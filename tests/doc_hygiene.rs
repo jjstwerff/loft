@@ -2109,3 +2109,221 @@ fn no_topic_renders_its_own_directives_as_prose() {
         "a topic's own metadata is rendered as prose in the release bundles: {offenders:#?}"
     );
 }
+
+/// Read every `<div class="item">` on the published Standard Library pages as
+/// (signature, documentation).
+fn stdlib_entries() -> Vec<(String, String, String)> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(root.join("doc")).expect("doc/ is unreadable") {
+        let path = entry.expect("doc entry").path();
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        if !name.starts_with("stdlib") || !name.ends_with(".html") {
+            continue;
+        }
+        let html = std::fs::read_to_string(&path).expect("stdlib page");
+        let Some(start) = html.find("<article>") else {
+            continue;
+        };
+        let end = html[start..]
+            .find("</article>")
+            .map_or(html.len(), |e| start + e);
+        let body = &html[start..end];
+        let mut rest = body;
+        while let Some(i) = rest.find("<div class=\"item\">") {
+            rest = &rest[i..];
+            let Some(open) = rest.find("<pre><code>") else {
+                break;
+            };
+            let Some(close) = rest[open..].find("</code></pre>") else {
+                break;
+            };
+            let sig = strip_tags(&rest[open + 11..open + close]);
+            let after = &rest[open + close..];
+            let doc_end = after.find("</div>").unwrap_or(after.len());
+            out.push((name.clone(), sig, strip_tags(&after[..doc_end])));
+            rest = &after[doc_end..];
+        }
+    }
+    out
+}
+
+fn strip_tags(s: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for c in s.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Every `pub fn` the standard library declares reaches the published Standard Library.
+///
+/// `gendoc` used to read a hard-coded three-element list of `default/*.loft`, so
+/// `04_stacktrace`, `05_coroutine`, `06_json` and `07_reflect` — added later — contributed
+/// nothing: the whole JSON and reflection API was absent from the reference while the JSON
+/// chapter and @F42 documented it. A list of filenames reads as a decision and was a sample.
+#[test]
+fn every_public_stdlib_function_is_published() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut declared: Vec<String> = Vec::new();
+    for entry in std::fs::read_dir(root.join("default")).expect("default/ is unreadable") {
+        let path = entry.expect("default entry").path();
+        if path.extension().is_none_or(|e| e != "loft") {
+            continue;
+        }
+        for line in std::fs::read_to_string(&path).expect("stdlib file").lines() {
+            let t = line.trim();
+            if t.starts_with("pub fn ") {
+                declared.push(
+                    t.trim_end_matches(['{', ';'])
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                );
+            }
+        }
+    }
+    assert!(
+        declared.len() > 150,
+        "only {} `pub fn` found in default/ — the scan lost its subject",
+        declared.len()
+    );
+
+    let rendered: std::collections::HashSet<String> = stdlib_entries()
+        .into_iter()
+        .map(|(_, sig, _)| sig.trim_end_matches(['{', ';']).trim().to_string())
+        .collect();
+    let missing: Vec<&String> = declared.iter().filter(|d| !rendered.contains(*d)).collect();
+    assert!(
+        missing.is_empty(),
+        "{} public stdlib function(s) are declared but reach no page of the published \
+         Standard Library — run `cargo run --bin gendoc`, and check that every \
+         `default/*.loft` is read:\n  {}",
+        missing.len(),
+        missing
+            .iter()
+            .map(|m| m.as_str())
+            .take(12)
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    );
+}
+
+/// Every published Standard Library entry says what it is for.
+///
+/// A blank line between a doc comment and its declaration used to orphan the doc, so 43
+/// entries reached the reader as a bare signature — `sin`, `sqrt`, `floor`, `round`,
+/// `split` among them, while the same authoring shape without the blank line rendered fine.
+#[test]
+fn every_published_stdlib_entry_carries_its_documentation() {
+    let bare: Vec<String> = stdlib_entries()
+        .into_iter()
+        .filter(|(_, _, doc)| doc.is_empty())
+        .map(|(page, sig, _)| format!("{page}: {}", sig.lines().next().unwrap_or("")))
+        .collect();
+    assert!(
+        bare.is_empty(),
+        "{} Standard Library entries are published with no documentation at all:\n  {}",
+        bare.len(),
+        bare.join("\n  ")
+    );
+}
+
+/// A Standard Library section is named and described for its reader.
+///
+/// Its name becomes the page title and the URL, and its description is the first thing on
+/// the page. Both drew from the maintainer's side of `default/*.loft`: sections shipped as
+/// "System directories (#635)" and "Vector operations (T2-8, T2-5)", and the Text section's
+/// description was `OpVarText`'s comment — "Read the value of a variable and put a reference
+/// to it on the stack".
+#[test]
+fn no_stdlib_section_shows_the_reader_a_tracker_tag_or_a_private_name() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    // The private declarations are derived, not listed: anything `default/` declares
+    // without `pub` is a name the reader has no way to use.
+    let mut private: Vec<String> = Vec::new();
+    for entry in std::fs::read_dir(root.join("default")).expect("default/") {
+        let path = entry.expect("entry").path();
+        if path.extension().is_none_or(|e| e != "loft") {
+            continue;
+        }
+        for line in std::fs::read_to_string(&path).expect("stdlib file").lines() {
+            let t = line.trim();
+            if let Some(rest) = t.strip_prefix("fn ") {
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if name.len() > 3 {
+                    private.push(name);
+                }
+            }
+        }
+    }
+    assert!(
+        private.len() > 20,
+        "no private stdlib declarations found — the scan broke"
+    );
+
+    let mut bad: Vec<String> = Vec::new();
+    for entry in std::fs::read_dir(root.join("doc")).expect("doc/") {
+        let path = entry.expect("doc entry").path();
+        let file = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        if !file.starts_with("stdlib-") || !file.ends_with(".html") {
+            continue;
+        }
+        // A tracker tag in the FILENAME is a tracker tag in the published URL.
+        if file.contains("pln") || file.contains("-635") || file.contains("t2-8") {
+            bad.push(format!("{file}: the page URL carries a tracker tag"));
+        }
+        let html = std::fs::read_to_string(&path).expect("page");
+        let Some(start) = html.find("<article>") else {
+            continue;
+        };
+        let end = html[start..]
+            .find("</article>")
+            .map_or(html.len(), |e| start + e);
+        let mut rest = &html[start..end];
+        while let Some(i) = rest.find("<div class=\"section-desc\">") {
+            rest = &rest[i..];
+            let stop = rest.find("</div>").unwrap_or(rest.len());
+            let desc = strip_tags(&rest[..stop]);
+            for name in &private {
+                if desc.contains(name.as_str()) {
+                    bad.push(format!(
+                        "{file}: the section description names `{name}`, \
+                                      which is private: {desc:.90}"
+                    ));
+                }
+            }
+            rest = &rest[stop..];
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "the published Standard Library shows the reader the maintainer's side of \
+         `default/*.loft`:\n  {}",
+        bad.join("\n  ")
+    );
+}

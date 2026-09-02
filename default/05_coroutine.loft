@@ -4,6 +4,8 @@
 // Coroutine runtime types (CO1.1).
 // Loaded after 04_stacktrace.loft.
 
+// ---  Coroutines  ---
+
 /// Lifecycle state of a coroutine frame.
 /// Transitions: Created -> Running -> Suspended -> Running -> ... -> Exhausted.
 pub enum CoroutineStatus {

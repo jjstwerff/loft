@@ -685,6 +685,46 @@ is declared `integer limit(0, 4294967294)` with the top value reserved as the nu
 so it never held every `u32` and is not meant to. **A closed issue is a claim that something
 changed, not a claim about what it changed to.**
 
+⚠ **The Standard Library's defects were STRUCTURAL, and none of them is a wrong sentence.**
+Every other row in this table was read claim by claim; the stdlib's 251 entries are generated
+from `default/*.loft`, and what was wrong was which of them reached the page at all. Three
+faults, each invisible from either side — the source looked right and the page looked
+plausible:
+1. `gendoc` read a hard-coded list of three `default/*.loft`. Four more had joined the
+   directory since, so `04_stacktrace`, `05_coroutine`, `06_json` and `07_reflect`
+   contributed nothing: the entire JSON and reflection API was absent from the published
+   Standard Library while the JSON chapter and @F42 documented it. 187 of 214 `pub fn`
+   reached a page.
+2. A blank line between a doc comment and its declaration orphaned the doc. The same
+   authoring shape is written both ways across `default/` — `// --- min / max / clamp ---`
+   puts its doc against `pub fn min`, `// --- Text ---` leaves a blank before
+   `pub fn split` — and only the second lost it. **43 entries shipped as a bare signature**,
+   `sin`, `sqrt`, `floor`, `round` and `split` among them.
+3. Section names and descriptions came from the maintainer's side of the file: pages titled
+   "System directories (#635)" and "Vector operations (T2-8, T2-5)" — tracker tags in the
+   published URL — and a Text section whose description was `OpVarText`'s comment, *"Read
+   the value of a variable and put a reference to it on the stack"*.
+
+**For a GENERATED reference section, the first question is not whether a sentence is true but
+whether the generator can see everything it claims to cover.** Counting the source's public
+declarations against the page's entries takes one script and answers it.
+
+⚠ **A doc that promises `null` is checkable against the declared type, and then against the
+code.** Cross-checking every `pub fn` whose documentation says "null" against its return type
+turned up 21 candidates; running them found two that never answer null at all —
+`as_bool` (every JSON kind mismatch answers `false`, where its three siblings all answer null:
+a matrix of four extractors × seven kinds says so) and `env_variable` (an unset variable
+answers `""`, so the `== null` test its own doc invites never fires). Filed as loft#1302.
+`as_text`'s doc also said "returns `null` (empty text)"; it returns null, and the two are
+distinguishable. **The type is not the obstacle — `as_text` is equally non-null and answers
+null through the sentinel — so a doc and a type agreeing still leaves the code to check.**
+
+⚠ **And check the documentation you write yourself the same way.** Writing a doc comment for
+`store_load_key`, which had none, I named the collection kinds it accepts by mirroring its
+text-keyed sibling's wording. I had not measured them. The claim came back out; what the
+implementation supports (`load_key` is `load_keys(…) > 0`) is what the comment says now. A
+reviewer's own sentence is a claim with no more standing than the one being replaced.
+
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
    did not is the failure this pass exists for.
@@ -762,6 +802,7 @@ whose entry list changed has.
 | `doc/00-vs-python.html` | 2026-09-02 | `a41ee548` |
 | `doc/install.html` | 2026-09-02 | `80568550` |
 | `doc/roadmap.html` | 2026-09-02 | `462d42ee` |
+| `default` | 2026-09-02 | `86f0423e` |
 
 ## See also
 

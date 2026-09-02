@@ -35,17 +35,36 @@ struct SectionFull {
 
 fn main() -> std::io::Result<()> {
     let version = env!("CARGO_PKG_VERSION");
-    let files = [
-        "default/01_code.loft",
-        "default/02_files.loft",
-        "default/03_text.loft",
-    ];
+    // Every `default/*.loft`, in the order the interpreter loads them — which is the
+    // numeric prefix, so sorting the directory gives it. A hard-coded list of three
+    // names read as a decision and was a sample: `04_stacktrace`, `05_coroutine`,
+    // `06_json` and `07_reflect` joined `default/` afterwards and never joined the list,
+    // so the whole JSON and reflection surface was missing from the published Standard
+    // Library while the JSON chapter and @F42 documented it.
+    let mut files: Vec<std::path::PathBuf> = fs::read_dir("default")
+        .expect("default/ is unreadable")
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "loft"))
+        .collect();
+    files.sort();
+    assert!(
+        files.len() >= 3,
+        "default/ holds {} .loft files — the stdlib surface cannot be that small",
+        files.len()
+    );
 
     let mut entries: Vec<Entry> = Vec::new();
     for path in &files {
         match fs::read_to_string(path) {
-            Ok(content) => parse_loft(&content, &mut entries),
-            Err(e) => eprintln!("Cannot read {path}: {e}"),
+            Ok(content) => {
+                let stem = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                parse_loft(&content, &mut entries, &section_name_for(&stem));
+            }
+            Err(e) => eprintln!("Cannot read {}: {e}", path.display()),
         }
     }
 
@@ -91,17 +110,55 @@ fn main() -> std::io::Result<()> {
 
 // ---  Parser  ---
 
-fn parse_loft(content: &str, entries: &mut Vec<Entry>) {
+/// Does the next DECLARATION after this point start with `pub`?
+///
+/// Answers who owns the doc block that opens a section: a `pub` item coming up claims it
+/// (`// --- Text ---` then `split`'s doc then `pub fn split`), and anything else means the
+/// block describes the section itself (`// --- Text ---` then the blurb then the private
+/// `fn OpVarText`). Comments, blank lines and `#` attributes are skipped on the way.
+fn next_declaration_is_public(rest: &[&str]) -> bool {
+    for line in rest {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with("//") || t.starts_with('#') {
+            continue;
+        }
+        return t.starts_with("pub ");
+    }
+    false
+}
+
+/// A readable section name for a stdlib file that names none itself: `06_json` -> `Json`.
+/// Deliberately plain — it is a placeholder the stderr note asks you to replace with a
+/// `// --- Name ---` marker in the file, not a naming scheme to rely on.
+fn section_name_for(stem: &str) -> String {
+    let bare = stem.split_once('_').map_or(stem, |(_, rest)| rest);
+    let mut c = bare.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => stem.to_string(),
+    }
+}
+
+/// Read one `default/*.loft` into section and item entries.
+///
+/// `fallback_section` opens the file when it declares something before naming a section of
+/// its own. Without it a file's items join whichever section the PREVIOUS file left open,
+/// which is silent and wrong: `06_json.loft` and `07_reflect.loft` have no
+/// `// --- Name ---` marker, so the whole JSON and reflection surface landed under
+/// "Environment" the moment they were read at all.
+fn parse_loft(content: &str, entries: &mut Vec<Entry>, fallback_section: &str) {
     let lines: Vec<&str> = content.lines().collect();
     let mut i = 0;
     let mut doc: Vec<String> = Vec::new();
     let mut after_section = false;
+    let mut named_a_section = false;
 
     while i < lines.len() {
         let trimmed = lines[i].trim();
 
         if let Some(name) = parse_section(trimmed) {
             entries.push(Entry::Section(name));
+            named_a_section = true;
             doc.clear();
             after_section = true;
             i += 1;
@@ -116,6 +173,15 @@ fn parse_loft(content: &str, entries: &mut Vec<Entry>) {
         }
 
         if trimmed.starts_with("pub ") {
+            if !named_a_section {
+                eprintln!(
+                    "gendoc: {fallback_section} declares a public item before any \
+                     `// --- Section ---` marker; filing it under \"{fallback_section}\". \
+                     Add a marker at the top of the file to name the section yourself."
+                );
+                entries.push(Entry::Section(fallback_section.to_string()));
+                named_a_section = true;
+            }
             let (sig, consumed) = collect_sig(&lines[i..]);
             entries.push(Entry::Item {
                 sig,
@@ -126,6 +192,28 @@ fn parse_loft(content: &str, entries: &mut Vec<Entry>) {
             continue;
         }
 
+        // A BLANK line does not orphan a doc block. The same authoring shape is written
+        // both ways across `default/` — `// --- min / max / clamp ---` puts its doc
+        // against `pub fn min`, `// --- Text ---` in `02_files.loft` leaves a blank line
+        // before `pub fn split` — and only the second lost its documentation, along with
+        // `sin`, `sqrt`, `floor`, `round` and 36 others whose published entry was a bare
+        // signature. The blank is formatting; the doc belongs to whatever declares next.
+        //
+        // The one thing a blank still settles is who owns the block that OPENS a section:
+        // it is the section's own description unless a `pub` declaration is coming to
+        // claim it, so look ahead for that rather than guessing from the layout.
+        if trimmed.is_empty() {
+            if after_section && !doc.is_empty() && !next_declaration_is_public(&lines[i..]) {
+                entries.push(Entry::Item {
+                    sig: String::new(),
+                    doc: std::mem::take(&mut doc),
+                });
+                after_section = false;
+            }
+            i += 1;
+            continue;
+        }
+
         // #rust attribute lines do not break doc accumulation.
         if !trimmed.starts_with('#') {
             if after_section && !doc.is_empty() {
@@ -133,6 +221,10 @@ fn parse_loft(content: &str, entries: &mut Vec<Entry>) {
                     sig: String::new(),
                     doc: std::mem::take(&mut doc),
                 });
+                // Reached only by a private declaration or a non-`pub` line: a `pub` item
+                // would have taken the doc, and the blank-line arm above already offered it
+                // to one. So this is a block nobody can claim, which is what a section
+                // description is.
             } else {
                 doc.clear();
             }

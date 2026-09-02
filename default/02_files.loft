@@ -10,6 +10,8 @@
 capability fs
 capability env
 
+// One entry of the process environment, as `env_variables()` answers them:
+// the variable's name and its value, both as plain text.
 pub struct EnvVariable {
   name: text,
   value: text,
@@ -789,6 +791,12 @@ pub fn store_lazy_clear(local: reference) -> boolean;
 pub fn store_lazy_fail(local: reference, why: text) fs#read;
 #rust"stores.lazy_fail(&(@local), @why)"
 
+// Fetch ONE integer-keyed entry from a persisted collection image into `local`,
+// reading only the pages the lookup touches. The singular of `store_load_keys`
+// and the integer form of `store_load_key_text`; returns false when the key is
+// absent or the image cannot serve this collection. @PLN97 arc G (loft#522).
+//   tiles: hash<Tile[id]> = []
+//   store_load_key(tiles, "block.store", 42)
 pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#read;
 #rust"stores.load_key(&(@local), @path, @key)"
 #impure(io)
@@ -973,12 +981,14 @@ pub fn write(self: File, v: text) -> FileResult fs#update {
 pub fn env_variables() -> vector<EnvVariable> env#read;
 #rust"stores.os_variables()"
 #impure(host_io)
-// Returns the value of the environment variable name, or null if it is not set.
-// Use to read configuration from the shell environment.
+// Returns the value of the environment variable `name`, or `""` when it is not set.
+// An unset variable and one set to the empty string give the same answer, so this
+// cannot tell them apart (loft#1302). Use to read configuration from the shell
+// environment.
 pub fn env_variable(name: text) -> text env#read;
 #rust"stores.os_variable(@name)"
 #impure(host_io)
-// --- Optional C libraries (@PLN24 arc G) ---
+// --- Optional C libraries ---
 // Returns whether the C library soname is usable right now: it loads, and every
 // `#c` binding declared against it resolves in it.
 //
@@ -992,7 +1002,11 @@ pub fn env_variable(name: text) -> text env#read;
 pub fn c_library_available(soname: text) -> boolean env#read;
 #rust"codegen_runtime::c_library_available(@soname, __C_LIBS, __C_LIB_SYMS)"
 #impure(host_io)
-// --- System directories (#635) ---
+// --- System directories ---
+// Where this machine keeps temporary files, the user's home, and the per-user
+// config, cache and data directories — each answering "" where the platform has
+// no such place.
+
 // Private native: the OS temp dir, "" only where there is no filesystem.
 fn os_temp_dir() -> text env#read;
 #rust"Stores::os_temp_dir_native()"
@@ -1073,7 +1087,10 @@ pub fn store_memory() -> text;
 #rust"stores.memory_report()"
 #impure(host_io)
 
-// --- Vector operations (T2-8, T2-5) ---
+// --- Vector operations ---
+// Reordering a vector in place: `reverse(v)` turns it end for end and `sort(v)`
+// puts it in ascending order.
+
 // reverse(v) and sort(v) are compiler special-cased in parse_call.
 fn OpReverseVector(r: vector, size: const u16);
 #rust"vector::reverse_vector(&@r, u32::from(@size), &mut s.database.allocations);"

@@ -713,6 +713,7 @@ pub fn approx(both: single, b: single, eps: single) -> boolean {
 #pure
 // --- Text ---
 // Functions for working with text (UTF-8 strings) and character values.
+
 // Read the value of a variable and put a reference to it on the stack
 
 fn OpVarText(pos: const u16) -> text;
@@ -1445,6 +1446,7 @@ pub fn len(both: spatial) -> integer {
 // the tree is shared, only the key oracle above it differs.
 fn OpLengthTrie(r: trie) -> integer;
 #rust"i64::from(codegen_runtime::trie_len(&@r, &s.database.allocations))"
+// Number of elements in the trie.
 pub fn len(both: trie) -> integer {
   OpLengthTrie(both)
 }

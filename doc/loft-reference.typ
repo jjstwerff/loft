@@ -7626,13 +7626,11 @@ pub type u32 = integer limit(0, 4294967294) size(4)
 
 == Interfaces
 
-Standard interfaces for bounded generic functions. A type satisfies an interface by defining the required operator or method.
-
 ```rust
 pub interface Ordered
 ```
 
-Types that support the `\<` comparison operator. Satisfied by integer, single, float, text, and any user type defining OpLt.
+Standard interfaces for bounded generic functions. A type satisfies an interface by defining the required operator or method. Types that support the `\<` comparison operator. Satisfied by integer, single, float, text, and any user type defining OpLt.
 `boolean` is NOT among them, deliberately: it satisfies Equatable below and has no ordering, so `false \< true` is a refusal rather than a convention the language picks for you.  A program that wants it says so — `(a as integer) \< (b as integer)`.  Note this is what bounds the null-ordering half of \@FR-E-NullArg, which applies to the ORDERED types only; boolean null still compares with `==` like every other scalar.
 ONE method is all a type has to define: inside a generic bounded by this, `\>`, `\<=` and `\>=` all derive from `\<` — `a \> b` is `b \< a`, `a \<= b` is `!(b \< a)`, `a \>= b` is `!(a \< b)`.  Each evaluates its operands exactly once.
 
@@ -7705,37 +7703,55 @@ Cosine. Use for circular motion: x = r \* cos(angle).
 pub fn sin(both: single) -> single
 ```
 
+Sine. Use for circular motion: y = r \* sin(angle).
+
 ```rust
 pub fn tan(both: single) -> single
 ```
+
+Tangent. Use for slopes and perspective projection.
 
 ```rust
 pub fn acos(both: single) -> single?
 ```
 
+Arc cosine. Returns the angle (in radians) whose cosine is v.
+
 ```rust
 pub fn asin(both: single) -> single?
 ```
+
+Arc sine. Returns the angle whose sine is v.
 
 ```rust
 pub fn atan(both: single) -> single
 ```
 
+Arc tangent of a single value. Returns angle in (-PI/2, PI/2).
+
 ```rust
 pub fn ceil(both: single) -> single
 ```
+
+Round up to the nearest integer value. Use to compute required buffer sizes from fractional counts.
 
 ```rust
 pub fn floor(both: single) -> single
 ```
 
+Round down to the nearest integer value. Use to convert a float position to a tile index.
+
 ```rust
 pub fn round(both: single) -> single
 ```
 
+Round to the nearest integer value (half rounds away from zero).
+
 ```rust
 pub fn sqrt(both: single) -> single?
 ```
+
+Square root. Use for distances and normalization.
 
 ```rust
 pub fn atan2(both: single, v2: single) -> single
@@ -7746,6 +7762,8 @@ Arc tangent of y/x, preserving the correct quadrant. Use instead of atan when yo
 ```rust
 pub fn log(both: single, v2: single) -> single?
 ```
+
+Logarithm of v in the given base. Use for converting between scales (e.g., decibels).
 
 ```rust
 pub fn pow(both: single, v2: single) -> single?
@@ -7781,37 +7799,55 @@ Cosine. Use for circular motion: x = r \* cos(angle).
 pub fn sin(both: float) -> float
 ```
 
+Sine. Use for circular motion: y = r \* sin(angle).
+
 ```rust
 pub fn tan(both: float) -> float
 ```
+
+Tangent. Use for slopes and perspective projection.
 
 ```rust
 pub fn acos(both: float) -> float?
 ```
 
+Arc cosine. Returns the angle (in radians) whose cosine is v.
+
 ```rust
 pub fn asin(both: float) -> float?
 ```
+
+Arc sine. Returns the angle whose sine is v.
 
 ```rust
 pub fn atan(both: float) -> float
 ```
 
+Arc tangent of a single value. Returns angle in (-PI/2, PI/2).
+
 ```rust
 pub fn ceil(both: float) -> float
 ```
+
+Round up to the nearest integer value. Use to compute required buffer sizes from fractional counts.
 
 ```rust
 pub fn floor(both: float) -> float
 ```
 
+Round down to the nearest integer value. Use to convert a float position to a tile index.
+
 ```rust
 pub fn round(both: float) -> float
 ```
 
+Round to the nearest integer value (half rounds away from zero).
+
 ```rust
 pub fn sqrt(both: float) -> float?
 ```
+
+Square root. Use for distances and normalization.
 
 ```rust
 pub fn atan2(both: float, v2: float) -> float
@@ -7823,6 +7859,8 @@ Arc tangent of y/x, preserving the correct quadrant. Use instead of atan when yo
 pub fn log(both: float, v2: float) -> float?
 ```
 
+Logarithm of v in the given base. Use for converting between scales (e.g., decibels).
+
 ```rust
 pub fn pow(both: float, v2: float) -> float?
 ```
@@ -7831,11 +7869,11 @@ Raises base to the power exp. Use for exponential growth curves and scaling.
 
 == exp / ln / log2 / log10
 
-Raises E (2.71828…) to the power v. Use for exponential growth models.
-
 ```rust
 pub fn exp(both: single) -> single
 ```
+
+Raises E (2.71828…) to the power v. Use for exponential growth models.
 
 ```rust
 pub fn exp(both: float) -> float
@@ -7847,6 +7885,8 @@ Double-precision exp (e^v).
 pub fn ln(both: single) -> single?
 ```
 
+Natural logarithm (base E). Use for growth rates and information entropy.
+
 ```rust
 pub fn ln(both: float) -> float?
 ```
@@ -7857,6 +7897,8 @@ Double-precision natural logarithm.
 pub fn log2(both: single) -> single?
 ```
 
+Base-2 logarithm. Use for bit-count calculations and information theory.
+
 ```rust
 pub fn log2(both: float) -> float?
 ```
@@ -7866,6 +7908,8 @@ Double-precision base-2 logarithm.
 ```rust
 pub fn log10(both: single) -> single?
 ```
+
+Base-10 logarithm. Use for decibels, orders of magnitude, and display scales.
 
 ```rust
 pub fn log10(both: float) -> float?
@@ -7943,7 +7987,7 @@ Approximate equality for single-precision floats (see the float overload).
 
 == Text
 
-Functions for working with text (UTF-8 strings) and character values. Read the value of a variable and put a reference to it on the stack
+Functions for working with text (UTF-8 strings) and character values.
 
 ```rust
 pub fn len(both: text) -> integer
@@ -7963,15 +8007,18 @@ pub fn len(both: character) -> integer
 
 Byte length of the character's UTF-8 encoding (1–4).
 
-Splits self on every occurrence of separator and returns the parts as a vector. Use to parse CSV lines or space-separated tokens.
-
 ```rust
 pub fn split(self: text, separator: character) -> vector<text>
 ```
 
+Splits self on every occurrence of separator and returns the parts as a vector. Use to parse CSV lines or space-separated tokens.
+
 ```rust
 pub fn split_text(self: text, separator: text) -> vector<text>
 ```
+
+Split on a multi-character text separator.  `"a, b, c".split\_text(", ")` returns `\["a", "b", "c"\]`.  Edge cases: - empty self → empty result - empty separator → returns `\[self\]` unchanged (no infinite-split) - separator never matches → returns `\[self\]` - separator at start / end → produces empty boundary entries
+Named `split\_text` (not an overload of `split`) because loft does not overload by non-self parameter type.
 
 ```rust
 pub fn starts_with_at(self: text, pos: integer, prefix: text) -> boolean
@@ -8233,6 +8280,8 @@ Writes v to standard output without a newline. Use for progress output and build
 pub fn println(v1: text)
 ```
 
+Writes v followed by a newline. The standard choice for line-oriented output.
+
 ```rust
 pub fn eprint(v1: text)
 ```
@@ -8254,6 +8303,8 @@ Number of elements in a spatial (radix / Morton tree) collection.
 ```rust
 pub fn len(both: trie) -> integer
 ```
+
+Number of elements in the trie.
 
 == Vector aggregates
 
@@ -8392,6 +8443,8 @@ pub struct EnvVariable {
 }
 ```
 
+One entry of the process environment, as `env\_variables()` answers them: the variable's name and its value, both as plain text.
+
 ```rust
 pub enum Format {
   TextFile,
@@ -8401,6 +8454,8 @@ pub enum Format {
   NotExists,
 }
 ```
+
+Describes how a file is opened. TextFile: read or write as UTF-8 text (default). LittleEndian: binary mode, least-significant byte first. BigEndian: binary mode, most-significant byte first. Directory: represents a directory path. NotExists: no file or directory exist.
 
 ```rust
 pub enum FileResult {
@@ -8441,6 +8496,8 @@ pub struct File {
 }
 ```
 
+A handle to a filesystem entry. Fields: path (full path), size (file size in bytes), format (open mode), current (byte position after last read), next (byte position to read next).
+
 ```rust
 pub fn content(self: File) -> text?fs#read
 ```
@@ -8453,19 +8510,23 @@ pub fn lines(self: File) -> vector<text> fs#read
 
 Par-safe: reads the file into a worker-local store; the host bridge serialises filesystem access. Reads the file and splits it into lines. Strips trailing '\\r' so CRLF files (Windows) and LF files (Unix) produce identical results. Use when processing line-by-line (logs, CSV, etc.). Example: \@STD-011
 
-Returns the platform path separator character: '\\' on Windows, '/' elsewhere. Detected once at startup from the runtime filesystem.
-
 ```rust
 pub fn path_sep() -> character
 ```
+
+Returns the platform path separator character: '\\' on Windows, '/' elsewhere. Detected once at startup from the runtime filesystem.
 
 ```rust
 pub fn file(path: text) -> File fs#read
 ```
 
+Plan-06 phase 5a: \#impure(host\_io) — reads a host-detected constant.  Could be \#pure once detected (it's invariant for the lifetime of a process), but the runtime caches it inside Stores so the access is observable. Use as the entry point for all file I/O. A relative path resolves against the program's own directory (\#255 / \@PLN9), so `../data.txt` names the file above the script — the same file an absolute path would name, and it answers the same either way (loft\#712).
+
 ```rust
 pub fn exists(path: text) -> boolean fs#read
 ```
+
+Stat-equivalent filesystem read; par-safe. Use to check whether a path is accessible before reading or writing it. A RELATIVE path resolves against the program's own directory, or against the working directory under `\#cwd`; an absolute path is used as given, including one outside the project.  This is not an access boundary — the boundary is the `fs` capability a `\[sandbox\]` profile grants or withholds.
 
 ```rust
 pub fn exists(both: File) -> boolean fs#read
@@ -8477,17 +8538,25 @@ Filesystem stat (via file()); par-safe. Method form: f = file("path"); if f.exis
 pub fn delete(path: text) -> FileResult fs#update
 ```
 
+Use to remove a file after processing or as a cleanup step. Returns FileResult.Ok on success and FileResult.NotFound when the file did not exist.  A path outside the project is deleted like any other; withhold the `fs` capability in a `\[sandbox\]` profile to prevent that.
+
 ```rust
 pub fn move(from: text, to: text) -> FileResult fs#update
 ```
+
+Par-safe filesystem write; the host bridge serialises mutations. Use to rename or relocate a file.  The destination must not already exist (FileResult.Other if it does), and a missing source is FileResult.NotFound. Neither path is confined to the project directory.
 
 ```rust
 pub fn mkdir(path: text) -> FileResult fs#update
 ```
 
+Create a single directory level; the parent must already exist. FileResult.Other when the directory is already there.  There is no counterpart that REMOVES a directory (loft\#1256).
+
 ```rust
 pub fn mkdir_all(path: text) -> FileResult fs#update
 ```
+
+Create a directory and all missing parents (like Unix mkdir -p). Idempotent: a directory that already exists is FileResult.Ok, which is what makes it safe on the way into a run.  There is no counterpart that REMOVES a directory (loft\#1256).
 
 ```rust
 pub fn rmdir(path: text) -> FileResult fs#update
@@ -8529,7 +8598,7 @@ Writes `bytes` to file `path`, truncating any existing content.  Returns true on
 pub fn mtime(path: text) -> integer fs#read
 ```
 
-Modification time of `path` as Unix epoch SECONDS (integer — same i64 representation as file.size).  Returns 0 on missing file / IO error / pre-epoch dates — caller treats 0 as "unknown" (matches scan.sh's `stat -c %Y || echo 0` fallback). Takes a path string rather than a File handle so the native + interp dispatch both use the same `n\_mtime` registration. Use for date-window filters: convert the returned seconds to YYYY-MM-DD and compare lexicographically against `ymd\_days\_ago(N)`.
+Truncate or extend the file to exactly `size` bytes. Truncating removes bytes beyond `size`; extending fills with null bytes. Returns FileResult.NotFound if the file does not exist; FileResult.IsDirectory if the path is a directory; FileResult.Other if size is negative. Modification time of `path` as Unix epoch SECONDS (integer — same i64 representation as file.size).  Returns 0 on missing file / IO error / pre-epoch dates — caller treats 0 as "unknown" (matches scan.sh's `stat -c %Y || echo 0` fallback). Takes a path string rather than a File handle so the native + interp dispatch both use the same `n\_mtime` registration. Use for date-window filters: convert the returned seconds to YYYY-MM-DD and compare lexicographically against `ymd\_days\_ago(N)`.
 
 ```rust
 pub fn store_durable_check(path: text) -> boolean fs#read
@@ -8684,6 +8753,8 @@ Sticky and counted exactly like a Rust source's failure: the FIRST reason is kep
 pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#read
 ```
 
+Fetch ONE integer-keyed entry from a persisted collection image into `local`, reading only the pages the lookup touches. The singular of `store\_load\_keys` and the integer form of `store\_load\_key\_text`; returns false when the key is absent or the image cannot serve this collection. \@PLN97 arc G (loft\#522). tiles: hash\<Tile\[id\]\> = \[\] store\_load\_key(tiles, "block.store", 42)
+
 ```rust
 pub fn store_load_key_text(local: reference, path: text, key: text) -> boolean fs#read
 ```
@@ -8750,9 +8821,13 @@ A file this process has not read from or written to yet has no position, and rep
 pub fn sync(self: File) -> boolean fs#update
 ```
 
+Flushes buffered bytes for self to the underlying storage so that the preceding writes are durable. Use between log records or block boundaries to guarantee that earlier appends have landed on disk before later ones are issued.
+
 ```rust
 pub fn files(self: File) -> vector<File> fs#read
 ```
+
+Returns the entries inside a directory, sorted by path — the same order as `list\_dir`, so an index into either listing means the same entry. The File must have format == Format.Directory; anything else lists as `\[\]` (where `list\_dir` answers null, because it has no format to check first). Use to iterate over all files in a folder.
 
 ```rust
 pub fn write(self: File, v: text) -> FileResult fs#update
@@ -8762,23 +8837,23 @@ Writes v as UTF-8 text to the file, overwriting existing content.  Returns FileR
 
 == Environment
 
-Returns all environment variables as a vector of EnvVariable records (fields: name, value). Use to inspect or forward the full environment.
-
 ```rust
 pub fn env_variables() -> vector<EnvVariable> env#read
 ```
+
+Returns all environment variables as a vector of EnvVariable records (fields: name, value). Use to inspect or forward the full environment.
 
 ```rust
 pub fn env_variable(name: text) -> text env#read
 ```
 
-Returns the value of the environment variable name, or null if it is not set. Use to read configuration from the shell environment.
-
-Functions for interacting with the host operating system. Returns the script-level arguments passed after the script path. Does not include the loft binary name or loft CLI flags.
+Returns the value of the environment variable `name`, or `""` when it is not set. An unset variable and one set to the empty string give the same answer, so this cannot tell them apart (loft\#1302). Use to read configuration from the shell environment.
 
 ```rust
 pub fn arguments() -> vector<text>
 ```
+
+Functions for interacting with the host operating system. Returns the script-level arguments passed after the script path. Does not include the loft binary name or loft CLI flags.
 
 ```rust
 pub fn ymd_days_ago(days: integer) -> text
@@ -8810,7 +8885,7 @@ pub fn source_dir() -> text
 
 Returns the directory containing the main source file being executed. Use to locate data files relative to the script, regardless of working directory.
 
-== Optional C libraries (\@PLN24 arc G)
+== Optional C libraries
 
 ```rust
 pub fn c_library_available(soname: text) -> boolean env#read
@@ -8820,9 +8895,9 @@ Returns whether the C library soname is usable right now: it loads, and every `\
 Ask this before calling into a library declared with `\[c\] optional-libs`, which is not installed on every machine and is loaded only when a binding needs it. Both halves of the answer matter — a library of the wrong version loads and then exports only some of the symbols, so "the file is there" would say yes where the call still fails.
 A library the program never declared answers false.
 
-== System directories (\#635)
+== System directories
 
-Private native: the OS temp dir, "" only where there is no filesystem.
+Where this machine keeps temporary files, the user's home, and the per-user config, cache and data directories — each answering "" where the platform has no such place.
 
 ```rust
 pub fn temp_dir() -> text?env#read
@@ -8873,15 +8948,16 @@ pub fn store_memory() -> text
 
 Returns a multi-line snapshot of all LIVE stores' internal memory utilisation: total capacity vs actual claimed data vs free space, record + free-block counts, mergeable adjacent-free pairs (free neighbours that should have coalesced), and the largest stores by capacity with their creation site (`bc:\<pos\>` — a bytecode position on the interpreter; 0 on --native) and type name.  Use to watch memory growth in a running program.
 
-== Vector operations (T2-8, T2-5)
+== Vector operations
 
-reverse(v) and sort(v) are compiler special-cased in parse\_call.
+Reordering a vector in place: `reverse(v)` turns it end for end and `sort(v)` puts it in ascending order.
 
 ```rust
 pub fn starts_with(self: text, value: text) -> boolean
 ```
 
-Returns true if self begins with value. Use for prefix matching (e.g., protocol detection).
+── Path helpers (moved from 03\_text.loft so they're available before file-I/O code that wants to compose them) ─────────
+loft treats paths as plain text; this group adds the most-needed path operations (dir\_of / basename / resolve\_relative) as methods on text. Pure-loft, slash-separated; Windows backslash normalisation is out of scope. `starts\_with` / `ends\_with` are dependencies of `join` / `resolve` so they also live here (was 03\_text.loft). Returns true if self begins with value. Use for prefix matching (e.g., protocol detection).
 
 ```rust
 pub fn ends_with(self: text, value: text) -> boolean
@@ -8912,6 +8988,458 @@ pub fn resolve(self: text, target: text) -> text
 ```
 
 Resolve `target` against `self` (where self is a base directory). Strips leading `./` repeatedly; each `../` segment trims the last component from `self`.  Mirrors scan.loft's `resolve\_link\_path`. "doc/claude".resolve("../README.md")     → "doc/README.md" "doc/claude".resolve("./PROBLEMS.md")    → "doc/claude/PROBLEMS.md" "a/b/c".resolve("../../x")               → "a/x" "".resolve("foo")                        → "foo"
+
+== Stack traces
+
+```rust
+pub enum ArgValue {
+  NullVal,
+  BoolVal { b: boolean },
+  IntVal { n: integer },
+  LongVal { n: integer },
+  FloatVal { f: float },
+  SingleVal { f: single },
+  CharVal { c: character },
+  TextVal { t: text },
+  RefVal { store: integer, rec: integer, pos: integer },
+  FnVal { d_nr: integer },
+  OtherVal { description: text },
+}
+```
+
+Typed union of inspectable argument/variable values. Each variant wraps one primitive type so that match expressions can recover the concrete value from a StackFrame's argument list.
+
+```rust
+pub struct ArgInfo {
+  name: text,
+  type_name: text,
+  value: ArgValue,
+}
+```
+
+One function argument in a stack frame.
+
+```rust
+pub struct VarInfo {
+  name: text,
+  type_name: text,
+  value: ArgValue,
+}
+```
+
+One local variable in a stack frame (populated only by stack\_trace\_full).
+
+```rust
+pub struct StackFrame {
+  function: text,
+  file: text,
+  line: integer,
+  arguments: vector<ArgInfo>,
+  variables: vector<VarInfo>,
+}
+```
+
+One call frame in the stack trace.
+
+```rust
+pub fn stack_trace() -> vector<StackFrame>
+```
+
+Return the current call stack as a vector of frames, outermost first. TR1.4: Each frame's `variables` field is populated with the live local variables at that frame's call site (typed via `ArgValue`).  Use this to inspect not only the current function's variables but also the variables of any function further up the call stack:
+```loft fn debug\_dump() { for frame in stack\_trace() { println("{frame.function}:{frame.line}"); for v in frame.variables { println("  {v.name} = {v.value}"); } } } ```
+
+== Coroutines
+
+```rust
+pub enum CoroutineStatus {
+  Created,
+  Suspended,
+  Running,
+  Exhausted,
+}
+```
+
+Lifecycle state of a coroutine frame. Transitions: Created -\> Running -\> Suspended -\> Running -\> ... -\> Exhausted.
+
+```rust
+pub fn exhausted(gen: reference) -> boolean
+```
+
+CO1.6: Returns true if the coroutine has finished producing values.
+
+== JSON
+
+```rust
+pub enum JsonValue {
+  JNull,
+  JBool { value: boolean },
+  JNumber { value: float },
+  JString { value: text },
+  JArray { items: vector<JsonValue> },
+  JObject { fields: vector<JsonField> },
+  JInteger { value: integer },
+}
+```
+
+Typed union of JSON values.  The discriminant (1..6) picks the active variant; variant data lives in the variant's fields. Matches the RFC 8259 kinds, plus `JInteger` (\@PLN109) for an integer-shaped number preserved to an exact `integer` (i64).
+`JInteger` MUST stay the LAST variant: the store discriminant it gets (7) is hard-coded as `JV\_DISCR\_INT` in `src/native.rs`, and the existing variants' discriminants (1–6) must not shift.
+
+```rust
+pub struct JsonField {
+  name: text,
+  value: JsonValue,
+}
+```
+
+One field of a `JObject`.  Stored as a `vector\<JsonField\>` rather than a `hash\<JsonField\[name\]\>` in step 2 — the hash form is a 0.9.0 follow-up once hash iteration and nested struct-enum-in-hash layouts are exercised end-to-end.  Linear scan is fine for the object sizes typical in configuration / API responses.
+
+```rust
+pub fn json_parse(raw: text) -> JsonValue
+```
+
+Parse JSON text into a `JsonValue` tree.  Malformed input returns `JNull`; the error trail is accessible via `json\_errors()`.  All six variants materialise (primitives, arrays, objects, nested containers); the entire tree lives in one store and frees as one unit when the root `DbRef` leaves scope.
+```loft match json\_parse(raw) { JObject { fields } =\> for f in fields { handle(f) }, JArray  { items }  =\> for v in items  { handle(v) }, JNull              =\> println("parse error: {json\_errors()}"), \_                  =\> println("unexpected root kind"), } ``` Example: \@STD-007
+
+```rust
+pub fn json_errors() -> text
+```
+
+Populates the runtime's per-call json\_errors state (read by json\_errors()).  Allocates the result tree into worker-local stores → par-safe; no parent state written. Return a pipe-separated trail of JSON parse errors from the most recent `json\_parse` call.  Empty when the parse succeeded.  Each entry carries an RFC 6901 path, a `line:col` location, and a context snippet — see Q1 in `doc/claude/QUALITY.md`.
+
+```rust
+pub fn field(self: JsonValue, name: text) -> JsonValue
+```
+
+Observes the runtime's json\_errors state populated by json\_parse.  No parent writes. JObject indexer — returns the value at `name`, or `JNull` when `self` isn't a JObject or the key is missing.  Chained access like `root.field("a").field("b")` is safe — every intermediate missing produces `JNull`, never a trap.
+
+```rust
+pub fn item(self: JsonValue, index: integer) -> JsonValue
+```
+
+JArray indexer — returns the element at `index`, or `JNull` when `self` isn't a JArray or the index is out of bounds.
+
+```rust
+pub fn len(self: JsonValue) -> integer
+```
+
+Length of a JArray's items vector or a JObject's fields vector. Returns `null` (i32::MIN) for any other variant.
+
+```rust
+pub fn as_text(self: JsonValue) -> text
+```
+
+Typed extractor — returns `null` on kind mismatch.
+
+```rust
+pub fn as_number(self: JsonValue) -> float
+```
+
+Typed extractor — returns `null` on kind mismatch.
+
+```rust
+pub fn as_long(self: JsonValue) -> integer
+```
+
+Typed extractor — returns `null` on kind mismatch.  Truncates the underlying `float` toward zero before converting.
+
+```rust
+pub fn as_bool(self: JsonValue) -> boolean
+```
+
+Typed extractor. Unlike its three siblings this one never answers `null`: every kind mismatch answers `false` — a missing field, a number, the string `"true"` — which cannot be told from a field that really says `false`. Test `kind()` or `has\_field()` first where that distinction matters (loft\#1302).
+
+```rust
+pub fn kind(self: JsonValue) -> text
+```
+
+Q2 introspection — returns the variant name as text: `"JNull"`, `"JBool"`, `"JNumber"`, `"JString"`, `"JArray"`, or `"JObject"`.  Cheap: reads the discriminant byte, formats a literal.  Useful for logs and conditional branches that don't want to commit to a full pattern match.
+
+```rust
+pub fn keys(self: JsonValue) -> vector<text>
+```
+
+Q2 introspection — returns the field-name list of a `JObject` in insertion order, or an empty vector for any other variant. Safe idiom: `for k in v.keys() { ... }` works on any JsonValue because non-objects yield an empty walk.
+
+```rust
+pub fn fields(self: JsonValue) -> vector<JsonField>
+```
+
+Q2 introspection — returns the (name, value) entries of a `JObject` in insertion order so callers can iterate as `for entry in fields(v) { … entry.name … entry.value … }`. Values deep-copy (primitives + nested containers — full tree). Empty vector for any other variant.
+
+```rust
+pub fn has_field(self: JsonValue, name: text) -> boolean
+```
+
+Q2 introspection — returns true iff `self` is a `JObject` variant carrying a field named `name`.  All other variants (including `JNull` on a parse error) return false, so the common pattern `if v.has\_field("users") { … }` is safe to write on any JsonValue without first destructuring. Distinguishes "absent" from "present-but-null" — a field whose value is `JNull` still returns `true`.
+
+```rust
+pub fn to_json(self: JsonValue) -> text
+```
+
+Q3 serialiser — render a JsonValue to canonical RFC 8259 JSON text.  All six variants serialise; `JArray` / `JObject` recurse through their children (full tree serialisation, nested containers walk naturally).  Strings escape `"`, `\\\\`, and ASCII control bytes; UTF-8 passes through verbatim. Non-finite numbers render as `null`.
+
+```rust
+pub fn to_json_pretty(self: JsonValue) -> text
+```
+
+Q3 pretty serialiser — `to\_json\_pretty` produces 2-space indented, one-element-per-line output for non-empty `JArray` / `JObject` containers.  Empty containers render `\[\]` / `{}` (no newline padding).  Primitives are byte-identical to `to\_json` (no nested structure to indent).  After object keys the colon is followed by a single space (`"k": v`). Useful for golden-file tests and log output.
+
+```rust
+pub fn json_null() -> JsonValue
+```
+
+Q4 constructor — build a JsonValue set to the `JNull` variant. Useful in test fixtures and reply-construction code that needs a known-null JsonValue without going through `json\_parse("null")`.
+
+```rust
+pub fn json_bool(v: boolean) -> JsonValue
+```
+
+Q4 constructor — build a JsonValue set to the `JBool` variant carrying the supplied boolean payload.
+
+```rust
+pub fn json_number(v: float?) -> JsonValue
+```
+
+Q4 constructor — build a JsonValue set to the `JNumber` variant carrying the supplied float payload.  Non-finite inputs (float null = NaN, or ±Inf) produce `JNull` with a diagnostic in `json\_errors()` — mirrors the RFC 8259 constraint that JSON numbers must be finite.  The parameter is `float?` because handling a null/NaN input IS its contract (→ `JNull`); a finite `float` passes as a non-null value into the nullable slot as usual.
+
+```rust
+pub fn json_string(v: text) -> JsonValue
+```
+
+Non-finite inputs touch json\_errors state.  Otherwise pure construction into worker stores. Q4 constructor — build a JsonValue set to the `JString` variant carrying the supplied text payload.  The text is copied into the JsonValue's own store, so the returned value owns the string independently of the argument's lifetime.
+
+```rust
+pub fn json_array(items: vector<JsonValue>) -> JsonValue
+```
+
+Q4 constructor — build a JsonValue set to the `JArray` variant carrying the supplied items.  Each element is deep-copied into the new tree's arena via the shared `dbref\_to\_parsed` walker, so nested containers and arena-origin subtrees (e.g. a captured `field()` result) embed correctly.  Empty input produces a real empty JArray. Example: \@STD-008
+
+```rust
+pub fn json_object(fields: vector<JsonField>) -> JsonValue
+```
+
+Build a JsonValue set to the `JObject` variant carrying the supplied fields.  Each field's value deep-copies via the same `dbref\_to\_parsed` walker as `json\_array`, so a JObject can carry captured-subtree JArray / JObject values.  Empty input produces a real empty JObject. Example: \@STD-008
+
+```rust
+pub fn struct_from_jsonvalue(v: JsonValue, struct_kt: integer) -> JsonValue
+```
+
+Internal walker — populate a struct of the given `struct\_kt` (known-type number) from a JsonValue.  Compile-time codegen for `Struct.parse(JsonValue)` emits exactly one call to this function regardless of struct shape; the runtime walker uses `stores.types\[struct\_kt\].parts` to dispatch on each field's declared type (primitive, nested struct, JsonValue passthrough, or vector). Path-qualified schema-side diagnostics on type mismatches go to `json\_errors()`.  Users should not call this directly — write `MyStruct.parse(value)` instead.
+Return type is declared as `JsonValue` here purely because it shares the same DbRef byte layout as the actual `reference\[T\]` the walker produces — the compile-time codegen at `parse\_type\_parse` overrides the type to `reference\[T\]` for the caller while the stack accounting remains correct. Example: \@STD-009
+
+```rust
+pub fn struct_to_json(self_ref: JsonValue, struct_kt: integer) -> text
+```
+
+Populates json\_errors on type mismatches.  Allocates the result struct into worker stores → par-safe; no parent state writes. P54 Q3 second half — serialise any user struct to canonical JSON. Backs the parser-side intercept for `instance.to\_json()`; the `field == "to\_json"` rewrite in `src/parser/fields.rs` lowers the method call to `n\_struct\_to\_json(self\_ref, struct\_kt)`.  Walks `stores.types\[struct\_kt\].parts` via `Stores::show\_json` (which reuses the existing `ShowDb` schema walker) and produces RFC 8259 JSON text.  String fields are escaped (`"` / `\\` / control bytes); nested structs and vectors recurse; `JsonValue`-typed fields render their inline subtree verbatim.  The first parameter is declared as `JsonValue` purely so the parser type-system accepts the synthesised call regardless of the actual receiver's struct type — the runtime only reads the `struct\_kt` discriminant for dispatch. Example: \@STD-009
+
+```rust
+pub fn struct_to_json_pretty(self_ref: JsonValue, struct_kt: integer) -> text
+```
+
+As `struct\_to\_json` but produces a pretty (2-space-indent, one element per line) form.  Same field-type matrix.
+
+== Type reflection
+
+```rust
+pub enum TypeKind {
+  IntegerKind,
+  LongKind,
+  SingleKind,
+  FloatKind,
+  BooleanKind,
+  TextKind,
+  CharacterKind,
+  /// A struct — its fields are in `fields`.
+  RecordKind,
+  /// An enum — its variants are in `variants`.
+  EnumKind,
+  /// One variant of a struct-enum; it has fields of its own.
+  VariantKind,
+  /// A vector — `element` names what it holds.
+  VectorKind,
+  /// A keyed collection (hash / index / sorted / ordered / radix) — walked by
+  /// cursor rather than by layout, so it has no fields of its own. Which of the
+  /// five it is, and on which fields, are in `collection` and `keys`.
+  KeyedKind,
+  /// A stored reference to another record.
+  RefKind,
+  /// A kind this loft version has no name for. Never guessed at.
+  OtherKind,
+}
+```
+
+What a type IS — the discriminant a caller matches on before reading the fields that only some kinds have.
+These are STORAGE kinds, because storage is what the descriptor records. A narrow `i32` field reports `IntegerKind`; the declared width is visible in `size`, not in a separate kind.
+
+```rust
+pub struct FieldInfo {
+  name: text,
+  /// The field type's name, as the store records it.
+  type_name: text,
+  /// Byte offset of the field within its record.
+  position: integer,
+  kind: TypeKind,
+  /// Was the field DECLARED nullable (`text?` rather than `text`)?
+  ///
+  /// Not a layout fact — a nullable field occupies the same bytes and spells an
+  /// absent value with a sentinel — so nothing in the stored bytes implies it,
+  /// and it reaches you only because the compiler records it. It is what a
+  /// generated `CREATE TABLE` needs for `NOT NULL`.
+  nullable: boolean,
+}
+```
+
+One field of a record or of a struct-enum variant.
+
+```rust
+pub enum CollectionKind {
+  /// Not a keyed collection. Every other kind of type answers this, so a
+  /// caller can read `collection` without matching `kind` first.
+  NotKeyed,
+  KeyedHash,
+  KeyedIndex,
+  KeyedSorted,
+  KeyedOrdered,
+  KeyedRadix,
+  KeyedTrie,
+}
+```
+
+WHICH keyed collection a type is — the shape of its lookup.
+`KeyedKind` says a type is walked by cursor; this says what by. The distinction decides what a query over it can be: a `hash` answers equality only, `sorted` / `ordered` / `index` also answer a range in their declared direction, a `radix` is a Morton-order structure that no SQL shape means the same thing as, and a `trie` answers equality, byte order, and a PREFIX — which is `LIKE 'x%'` and nothing narrower.
+
+```rust
+pub struct KeyInfo {
+  name: text,
+  /// Byte offset of this field within the ELEMENT record — the same number the
+  /// element type's `FieldInfo.position` carries, so a caller joins the two by
+  /// VALUE rather than by matching names. A name is a display fact; the
+  /// position is what the collection actually keys on.
+  position: integer,
+  /// Does the collection order this key ascending?
+  ///
+  /// `true` for a kind that has no order of its own (`hash`, `radix`), and for a
+  /// `trie`, whose single key IS ordered ascending by byte. Only a kind that can
+  /// be declared descending ever answers `false`. Because
+  /// there is no descending answer to give. Match `collection` first where the
+  /// difference between "ascending" and "unordered" matters.
+  ascending: boolean,
+}
+```
+
+One key field of a keyed collection.
+
+```rust
+pub struct VariantInfo {
+  name: text,
+  /// The discriminant this variant is stored as. Never 0 — 0 means absent.
+  tag: integer,
+}
+```
+
+One variant of an enum.
+
+```rust
+pub struct TypeInfo {
+  name: text,
+  kind: TypeKind,
+  /// Bytes one record of this type occupies; 0 for a type with no record.
+  size: integer,
+  const fields: vector<FieldInfo>,
+  const variants: vector<VariantInfo>,
+  /// For a vector or a keyed collection, the element type's name.
+  element: text,
+  /// For a keyed collection, which of the five it is; `NotKeyed` otherwise.
+  collection: CollectionKind,
+  /// The key fields of a keyed collection, in KEY ORDER — the order a composite
+  /// lookup binds them in, which is why it is a vector and not a set.
+  ///
+  /// Empty for every type that is not keyed, and empty for the one keyed shape
+  /// whose keys are not its element's own fields: a `__nullable<S>` element
+  /// keys through its `Some` payload. Empty rather than partial is deliberate —
+  /// a query built from half a composite key is a WRONG query, not a narrower
+  /// one, so a key list is delivered whole or not at all.
+  const keys: vector<KeyInfo>,
+}
+```
+
+The declared shape of one type.
+`fields` is empty for everything but a record and a struct-enum variant; `variants` for everything but an enum; `element` is `""` unless the type holds one. Empty is the honest answer for a kind that has no such thing — a caller matches `kind` first.
+
+```rust
+pub fn reflect_type(kt: integer) -> TypeInfo
+```
+
+The declared shape of `value`'s type.
+\*\*The argument is read for its TYPE and is not evaluated\*\* — the same contract C's `sizeof` has, and for the same reason: nothing about the answer depends on the value. Pass a variable, a field or a parameter; an expression with a side effect will not have it.
+```loft t = type\_of(row); println("{t.name}:"); for f in t.fields { println("  {f.name}: {f.type\_name} \@{f.position}") } ```
+\*\*Not inside a generic.\*\* A generic body is parsed ONCE against its type variable, so `type\_of(v)` there answers `\_\_typevar\_T` — the same reason `"{v:j}"` in a generic body renders `{}`. Call it where the concrete type is known. Making it work inside a generic needs the body parsed per instantiation, which is a different plan.
+Describes a TYPE. To read what a VALUE holds at one of these positions, use `field\_value`. WRITING a value by field is a separate and larger question, deliberately still out of scope.
+`type\_of(x)` is intercepted in `src/parser/control.rs` and lowered to `n\_reflect\_type(\<type-id\>)`, so the id is a parse-time constant on both backends — the same mechanism `to\_json` uses, and the reason the answer does not depend on a runtime name lookup.
+
+```rust
+pub fn type_named(name: text) -> TypeInfo?
+```
+
+Reads the store's type table through `Stores::layout\_descriptor` and allocates the answer into the caller's own stores → par-safe. The declared shape of the type called `name`, or `null` if this program has no such type — reflection with no value in hand.
+This is what an ORM or a schema check needs: the name arrives from a config file, a database catalogue or a command line, so there is nothing to call `type\_of` on.
+```loft t = type\_named("Row"); if t == null { println("no such type") } else { println("{t.name}") } ```
+\*\*`TypeInfo?`, and null means the name is not a type here.\*\* A type that does not exist has no shape, and saying so in the type is what makes a caller handle it rather than read a plausible-looking empty answer.
+A name is matched exactly as the store records it, which is the loft type name — `Point`, `text`, `vector\<Point\>`.
+Unlike `type\_of`, no parser intercept: the name is a RUNTIME value, so the lookup is a runtime one. It works on `--native` because the generated `init()` replays the type registrations — names included — and `Stores::name` is a total lookup that answers "absent" rather than minting a type for a typo.
+
+```rust
+pub struct ValueInfo {
+  /// What the type's own descriptor says lives at that position — never what
+  /// the caller expected to find there.
+  kind: TypeKind,
+  /// The SCALAR at that position holds loft's NULL.
+  ///
+  /// Separate from the payload because a null is not a value a payload can
+  /// spell: `0`, `""` and `false` are ordinary answers a field can genuinely
+  /// hold, and an ORM that could not tell them from SQL NULL would write the
+  /// wrong row. Test this before reading `i` / `f` / `t`.
+  ///
+  /// `false` for a `kind` that has no scalar reading and for `OtherKind` — a
+  /// field that was never read is not a field that read as null, and those are
+  /// three answers rather than two.
+  is_null: boolean,
+  i: integer,
+  f: float,
+  t: text,
+}
+```
+
+One field's VALUE, read out of a record at the position reflection reported.
+`kind` says which payload carries the answer, so a caller matches it once rather than asking a different question per type:
+| `kind` | read | |---|---| | `IntegerKind` · `LongKind` | `i` | | `BooleanKind` | `i` — 1 or 0 | | `CharacterKind` | `i` — the code point | | `FloatKind` · `SingleKind` | `f` | | `TextKind` | `t` | | `OtherKind` | nothing — see `field\_value` |
+A boolean and a character ride in `i` for the reason a bound SQL value does: one integer path is one thing to get right, and the `kind` beside it is what keeps them apart.
+
+```rust
+pub fn reflect_field(value: TypeInfo, position: integer, kt: integer) -> ValueInfo
+```
+
+The value `value` holds at byte `position` — the VALUE half of reflection.
+`type\_of` says a record has a `text` at byte 16; this reads it. Together they are what a generic serialiser, an ORM write or a diff needs, and neither half is enough alone:
+```loft t = type\_of(row); for f in t.fields { v = field\_value(row, f.position); if v.is\_null { println("{f.name}=null") } else { println("{f.name}={v.t}") } } ```
+\*\*The position is CHECKED against the type's own descriptor, never trusted.\*\* A number that does not begin a field — a hand-made offset, a stale one, a position from a different type — answers `OtherKind`, which is also what a field whose type has no scalar reading (a nested record, a vector, a keyed collection, a stored reference) answers. So there is no offset a caller can pass that reads bytes belonging to something else, which is what makes this ordinary loft rather than a pointer.
+`kind` is the DESCRIPTOR's answer, not the caller's: passing the position of an `integer` field does not make the reading an integer, it makes it whatever that field is. That is why the kind is reported rather than requested.
+\*\*REFUSED inside a generic\*\*, and refused rather than merely unsupported. A generic body is parsed once against its type variable, so there is no concrete type to read positions out of — the same limit `type\_of` has. Left to answer, every call there reports `OtherKind`, which for an ORM's write half is an EMPTY ROW rather than an error: the write succeeds and the columns are missing. So it is a compile error naming the type variable. Call it one frame out, where the type is known, and pass the values in.
+`field\_value(x, position)` is intercepted in `src/parser/control.rs` and lowered to `reflect\_field(x, position, \<type-id\>)`, so the id is a parse-time constant on both backends — the same mechanism `type\_of` and `to\_json` use.
+The value parameter is declared `TypeInfo` only because loft has no way to spell "any record"; the parser substitutes the real argument, and only the reference ABI matters here. `struct\_to\_json` (06\_json.loft) does the same.
+
+```rust
+pub fn reflect_field_path(value: TypeInfo, path: vector<integer>, kt: integer) -> ValueInfo
+```
+
+Reads through the SAME `Parts::Struct` field list the store itself is walked by, and allocates the answer into the caller's own stores → par-safe. The value at the end of a PATH of positions — `field\_value(x, \[8, 0\])`.
+`type\_of` reports a nested record's fields at positions relative to THAT record, so one number cannot name `origin.x` — and reflection hands back no handle to a nested record to call `field\_value` on again. A path closes that: each element is a position in the record the previous element landed in.
+\*\*The offsets must not be added up by the caller.\*\* `field\_value(doc, 8 + 0)` asks for a field BEGINNING at byte 8 of `Doc`, which is `origin` itself — the check that makes this ordinary loft rather than a pointer is that a position must begin a field of the type it is read against. So the walk happens inside, one descriptor step per element, each checked the same way.
+```loft // Doc.origin \@8, Point.y \@8 v = field\_value(doc, \[8, 8\]);   // doc.origin.y ```
+Every step but the last must land on an INLINE record. A step onto a scalar, a vector, a keyed collection or a stored reference answers `OtherKind` and reads nothing: a stored reference names a record with its own identity, and following it would be a pointer chase rather than a field read. An empty path answers `OtherKind` for the same reason a bad position does — nothing names a field there.
+A one-element path is the single-position form, and answers identically.
+`field\_value(x, path)` is intercepted in `src/parser/control.rs` beside the single-position form and lowered to `reflect\_field\_path(x, path, \<type-id\>)`, so the type id is a parse-time constant on both backends.
 
 = Roadmap
 

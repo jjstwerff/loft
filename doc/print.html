@@ -68,11 +68,15 @@
 <li class="toc-indent"><a href="#stdlib-field-iteration-support-types">Field iteration support types</a></li>
 <li class="toc-indent"><a href="#stdlib-file-system">File System</a></li>
 <li class="toc-indent"><a href="#stdlib-environment">Environment</a></li>
-<li class="toc-indent"><a href="#stdlib-optional-c-libraries-pln24-arc-g">Optional C libraries (@PLN24 arc G)</a></li>
-<li class="toc-indent"><a href="#stdlib-system-directories-635">System directories (#635)</a></li>
+<li class="toc-indent"><a href="#stdlib-optional-c-libraries">Optional C libraries</a></li>
+<li class="toc-indent"><a href="#stdlib-system-directories">System directories</a></li>
 <li class="toc-indent"><a href="#stdlib-time">Time</a></li>
 <li class="toc-indent"><a href="#stdlib-memory-diagnostics">Memory diagnostics</a></li>
-<li class="toc-indent"><a href="#stdlib-vector-operations-t2-8-t2-5">Vector operations (T2-8, T2-5)</a></li>
+<li class="toc-indent"><a href="#stdlib-vector-operations">Vector operations</a></li>
+<li class="toc-indent"><a href="#stdlib-stack-traces">Stack traces</a></li>
+<li class="toc-indent"><a href="#stdlib-coroutines">Coroutines</a></li>
+<li class="toc-indent"><a href="#stdlib-json">JSON</a></li>
+<li class="toc-indent"><a href="#stdlib-type-reflection">Type reflection</a></li>
 </ul>
 </nav>
 <section class="print-section" id="01-keywords">
@@ -218,8 +222,8 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{nexts}"</span> == <span class="st">"[1,2,3,7,8]"</span>, <span class="st">"Character nexts was {nexts}"</span>);</code></pre>
 <h2 id="searching-inside-text">Searching inside text</h2>
 <p>These built-in functions answer common "does this text contain…?" questions. <code>starts_with</code> and <code>ends_with</code> check the boundaries. <code>find</code> returns the byte offset of the first match, or null if not found. <code>contains</code> is true if the needle appears anywhere in the text. All positions are byte offsets, consistent with <code>len()</code> and slicing.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"something"</span>.<span class="fn-call"><a href="stdlib-vector-operations-t2-8-t2-5.html">starts_with</a></span>(<span class="st">"some"</span>), <span class="st">"starts_with"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"something"</span>.<span class="fn-call"><a href="stdlib-vector-operations-t2-8-t2-5.html">ends_with</a></span>(<span class="st">"thing"</span>), <span class="st">"ends_with"</span>);
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"something"</span>.<span class="fn-call"><a href="stdlib-vector-operations.html">starts_with</a></span>(<span class="st">"some"</span>), <span class="st">"starts_with"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"something"</span>.<span class="fn-call"><a href="stdlib-vector-operations.html">ends_with</a></span>(<span class="st">"thing"</span>), <span class="st">"ends_with"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"something"</span>.<span class="fn-call"><a href="stdlib-text.html">find</a></span>(<span class="st">"th"</span>) == <span class="nm">4</span>, <span class="st">"find returns byte offset"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"a longer text"</span>.<span class="fn-call"><a href="stdlib-text.html">contains</a></span>(<span class="st">"longer"</span>), <span class="st">"contains"</span>);</code></pre>
 <p><code>trim()</code> removes spaces and other whitespace from both ends of a text value. It is useful when reading user input or parsing text from a file.</p>
@@ -2197,11 +2201,11 @@ User.parse(json_parse(text))   -&gt;  Addr.zip: expected JNumber, got JString
 <p>A type-mismatched field leaves the record at its DECLARED default — <code>id</code> is plain, so that is 0, never a null in a slot the declaration says cannot hold one — and the mismatch is reported through <code>json_errors()</code>.</p>
 <pre><code>  bad = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="st">"not_a_number"</span>,<span class="st">"name"</span>:<span class="nm">42</span>}}`);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad.id == <span class="nm">0</span>, <span class="st">"type-mismatched id keeps its default: {bad.id}"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">json_errors</span>() != <span class="st">""</span>, <span class="st">"the mismatch was reported: [{json_errors()}]"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-json.html">json_errors</a></span>() != <span class="st">""</span>, <span class="st">"the mismatch was reported: [{json_errors()}]"</span>);</code></pre>
 <p>…and the next parse replaces it, so a good parse reads clean.</p>
 <pre><code>  fine = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="nm">2</span>,<span class="st">"name"</span>:<span class="st">"n"</span>,<span class="st">"email"</span>:<span class="st">"e"</span>}}`);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(fine.id == <span class="nm">2</span>, <span class="st">"the good parse landed"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">json_errors</span>() == <span class="st">""</span>, <span class="st">"a successful parse clears the errors: [{json_errors()}]"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-json.html">json_errors</a></span>() == <span class="st">""</span>, <span class="st">"a successful parse clears the errors: [{json_errors()}]"</span>);</code></pre>
 <pre><code>  scores = <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Score</span>&gt;.<span class="fn-call">parse</span>(`[{{<span class="st">"value"</span>:<span class="nm">10</span>}},{{<span class="st">"value"</span>:<span class="nm">20</span>}},{{<span class="st">"value"</span>:<span class="nm">30</span>}}]`);
   total = <span class="nm">0</span>;
   <span class="kw">for</span> s <span class="kw">in</span> scores {
@@ -2223,27 +2227,27 @@ User.parse(json_parse(text))   -&gt;  Addr.zip: expected JNumber, got JString
   maybe = <span class="en">MaybeUser</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="nm">1</span>}}`);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!maybe.name, <span class="st">"a missing `text?` field is null"</span>);</code></pre>
 <p>Walking a document by shape rather than by declaration.</p>
-<pre><code>  doc = <span class="fn-call">json_parse</span>(`{{<span class="st">"tag"</span>:<span class="st">"reading"</span>,<span class="st">"n"</span>:<span class="nm">3</span>,<span class="st">"items"</span>:[<span class="st">"a"</span>,<span class="st">"b"</span>]}}`);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(doc.<span class="fn-call">kind</span>() == <span class="st">"JObject"</span>, <span class="st">"the document is an object: {doc.kind()}"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(doc.<span class="fn-call">has_field</span>(<span class="st">"tag"</span>), <span class="st">"it carries `tag`"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((doc.<span class="fn-call">field</span>(<span class="st">"n"</span>).<span class="fn-call">as_long</span>() ?? -<span class="nm">1</span>) == <span class="nm">3</span>, <span class="st">"n is 3"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((doc.<span class="fn-call">field</span>(<span class="st">"tag"</span>).<span class="fn-call">as_text</span>() ?? <span class="st">""</span>) == <span class="st">"reading"</span>, <span class="st">"tag is `reading`"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(doc.<span class="fn-call">keys</span>()) == <span class="nm">3</span>, <span class="st">"three keys: {len(doc.keys())}"</span>);
-  items = doc.<span class="fn-call">field</span>(<span class="st">"items"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(items.<span class="fn-call">kind</span>() == <span class="st">"JArray"</span>, <span class="st">"items is an array"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((items.<span class="fn-call">item</span>(<span class="nm">1</span>).<span class="fn-call">as_text</span>() ?? <span class="st">""</span>) == <span class="st">"b"</span>, <span class="st">"second item is `b`"</span>);</code></pre>
+<pre><code>  doc = <span class="fn-call"><a href="stdlib-json.html">json_parse</a></span>(`{{<span class="st">"tag"</span>:<span class="st">"reading"</span>,<span class="st">"n"</span>:<span class="nm">3</span>,<span class="st">"items"</span>:[<span class="st">"a"</span>,<span class="st">"b"</span>]}}`);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(doc.<span class="fn-call"><a href="stdlib-json.html">kind</a></span>() == <span class="st">"JObject"</span>, <span class="st">"the document is an object: {doc.kind()}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(doc.<span class="fn-call"><a href="stdlib-json.html">has_field</a></span>(<span class="st">"tag"</span>), <span class="st">"it carries `tag`"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((doc.<span class="fn-call"><a href="stdlib-json.html">field</a></span>(<span class="st">"n"</span>).<span class="fn-call"><a href="stdlib-json.html">as_long</a></span>() ?? -<span class="nm">1</span>) == <span class="nm">3</span>, <span class="st">"n is 3"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((doc.<span class="fn-call"><a href="stdlib-json.html">field</a></span>(<span class="st">"tag"</span>).<span class="fn-call"><a href="stdlib-json.html">as_text</a></span>() ?? <span class="st">""</span>) == <span class="st">"reading"</span>, <span class="st">"tag is `reading`"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(doc.<span class="fn-call"><a href="stdlib-json.html">keys</a></span>()) == <span class="nm">3</span>, <span class="st">"three keys: {len(doc.keys())}"</span>);
+  items = doc.<span class="fn-call"><a href="stdlib-json.html">field</a></span>(<span class="st">"items"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(items.<span class="fn-call"><a href="stdlib-json.html">kind</a></span>() == <span class="st">"JArray"</span>, <span class="st">"items is an array"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((items.<span class="fn-call"><a href="stdlib-json.html">item</a></span>(<span class="nm">1</span>).<span class="fn-call"><a href="stdlib-json.html">as_text</a></span>() ?? <span class="st">""</span>) == <span class="st">"b"</span>, <span class="st">"second item is `b`"</span>);</code></pre>
 <p>A field that is not there is <code>JNull</code>, not a fault — so a walk keeps going.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(doc.<span class="fn-call">field</span>(<span class="st">"absent"</span>).<span class="fn-call">kind</span>() == <span class="st">"JNull"</span>, <span class="st">"a missing field answers JNull"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!doc.<span class="fn-call">field</span>(<span class="st">"n"</span>).<span class="fn-call">as_text</span>(), <span class="st">"an `as_` on the wrong kind answers null"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(doc.<span class="fn-call"><a href="stdlib-json.html">field</a></span>(<span class="st">"absent"</span>).<span class="fn-call"><a href="stdlib-json.html">kind</a></span>() == <span class="st">"JNull"</span>, <span class="st">"a missing field answers JNull"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!doc.<span class="fn-call"><a href="stdlib-json.html">field</a></span>(<span class="st">"n"</span>).<span class="fn-call"><a href="stdlib-json.html">as_text</a></span>(), <span class="st">"an `as_` on the wrong kind answers null"</span>);</code></pre>
 <p>Once you know the shape, hand the same tree to the struct form.</p>
 <pre><code>  t = <span class="en">Tagged</span>.<span class="fn-call">parse</span>(doc);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t.tag == <span class="st">"reading"</span>, <span class="st">"the tree parses into a struct too: {t.tag}"</span>);</code></pre>
 <p>Building a document without a struct to describe it.</p>
-<pre><code>  reply = <span class="fn-call">json_object</span>([
-    <span class="en">JsonField</span> { name: <span class="st">"ok"</span>, value: <span class="fn-call">json_bool</span>(<span class="kw">true</span>) },
-    <span class="en">JsonField</span> { name: <span class="st">"n"</span>,  value: <span class="fn-call">json_number</span>(<span class="nm">42.0</span>) },
+<pre><code>  reply = <span class="fn-call"><a href="stdlib-json.html">json_object</a></span>([
+    <span class="en"><a href="stdlib-json.html">JsonField</a></span> { name: <span class="st">"ok"</span>, value: <span class="fn-call"><a href="stdlib-json.html">json_bool</a></span>(<span class="kw">true</span>) },
+    <span class="en"><a href="stdlib-json.html">JsonField</a></span> { name: <span class="st">"n"</span>,  value: <span class="fn-call"><a href="stdlib-json.html">json_number</a></span>(<span class="nm">42.0</span>) },
   ]);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(reply.<span class="fn-call">to_json</span>() == `{{<span class="st">"ok"</span>:<span class="kw">true</span>,<span class="st">"n"</span>:<span class="nm">42</span>}}`, <span class="st">"built: {reply.to_json()}"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(reply.<span class="fn-call"><a href="stdlib-json.html">to_json</a></span>() == `{{<span class="st">"ok"</span>:<span class="kw">true</span>,<span class="st">"n"</span>:<span class="nm">42</span>}}`, <span class="st">"built: {reply.to_json()}"</span>);</code></pre>
 <h2 id="the-shapes-on-the-wire">The shapes on the wire</h2>
 <p>Four encodings a reader interoperating with another system needs, none of which the field declaration makes obvious: * a plain enum variant is an OBJECT keyed by the variant name — <code>Green</code> is <code>{{"Green":{{}}}}</code>, not the string <code>"Green"</code>; * a tuple is an object with <code>_0</code>, <code>_1</code> … keys, not a JSON array; * an absent field is normally LEFT OUT rather than written <code>null</code>, and an absent <code>vector&lt;T&gt;?</code> is left out too — it is not <code>[]</code>, which is the present-but-empty collection and a different value; * a keyed member of a linked collection group is left out as well, because it is an INDEX on the same rows rather than data of its own — and parsing the document back rebuilds it from them.</p>
 <pre><code>  colour = <span class="en">Flag</span> { on: <span class="en">Shade</span>.<span class="en">Green</span> };
@@ -2620,10 +2624,10 @@ Printable  fn to_text(self: T) -&gt; text
   b = <span class="fn-call">next</span>(gen);
   c = <span class="fn-call">next</span>(gen);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(a == <span class="nm">10</span> &amp;&amp; b == <span class="nm">11</span> &amp;&amp; c == <span class="nm">12</span>, <span class="st">"manual next: {a},{b},{c}"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">exhausted</span>(gen), <span class="st">"not yet exhausted, though no values remain"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-coroutines.html">exhausted</a></span>(gen), <span class="st">"not yet exhausted, though no values remain"</span>);
   past_end = <span class="fn-call">next</span>(gen);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(past_end == <span class="kw">null</span>, <span class="st">"next past the last value answers null"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">exhausted</span>(gen), <span class="st">"and now it is exhausted"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-coroutines.html">exhausted</a></span>(gen), <span class="st">"and now it is exhausted"</span>);</code></pre>
 <h2 id="generators-with-parameters">Generators with parameters</h2>
 <p><code>len_twice</code> takes a text parameter and yields its length twice. The text value is preserved across the yield.</p>
 <pre><code>  lt_total = <span class="nm">0</span>;
@@ -3920,10 +3924,9 @@ Printable  fn to_text(self: T) -&gt; text
 <p>4-byte unsigned: 0 – 4_294_967_294.  size(4) forces 4-byte storage and serialisation symmetric with `i32`.  Stored as Parts::Int so the in-memory representation is signed i32; values in the upper half (2^31..2^32-2) round-trip through file I/O via 4-byte raw bytes but read back as negative i64s in expressions.  For full 0..2^32-1 values needed in expression-time arithmetic, declare the field / variable as plain `integer` (8-byte) instead — `u32` is for the file / wire-format use cases (magic numbers, counts, tick fields) where the byte width is the load-bearing property.</p>
 </div>
 <h2 id="stdlib-interfaces">Interfaces</h2>
-<p class="section-desc">Standard interfaces for bounded generic functions. A type satisfies an interface by defining the required operator or method.</p>
 <div class="item">
 <pre><code>pub interface Ordered</code></pre>
-<p>Types that support the `&lt;` comparison operator. Satisfied by integer, single, float, text, and any user type defining OpLt.</p>
+<p>Standard interfaces for bounded generic functions. A type satisfies an interface by defining the required operator or method. Types that support the `&lt;` comparison operator. Satisfied by integer, single, float, text, and any user type defining OpLt.</p>
 <p>`boolean` is NOT among them, deliberately: it satisfies Equatable below and has no ordering, so `false &lt; true` is a refusal rather than a convention the language picks for you.  A program that wants it says so — `(a as integer) &lt; (b as integer)`.  Note this is what bounds the null-ordering half of @FR-E-NullArg, which applies to the ORDERED types only; boolean null still compares with `==` like every other scalar.</p>
 <p>ONE method is all a type has to define: inside a generic bounded by this, `&gt;`, `&lt;=` and `&gt;=` all derive from `&lt;` — `a &gt; b` is `b &lt; a`, `a &lt;= b` is `!(b &lt; a)`, `a &gt;= b` is `!(a &lt; b)`.  Each evaluates its operands exactly once.</p>
 </div>
@@ -3971,30 +3974,39 @@ Printable  fn to_text(self: T) -&gt; text
 </div>
 <div class="item">
 <pre><code>pub fn sin(both: single) -&gt; single</code></pre>
+<p>Sine. Use for circular motion: y = r * sin(angle).</p>
 </div>
 <div class="item">
 <pre><code>pub fn tan(both: single) -&gt; single</code></pre>
+<p>Tangent. Use for slopes and perspective projection.</p>
 </div>
 <div class="item">
 <pre><code>pub fn acos(both: single) -&gt; single?</code></pre>
+<p>Arc cosine. Returns the angle (in radians) whose cosine is v.</p>
 </div>
 <div class="item">
 <pre><code>pub fn asin(both: single) -&gt; single?</code></pre>
+<p>Arc sine. Returns the angle whose sine is v.</p>
 </div>
 <div class="item">
 <pre><code>pub fn atan(both: single) -&gt; single</code></pre>
+<p>Arc tangent of a single value. Returns angle in (-PI/2, PI/2).</p>
 </div>
 <div class="item">
 <pre><code>pub fn ceil(both: single) -&gt; single</code></pre>
+<p>Round up to the nearest integer value. Use to compute required buffer sizes from fractional counts.</p>
 </div>
 <div class="item">
 <pre><code>pub fn floor(both: single) -&gt; single</code></pre>
+<p>Round down to the nearest integer value. Use to convert a float position to a tile index.</p>
 </div>
 <div class="item">
 <pre><code>pub fn round(both: single) -&gt; single</code></pre>
+<p>Round to the nearest integer value (half rounds away from zero).</p>
 </div>
 <div class="item">
 <pre><code>pub fn sqrt(both: single) -&gt; single?</code></pre>
+<p>Square root. Use for distances and normalization.</p>
 </div>
 <div class="item">
 <pre><code>pub fn atan2(both: single, v2: single) -&gt; single</code></pre>
@@ -4002,6 +4014,7 @@ Printable  fn to_text(self: T) -&gt; text
 </div>
 <div class="item">
 <pre><code>pub fn log(both: single, v2: single) -&gt; single?</code></pre>
+<p>Logarithm of v in the given base. Use for converting between scales (e.g., decibels).</p>
 </div>
 <div class="item">
 <pre><code>pub fn pow(both: single, v2: single) -&gt; single?</code></pre>
@@ -4025,30 +4038,39 @@ Printable  fn to_text(self: T) -&gt; text
 </div>
 <div class="item">
 <pre><code>pub fn sin(both: float) -&gt; float</code></pre>
+<p>Sine. Use for circular motion: y = r * sin(angle).</p>
 </div>
 <div class="item">
 <pre><code>pub fn tan(both: float) -&gt; float</code></pre>
+<p>Tangent. Use for slopes and perspective projection.</p>
 </div>
 <div class="item">
 <pre><code>pub fn acos(both: float) -&gt; float?</code></pre>
+<p>Arc cosine. Returns the angle (in radians) whose cosine is v.</p>
 </div>
 <div class="item">
 <pre><code>pub fn asin(both: float) -&gt; float?</code></pre>
+<p>Arc sine. Returns the angle whose sine is v.</p>
 </div>
 <div class="item">
 <pre><code>pub fn atan(both: float) -&gt; float</code></pre>
+<p>Arc tangent of a single value. Returns angle in (-PI/2, PI/2).</p>
 </div>
 <div class="item">
 <pre><code>pub fn ceil(both: float) -&gt; float</code></pre>
+<p>Round up to the nearest integer value. Use to compute required buffer sizes from fractional counts.</p>
 </div>
 <div class="item">
 <pre><code>pub fn floor(both: float) -&gt; float</code></pre>
+<p>Round down to the nearest integer value. Use to convert a float position to a tile index.</p>
 </div>
 <div class="item">
 <pre><code>pub fn round(both: float) -&gt; float</code></pre>
+<p>Round to the nearest integer value (half rounds away from zero).</p>
 </div>
 <div class="item">
 <pre><code>pub fn sqrt(both: float) -&gt; float?</code></pre>
+<p>Square root. Use for distances and normalization.</p>
 </div>
 <div class="item">
 <pre><code>pub fn atan2(both: float, v2: float) -&gt; float</code></pre>
@@ -4056,15 +4078,16 @@ Printable  fn to_text(self: T) -&gt; text
 </div>
 <div class="item">
 <pre><code>pub fn log(both: float, v2: float) -&gt; float?</code></pre>
+<p>Logarithm of v in the given base. Use for converting between scales (e.g., decibels).</p>
 </div>
 <div class="item">
 <pre><code>pub fn pow(both: float, v2: float) -&gt; float?</code></pre>
 <p>Raises base to the power exp. Use for exponential growth curves and scaling.</p>
 </div>
 <h2 id="stdlib-exp-ln-log2-log10">exp / ln / log2 / log10</h2>
-<p class="section-desc">Raises E (2.71828…) to the power v. Use for exponential growth models.</p>
 <div class="item">
 <pre><code>pub fn exp(both: single) -&gt; single</code></pre>
+<p>Raises E (2.71828…) to the power v. Use for exponential growth models.</p>
 </div>
 <div class="item">
 <pre><code>pub fn exp(both: float) -&gt; float</code></pre>
@@ -4072,6 +4095,7 @@ Printable  fn to_text(self: T) -&gt; text
 </div>
 <div class="item">
 <pre><code>pub fn ln(both: single) -&gt; single?</code></pre>
+<p>Natural logarithm (base E). Use for growth rates and information entropy.</p>
 </div>
 <div class="item">
 <pre><code>pub fn ln(both: float) -&gt; float?</code></pre>
@@ -4079,6 +4103,7 @@ Printable  fn to_text(self: T) -&gt; text
 </div>
 <div class="item">
 <pre><code>pub fn log2(both: single) -&gt; single?</code></pre>
+<p>Base-2 logarithm. Use for bit-count calculations and information theory.</p>
 </div>
 <div class="item">
 <pre><code>pub fn log2(both: float) -&gt; float?</code></pre>
@@ -4086,6 +4111,7 @@ Printable  fn to_text(self: T) -&gt; text
 </div>
 <div class="item">
 <pre><code>pub fn log10(both: single) -&gt; single?</code></pre>
+<p>Base-10 logarithm. Use for decibels, orders of magnitude, and display scales.</p>
 </div>
 <div class="item">
 <pre><code>pub fn log10(both: float) -&gt; float?</code></pre>
@@ -4137,7 +4163,7 @@ Printable  fn to_text(self: T) -&gt; text
 <p>Approximate equality for single-precision floats (see the float overload).</p>
 </div>
 <h2 id="stdlib-text">Text</h2>
-<p class="section-desc">Functions for working with text (UTF-8 strings) and character values. Read the value of a variable and put a reference to it on the stack</p>
+<p class="section-desc">Functions for working with text (UTF-8 strings) and character values.</p>
 <div class="item">
 <pre><code>pub fn len(both: text) -&gt; integer</code></pre>
 <p>Number of characters (Unicode code points) in the text (@PLN110) — the human count, as in every mainstream language. For a byte length (bounds checks, the limit of byte-positioned indexing / slicing) use `size`.</p>
@@ -4150,12 +4176,14 @@ Printable  fn to_text(self: T) -&gt; text
 <pre><code>pub fn len(both: character) -&gt; integer</code></pre>
 <p>Byte length of the character's UTF-8 encoding (1–4).</p>
 </div>
-<p class="section-desc">Splits self on every occurrence of separator and returns the parts as a vector. Use to parse CSV lines or space-separated tokens.</p>
 <div class="item">
 <pre><code>pub fn split(self: text, separator: character) -&gt; vector&lt;text&gt;</code></pre>
+<p>Splits self on every occurrence of separator and returns the parts as a vector. Use to parse CSV lines or space-separated tokens.</p>
 </div>
 <div class="item">
 <pre><code>pub fn split_text(self: text, separator: text) -&gt; vector&lt;text&gt;</code></pre>
+<p>Split on a multi-character text separator.  `&quot;a, b, c&quot;.split_text(&quot;, &quot;)` returns `[&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]`.  Edge cases: - empty self → empty result - empty separator → returns `[self]` unchanged (no infinite-split) - separator never matches → returns `[self]` - separator at start / end → produces empty boundary entries</p>
+<p>Named `split_text` (not an overload of `split`) because loft does not overload by non-self parameter type.</p>
 </div>
 <div class="item">
 <pre><code>pub fn starts_with_at(self: text, pos: integer, prefix: text) -&gt; boolean</code></pre>
@@ -4330,6 +4358,7 @@ Printable  fn to_text(self: T) -&gt; text
 </div>
 <div class="item">
 <pre><code>pub fn println(v1: text)</code></pre>
+<p>Writes v followed by a newline. The standard choice for line-oriented output.</p>
 </div>
 <div class="item">
 <pre><code>pub fn eprint(v1: text)</code></pre>
@@ -4345,6 +4374,7 @@ Printable  fn to_text(self: T) -&gt; text
 </div>
 <div class="item">
 <pre><code>pub fn len(both: trie) -&gt; integer</code></pre>
+<p>Number of elements in the trie.</p>
 </div>
 <h2 id="stdlib-vector-aggregates">Vector aggregates</h2>
 <div class="item">
@@ -4445,6 +4475,7 @@ Printable  fn to_text(self: T) -&gt; text
   name: text,
   value: text,
 }</code></pre>
+<p>One entry of the process environment, as `env_variables()` answers them: the variable's name and its value, both as plain text.</p>
 </div>
 <div class="item">
 <pre><code>pub enum Format {
@@ -4454,6 +4485,7 @@ Printable  fn to_text(self: T) -&gt; text
   Directory,
   NotExists,
 }</code></pre>
+<p>Describes how a file is opened. TextFile: read or write as UTF-8 text (default). LittleEndian: binary mode, least-significant byte first. BigEndian: binary mode, most-significant byte first. Directory: represents a directory path. NotExists: no file or directory exist.</p>
 </div>
 <div class="item">
 <pre><code>pub enum FileResult {
@@ -4488,6 +4520,7 @@ Printable  fn to_text(self: T) -&gt; text
 
   next: integer,
 }</code></pre>
+<p>A handle to a filesystem entry. Fields: path (full path), size (file size in bytes), format (open mode), current (byte position after last read), next (byte position to read next).</p>
 </div>
 <div class="item">
 <pre><code>pub fn content(self: File) -&gt; text?fs#read</code></pre>
@@ -4497,15 +4530,17 @@ Printable  fn to_text(self: T) -&gt; text
 <pre><code>pub fn lines(self: File) -&gt; vector&lt;text&gt; fs#read</code></pre>
 <p>Par-safe: reads the file into a worker-local store; the host bridge serialises filesystem access. Reads the file and splits it into lines. Strips trailing '\r' so CRLF files (Windows) and LF files (Unix) produce identical results. Use when processing line-by-line (logs, CSV, etc.). Example: @STD-011</p>
 </div>
-<p class="section-desc">Returns the platform path separator character: '\' on Windows, '/' elsewhere. Detected once at startup from the runtime filesystem.</p>
 <div class="item">
 <pre><code>pub fn path_sep() -&gt; character</code></pre>
+<p>Returns the platform path separator character: '\' on Windows, '/' elsewhere. Detected once at startup from the runtime filesystem.</p>
 </div>
 <div class="item">
 <pre><code>pub fn file(path: text) -&gt; File fs#read</code></pre>
+<p>Plan-06 phase 5a: #impure(host_io) — reads a host-detected constant.  Could be #pure once detected (it's invariant for the lifetime of a process), but the runtime caches it inside Stores so the access is observable. Use as the entry point for all file I/O. A relative path resolves against the program's own directory (#255 / @PLN9), so `../data.txt` names the file above the script — the same file an absolute path would name, and it answers the same either way (loft#712).</p>
 </div>
 <div class="item">
 <pre><code>pub fn exists(path: text) -&gt; boolean fs#read</code></pre>
+<p>Stat-equivalent filesystem read; par-safe. Use to check whether a path is accessible before reading or writing it. A RELATIVE path resolves against the program's own directory, or against the working directory under `#cwd`; an absolute path is used as given, including one outside the project.  This is not an access boundary — the boundary is the `fs` capability a `[sandbox]` profile grants or withholds.</p>
 </div>
 <div class="item">
 <pre><code>pub fn exists(both: File) -&gt; boolean fs#read</code></pre>
@@ -4513,15 +4548,19 @@ Printable  fn to_text(self: T) -&gt; text
 </div>
 <div class="item">
 <pre><code>pub fn delete(path: text) -&gt; FileResult fs#update</code></pre>
+<p>Use to remove a file after processing or as a cleanup step. Returns FileResult.Ok on success and FileResult.NotFound when the file did not exist.  A path outside the project is deleted like any other; withhold the `fs` capability in a `[sandbox]` profile to prevent that.</p>
 </div>
 <div class="item">
 <pre><code>pub fn move(from: text, to: text) -&gt; FileResult fs#update</code></pre>
+<p>Par-safe filesystem write; the host bridge serialises mutations. Use to rename or relocate a file.  The destination must not already exist (FileResult.Other if it does), and a missing source is FileResult.NotFound. Neither path is confined to the project directory.</p>
 </div>
 <div class="item">
 <pre><code>pub fn mkdir(path: text) -&gt; FileResult fs#update</code></pre>
+<p>Create a single directory level; the parent must already exist. FileResult.Other when the directory is already there.  There is no counterpart that REMOVES a directory (loft#1256).</p>
 </div>
 <div class="item">
 <pre><code>pub fn mkdir_all(path: text) -&gt; FileResult fs#update</code></pre>
+<p>Create a directory and all missing parents (like Unix mkdir -p). Idempotent: a directory that already exists is FileResult.Ok, which is what makes it safe on the way into a run.  There is no counterpart that REMOVES a directory (loft#1256).</p>
 </div>
 <div class="item">
 <pre><code>pub fn rmdir(path: text) -&gt; FileResult fs#update</code></pre>
@@ -4549,7 +4588,7 @@ Printable  fn to_text(self: T) -&gt; text
 </div>
 <div class="item">
 <pre><code>pub fn mtime(path: text) -&gt; integer fs#read</code></pre>
-<p>Modification time of `path` as Unix epoch SECONDS (integer — same i64 representation as file.size).  Returns 0 on missing file / IO error / pre-epoch dates — caller treats 0 as &quot;unknown&quot; (matches scan.sh's `stat -c %Y || echo 0` fallback). Takes a path string rather than a File handle so the native + interp dispatch both use the same `n_mtime` registration. Use for date-window filters: convert the returned seconds to YYYY-MM-DD and compare lexicographically against `ymd_days_ago(N)`.</p>
+<p>Truncate or extend the file to exactly `size` bytes. Truncating removes bytes beyond `size`; extending fills with null bytes. Returns FileResult.NotFound if the file does not exist; FileResult.IsDirectory if the path is a directory; FileResult.Other if size is negative. Modification time of `path` as Unix epoch SECONDS (integer — same i64 representation as file.size).  Returns 0 on missing file / IO error / pre-epoch dates — caller treats 0 as &quot;unknown&quot; (matches scan.sh's `stat -c %Y || echo 0` fallback). Takes a path string rather than a File handle so the native + interp dispatch both use the same `n_mtime` registration. Use for date-window filters: convert the returned seconds to YYYY-MM-DD and compare lexicographically against `ymd_days_ago(N)`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_durable_check(path: text) -&gt; boolean fs#read</code></pre>
@@ -4666,6 +4705,7 @@ Printable  fn to_text(self: T) -&gt; text
 </div>
 <div class="item">
 <pre><code>pub fn store_load_key(local: reference, path: text, key: integer) -&gt; boolean fs#read</code></pre>
+<p>Fetch ONE integer-keyed entry from a persisted collection image into `local`, reading only the pages the lookup touches. The singular of `store_load_keys` and the integer form of `store_load_key_text`; returns false when the key is absent or the image cannot serve this collection. @PLN97 arc G (loft#522). tiles: hash&lt;Tile[id]&gt; = [] store_load_key(tiles, &quot;block.store&quot;, 42)</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_load_key_text(local: reference, path: text, key: text) -&gt; boolean fs#read</code></pre>
@@ -4713,26 +4753,28 @@ Printable  fn to_text(self: T) -&gt; text
 </div>
 <div class="item">
 <pre><code>pub fn sync(self: File) -&gt; boolean fs#update</code></pre>
+<p>Flushes buffered bytes for self to the underlying storage so that the preceding writes are durable. Use between log records or block boundaries to guarantee that earlier appends have landed on disk before later ones are issued.</p>
 </div>
 <div class="item">
 <pre><code>pub fn files(self: File) -&gt; vector&lt;File&gt; fs#read</code></pre>
+<p>Returns the entries inside a directory, sorted by path — the same order as `list_dir`, so an index into either listing means the same entry. The File must have format == Format.Directory; anything else lists as `[]` (where `list_dir` answers null, because it has no format to check first). Use to iterate over all files in a folder.</p>
 </div>
 <div class="item">
 <pre><code>pub fn write(self: File, v: text) -&gt; FileResult fs#update</code></pre>
 <p>Writes v as UTF-8 text to the file, overwriting existing content.  Returns FileResult.Ok on success and FileResult.Other on an OS write failure (disk full, permission denied, a bad path) — a failed write is OBSERVABLE, not silently swallowed.  Discarding callers (`f.write(s)` as a statement) are unaffected; check with `f.write(s).ok()` or match the result.</p>
 </div>
 <h2 id="stdlib-environment">Environment</h2>
-<p class="section-desc">Returns all environment variables as a vector of EnvVariable records (fields: name, value). Use to inspect or forward the full environment.</p>
 <div class="item">
 <pre><code>pub fn env_variables() -&gt; vector&lt;EnvVariable&gt; env#read</code></pre>
+<p>Returns all environment variables as a vector of EnvVariable records (fields: name, value). Use to inspect or forward the full environment.</p>
 </div>
 <div class="item">
 <pre><code>pub fn env_variable(name: text) -&gt; text env#read</code></pre>
-<p>Returns the value of the environment variable name, or null if it is not set. Use to read configuration from the shell environment.</p>
+<p>Returns the value of the environment variable `name`, or `&quot;&quot;` when it is not set. An unset variable and one set to the empty string give the same answer, so this cannot tell them apart (loft#1302). Use to read configuration from the shell environment.</p>
 </div>
-<p class="section-desc">Functions for interacting with the host operating system. Returns the script-level arguments passed after the script path. Does not include the loft binary name or loft CLI flags.</p>
 <div class="item">
 <pre><code>pub fn arguments() -&gt; vector&lt;text&gt;</code></pre>
+<p>Functions for interacting with the host operating system. Returns the script-level arguments passed after the script path. Does not include the loft binary name or loft CLI flags.</p>
 </div>
 <div class="item">
 <pre><code>pub fn ymd_days_ago(days: integer) -&gt; text</code></pre>
@@ -4754,15 +4796,15 @@ Printable  fn to_text(self: T) -&gt; text
 <pre><code>pub fn source_dir() -&gt; text</code></pre>
 <p>Returns the directory containing the main source file being executed. Use to locate data files relative to the script, regardless of working directory.</p>
 </div>
-<h2 id="stdlib-optional-c-libraries-pln24-arc-g">Optional C libraries (@PLN24 arc G)</h2>
+<h2 id="stdlib-optional-c-libraries">Optional C libraries</h2>
 <div class="item">
 <pre><code>pub fn c_library_available(soname: text) -&gt; boolean env#read</code></pre>
 <p>Returns whether the C library soname is usable right now: it loads, and every `#c` binding declared against it resolves in it.</p>
 <p>Ask this before calling into a library declared with `[c] optional-libs`, which is not installed on every machine and is loaded only when a binding needs it. Both halves of the answer matter — a library of the wrong version loads and then exports only some of the symbols, so &quot;the file is there&quot; would say yes where the call still fails.</p>
 <p>A library the program never declared answers false.</p>
 </div>
-<h2 id="stdlib-system-directories-635">System directories (#635)</h2>
-<p class="section-desc">Private native: the OS temp dir, &quot;&quot; only where there is no filesystem.</p>
+<h2 id="stdlib-system-directories">System directories</h2>
+<p class="section-desc">Where this machine keeps temporary files, the user's home, and the per-user config, cache and data directories — each answering &quot;&quot; where the platform has no such place.</p>
 <div class="item">
 <pre><code>pub fn temp_dir() -&gt; text?env#read</code></pre>
 <p>Returns the system temporary directory, or null on a target with no filesystem (the browser). Prefer this over reading TMPDIR / TEMP / TMP directly: those differ by platform (Unix uses TMPDIR, Windows TEMP/TMP) and this also applies the OS fallback (e.g. /tmp) when none is set.</p>
@@ -4796,11 +4838,12 @@ Printable  fn to_text(self: T) -&gt; text
 <pre><code>pub fn store_memory() -&gt; text</code></pre>
 <p>Returns a multi-line snapshot of all LIVE stores' internal memory utilisation: total capacity vs actual claimed data vs free space, record + free-block counts, mergeable adjacent-free pairs (free neighbours that should have coalesced), and the largest stores by capacity with their creation site (`bc:&lt;pos&gt;` — a bytecode position on the interpreter; 0 on --native) and type name.  Use to watch memory growth in a running program.</p>
 </div>
-<h2 id="stdlib-vector-operations-t2-8-t2-5">Vector operations (T2-8, T2-5)</h2>
-<p class="section-desc">reverse(v) and sort(v) are compiler special-cased in parse_call.</p>
+<h2 id="stdlib-vector-operations">Vector operations</h2>
+<p class="section-desc">Reordering a vector in place: `reverse(v)` turns it end for end and `sort(v)` puts it in ascending order.</p>
 <div class="item">
 <pre><code>pub fn starts_with(self: text, value: text) -&gt; boolean</code></pre>
-<p>Returns true if self begins with value. Use for prefix matching (e.g., protocol detection).</p>
+<p>── Path helpers (moved from 03_text.loft so they're available before file-I/O code that wants to compose them) ─────────</p>
+<p>loft treats paths as plain text; this group adds the most-needed path operations (dir_of / basename / resolve_relative) as methods on text. Pure-loft, slash-separated; Windows backslash normalisation is out of scope. `starts_with` / `ends_with` are dependencies of `join` / `resolve` so they also live here (was 03_text.loft). Returns true if self begins with value. Use for prefix matching (e.g., protocol detection).</p>
 </div>
 <div class="item">
 <pre><code>pub fn ends_with(self: text, value: text) -&gt; boolean</code></pre>
@@ -4821,6 +4864,366 @@ Printable  fn to_text(self: T) -&gt; text
 <div class="item">
 <pre><code>pub fn resolve(self: text, target: text) -&gt; text</code></pre>
 <p>Resolve `target` against `self` (where self is a base directory). Strips leading `./` repeatedly; each `../` segment trims the last component from `self`.  Mirrors scan.loft's `resolve_link_path`. &quot;doc/claude&quot;.resolve(&quot;../README.md&quot;)     → &quot;doc/README.md&quot; &quot;doc/claude&quot;.resolve(&quot;./PROBLEMS.md&quot;)    → &quot;doc/claude/PROBLEMS.md&quot; &quot;a/b/c&quot;.resolve(&quot;../../x&quot;)               → &quot;a/x&quot; &quot;&quot;.resolve(&quot;foo&quot;)                        → &quot;foo&quot;</p>
+</div>
+<h2 id="stdlib-stack-traces">Stack traces</h2>
+<div class="item">
+<pre><code>pub enum ArgValue {
+  NullVal,
+  BoolVal { b: boolean },
+  IntVal { n: integer },
+  LongVal { n: integer },
+  FloatVal { f: float },
+  SingleVal { f: single },
+  CharVal { c: character },
+  TextVal { t: text },
+  RefVal { store: integer, rec: integer, pos: integer },
+  FnVal { d_nr: integer },
+  OtherVal { description: text },
+}</code></pre>
+<p>Typed union of inspectable argument/variable values. Each variant wraps one primitive type so that match expressions can recover the concrete value from a StackFrame's argument list.</p>
+</div>
+<div class="item">
+<pre><code>pub struct ArgInfo {
+  name: text,
+  type_name: text,
+  value: ArgValue,
+}</code></pre>
+<p>One function argument in a stack frame.</p>
+</div>
+<div class="item">
+<pre><code>pub struct VarInfo {
+  name: text,
+  type_name: text,
+  value: ArgValue,
+}</code></pre>
+<p>One local variable in a stack frame (populated only by stack_trace_full).</p>
+</div>
+<div class="item">
+<pre><code>pub struct StackFrame {
+  function: text,
+  file: text,
+  line: integer,
+  arguments: vector&lt;ArgInfo&gt;,
+  variables: vector&lt;VarInfo&gt;,
+}</code></pre>
+<p>One call frame in the stack trace.</p>
+</div>
+<div class="item">
+<pre><code>pub fn stack_trace() -&gt; vector&lt;StackFrame&gt;</code></pre>
+<p>Return the current call stack as a vector of frames, outermost first. TR1.4: Each frame's `variables` field is populated with the live local variables at that frame's call site (typed via `ArgValue`).  Use this to inspect not only the current function's variables but also the variables of any function further up the call stack:</p>
+<p>```loft fn debug_dump() { for frame in stack_trace() { println(&quot;{frame.function}:{frame.line}&quot;); for v in frame.variables { println(&quot;  {v.name} = {v.value}&quot;); } } } ```</p>
+</div>
+<h2 id="stdlib-coroutines">Coroutines</h2>
+<div class="item">
+<pre><code>pub enum CoroutineStatus {
+  Created,
+  Suspended,
+  Running,
+  Exhausted,
+}</code></pre>
+<p>Lifecycle state of a coroutine frame. Transitions: Created -&gt; Running -&gt; Suspended -&gt; Running -&gt; ... -&gt; Exhausted.</p>
+</div>
+<div class="item">
+<pre><code>pub fn exhausted(gen: reference) -&gt; boolean</code></pre>
+<p>CO1.6: Returns true if the coroutine has finished producing values.</p>
+</div>
+<h2 id="stdlib-json">JSON</h2>
+<div class="item">
+<pre><code>pub enum JsonValue {
+  JNull,
+  JBool { value: boolean },
+  JNumber { value: float },
+  JString { value: text },
+  JArray { items: vector&lt;JsonValue&gt; },
+  JObject { fields: vector&lt;JsonField&gt; },
+  JInteger { value: integer },
+}</code></pre>
+<p>Typed union of JSON values.  The discriminant (1..6) picks the active variant; variant data lives in the variant's fields. Matches the RFC 8259 kinds, plus `JInteger` (@PLN109) for an integer-shaped number preserved to an exact `integer` (i64).</p>
+<p>`JInteger` MUST stay the LAST variant: the store discriminant it gets (7) is hard-coded as `JV_DISCR_INT` in `src/native.rs`, and the existing variants' discriminants (1–6) must not shift.</p>
+</div>
+<div class="item">
+<pre><code>pub struct JsonField {
+  name: text,
+  value: JsonValue,
+}</code></pre>
+<p>One field of a `JObject`.  Stored as a `vector&lt;JsonField&gt;` rather than a `hash&lt;JsonField[name]&gt;` in step 2 — the hash form is a 0.9.0 follow-up once hash iteration and nested struct-enum-in-hash layouts are exercised end-to-end.  Linear scan is fine for the object sizes typical in configuration / API responses.</p>
+</div>
+<div class="item">
+<pre><code>pub fn json_parse(raw: text) -&gt; JsonValue</code></pre>
+<p>Parse JSON text into a `JsonValue` tree.  Malformed input returns `JNull`; the error trail is accessible via `json_errors()`.  All six variants materialise (primitives, arrays, objects, nested containers); the entire tree lives in one store and frees as one unit when the root `DbRef` leaves scope.</p>
+<p>```loft match json_parse(raw) { JObject { fields } =&gt; for f in fields { handle(f) }, JArray  { items }  =&gt; for v in items  { handle(v) }, JNull              =&gt; println(&quot;parse error: {json_errors()}&quot;), _                  =&gt; println(&quot;unexpected root kind&quot;), } ``` Example: @STD-007</p>
+</div>
+<div class="item">
+<pre><code>pub fn json_errors() -&gt; text</code></pre>
+<p>Populates the runtime's per-call json_errors state (read by json_errors()).  Allocates the result tree into worker-local stores → par-safe; no parent state written. Return a pipe-separated trail of JSON parse errors from the most recent `json_parse` call.  Empty when the parse succeeded.  Each entry carries an RFC 6901 path, a `line:col` location, and a context snippet — see Q1 in `doc/claude/QUALITY.md`.</p>
+</div>
+<div class="item">
+<pre><code>pub fn field(self: JsonValue, name: text) -&gt; JsonValue</code></pre>
+<p>Observes the runtime's json_errors state populated by json_parse.  No parent writes. JObject indexer — returns the value at `name`, or `JNull` when `self` isn't a JObject or the key is missing.  Chained access like `root.field(&quot;a&quot;).field(&quot;b&quot;)` is safe — every intermediate missing produces `JNull`, never a trap.</p>
+</div>
+<div class="item">
+<pre><code>pub fn item(self: JsonValue, index: integer) -&gt; JsonValue</code></pre>
+<p>JArray indexer — returns the element at `index`, or `JNull` when `self` isn't a JArray or the index is out of bounds.</p>
+</div>
+<div class="item">
+<pre><code>pub fn len(self: JsonValue) -&gt; integer</code></pre>
+<p>Length of a JArray's items vector or a JObject's fields vector. Returns `null` (i32::MIN) for any other variant.</p>
+</div>
+<div class="item">
+<pre><code>pub fn as_text(self: JsonValue) -&gt; text</code></pre>
+<p>Typed extractor — returns `null` on kind mismatch.</p>
+</div>
+<div class="item">
+<pre><code>pub fn as_number(self: JsonValue) -&gt; float</code></pre>
+<p>Typed extractor — returns `null` on kind mismatch.</p>
+</div>
+<div class="item">
+<pre><code>pub fn as_long(self: JsonValue) -&gt; integer</code></pre>
+<p>Typed extractor — returns `null` on kind mismatch.  Truncates the underlying `float` toward zero before converting.</p>
+</div>
+<div class="item">
+<pre><code>pub fn as_bool(self: JsonValue) -&gt; boolean</code></pre>
+<p>Typed extractor. Unlike its three siblings this one never answers `null`: every kind mismatch answers `false` — a missing field, a number, the string `&quot;true&quot;` — which cannot be told from a field that really says `false`. Test `kind()` or `has_field()` first where that distinction matters (loft#1302).</p>
+</div>
+<div class="item">
+<pre><code>pub fn kind(self: JsonValue) -&gt; text</code></pre>
+<p>Q2 introspection — returns the variant name as text: `&quot;JNull&quot;`, `&quot;JBool&quot;`, `&quot;JNumber&quot;`, `&quot;JString&quot;`, `&quot;JArray&quot;`, or `&quot;JObject&quot;`.  Cheap: reads the discriminant byte, formats a literal.  Useful for logs and conditional branches that don't want to commit to a full pattern match.</p>
+</div>
+<div class="item">
+<pre><code>pub fn keys(self: JsonValue) -&gt; vector&lt;text&gt;</code></pre>
+<p>Q2 introspection — returns the field-name list of a `JObject` in insertion order, or an empty vector for any other variant. Safe idiom: `for k in v.keys() { ... }` works on any JsonValue because non-objects yield an empty walk.</p>
+</div>
+<div class="item">
+<pre><code>pub fn fields(self: JsonValue) -&gt; vector&lt;JsonField&gt;</code></pre>
+<p>Q2 introspection — returns the (name, value) entries of a `JObject` in insertion order so callers can iterate as `for entry in fields(v) { … entry.name … entry.value … }`. Values deep-copy (primitives + nested containers — full tree). Empty vector for any other variant.</p>
+</div>
+<div class="item">
+<pre><code>pub fn has_field(self: JsonValue, name: text) -&gt; boolean</code></pre>
+<p>Q2 introspection — returns true iff `self` is a `JObject` variant carrying a field named `name`.  All other variants (including `JNull` on a parse error) return false, so the common pattern `if v.has_field(&quot;users&quot;) { … }` is safe to write on any JsonValue without first destructuring. Distinguishes &quot;absent&quot; from &quot;present-but-null&quot; — a field whose value is `JNull` still returns `true`.</p>
+</div>
+<div class="item">
+<pre><code>pub fn to_json(self: JsonValue) -&gt; text</code></pre>
+<p>Q3 serialiser — render a JsonValue to canonical RFC 8259 JSON text.  All six variants serialise; `JArray` / `JObject` recurse through their children (full tree serialisation, nested containers walk naturally).  Strings escape `&quot;`, `\\`, and ASCII control bytes; UTF-8 passes through verbatim. Non-finite numbers render as `null`.</p>
+</div>
+<div class="item">
+<pre><code>pub fn to_json_pretty(self: JsonValue) -&gt; text</code></pre>
+<p>Q3 pretty serialiser — `to_json_pretty` produces 2-space indented, one-element-per-line output for non-empty `JArray` / `JObject` containers.  Empty containers render `[]` / `{}` (no newline padding).  Primitives are byte-identical to `to_json` (no nested structure to indent).  After object keys the colon is followed by a single space (`&quot;k&quot;: v`). Useful for golden-file tests and log output.</p>
+</div>
+<div class="item">
+<pre><code>pub fn json_null() -&gt; JsonValue</code></pre>
+<p>Q4 constructor — build a JsonValue set to the `JNull` variant. Useful in test fixtures and reply-construction code that needs a known-null JsonValue without going through `json_parse(&quot;null&quot;)`.</p>
+</div>
+<div class="item">
+<pre><code>pub fn json_bool(v: boolean) -&gt; JsonValue</code></pre>
+<p>Q4 constructor — build a JsonValue set to the `JBool` variant carrying the supplied boolean payload.</p>
+</div>
+<div class="item">
+<pre><code>pub fn json_number(v: float?) -&gt; JsonValue</code></pre>
+<p>Q4 constructor — build a JsonValue set to the `JNumber` variant carrying the supplied float payload.  Non-finite inputs (float null = NaN, or ±Inf) produce `JNull` with a diagnostic in `json_errors()` — mirrors the RFC 8259 constraint that JSON numbers must be finite.  The parameter is `float?` because handling a null/NaN input IS its contract (→ `JNull`); a finite `float` passes as a non-null value into the nullable slot as usual.</p>
+</div>
+<div class="item">
+<pre><code>pub fn json_string(v: text) -&gt; JsonValue</code></pre>
+<p>Non-finite inputs touch json_errors state.  Otherwise pure construction into worker stores. Q4 constructor — build a JsonValue set to the `JString` variant carrying the supplied text payload.  The text is copied into the JsonValue's own store, so the returned value owns the string independently of the argument's lifetime.</p>
+</div>
+<div class="item">
+<pre><code>pub fn json_array(items: vector&lt;JsonValue&gt;) -&gt; JsonValue</code></pre>
+<p>Q4 constructor — build a JsonValue set to the `JArray` variant carrying the supplied items.  Each element is deep-copied into the new tree's arena via the shared `dbref_to_parsed` walker, so nested containers and arena-origin subtrees (e.g. a captured `field()` result) embed correctly.  Empty input produces a real empty JArray. Example: @STD-008</p>
+</div>
+<div class="item">
+<pre><code>pub fn json_object(fields: vector&lt;JsonField&gt;) -&gt; JsonValue</code></pre>
+<p>Build a JsonValue set to the `JObject` variant carrying the supplied fields.  Each field's value deep-copies via the same `dbref_to_parsed` walker as `json_array`, so a JObject can carry captured-subtree JArray / JObject values.  Empty input produces a real empty JObject. Example: @STD-008</p>
+</div>
+<div class="item">
+<pre><code>pub fn struct_from_jsonvalue(v: JsonValue, struct_kt: integer) -&gt; JsonValue</code></pre>
+<p>Internal walker — populate a struct of the given `struct_kt` (known-type number) from a JsonValue.  Compile-time codegen for `Struct.parse(JsonValue)` emits exactly one call to this function regardless of struct shape; the runtime walker uses `stores.types[struct_kt].parts` to dispatch on each field's declared type (primitive, nested struct, JsonValue passthrough, or vector). Path-qualified schema-side diagnostics on type mismatches go to `json_errors()`.  Users should not call this directly — write `MyStruct.parse(value)` instead.</p>
+<p>Return type is declared as `JsonValue` here purely because it shares the same DbRef byte layout as the actual `reference[T]` the walker produces — the compile-time codegen at `parse_type_parse` overrides the type to `reference[T]` for the caller while the stack accounting remains correct. Example: @STD-009</p>
+</div>
+<div class="item">
+<pre><code>pub fn struct_to_json(self_ref: JsonValue, struct_kt: integer) -&gt; text</code></pre>
+<p>Populates json_errors on type mismatches.  Allocates the result struct into worker stores → par-safe; no parent state writes. P54 Q3 second half — serialise any user struct to canonical JSON. Backs the parser-side intercept for `instance.to_json()`; the `field == &quot;to_json&quot;` rewrite in `src/parser/fields.rs` lowers the method call to `n_struct_to_json(self_ref, struct_kt)`.  Walks `stores.types[struct_kt].parts` via `Stores::show_json` (which reuses the existing `ShowDb` schema walker) and produces RFC 8259 JSON text.  String fields are escaped (`&quot;` / `\` / control bytes); nested structs and vectors recurse; `JsonValue`-typed fields render their inline subtree verbatim.  The first parameter is declared as `JsonValue` purely so the parser type-system accepts the synthesised call regardless of the actual receiver's struct type — the runtime only reads the `struct_kt` discriminant for dispatch. Example: @STD-009</p>
+</div>
+<div class="item">
+<pre><code>pub fn struct_to_json_pretty(self_ref: JsonValue, struct_kt: integer) -&gt; text</code></pre>
+<p>As `struct_to_json` but produces a pretty (2-space-indent, one element per line) form.  Same field-type matrix.</p>
+</div>
+<h2 id="stdlib-type-reflection">Type reflection</h2>
+<div class="item">
+<pre><code>pub enum TypeKind {
+  IntegerKind,
+  LongKind,
+  SingleKind,
+  FloatKind,
+  BooleanKind,
+  TextKind,
+  CharacterKind,
+  /// A struct — its fields are in `fields`.
+  RecordKind,
+  /// An enum — its variants are in `variants`.
+  EnumKind,
+  /// One variant of a struct-enum; it has fields of its own.
+  VariantKind,
+  /// A vector — `element` names what it holds.
+  VectorKind,
+  /// A keyed collection (hash / index / sorted / ordered / radix) — walked by
+  /// cursor rather than by layout, so it has no fields of its own. Which of the
+  /// five it is, and on which fields, are in `collection` and `keys`.
+  KeyedKind,
+  /// A stored reference to another record.
+  RefKind,
+  /// A kind this loft version has no name for. Never guessed at.
+  OtherKind,
+}</code></pre>
+<p>What a type IS — the discriminant a caller matches on before reading the fields that only some kinds have.</p>
+<p>These are STORAGE kinds, because storage is what the descriptor records. A narrow `i32` field reports `IntegerKind`; the declared width is visible in `size`, not in a separate kind.</p>
+</div>
+<div class="item">
+<pre><code>pub struct FieldInfo {
+  name: text,
+  /// The field type's name, as the store records it.
+  type_name: text,
+  /// Byte offset of the field within its record.
+  position: integer,
+  kind: TypeKind,
+  /// Was the field DECLARED nullable (`text?` rather than `text`)?
+  ///
+  /// Not a layout fact — a nullable field occupies the same bytes and spells an
+  /// absent value with a sentinel — so nothing in the stored bytes implies it,
+  /// and it reaches you only because the compiler records it. It is what a
+  /// generated `CREATE TABLE` needs for `NOT NULL`.
+  nullable: boolean,
+}</code></pre>
+<p>One field of a record or of a struct-enum variant.</p>
+</div>
+<div class="item">
+<pre><code>pub enum CollectionKind {
+  /// Not a keyed collection. Every other kind of type answers this, so a
+  /// caller can read `collection` without matching `kind` first.
+  NotKeyed,
+  KeyedHash,
+  KeyedIndex,
+  KeyedSorted,
+  KeyedOrdered,
+  KeyedRadix,
+  KeyedTrie,
+}</code></pre>
+<p>WHICH keyed collection a type is — the shape of its lookup.</p>
+<p>`KeyedKind` says a type is walked by cursor; this says what by. The distinction decides what a query over it can be: a `hash` answers equality only, `sorted` / `ordered` / `index` also answer a range in their declared direction, a `radix` is a Morton-order structure that no SQL shape means the same thing as, and a `trie` answers equality, byte order, and a PREFIX — which is `LIKE 'x%'` and nothing narrower.</p>
+</div>
+<div class="item">
+<pre><code>pub struct KeyInfo {
+  name: text,
+  /// Byte offset of this field within the ELEMENT record — the same number the
+  /// element type's `FieldInfo.position` carries, so a caller joins the two by
+  /// VALUE rather than by matching names. A name is a display fact; the
+  /// position is what the collection actually keys on.
+  position: integer,
+  /// Does the collection order this key ascending?
+  ///
+  /// `true` for a kind that has no order of its own (`hash`, `radix`), and for a
+  /// `trie`, whose single key IS ordered ascending by byte. Only a kind that can
+  /// be declared descending ever answers `false`. Because
+  /// there is no descending answer to give. Match `collection` first where the
+  /// difference between &quot;ascending&quot; and &quot;unordered&quot; matters.
+  ascending: boolean,
+}</code></pre>
+<p>One key field of a keyed collection.</p>
+</div>
+<div class="item">
+<pre><code>pub struct VariantInfo {
+  name: text,
+  /// The discriminant this variant is stored as. Never 0 — 0 means absent.
+  tag: integer,
+}</code></pre>
+<p>One variant of an enum.</p>
+</div>
+<div class="item">
+<pre><code>pub struct TypeInfo {
+  name: text,
+  kind: TypeKind,
+  /// Bytes one record of this type occupies; 0 for a type with no record.
+  size: integer,
+  const fields: vector&lt;FieldInfo&gt;,
+  const variants: vector&lt;VariantInfo&gt;,
+  /// For a vector or a keyed collection, the element type's name.
+  element: text,
+  /// For a keyed collection, which of the five it is; `NotKeyed` otherwise.
+  collection: CollectionKind,
+  /// The key fields of a keyed collection, in KEY ORDER — the order a composite
+  /// lookup binds them in, which is why it is a vector and not a set.
+  ///
+  /// Empty for every type that is not keyed, and empty for the one keyed shape
+  /// whose keys are not its element's own fields: a `__nullable&lt;S&gt;` element
+  /// keys through its `Some` payload. Empty rather than partial is deliberate —
+  /// a query built from half a composite key is a WRONG query, not a narrower
+  /// one, so a key list is delivered whole or not at all.
+  const keys: vector&lt;KeyInfo&gt;,
+}</code></pre>
+<p>The declared shape of one type.</p>
+<p>`fields` is empty for everything but a record and a struct-enum variant; `variants` for everything but an enum; `element` is `&quot;&quot;` unless the type holds one. Empty is the honest answer for a kind that has no such thing — a caller matches `kind` first.</p>
+</div>
+<div class="item">
+<pre><code>pub fn reflect_type(kt: integer) -&gt; TypeInfo</code></pre>
+<p>The declared shape of `value`'s type.</p>
+<p>**The argument is read for its TYPE and is not evaluated** — the same contract C's `sizeof` has, and for the same reason: nothing about the answer depends on the value. Pass a variable, a field or a parameter; an expression with a side effect will not have it.</p>
+<p>```loft t = type_of(row); println(&quot;{t.name}:&quot;); for f in t.fields { println(&quot;  {f.name}: {f.type_name} @{f.position}&quot;) } ```</p>
+<p>**Not inside a generic.** A generic body is parsed ONCE against its type variable, so `type_of(v)` there answers `__typevar_T` — the same reason `&quot;{v:j}&quot;` in a generic body renders `{}`. Call it where the concrete type is known. Making it work inside a generic needs the body parsed per instantiation, which is a different plan.</p>
+<p>Describes a TYPE. To read what a VALUE holds at one of these positions, use `field_value`. WRITING a value by field is a separate and larger question, deliberately still out of scope.</p>
+<p>`type_of(x)` is intercepted in `src/parser/control.rs` and lowered to `n_reflect_type(&lt;type-id&gt;)`, so the id is a parse-time constant on both backends — the same mechanism `to_json` uses, and the reason the answer does not depend on a runtime name lookup.</p>
+</div>
+<div class="item">
+<pre><code>pub fn type_named(name: text) -&gt; TypeInfo?</code></pre>
+<p>Reads the store's type table through `Stores::layout_descriptor` and allocates the answer into the caller's own stores → par-safe. The declared shape of the type called `name`, or `null` if this program has no such type — reflection with no value in hand.</p>
+<p>This is what an ORM or a schema check needs: the name arrives from a config file, a database catalogue or a command line, so there is nothing to call `type_of` on.</p>
+<p>```loft t = type_named(&quot;Row&quot;); if t == null { println(&quot;no such type&quot;) } else { println(&quot;{t.name}&quot;) } ```</p>
+<p>**`TypeInfo?`, and null means the name is not a type here.** A type that does not exist has no shape, and saying so in the type is what makes a caller handle it rather than read a plausible-looking empty answer.</p>
+<p>A name is matched exactly as the store records it, which is the loft type name — `Point`, `text`, `vector&lt;Point&gt;`.</p>
+<p>Unlike `type_of`, no parser intercept: the name is a RUNTIME value, so the lookup is a runtime one. It works on `--native` because the generated `init()` replays the type registrations — names included — and `Stores::name` is a total lookup that answers &quot;absent&quot; rather than minting a type for a typo.</p>
+</div>
+<div class="item">
+<pre><code>pub struct ValueInfo {
+  /// What the type's own descriptor says lives at that position — never what
+  /// the caller expected to find there.
+  kind: TypeKind,
+  /// The SCALAR at that position holds loft's NULL.
+  ///
+  /// Separate from the payload because a null is not a value a payload can
+  /// spell: `0`, `&quot;&quot;` and `false` are ordinary answers a field can genuinely
+  /// hold, and an ORM that could not tell them from SQL NULL would write the
+  /// wrong row. Test this before reading `i` / `f` / `t`.
+  ///
+  /// `false` for a `kind` that has no scalar reading and for `OtherKind` — a
+  /// field that was never read is not a field that read as null, and those are
+  /// three answers rather than two.
+  is_null: boolean,
+  i: integer,
+  f: float,
+  t: text,
+}</code></pre>
+<p>One field's VALUE, read out of a record at the position reflection reported.</p>
+<p>`kind` says which payload carries the answer, so a caller matches it once rather than asking a different question per type:</p>
+<p>| `kind` | read | |---|---| | `IntegerKind` · `LongKind` | `i` | | `BooleanKind` | `i` — 1 or 0 | | `CharacterKind` | `i` — the code point | | `FloatKind` · `SingleKind` | `f` | | `TextKind` | `t` | | `OtherKind` | nothing — see `field_value` |</p>
+<p>A boolean and a character ride in `i` for the reason a bound SQL value does: one integer path is one thing to get right, and the `kind` beside it is what keeps them apart.</p>
+</div>
+<div class="item">
+<pre><code>pub fn reflect_field(value: TypeInfo, position: integer, kt: integer) -&gt; ValueInfo</code></pre>
+<p>The value `value` holds at byte `position` — the VALUE half of reflection.</p>
+<p>`type_of` says a record has a `text` at byte 16; this reads it. Together they are what a generic serialiser, an ORM write or a diff needs, and neither half is enough alone:</p>
+<p>```loft t = type_of(row); for f in t.fields { v = field_value(row, f.position); if v.is_null { println(&quot;{f.name}=null&quot;) } else { println(&quot;{f.name}={v.t}&quot;) } } ```</p>
+<p>**The position is CHECKED against the type's own descriptor, never trusted.** A number that does not begin a field — a hand-made offset, a stale one, a position from a different type — answers `OtherKind`, which is also what a field whose type has no scalar reading (a nested record, a vector, a keyed collection, a stored reference) answers. So there is no offset a caller can pass that reads bytes belonging to something else, which is what makes this ordinary loft rather than a pointer.</p>
+<p>`kind` is the DESCRIPTOR's answer, not the caller's: passing the position of an `integer` field does not make the reading an integer, it makes it whatever that field is. That is why the kind is reported rather than requested.</p>
+<p>**REFUSED inside a generic**, and refused rather than merely unsupported. A generic body is parsed once against its type variable, so there is no concrete type to read positions out of — the same limit `type_of` has. Left to answer, every call there reports `OtherKind`, which for an ORM's write half is an EMPTY ROW rather than an error: the write succeeds and the columns are missing. So it is a compile error naming the type variable. Call it one frame out, where the type is known, and pass the values in.</p>
+<p>`field_value(x, position)` is intercepted in `src/parser/control.rs` and lowered to `reflect_field(x, position, &lt;type-id&gt;)`, so the id is a parse-time constant on both backends — the same mechanism `type_of` and `to_json` use.</p>
+<p>The value parameter is declared `TypeInfo` only because loft has no way to spell &quot;any record&quot;; the parser substitutes the real argument, and only the reference ABI matters here. `struct_to_json` (06_json.loft) does the same.</p>
+</div>
+<div class="item">
+<pre><code>pub fn reflect_field_path(value: TypeInfo, path: vector&lt;integer&gt;, kt: integer) -&gt; ValueInfo</code></pre>
+<p>Reads through the SAME `Parts::Struct` field list the store itself is walked by, and allocates the answer into the caller's own stores → par-safe. The value at the end of a PATH of positions — `field_value(x, [8, 0])`.</p>
+<p>`type_of` reports a nested record's fields at positions relative to THAT record, so one number cannot name `origin.x` — and reflection hands back no handle to a nested record to call `field_value` on again. A path closes that: each element is a position in the record the previous element landed in.</p>
+<p>**The offsets must not be added up by the caller.** `field_value(doc, 8 + 0)` asks for a field BEGINNING at byte 8 of `Doc`, which is `origin` itself — the check that makes this ordinary loft rather than a pointer is that a position must begin a field of the type it is read against. So the walk happens inside, one descriptor step per element, each checked the same way.</p>
+<p>```loft // Doc.origin @8, Point.y @8 v = field_value(doc, [8, 8]);   // doc.origin.y ```</p>
+<p>Every step but the last must land on an INLINE record. A step onto a scalar, a vector, a keyed collection or a stored reference answers `OtherKind` and reads nothing: a stored reference names a record with its own identity, and following it would be a pointer chase rather than a field read. An empty path answers `OtherKind` for the same reason a bad position does — nothing names a field there.</p>
+<p>A one-element path is the single-position form, and answers identically.</p>
+<p>`field_value(x, path)` is intercepted in `src/parser/control.rs` beside the single-position form and lowered to `reflect_field_path(x, path, &lt;type-id&gt;)`, so the type id is a parse-time constant on both backends.</p>
 </div>
 </section>
 </body>
