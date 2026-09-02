@@ -17,6 +17,8 @@
 #
 # Usage:  scripts/refresh-unreleased.py            # refresh all libs
 #         scripts/refresh-unreleased.py <name...>  # only these libs (still writes all)
+#         scripts/refresh-unreleased.py --force     # re-extract even when the sha matches
+#                                                   #   (use when the EXTRACTOR changed)
 from __future__ import annotations
 
 import base64
@@ -75,7 +77,15 @@ def extract_api(owner_repo: str, subpath: str) -> list[dict]:
 
 
 def main() -> int:
-    only = set(sys.argv[1:])
+    argv = sys.argv[1:]
+    # The sha keys the SOURCE, and the source is only half of what the snapshot depends on:
+    # the other half is the EXTRACTOR.  When `loft api`'s reading of a doc comment changes,
+    # every sha is still identical and every entry is reused, so the snapshot silently keeps
+    # answers the current binary would not give.  That is how the library review went on
+    # reporting 334 undocumented public functions after the reader was fixed.  `--force`
+    # re-extracts regardless of sha; reach for it whenever the extractor moved, not the libs.
+    force = "--force" in argv
+    only = {a for a in argv if not a.startswith("--")}
     if INDEX.exists():
         index = json.loads(INDEX.read_text(encoding="utf-8"))
     else:  # local build with no committed seed — fetch the live registry index
@@ -94,7 +104,7 @@ def main() -> int:
         sha = origin_main_sha(owner_repo, subpath)
         if not sha:
             continue
-        if prior.get(name, {}).get("sha") == sha:
+        if not force and prior.get(name, {}).get("sha") == sha:
             result[name] = prior[name]  # not stale — reuse (no fetch, no extract)
             sys.stderr.write(f"  {name}: reuse ({sha[:7]})\n")
             continue
