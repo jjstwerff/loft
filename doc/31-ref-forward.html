@@ -4,47 +4,98 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Reference parameter forwarding — Loft, a programming language for small browser games</title>
-  <meta name="description" content="Forwarding &amp; parameters between functions">
+  <meta name="description" content="What a function can change about the values you hand it">
 <link rel="canonical" href="https://loft-lang.org/loft/31-ref-forward.html">
 <meta property="og:title" content="Reference parameter forwarding — Loft, a programming language for small browser games">
-<meta property="og:description" content="Forwarding &amp; parameters between functions">
+<meta property="og:description" content="What a function can change about the values you hand it">
 <meta property="og:type" content="article">
 <meta property="og:url" content="https://loft-lang.org/loft/31-ref-forward.html">
 <meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
 <meta property="og:site_name" content="Loft">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Reference parameter forwarding — Loft, a programming language for small browser games">
-<meta name="twitter:description" content="Forwarding &amp; parameters between functions">
+<meta name="twitter:description" content="What a function can change about the values you hand it">
 <meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
 <link rel="stylesheet" href="style.css">
 <style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
 </head>
 <body>
-<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <a href="libraries.html">Libraries</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <span class="cur">Reference parameter forwarding</span> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <a href="38-call-it-yourself.html">Call it yourself</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <a href="libraries.html">Libraries</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <span class="cur">Reference parameter forwarding</span> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <a href="38-call-it-yourself.html">Call it yourself</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries.html">Optional C libraries</a> · <a href="stdlib-system-directories.html">System directories</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations.html">Vector operations</a> · <a href="stdlib-stack-traces.html">Stack traces</a> · <a href="stdlib-coroutines.html">Coroutines</a> · <a href="stdlib-json.html">JSON</a> · <a href="stdlib-type-reflection.html">Type reflection</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>Reference parameter forwarding</h1>
 <article>
-<p>@ARGS: --lib tests/lib When a function receives a <code>&amp;Struct</code> (mutable reference) parameter and passes it to another function that also takes <code>&amp;Struct</code>, the reference must be forwarded without dereferencing. This is P144.</p>
-<pre><code><span class="kw">use</span> p144_entry;</code></pre>
+<p>When you pass a value to a function, what can that function change about it?  The answer depends on the value's type and on one annotation, <code>&amp;</code>. This chapter is about the whole of that rule, because the half of it people usually assume is the wrong half.</p>
+<pre><code><span class="kw">struct</span> <span class="en">Item</span> { val: <span class="ty"><a href="stdlib-types.html">integer</a></span> }
+<span class="kw">struct</span> <span class="en">Box</span> { items: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Item</span>&gt; }</code></pre>
+<h2 id="a-scalar-argument-is-copied">A scalar argument is copied</h2>
+<p>The callee gets its own number.  Nothing it does can reach the caller.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">bump</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) { n = n + <span class="nm">1</span>; }</code></pre>
+<h2 id="a-struct-or-collection-argument-is-shared">A struct or collection argument is SHARED</h2>
+<p>No annotation needed.  Writing a field, writing an element, appending, removing and clearing are all done to the caller's value.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">set_first</span>(b: <span class="en">Box</span>) { b.items[<span class="nm">0</span>].val = <span class="nm">7</span>; }
+<span class="kw">fn</span> <span class="fn-call">add_one</span>(b: <span class="en">Box</span>) { b.items += [<span class="en">Item</span> { val: <span class="nm">1</span> }]; }
+<span class="kw">fn</span> <span class="fn-call">empty_it</span>(b: <span class="en">Box</span>) { b.items.<span class="fn-call"><a href="stdlib-collections.html">clear</a></span>(); }</code></pre>
+<h2 id="what-adds-replacement">What <code>&amp;</code> adds: REPLACEMENT</h2>
+<p>Assigning the whole binding — <code>b = ...</code> — is the one operation that does NOT reach the caller through a plain parameter.  It rebinds the callee's own name and the caller keeps what it had.  Declaring the parameter <code>&amp;</code> turns that assignment into a write-back, and that is all <code>&amp;</code> does.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">replace_plain</span>(b: <span class="en">Box</span>) { b = <span class="en">Box</span> { items: [<span class="en">Item</span> { val: <span class="nm">99</span> }] }; }
+<span class="kw">fn</span> <span class="fn-call">replace_ref</span>(b: &amp;<span class="en">Box</span>) { b = <span class="en">Box</span> { items: [<span class="en">Item</span> { val: <span class="nm">99</span> }] }; }</code></pre>
+<h2 id="forwarding">Forwarding</h2>
+<p>A <code>&amp;</code> parameter can be handed to another function that also takes <code>&amp;</code>. The reference is forwarded rather than dereferenced, so the innermost function's replacement still reaches the outermost caller, at any depth.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">forward_replace</span>(b: &amp;<span class="en">Box</span>) { <span class="fn-call">replace_ref</span>(b); }</code></pre>
+<p>These two only append and write elements, so neither needs <code>&amp;</code> — a plain parameter already does both to the caller's value.  The compiler says so if you add one: <code>advice[slow-reference-parameter]</code>.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">ensure</span>(b: <span class="en">Box</span>) {
+  <span class="kw">if</span> <span class="bi"><a href="stdlib-text.html">len</a></span>(b.items) == <span class="nm">0</span> { b.items += [<span class="en">Item</span> { val: <span class="nm">0</span> }]; }
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">set_val</span>(b: <span class="en">Box</span>, val: <span class="ty"><a href="stdlib-types.html">integer</a></span>) {
+  <span class="fn-call">ensure</span>(b);
+  <span class="kw">for</span> sv_item <span class="kw">in</span> b.items {
+    <span class="kw">if</span> sv_item.val == <span class="nm">0</span> { sv_item.val = val; <span class="kw">return</span>; }
+  }
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
-<p>box_set_val calls box_ensure(b) internally — forwarding the &amp; param.</p>
+<h2 id="a-scalar-is-copied">A scalar is copied</h2>
+<pre><code>  n = <span class="nm">1</span>;
+  <span class="fn-call">bump</span>(n);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n == <span class="nm">1</span>, <span class="st">"a scalar argument is copied"</span>);</code></pre>
+<h2 id="a-struct-or-collection-is-shared-no-required">A struct or collection is shared — no <code>&amp;</code> required</h2>
+<pre><code>  shared = <span class="en">Box</span> { items: [<span class="en">Item</span> { val: <span class="nm">0</span> }] };
+  <span class="fn-call">set_first</span>(shared);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(shared.items[<span class="nm">0</span>].val == <span class="nm">7</span>, <span class="st">"an element write reaches the caller"</span>);
+  <span class="fn-call">add_one</span>(shared);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(shared.items) == <span class="nm">2</span>, <span class="st">"an append reaches the caller"</span>);
+  <span class="fn-call">empty_it</span>(shared);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(shared.items) == <span class="nm">0</span>, <span class="st">"a clear reaches the caller"</span>);</code></pre>
+<p>This is the half people assume is the other way round.  <code>&amp;</code> is NOT the permission you need in order to append to a vector parameter — a plain parameter already grows the caller's vector.</p>
+<h2 id="replacement-is-the-one-thing-that-needs">Replacement is the one thing that needs <code>&amp;</code></h2>
+<pre><code>  keep = <span class="en">Box</span> { items: [<span class="en">Item</span> { val: <span class="nm">1</span> }] };
+  <span class="fn-call">replace_plain</span>(keep);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(keep.items[<span class="nm">0</span>].val == <span class="nm">1</span>, <span class="st">"a plain parameter cannot replace the whole value"</span>);
+  swap = <span class="en">Box</span> { items: [<span class="en">Item</span> { val: <span class="nm">1</span> }] };
+  <span class="fn-call">replace_ref</span>(swap);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(swap.items[<span class="nm">0</span>].val == <span class="nm">99</span>, <span class="st">"a `&amp;` parameter can"</span>);</code></pre>
+<p>So read <code>&amp;</code> on a signature as "this function may hand you back a different value", not as "this function may modify what you give it".</p>
+<h2 id="forwarding-carries-it-through">Forwarding carries it through</h2>
+<p>The forwarder needs the <code>&amp;</code> as much as the function it calls.  Its own body never assigns to the parameter, so the <code>&amp;</code> can look unnecessary — but it is what carries the inner replacement out.  Written <code>fn forward_replace(b: Box)</code> the assertion below fails, and nothing reports it.</p>
+<pre><code>  deep = <span class="en">Box</span> { items: [<span class="en">Item</span> { val: <span class="nm">1</span> }] };
+  <span class="fn-call">forward_replace</span>(deep);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(deep.items[<span class="nm">0</span>].val == <span class="nm">99</span>, <span class="st">"the replacement survives one forward"</span>);</code></pre>
+<p>A chain of plain parameters carries the shared value just as far, which is why <code>set_val</code> below needs no annotation at any level.</p>
 <pre><code>  b = <span class="en">Box</span> { items: [] };
-  <span class="fn-call">box_set_val</span>(b, <span class="nm">42</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b.items[<span class="nm">0</span>].val == <span class="nm">42</span>, <span class="st">"P144: &amp; forwarded — item set to 42"</span>);</code></pre>
-<p>Calling the inner function directly also works.</p>
+  <span class="fn-call">set_val</span>(b, <span class="nm">42</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b.items[<span class="nm">0</span>].val == <span class="nm">42</span>, <span class="st">"a plain parameter forwards its sharing too"</span>);</code></pre>
+<p>Calling the inner function directly does the same thing, and calling it twice is harmless: it only fills an empty box.</p>
 <pre><code>  b2 = <span class="en">Box</span> { items: [] };
-  <span class="fn-call">box_ensure</span>(b2);
+  <span class="fn-call">ensure</span>(b2);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(b2.items) == <span class="nm">1</span>, <span class="st">"ensure added one item"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b2.items[<span class="nm">0</span>].val == <span class="nm">0</span>, <span class="st">"default val is 0"</span>);</code></pre>
-<p>Multiple forwards: ensure is idempotent.</p>
-<pre><code>  <span class="fn-call">box_ensure</span>(b2);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(b2.items) == <span class="nm">1</span>, <span class="st">"ensure idempotent"</span>);</code></pre>
-<p>Set a second value via box_set_val on a pre-populated box.</p>
+  <span class="fn-call">ensure</span>(b2);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(b2.items) == <span class="nm">1</span>, <span class="st">"ensure is idempotent"</span>);</code></pre>
+<h2 id="a-worked-example">A worked example</h2>
+<p><code>set_val</code> fills the first zero slot, leaving anything already set alone.</p>
 <pre><code>  b3 = <span class="en">Box</span> { items: [] };
-  b3.items += [<span class="en">Inner</span> { val: <span class="nm">10</span> }];
-  b3.items += [<span class="en">Inner</span> { val: <span class="nm">0</span> }];
-  <span class="fn-call">box_set_val</span>(b3, <span class="nm">99</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b3.items[<span class="nm">0</span>].val == <span class="nm">10</span>, <span class="st">"existing item preserved"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b3.items[<span class="nm">1</span>].val == <span class="nm">99</span>, <span class="st">"zero item replaced"</span>);
+  b3.items += [<span class="en">Item</span> { val: <span class="nm">10</span> }];
+  b3.items += [<span class="en">Item</span> { val: <span class="nm">0</span> }];
+  <span class="fn-call">set_val</span>(b3, <span class="nm">99</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b3.items[<span class="nm">0</span>].val == <span class="nm">10</span>, <span class="st">"an existing value is left alone"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b3.items[<span class="nm">1</span>].val == <span class="nm">99</span>, <span class="st">"the empty slot is filled"</span>);
 }</code></pre>
 <section id="loft-panel" class="loft-panel" hidden>
 <h2>Run it yourself</h2>
@@ -60,36 +111,113 @@
 <pre id="lp-source" hidden>// Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Reference parameter forwarding
-// @TITLE: Forwarding &amp; parameters between functions
-// @ARGS: --lib tests/lib
-// When a function receives a `&amp;Struct` (mutable reference) parameter and
-// passes it to another function that also takes `&amp;Struct`, the reference
-// must be forwarded without dereferencing. This is P144.
-use p144_entry;
+// @TITLE: What a function can change about the values you hand it
+// When you pass a value to a function, what can that function change about
+// it?  The answer depends on the value's type and on one annotation, `&amp;`.
+// This chapter is about the whole of that rule, because the half of it
+// people usually assume is the wrong half.
+struct Item { val: integer }
+struct Box { items: vector&lt;Item&gt; }
+
+// ## A scalar argument is copied
+// The callee gets its own number.  Nothing it does can reach the caller.
+fn bump(n: integer) { n = n + 1; }
+
+// ## A struct or collection argument is SHARED
+// No annotation needed.  Writing a field, writing an element, appending,
+// removing and clearing are all done to the caller's value.
+fn set_first(b: Box) { b.items[0].val = 7; }
+fn add_one(b: Box) { b.items += [Item { val: 1 }]; }
+fn empty_it(b: Box) { b.items.clear(); }
+
+// ## What `&amp;` adds: REPLACEMENT
+// Assigning the whole binding — `b = ...` — is the one operation that does
+// NOT reach the caller through a plain parameter.  It rebinds the callee's
+// own name and the caller keeps what it had.  Declaring the parameter `&amp;`
+// turns that assignment into a write-back, and that is all `&amp;` does.
+fn replace_plain(b: Box) { b = Box { items: [Item { val: 99 }] }; }
+fn replace_ref(b: &amp;Box) { b = Box { items: [Item { val: 99 }] }; }
+
+// ## Forwarding
+// A `&amp;` parameter can be handed to another function that also takes `&amp;`.
+// The reference is forwarded rather than dereferenced, so the innermost
+// function's replacement still reaches the outermost caller, at any depth.
+fn forward_replace(b: &amp;Box) { replace_ref(b); }
+
+// These two only append and write elements, so neither needs `&amp;` — a plain
+// parameter already does both to the caller's value.  The compiler says so
+// if you add one: `advice[slow-reference-parameter]`.
+fn ensure(b: Box) {
+  if len(b.items) == 0 { b.items += [Item { val: 0 }]; }
+}
+
+fn set_val(b: Box, val: integer) {
+  ensure(b);
+  for sv_item in b.items {
+    if sv_item.val == 0 { sv_item.val = val; return; }
+  }
+}
 
 fn main() {
-  // box_set_val calls box_ensure(b) internally — forwarding the &amp; param.
+  // ## A scalar is copied
+  n = 1;
+  bump(n);
+  assert(n == 1, "a scalar argument is copied");
+
+  // ## A struct or collection is shared — no `&amp;` required
+  shared = Box { items: [Item { val: 0 }] };
+  set_first(shared);
+  assert(shared.items[0].val == 7, "an element write reaches the caller");
+  add_one(shared);
+  assert(len(shared.items) == 2, "an append reaches the caller");
+  empty_it(shared);
+  assert(len(shared.items) == 0, "a clear reaches the caller");
+  // This is the half people assume is the other way round.  `&amp;` is NOT the
+  // permission you need in order to append to a vector parameter — a plain
+  // parameter already grows the caller's vector.
+
+  // ## Replacement is the one thing that needs `&amp;`
+  keep = Box { items: [Item { val: 1 }] };
+  replace_plain(keep);
+  assert(keep.items[0].val == 1, "a plain parameter cannot replace the whole value");
+  swap = Box { items: [Item { val: 1 }] };
+  replace_ref(swap);
+  assert(swap.items[0].val == 99, "a `&amp;` parameter can");
+  // So read `&amp;` on a signature as "this function may hand you back a
+  // different value", not as "this function may modify what you give it".
+
+  // ## Forwarding carries it through
+  // The forwarder needs the `&amp;` as much as the function it calls.  Its own
+  // body never assigns to the parameter, so the `&amp;` can look unnecessary —
+  // but it is what carries the inner replacement out.  Written
+  // `fn forward_replace(b: Box)` the assertion below fails, and nothing
+  // reports it.
+  deep = Box { items: [Item { val: 1 }] };
+  forward_replace(deep);
+  assert(deep.items[0].val == 99, "the replacement survives one forward");
+
+  // A chain of plain parameters carries the shared value just as far, which
+  // is why `set_val` below needs no annotation at any level.
   b = Box { items: [] };
-  box_set_val(b, 42);
-  assert(b.items[0].val == 42, "P144: &amp; forwarded — item set to 42");
+  set_val(b, 42);
+  assert(b.items[0].val == 42, "a plain parameter forwards its sharing too");
 
-  // Calling the inner function directly also works.
+  // Calling the inner function directly does the same thing, and calling it
+  // twice is harmless: it only fills an empty box.
   b2 = Box { items: [] };
-  box_ensure(b2);
+  ensure(b2);
   assert(len(b2.items) == 1, "ensure added one item");
-  assert(b2.items[0].val == 0, "default val is 0");
+  ensure(b2);
+  assert(len(b2.items) == 1, "ensure is idempotent");
 
-  // Multiple forwards: ensure is idempotent.
-  box_ensure(b2);
-  assert(len(b2.items) == 1, "ensure idempotent");
-
-  // Set a second value via box_set_val on a pre-populated box.
+  // ## A worked example
+  // `set_val` fills the first zero slot, leaving anything already set alone.
   b3 = Box { items: [] };
-  b3.items += [Inner { val: 10 }];
-  b3.items += [Inner { val: 0 }];
-  box_set_val(b3, 99);
-  assert(b3.items[0].val == 10, "existing item preserved");
-  assert(b3.items[1].val == 99, "zero item replaced");
+  b3.items += [Item { val: 10 }];
+  b3.items += [Item { val: 0 }];
+  set_val(b3, 99);
+  assert(b3.items[0].val == 10, "an existing value is left alone");
+  assert(b3.items[1].val == 99, "the empty slot is filled");
 }
 </pre>
 <style>.loft-panel{margin:2em 0;padding:1em;border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa}.loft-panel h2{margin-top:0}.lp-note{color:#57606a;font-size:0.9em;margin:0 0 0.8em}.lp-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:0.8em}.loft-panel button{background:#2563eb;color:#fff;border:0;border-radius:4px;padding:5px 14px;font-size:0.9em;font-weight:600;cursor:pointer}.loft-panel button:disabled{opacity:0.4;cursor:default}.lp-status{font-size:0.85em;color:#57606a}.lp-status.lp-ok{color:#1a7f37}.lp-status.lp-err{color:#cf222e}.lp-status.lp-info{color:#57606a}.lp-output{background:#fff;border:1px solid #d0d7de;border-radius:4px;padding:8px;min-height:2.2em;max-height:16em;overflow:auto;white-space:pre-wrap;margin:0 0 0.8em}.lp-frame{background:#fff;border:1px solid #d0d7de;border-radius:4px;padding:8px;margin-bottom:0.8em}.lp-frame-head{font-size:0.85em;color:#57606a;margin-bottom:6px}.lp-locals{display:flex;gap:6px;flex-wrap:wrap}.lp-local,.lp-callable{background:#eaeef2;border-radius:3px;padding:2px 6px;font-size:0.85em;cursor:pointer}.lp-local:hover,.lp-callable:hover{background:#d0d7de}.lp-callables{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:0.8em}.lp-prompt{display:flex;gap:6px;align-items:center}.lp-caret{color:#2563eb;font-weight:700}.lp-prompt input{flex:1;padding:6px 8px;border:1px solid #d0d7de;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.9em}.lp-log{margin-top:0.6em;display:flex;flex-direction:column;gap:4px;max-height:14em;overflow:auto}.lp-row{display:flex;gap:8px;align-items:baseline;font-size:0.9em}.lp-q{color:#2563eb;flex:0 0 auto}.lp-a{color:#1f2328;word-break:break-word}.lp-row.lp-warn .lp-a{color:#9a6700}.lp-lines{margin-top:1em}.lp-lines summary{cursor:pointer;font-size:0.9em;color:#57606a}.lp-src{margin:0.6em 0 0;padding-left:3.5em;background:#fff;border:1px solid #d0d7de;border-radius:4px;max-height:20em;overflow:auto}.lp-line{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.82em;white-space:pre;cursor:pointer;padding:0 4px}.lp-line:hover{background:#eaeef2}.lp-line.lp-break{background:#ffebe9;outline:1px solid #cf222e}@media print{.loft-panel{display:none}}</style>

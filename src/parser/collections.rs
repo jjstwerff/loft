@@ -1443,8 +1443,31 @@ impl Parser {
             // codegen).  Empty literal `[]` is also handled there.
             return val.clone();
         }
+        // A right-hand side that has ALREADY written the target leaves nothing to assign, and
+        // wrapping it in a `Set` would build a second, empty collection over the top of it.
+        // That is what a `&`-vector `=` looks like by the time it arrives: `assign_refvar_vector`
+        // lowers the write into ops that fill the target in place, and the shapes it declines —
+        // a bracket literal, a comprehension — carry their own appends in an `Insert` / `Block`.
+        //
+        // loft#1292 — the condition used to name the FORMER (`Vector | Sorted`) instead of the
+        // fact.  A `sorted` has no such lowering, so its right-hand side is a bare VALUE and
+        // returning it alone DROPPED the write: `fn f(x: &sorted<E[k]>) { x = mks(); }` left the
+        // caller's collection untouched and leaked the one the callee minted.  The refusal
+        // beside it (*"has & but is never modified"*) was the only thing stopping that, since
+        // the write it could not see is the write that never happened.  `&hash` and `&index`
+        // were correct all along, which is what said the difference had to be a site naming one
+        // kind rather than anything about keyed collections.
+        //
+        // loft#1303 — and `Sorted` had to leave the list for the fact to be named ONCE rather
+        // than twice.  `assign_refvar_vector` is the only lowering that fills the target in
+        // place, and it fires for `Vector` alone, so a `Vector` target is what "the right-hand
+        // side has already written the target" means.  A keyed target's block is
+        // `assign_refvar_keyed`'s materialisation, which fills a fresh WORK-REF that the `Set`
+        // still has to install; matching it here dropped the write and re-raised the refusal
+        // the line above describes.
         if let Type::RefVar(tp) = f_type
-            && matches!(**tp, Type::Vector(_, _) | Type::Sorted(_, _, _))
+            && matches!(**tp, Type::Vector(_, _))
+            && matches!(val.unspan(), Value::Insert(_) | Value::Block(_))
         {
             if let Value::Var(nr) = to.unspan() {
                 if self.vars.uses(*nr) > 0 {
@@ -1812,6 +1835,21 @@ use #count instead"
         }
     }
 
+    /// The letter a reader wrote for this radix, for a diagnostic that names the part.
+    ///
+    /// The inverse of [`crate::parser::radix_for`]; `10` is the decimal default, which no
+    /// refusal reports, so it has no letter here.
+    fn radix_letter(radix: i32) -> &'static str {
+        match radix {
+            -1 => "j",
+            1 => "e",
+            2 => "b",
+            8 => "o",
+            16 => "x",
+            _ => "X",
+        }
+    }
+
     pub(crate) fn append_data_fp(state: OutputState, fmt: Value) -> (Value, Value, Value) {
         let mut a_width = state.width;
         let mut p_rec = Value::Int(-1); // -1 = no precision specified; 0 = :.0
@@ -1911,7 +1949,9 @@ use #count instead"
         //
         // A CONCRETE struct keeps @PLN99 Arc B's widened behaviour untouched — its `to_text`
         // is its own and there is no bound to consult.
-        if self.data.is_type_var_placeholder(d_nr) && !self.has_bound_for_method("to_text", d_nr) {
+        if self.data.is_type_var_placeholder(d_nr)
+            && !self.has_bound_for_method("to_text", d_nr, None)
+        {
             return None;
         }
         let tv_name = self.data.def(d_nr).name().to_string();
@@ -1921,7 +1961,7 @@ use #count instead"
         // loft#1153 — a HOLDER's stub and a concrete type's method have different spellings;
         // which to look up follows from which this is.  They used to collide, and a struct named
         // like a type variable then resolved to the stub and rendered EMPTY.
-        let stub_name = self.data.method_key(d_nr, "to_text");
+        let stub_name = self.data.method_key(d_nr, "to_text", 1);
         let stub_nr = self.data.def_nr(&stub_name);
         if stub_nr == u32::MAX {
             return None;
@@ -2070,26 +2110,44 @@ use #count instead"
         // A specifier that can never have any effect on the value type is always a bug.
         if !self.first_pass {
             let is_text = matches!(tp, Type::Text(_));
-            let is_bool = matches!(tp, Type::Boolean);
+            // @FR-F-Spec — a precision reaches here in two spellings: a bare `.P` sets
+            // `float` and leaves `P` in the width slot, and the dotted `W.P` — the only
+            // spelling that gives both at once — arrives as one `Value::Float`.
+            let has_precision = state.float || matches!(state.width, Value::Float(_));
             // @FR-F-Spec — an integer renders through `ops::format_long`, which implements
-            // the four radixes the rule lists (`b` 2, `o` 8, decimal 10, `x`/`X` 16) and
+            // the radixes the rule lists (`b` 2, `o` 8, decimal 10, `x` 16, `X` upper) and
             // ends in `panic!("Unknown radix")` for anything else.  `get_radix` answers two
             // more: `e` (scientific, 1) and `j` (JSON, -1).  Neither means anything for an
             // integer and both reached that panic, so `println("{n:e}")` — a plain source
             // program — aborted the interpreter.  Refuse them here, where the value's type
             // is known, instead of at a renderer that has only the radix number left.
-            if matches!(tp, Type::Integer(_)) && !matches!(state.radix, 2 | 8 | 10 | 16) {
+            let hex_upper = i32::from(crate::ops::HEX_UPPER);
+            // @FR-F-Spec-Radix — which radixes the renderer for this type has an arm for.  An
+            // integer has the four bases plus upper-case hex; a heap value renders
+            // through the store walker, whose one switch is JSON; every other type has a
+            // single rendering, so only the decimal default reaches it.
+            let radix_ok = match tp {
+                Type::Integer(_) => {
+                    matches!(state.radix, 2 | 8 | 10 | 16) || state.radix == hex_upper
+                }
+                Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, _, _) => {
+                    matches!(state.radix, 10 | -1)
+                }
+                _ => state.radix == 10,
+            };
+            if matches!(tp, Type::Integer(_)) && !radix_ok {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
                     "`{}` is not an integer format — use `x`, `X`, `b`, `o` or `d`",
-                    if state.radix == -1 { "j" } else { "e" }
+                    Self::radix_letter(state.radix)
                 );
-            } else if state.radix != 10 && (is_text || is_bool) {
+            } else if !radix_ok {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
-                    "Format specifier has no effect on {}",
+                    "`{}` has no effect on {}",
+                    Self::radix_letter(state.radix),
                     tp.name(&self.data)
                 );
             } else if is_text && state.token == "0" && state.width != Value::Int(0) {
@@ -2097,6 +2155,24 @@ use #count instead"
                     self.lexer,
                     Level::Error,
                     "Zero-padding has no effect on text"
+                );
+            } else if has_precision && !matches!(tp, Type::Float | Type::Single) {
+                // @FR-F-Spec — `.P` asks for fractional digits, and only `float` and
+                // `single` have them.  Their two arms are also the only ones that call
+                // `append_data_fp`, which is what splits a dotted `W.P` into a width and a
+                // precision; every other renderer takes `state.width` as written, so the
+                // `f64` of a dotted spec lands in a slot the opcode reads as an i64 WIDTH.
+                // Reinterpreted, `8.2` is a pad count of ~4.6e18: `--interpret` asks for
+                // the whole field in one allocation and is OOM-killed, and `--native`
+                // hands rustc `E0308 expected i64, found f64` about loft's internals.  The
+                // bare `.P` spelling is quieter and worse — it leaves the precision in the
+                // width slot, so `{n:.4}` renders a four-wide field in silence.
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "a precision has no effect on {} — `.N` sets fractional digits, \
+                     which only `float` and `single` have",
+                    tp.name(&self.data)
                 );
             }
         }
@@ -2150,19 +2226,29 @@ use #count instead"
             Type::Float => {
                 let dir = Value::Int(state.dir);
                 let plus = Value::Boolean(state.plus);
+                // @FR-F-Spec — the pad TOKEN travels with the rest of the spec.  The four
+                // float opcodes had no slot for it, so `ops::format_float` filled with a
+                // hard-coded space: `{f:06}` padded with spaces and `{f:*^11}` ignored its
+                // fill, both silently, while the same specs worked on an integer.
+                let token = Value::Int(i32::from(state.token.as_bytes()[0]));
                 let (fmt, a_width, p_rec) = Self::append_data_fp(state, format.clone());
                 list.push(self.cl(
                     &(start.to_owned() + "Float"),
-                    &[var, fmt, a_width, p_rec, plus, dir],
+                    &[var, fmt, a_width, p_rec, token, plus, dir],
                 ));
             }
             Type::Single => {
                 let dir = Value::Int(state.dir);
                 let plus = Value::Boolean(state.plus);
+                // @FR-F-Spec — the pad TOKEN travels with the rest of the spec.  The four
+                // float opcodes had no slot for it, so `ops::format_float` filled with a
+                // hard-coded space: `{f:06}` padded with spaces and `{f:*^11}` ignored its
+                // fill, both silently, while the same specs worked on an integer.
+                let token = Value::Int(i32::from(state.token.as_bytes()[0]));
                 let (fmt, a_width, p_rec) = Self::append_data_fp(state, format.clone());
                 list.push(self.cl(
                     &(start.to_owned() + "Single"),
-                    &[var, fmt, a_width, p_rec, plus, dir],
+                    &[var, fmt, a_width, p_rec, token, plus, dir],
                 ));
             }
             Type::Vector(cont, _) => {
@@ -2216,7 +2302,8 @@ use #count instead"
                     // by every built-in, and the bounded path renders correctly on both
                     // backends for every kind.
                     if !self.first_pass {
-                        let name = self.data.def(d_nr).name().to_string();
+                        let name = crate::data::Data::type_var_spelling(self.data.def(d_nr).name())
+                            .to_string();
                         diagnostic!(
                             self.lexer,
                             Level::Error,
@@ -3972,6 +4059,20 @@ use #count instead"
                 // stride.  Hard-code 4 here so par steps through the
                 // vector in 4-byte increments matching `OpSetInt4`'s
                 // narrow writes.
+                4
+            } else if matches!(elem_tp, Type::Vector(_, _)) {
+                // A nested VECTOR element is stored as a 4-byte record index, not as the
+                // inner element type it holds.  `type_elm` resolves `vector<integer>` to
+                // `integer`, whose db size is 8, so par strode TWICE per row: over four rows
+                // a worker saw rows 0 and 2 and then read past the end, answering the
+                // element's default — `null` for a value, `0` for a length — with no
+                // diagnostic, on both backends.  `vector<text>` was the one inner type that
+                // worked, and only because `text`'s db size is 4 by coincidence (loft#1033).
+                //
+                // VECTOR and not `is_collection`: a `vector<hash<T[k]>>` cannot be built at
+                // all today — the construction panics the interpreter before any stride
+                // question arises (loft#1298) — so a keyed element's stride is unmeasured,
+                // and a number nothing can check is not a fact to write down.
                 4
             } else {
                 let known = self.data.def(elm_td).known_type();

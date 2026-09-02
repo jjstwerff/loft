@@ -6,7 +6,8 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — `D-gen-1` and `D-gen-2` were both opened and closed on 2026-08-29.
+OPEN: **0**.  `D-gen-1` and `D-gen-2` were opened and closed on 2026-08-29, `D-gen-3` and
+`D-gen-4` on 2026-09-02.
 
 ⚠ **This line read `OPEN: 0` because *"a rules doc adds no code deviation"* — a claim about the
 doc's GENRE, not a measurement, and the same sentence `formatting.md` carried for its whole life
@@ -14,6 +15,131 @@ until the walk that first asked found four defects there.  It has now produced o
 The oracle under it (`86-interfaces.loft`, `48-generics.loft`, and the numbered scripts) is real,
 but it is an oracle for the shapes those files happen to write; `D-gen-1` is what it could not
 see.
+
+### D-gen-4 — OPENED AND CLOSED (2026-09-02, loft#1275): the stub key spelled a NAME, not a signature
+
+`(G-Iface)` calls an interface a set of method SIGNATURES and `(G-Sat)` satisfies it per
+signature; neither rule keys a method by name alone.  The bound-method stub did —
+`t_<LEN><holder>#g_<method>` — so the two arities of `-`, both `OpMin` after the operator sugar,
+asked for one name.  The second declaration was silently dropped, no shipped bound could offer
+binary subtraction, and `a - b` under any bound was refused with *"operator '-' requires a
+concrete type"*.
+
+The arity is part of the key now, **inside the length-counted portion** beside the holder mark.
+Putting it after the method instead was built and measured and is wrong: nine sites strip `t_`
+and take what follows the first underscore, so the monomorphiser looked for a concrete `sizer#1`,
+found nothing, and a one-method `Sizable` answered garbage while the stdlib's `sum<T: Addable>`
+panicked.  The arity is part of the KEY and never part of the NAME — which is what
+`bound_stub_name`'s own doc block already said about the holder mark, one paragraph above where
+the arity was first appended.
+
+**Two things this did NOT close, both of them rules rather than deviations.**
+
+* A NAMED method required at two arities by one bound set is still refused, at the declaration.
+  An operator's arity is fixed by its SYNTAX, so `call_op` asks for the exact stub; a method call
+  resolves its RECEIVER before its arguments are parsed, so `x.sizer()` has no arity to ask with.
+  The refusal names both arities and the cure.
+* A CONCRETE receiver's method key carries no arity either, so a user type provides one arity of
+  `-` and not both.  That is why binary subtraction ships as `Subtractable` rather than as a third
+  requirement on `Numeric`: `(G-Sat)` is structural, so adding a requirement to a shipped
+  interface takes satisfaction away from every user type that already provides the other two —
+  a breaking change under COMPATIBILITY.md, and the reason the mechanism fix and the surface
+  choice are two decisions.
+
+⚠ **Closing it exposed a `(G-Sat)` hole that had been unreachable.**  Satisfaction asked
+`find_fn`, which takes a name and a receiver and no arity.  While no interface could declare one
+name twice, nothing could reach it; the moment `Subtractable` asked for a two-operand `OpMin`, a
+type providing only the UNARY one answered the name, satisfied the bound, and the monomorph
+called it with one operand too many and dropped the second — `diff(a, b)` computed `-a` on both
+backends with no diagnostic.  That is loft#1274's defect at the satisfaction site instead of the
+use site, and it was introduced and closed inside this change: satisfaction now compares the
+VISIBLE parameter count and re-asks through `possible_with_signature`, the resolver
+monomorphisation already uses.  **A gap that only a new feature can reach is not a gap the old
+oracle was wrong to miss — but it is one the feature has to bring its own cell for.**
+
+Guard: `tests/scripts/1275-a-bound-offers-both-arities-of-minus.loft`.
+
+### D-gen-3 — OPENED AND CLOSED (2026-09-02): the type variable's binding was FILE-scoped
+
+`(G-Gen)` says a header `fn f<T: I₁ + … + Iₖ>` **introduces** the type variable — introduces, so
+the binding belongs to that header and two functions writing `T` name two variables, each judged
+against its own bounds by `(G-Check)`.  The implementation gave the spelling FILE scope: one
+attribute-less placeholder definition stood for every `T` in the program, deliberately, because
+sharing it is what lets the stdlib's many `<T>` templates resolve against one definition.
+
+Sharing the placeholder is sound for type RESOLUTION, which is what that decision was about.  It
+is not sound for the **bound-method stubs**, which hang off the placeholder (`t_<LEN>T#g_<method>`)
+and carry a SIGNATURE.  Two headers whose bounds declare one method name differently therefore
+shared one stub, the second requirement was dropped, and every call in the second header was
+checked against the first header's parameter list:
+
+```
+interface HasSize1 { fn sizer(self: Self) -> integer }
+interface HasSize2 { fn sizer(self: Self, scale: integer) -> integer }
+fn one<T: HasSize1>(x: T) -> integer { x.sizer() }
+fn two<T: HasSize2>(x: T) -> integer { x.sizer(10) }
+    ->  error: Too many parameters for T#g.sizer
+```
+
+**Order-dependent, which is what made the message unreadable.** Whichever header came first owned
+the stub; swap the two declarations and the error swapped with them, naming a parameter that lives
+in the OTHER function.  Renaming one variable to `U` compiled and answered correctly — the
+one-line test that named the axis, and the reason the earlier costing (as an ARITY problem, on
+loft#1300) was wrong.
+
+Four spellings reached it, and only the first two were reported:
+
+| two headers both writing `T`, bounds declaring one method name | before | after |
+|---|---|---|
+| different ARITY (loft#1301) | refused | ✓ |
+| the two arities of `-`, which both desugar to `OpMin` (loft#1300) | refused | ✓ |
+| same arity, different parameter TYPE | refused — *"expected integer, got text"* | ✓ |
+| same parameters, different RETURN type | refused | ✓ |
+| identical signatures (the sharing that must survive) | ✓ | ✓ |
+
+The third and fourth rows were invisible to the conflict diagnostic loft#1301 shipped, which
+compares parameter COUNTS: a signature is not an arity either.
+
+Closed by keying the placeholder on `(spelling, bound set)` and resolving the spelling against the
+ENCLOSING header before the flat namespace — `Parser::cur_type_var_name` /
+`Parser::type_var_holders`, read in `parse_type_inner`.  Sharing stays the norm: two headers with
+the same bounds still reach one placeholder and one set of stubs.  Guards:
+`tests/scripts/1300-a-generic-header-binds-its-own-type-variable.loft` (ten cells, both backends)
+and `tests/parse_errors.rs::two_headers_writing_the_same_type_variable_are_two_variables`, which
+pins the declaration ORDER because that is what used to decide the answer.
+
+**The oracle could not see any of it, and the reason generalises.** `86-interfaces.loft`,
+`48-generics.loft` and every numbered script declare their generics one bound at a time; nothing in
+the tree wrote two headers whose bounds share a method name, because the workaround (rename the
+variable) is what anyone hitting it does.  A corpus written against the implementation records the
+implementation's own habits.
+
+### D-gen-4 — OPEN (loft#1275): one bound set cannot require two signatures of one method name
+
+What `D-gen-3` leaves.  `(G-Iface)` declares an interface as **the set of its method
+SIGNATURES**, so an interface naming one method twice at different signatures is well-formed
+under the rules, and `(G-Sat)` satisfies each entry separately against `[Self ↦ C](p̄ -> R)`.
+`integer` has `OpMinInt` beside `OpMinSingleInt`, so it satisfies both entries of:
+
+```
+interface SubNeg { op - (self: Self, other: Self) -> Self
+                   op - (self: Self) -> Self }
+fn both<T: SubNeg>(a: T, b: T) -> T { -(a - b) }
+    ->  error: generic type T: operator 'Min' requires a concrete type
+```
+
+The same collision without writing one interface twice: `<T: S1 + S2>` where `S1` and `S2` both
+declare `sizer`.  Here the two requirements really are on ONE variable, so the per-header split
+cannot separate them — a bound method is reached by NAME (`method_key` and `bound_stub_name`
+produce the same string by construction, which is what lets `find_fn` dispatch on it), and the
+key carries no arity.
+
+Costed on loft#1300: adding arity changes the method-key convention `find_fn` dispatches on, the
+un-mangling in `re_resolve_call` moves with it, and the mangled names are user-visible in
+`--native` output.  The refusal names the two arities and the cure that works today, and
+`tests/parse_errors.rs::one_bound_set_cannot_require_two_signatures_of_one_method` and
+`::one_interface_declaring_both_arities_of_minus_is_refused` pin both spellings, so the day the
+key gains a signature both fail and say so.
 
 ### D-gen-1 — OPENED AND CLOSED (2026-08-29): the type variable was only found under two formers
 

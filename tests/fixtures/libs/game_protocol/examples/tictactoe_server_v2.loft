@@ -314,7 +314,7 @@ fn main() {
   // run via LOFT_TICTACTOE_PORT so concurrent `cargo test` runs
   // don't collide on a single hardcoded port.  Default 7878
   // preserves the standalone-launch behaviour.
-  port_raw = env_variable("LOFT_TICTACTOE_PORT");
+  port_raw = env_variable("LOFT_TICTACTOE_PORT") ?? "";
   port = if port_raw == "" { 7878 } else { port_raw as integer };
   srv   = server::listen(port);
   println("v2 server listening on :{port}");

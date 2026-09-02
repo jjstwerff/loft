@@ -738,6 +738,9 @@ fn spawn_build(driver: &str, src: &str) -> Result<Rebuild, String> {
     }
     // A build legitimately takes minutes — never under the run watchdog.
     cmd.arg(src)
+        // Ask the driver for the machine form of its ok line: "ok <src> <artifact>".
+        // Without it the driver answers a person, and prints `ok` alone.
+        .env("LOFT_CHECK_ARTIFACT", "1")
         .env_remove("LOFT_TIMEOUT")
         .stdout(out)
         .stderr(err)

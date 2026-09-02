@@ -118,22 +118,38 @@ is a compact `{field:value}` form, and the `:j` spec switches it to JSON with qu
                < > ^              force left / right / centre alignment
                0N                 zero-pad a number to width N
                .P                 fixed P fractional digits (float/single)
-               #x  x  b  o        integer radix: hex-with-0x / hex / binary / octal
+               x  X  b  o  d     integer radix: hex / HEX / binary / octal / decimal
+               #                  prefix the radix marker (`0x`, `0b`, `0o`)
                +                  always show a sign on a number — integer, float and single
                                   alike; a negative number keeps its own sign, and `null`
                                   (a sentinel, not a number) takes none
-             width counts Unicode CODEPOINTS, not bytes.
+             width counts Unicode CODEPOINTS, not bytes, and a width at or below zero
+             asks for no padding — the renderers reach one by subtracting a sign or a
+             radix marker they emitted first.
              The flags may be written in any ORDER (`+<8.3` and `<+8.3` are the same spec).
+  (F-Spec-Zero)  the `0N` pad fills the NUMBER, so anything the renderer emitted ahead of
+                 the digits stays in front of the zeros: `{-1:04}` is `-001` and
+                 `{255:#06x}` is `0x00ff`.  Every OTHER pad character shapes the rendering
+                 as a whole.  `null` is a sentinel rather than a number and so takes NO
+                 zero pad on any type (`{n:08}` is four spaces and `null`), by the same
+                 line F-Spec draws for the sign; a non-zero fill still applies to it.
+  (F-Spec-Radix) which radixes a hole admits is decided by the renderer its TYPE has:
+                 integer/long take `x X b o d` (and `#`), a vector/struct/enum takes the
+                 JSON switch `j`, and every other type renders exactly one way and so takes
+                 the decimal default alone.  A `.P` precision is admitted by `float` and
+                 `single` only — they are the types that HAVE fractional digits.
   (F-Spec-Fill)  a spec may open with a FILL character, which pads instead of a space
                  (`{s:*>6}` is `**​**ab`).  It comes FIRST, before the flags, and it is a
                  single token that is not itself a flag — so a DIGIT can never be one, and
                  `0>5` is not fill-`0` right-align-5 but the comparison `0 > 5`.  `0N`
                  (F-Spec above) is how a number is zero-padded.
   (F-Spec-Exec)  every part of a spec reaches the renderer for the hole's type, or the
-                 program is REFUSED.  A part that type cannot execute — a radix on a
-                 non-number, `e` or `j` on an integer — is a static error naming the part;
-                 it is never dropped, because a dropped part is a wrong rendering that
-                 nothing reports.
+                 program is REFUSED.  A part that type cannot execute — a radix or a
+                 precision outside the sets F-Spec-Radix gives it — is a static error
+                 naming the part; it is never dropped, because a dropped part is a wrong
+                 rendering that nothing reports.  The refusal is stated per RENDERER and
+                 not as a list of types, because a list is the shape that cannot say what
+                 it left out.
 ```
 
 **In words.** `{1:03}` is `001`, `{42:#x}` is `0x2a`, `{334.1:.2}` is `334.10`, `{"abc":>7}` is
@@ -169,9 +185,15 @@ index, …) names *why* the value is null, which is exactly what a `"{x}"` in a 
 
 ## Deviations
 
-**OPEN: 2.**
-- **D-fmt-2** — a `character` hole drops its whole spec
-- **D-fmt-3** — a vector/struct hole drops width and alignment
+**OPEN: 0.**
+
+⚠ This section read **OPEN: 2** for two days after both entries were closed. `D-fmt-2` and
+`D-fmt-3` were fixed by the commit that wrote the "a spec tunes ⟦v⟧ … for EVERY type"
+paragraph into the rules above, and loft#1165 / loft#1166 were closed with it — but the
+commit that split this register out of the rules doc replayed the deviation list from before
+that fix, and a clean prose merge keeps both halves. **An `OPEN: n` is a claim to
+re-measure, and the cheapest way is to run the entry's own repro**: `{c:>5}` and `{v:>12}`
+both padded, which is what a deviation says they do not.
 
 The full register — these entries in full, plus every closed one with its dates and
 issue numbers — is the companion [formatting-history.md](formatting-history.md).

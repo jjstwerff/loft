@@ -105,7 +105,7 @@ fn main() {
   // P231: pair with the server's `LOFT_TICTACTOE_PORT` so a test
   // harness can spin up server+clients on a unique ephemeral port.
   // Default 7878 keeps the standalone-launch behaviour.
-  port_raw = env_variable("LOFT_TICTACTOE_PORT");
+  port_raw = env_variable("LOFT_TICTACTOE_PORT") ?? "";
   url = if port_raw == "" { "ws://localhost:7878/" } else { "ws://localhost:{port_raw}/" };
   ws = web::ws_handler(url);
   if ws == null {
@@ -172,7 +172,7 @@ fn main() {
   //
   // With no rendezvous file, the P229a pause still applies, so the
   // single-client and late-join scenarios are unaffected.
-  go_file = env_variable("LOFT_TICTACTOE_GO_FILE");
+  go_file = env_variable("LOFT_TICTACTOE_GO_FILE") ?? "";
   if go_file != "" {
     go_waited = 0;
     while !exists(go_file) && go_waited < 30000 {
@@ -180,7 +180,7 @@ fn main() {
       go_waited = go_waited + 20;
     }
   } else {
-    delay_raw = env_variable("LOFT_TICTACTOE_CLIENT_DELAY_MS");
+    delay_raw = env_variable("LOFT_TICTACTOE_CLIENT_DELAY_MS") ?? "";
     if delay_raw != "" { sleep_ms(delay_raw as integer? ?? 0); }
   }
 

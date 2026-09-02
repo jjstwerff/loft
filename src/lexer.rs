@@ -32,7 +32,11 @@ pub enum LexItem {
     /// Second token is if the number started with a 0. Only needed for string formatting.
     Integer(u32, bool),
     Long(u64),
-    Float(f64),
+    /// A float literal and whether its spelling began with a `0` — the leading zero
+    /// that a `{f:08.2}` format spec means as "pad with zeros", exactly as [`Self::Integer`]
+    /// carries it for `{n:08}`.  The parsed `f64` cannot answer it: `08.2` and `8.2` are the
+    /// same number.
+    Float(f64, bool),
     Single(f32),
     /// Can be both a keyword and one or more position tokens.
     Token(String),
@@ -1634,12 +1638,18 @@ impl Lexer {
         let mut group_start = 0usize; // number.len() at the last separator
         let mut prev_was_digit = false; // was the last CONSUMED char a (hex)digit?
         while let Some(&c) = self.iter.peek() {
-            if c.is_ascii_digit() || c == 'b' || c == 'o' {
+            if c.is_ascii_digit() {
                 number.push(c);
                 self.next_char();
-                prev_was_digit = c.is_ascii_digit();
-            } else if c == 'x' && !hex && number == "0" {
-                hex = true;
+                prev_was_digit = true;
+            } else if matches!(c, 'x' | 'b' | 'o') && !hex && number == "0" {
+                // A base marker belongs to the literal only directly after a leading `0`
+                // — `0x1f`, `0b1010`, `0o17`.  Elsewhere the letter is the next token, and
+                // the three must agree about that: while `b` and `o` were taken anywhere
+                // in a number, `{10:6b}` scanned `6b`, failed to parse it and reported
+                // "Problem parsing number", so a width could be written before `x` but
+                // never before `b` or `o`.
+                hex = c == 'x';
                 number.push(c);
                 self.next_char();
                 prev_was_digit = false;
@@ -1821,10 +1831,10 @@ impl Lexer {
                     LexResult::new(LexItem::Single(0.0), pos)
                 }
             } else if let Ok(r) = val.parse::<f64>() {
-                LexResult::new(LexItem::Float(r), pos)
+                LexResult::new(LexItem::Float(r, val.starts_with('0')), pos)
             } else {
                 self.err(Level::Error, "Problem parsing float");
-                LexResult::new(LexItem::Float(0.0), pos)
+                LexResult::new(LexItem::Float(0.0, val.starts_with('0')), pos)
             }
         } else if let Some(short) = val.strip_prefix("0x") {
             let res = if let Some(r) = hex_parse(short) {
@@ -2428,7 +2438,7 @@ impl Lexer {
 
     /// Shorthand test if the current element is a float and skip it if found.
     pub fn has_float(&mut self) -> Option<f64> {
-        if let LexItem::Float(n) = self.peek().has {
+        if let LexItem::Float(n, _) = self.peek().has {
             self.cont();
             Some(n)
         } else {
@@ -2578,10 +2588,10 @@ mod test {
             json_first("9007199254740993"),
             LexItem::Long(9_007_199_254_740_993)
         );
-        assert!(matches!(json_first("3.14"), LexItem::Float(_)));
+        assert!(matches!(json_first("3.14"), LexItem::Float(..)));
         // Exponent-bearing numbers are Float (1b): `1e3` / `1E5` are not i64.
-        assert!(matches!(json_first("1e3"), LexItem::Float(_)));
-        assert!(matches!(json_first("1E5"), LexItem::Float(_)));
+        assert!(matches!(json_first("1e3"), LexItem::Float(..)));
+        assert!(matches!(json_first("1E5"), LexItem::Float(..)));
     }
 
     /// @PLN109 Phase 1a — JSON string escapes decode in JSON mode: `\/` and
@@ -2669,7 +2679,7 @@ mod test {
     fn test_lexer() {
         validate("1234", &[LexItem::Integer(1234, false)]);
         validate("0xaf", &[LexItem::Integer(0xaf, false)]);
-        validate("1e2", &[LexItem::Float(100.0)]);
+        validate("1e2", &[LexItem::Float(100.0, false)]);
         validate(
             "1..4",
             &[
@@ -2722,20 +2732,20 @@ mod test {
             ],
         );
         // Stand-alone float still works at expression position.
-        validate_cont("0.0", &[LexItem::Float(0.0)]);
+        validate_cont("0.0", &[LexItem::Float(0.0, true)]);
         validate_cont(
             "x = 0.0",
             &[
                 LexItem::Identifier("x".to_string()),
                 LexItem::Token("=".to_string()),
-                LexItem::Float(0.0),
+                LexItem::Float(0.0, true),
             ],
         );
         // Mixed: float at expression position, integer after `.`.
         validate_cont(
             "1.5 + p.0",
             &[
-                LexItem::Float(1.5),
+                LexItem::Float(1.5, false),
                 LexItem::Token("+".to_string()),
                 LexItem::Identifier("p".to_string()),
                 LexItem::Token(".".to_string()),
@@ -2867,7 +2877,7 @@ mod test {
         assert!(lex.has_token("*"));
         assert!(lex.has_token("("));
         if let LexResult {
-            has: LexItem::Float(f),
+            has: LexItem::Float(f, _),
             ..
         } = lex.peek()
         {

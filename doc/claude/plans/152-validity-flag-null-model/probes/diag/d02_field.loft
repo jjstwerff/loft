@@ -1,0 +1,9 @@
+// want: WARN
+struct S { n: integer }
+fn main() {
+  q: integer? = 9223372036854775807;
+  q += 1;
+  s = S { n: 0 };
+  s.n = q;
+  println("{s.n}");
+}

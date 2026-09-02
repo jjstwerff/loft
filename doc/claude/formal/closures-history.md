@@ -14,6 +14,32 @@ and its literal-`null` argument are all closed), and the same `??` at a COLLECTI
 leaks its mint arm because declining the unguarded lift was the only cure correct on both
 backends (D-clo-14).
 
+⚠ **A rebind is not a mutation, and a capture is the one place the code could not tell them
+apart (D-clo-20, loft#1281, closed 2026-09-02).** `(L-CapHeap)` shares a captured heap value
+so a mutation-through is visible both ways; `(F-ParamRebind)` makes a whole-value REPLACE of
+a heap parameter local to the callee. Written inside a closure, the replace took the
+mutation's route: the closure record holds a COPY of the parameter's DbRef, the rebind
+lowered to a clear plus a refill of the store that copy names, and `(F-ParamHeap)` makes that
+store the CALLER's. So `fn f(p: vector<integer>) { g = fn() { p = [7,7]; }; g(); }` replaced
+the caller's collection, on both backends, silently — every heap kind and every right-hand
+side.
+
+The cure is a refusal, and the measurement is why. Repointing the capture slot — the obvious
+fix, and the one the keyed kinds appear to model — does not work HERE, because the callee
+reads its own slot directly (`t_6vector_len(p(0))`, not a read through the closure record).
+Two readers, one binding: a repoint moves the wrong answer from the caller to the callee
+rather than removing it. Making it mean what it says needs the binding reachable from inside
+the closure plus a write-back, which is precisely what `D-clo-18` records as unavailable for
+the `&`-scalar shape — the cell machinery that gives a mutated captured SCALAR that channel
+cannot serve a heap value, because reads in the enclosing body would then see the cell while
+the caller still sees its own slot. Same wall, one rule over, so the same answer.
+
+Worth keeping for the next reader: the emitter was already building the fresh backing the
+correct lowering would need (`__vdb_1`, `var__vec_1`), writing its length, pre-allocating it —
+and then appending into the shared store instead and abandoning it. It does not leak (the
+wrapper is freed at lambda exit), so it was wasted work rather than a second defect, but it
+means the missing piece was never the allocation.
+
 ⚠ **Three entries had ONE cure between them, and it was not another ownership predicate.**
 Each was a call site that allocated a return buffer and could not say whether what came back
 IS that buffer: D-clo-13 across the two arms of a `??`, D-clo-12 across the frame a
@@ -87,6 +113,37 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > short lambda through `map`/`any`/`all`/`sort_by`/`filter` (D-clo-2's fix named
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
+
+> **D-clo-19 — OPENED AND CLOSED (2026-09-01, loft#1279): `=` on a captured collection was two
+> other operations, decided by the SOURCE of the right-hand side.**
+>
+> A literal APPENDED (`b = [7,7]` over `[1,2]` read back `[1,2,7,7]`); a variable, a call and
+> an empty literal were DROPPED entirely, the statement collapsing to a bare read of its own
+> right-hand side — the emitted lambda for `c = src` is one `OpGetDbRef` and no store at all.
+> Both backends, no diagnostic.
+>
+> One cause under both. A captured collection is reached through the closure record's shared
+> DbRef, which resolves to `OpGetDbRef` and not to the `OpGetField` a struct field gives.
+> @PLN93 taught the APPEND path that difference — `is_captured_dbref` exists for exactly it —
+> and the whole-value REPLACE path was never told. So a LITERAL right-hand side still had
+> @PLN93's build-into-the-target lowering to run and appended, because nothing had cleared
+> first; every other right-hand side had nothing to run at all.
+>
+> That selector has now been too narrow three times, and the lowering was right each time:
+> P261 (a literal into a struct field appended), loft#917 (a `vector<τ>?` field, whose
+> `Optional` wrapper it did not match), and this. The cure is the same clear-then-fill in all
+> three; only the shape of the destination kept changing.
+>
+> ⚠ The literal needs the clear BEFORE it and no append after it, because it builds INTO the
+> destination — the first version of this fix appended and answered `[]`, having cleared away
+> what it had just built. `value_mentions` is what asks that question: an RHS that names its
+> own destination is one that constructs in place.
+>
+> Guard `tests/scripts/1279-a-captured-collection-rebind-replaces.loft`. Its sharp cell is
+> `bx.items = [7,7]`: the same rebind reaching the same kind of collection through a captured
+> STRUCT was correct throughout, which is what said this was a missing lowering rather than a
+> limit of capture. The remaining question — which BINDING a captured rebind names, where a
+> captured PARAMETER's rebind still reaches the caller — is D-clo-20 (loft#1281).
 
 > **D-clo-17 — OPENED AND CLOSED (2026-08-30, loft#1202): a captured record ENUM was TAKEN by
 > the caller's bind, because no delivery was ever classified for it.** `@FR-L-CapHeap` says a

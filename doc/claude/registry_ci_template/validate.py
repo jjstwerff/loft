@@ -171,6 +171,49 @@ def gate_tarball_verify(idx: dict, prev: dict) -> None:
         print(f"[verify] {name} v{ver} sha256 + size match")
 
 
+def gate_binaries_verify(idx: dict, prev: dict) -> None:
+    """Gate 2b — every `binaries[triple].sha256` re-checked by download.
+
+    A version may carry prebuilt platform artifacts alongside its source
+    archive (today: the `loft` toolchain itself, so `loft self-update` can find
+    a release).  Those zips are what users actually RUN, and `index.json` is the
+    only signed thing the registry publishes -- the `.zip.sha256` sidecar beside
+    each artifact rides the same transport as the artifact, so it catches a
+    corrupted download, never a substituted one.  Naming the binaries from the
+    signed index is what puts them under a signature, and this gate is what makes
+    that signature mean something: the hash is verified against the bytes here,
+    at review time, rather than trusted from the submission.
+
+    It is also the reason gate 3 can exempt the toolchain (see
+    `gate_reproducible_build`).  Without this gate that exemption would leave the
+    binaries unchecked entirely, so the two belong together: if this gate is ever
+    removed, the exemption below must go with it.
+
+    `manifest_sha256` is NOT downloaded here.  It names `SHA256SUMS` *inside* the
+    zip, which the client checks against what it INSTALLED; verifying the zip's
+    own hash is what this gate is for.  Its presence is checked by the schema gate.
+    """
+    for name, ver, vobj in _new_entries(idx, prev):
+        binaries = vobj.get("binaries")
+        if not binaries:
+            continue
+        for triple, b in sorted(binaries.items()):
+            print(f"[verify] downloading {name} v{ver} {triple} from {b['url']}")
+            try:
+                with urllib.request.urlopen(b["url"], timeout=120) as resp:
+                    data = resp.read()
+            except Exception as e:  # noqa: BLE001 -- surface any failure
+                fail(f"`{name}` v{ver} [{triple}]: download failed: {e}")
+            actual_sha = hashlib.sha256(data).hexdigest()
+            if actual_sha.lower() != b["sha256"].lower():
+                fail(
+                    f"`{name}` v{ver} [{triple}]: sha256 MISMATCH\n"
+                    f"  PR claims: {b['sha256']}\n"
+                    f"  actual:    {actual_sha}"
+                )
+            print(f"[verify] {name} v{ver} {triple} sha256 match")
+
+
 def gate_reproducible_build(idx: dict, prev: dict) -> None:
     """Clone the homepage repo at the version tag, run `loft package`,
     compare sha256 to the PR's claim.
@@ -215,6 +258,27 @@ def gate_reproducible_build(idx: dict, prev: dict) -> None:
         homepage = pkg_meta.get("homepage", "")
         if not homepage or "github.com" not in homepage:
             print(f"[repro] {name} v{ver} — no GitHub homepage, skipping")
+            continue
+
+        # The TOOLCHAIN is exempt, and the exemption is narrow: it applies to a
+        # version whose artifact is a source archive of the compiler itself, not
+        # to anything a publisher can opt into.
+        #
+        # This gate re-packages a source tree with `loft package` and compares the
+        # hash.  Neither half applies here.  loft's repo root has no `loft.toml` --
+        # it is the compiler, not a loft package -- so there is nothing to
+        # re-package, and its version artifact is a `git archive` zip produced by
+        # the release workflow, not a `loft package` tarball.  Running the gate
+        # anyway fails on every toolchain submission for a reason that says nothing
+        # about the bytes ("`loft package` failed: exit status 1").
+        #
+        # What keeps the exemption honest is gate 2b above, which downloads every
+        # `binaries[triple]` zip and re-checks its sha256 -- so the artifacts users
+        # actually run are verified against their hashes here, at review time.  The
+        # source archive itself is still covered by gate 2. If gate 2b is ever
+        # removed, this exemption must be removed with it.
+        if vobj.get("binaries") and name == "loft":
+            print(f"[repro] {name} v{ver} — toolchain, verified by gate 2b instead")
             continue
 
         m = chunk_homepage.match(homepage)
@@ -363,6 +427,8 @@ def main() -> None:
     gate_schema(idx)
     print("[gate 2] tarball sha256 + size verify")
     gate_tarball_verify(idx, prev)
+    print("[gate 2b] prebuilt-binary sha256 verify")
+    gate_binaries_verify(idx, prev)
     skip_repro = os.environ.get("LOFT_VALIDATE_SKIP_REPRO") == "1"
     if skip_repro:
         print("[gate 3] reproducible-build re-check — SKIPPED (env)")

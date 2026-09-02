@@ -1,0 +1,219 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// `formal/interfaces.md` `(G-Gen)`: a generic header `fn f<T: I>` INTRODUCES its type
+// variable.  Introduces, per header — so the `T` in one function and the `T` in the next are
+// two variables, each judged against its own bounds by `(G-Check)`.
+//
+// The implementation gave the spelling FILE scope instead.  One attribute-less placeholder
+// stood for every `T` in the program, and the bound-method stubs (`t_<LEN>T#g_<method>`) hang
+// off that placeholder — so two headers writing `T` shared one stub, and a stub carries a
+// SIGNATURE.  Whichever header was declared first owned it; the second's calls were checked
+// against a parameter list its author never wrote:
+//
+//     fn one<T: HasSize1>(x: T) -> integer { x.sizer() }      // fn sizer(self: Self)
+//     fn two<T: HasSize2>(x: T) -> integer { x.sizer(10) }    // fn sizer(self: Self, k: integer)
+//     -> error: Too many parameters for T#g.sizer
+//
+// Order-dependent, so swapping the two declarations swapped the message with them, and
+// renaming one variable to `U` cured it — which is the one-line test that found the axis.
+// loft#1301 is the general statement; loft#1300 is its operator instance, where the two
+// arities of `-` both desugar to `OpMin`.
+//
+// The cure follows the rule: the placeholder is keyed on `(spelling, bound set)`, so a second
+// bound set gets a placeholder of its own, and `parse_type` resolves the spelling against the
+// ENCLOSING header before it asks the flat namespace.  Sharing stays the norm — two headers
+// with the same bounds still share one placeholder and one set of stubs, which is what keeps
+// the stdlib's many `<T>` templates on one definition.
+//
+// ⚠ What this deliberately leaves refused is ONE bound set requiring two signatures of one
+// method name — `<T: S1 + S2>` where both declare `sizer`, or one interface declaring `-` at
+// both arities.  There the two requirements are genuinely on one variable, and which one
+// `x.sizer()` means is a policy question, not a scoping one: loft#1275.  Its message is
+// pinned in `tests/parse_errors.rs`, where a file containing the refusal can still parse.
+//
+// @falsified-at: ebdc8801 — interpret exit 1 -> 0, native exit 1 -> 0.  (The pre-fix build
+//   REFUSES the file at parse time, so no assertion runs at all and the channel that moves is
+//   the exit status.)
+
+// ---- the reported shapes -----------------------------------------------------------------
+
+interface HasSize1300 { fn sizer(self: Self) -> integer }
+interface HasScale1300 { fn sizer(self: Self, scale: integer) -> integer }
+
+struct A1300 { v: integer }
+struct B1300 { v: integer }
+fn sizer(self: A1300) -> integer { self.v }
+fn sizer(self: B1300, scale: integer) -> integer { self.v * scale }
+
+fn one1300<T: HasSize1300>(x: T) -> integer { x.sizer() }
+fn two1300<T: HasScale1300>(x: T) -> integer { x.sizer(10) }
+
+fn two_headers_writing_t_are_two_variables() {
+  assert(one1300(A1300 { v: 7 }) == 7, "one: {one1300(A1300 { v: 7 })}");
+  assert(two1300(B1300 { v: 7 }) == 70, "two: {two1300(B1300 { v: 7 })}");
+}
+
+// The operator instance (loft#1300): two interfaces in one file, one requiring binary `-`
+// and one unary, both bounding a variable spelled `T`.
+interface Sub1300 { op - (self: Self, other: Self) -> Self }
+interface Neg1300 { op - (self: Self) -> Self }
+fn sub1300<T: Sub1300>(a: T, b: T) -> T { a - b }
+fn neg1300<T: Neg1300>(a: T) -> T { -a }
+
+fn both_arities_of_minus_coexist() {
+  assert(sub1300(10, 3) == 7, "sub: {sub1300(10, 3)}");
+  assert(neg1300(7) == -7, "neg: {neg1300(7)}");
+  // The same pair on the two other numeric receivers the resolution reaches.
+  assert(sub1300(10.5, 0.5) == 10.0, "sub float: {sub1300(10.5, 0.5)}");
+  assert(neg1300(7.5) == -7.5, "neg float: {neg1300(7.5)}");
+}
+
+// loft#1300's second trigger: a bound requiring binary `-` beside the STDLIB's `Numeric`,
+// whose `-` is unary.  No second interface is written; the collision was with a shipped one.
+struct M1300 { v: integer }
+fn OpMin(self: M1300, other: M1300) -> M1300 { M1300 { v: self.v - other.v } }
+fn diff1300<T: Sub1300>(a: T, b: T) -> T { a - b }
+fn negate1300<T: Numeric>(a: T) -> T { -a }
+
+fn a_user_binary_minus_does_not_capture_the_stdlib_unary() {
+  d = diff1300(M1300 { v: 10 }, M1300 { v: 3 });
+  assert(d.v == 7, "diff: {d.v}");
+  assert(negate1300(7) == -7, "negate: {negate1300(7)}");
+}
+
+// ---- the axes the reports did not carry --------------------------------------------------
+
+// Same ARITY, different parameter TYPE.  The conflict check counted parameters, so this one
+// was never even reported: the second header's call was silently typed against the first's
+// signature and refused with *"expected integer, got text"*.
+interface TakesInt1300 { fn sizer(self: Self, k: integer) -> integer }
+interface TakesText1300 { fn sizer(self: Self, k: text) -> integer }
+struct C1300 { v: integer }
+struct D1300 { v: integer }
+fn sizer(self: C1300, k: integer) -> integer { self.v * k }
+fn sizer(self: D1300, k: text) -> integer { self.v + len(k) }
+fn int1300<T: TakesInt1300>(x: T) -> integer { x.sizer(10) }
+fn text1300<T: TakesText1300>(x: T) -> integer { x.sizer("abc") }
+
+fn same_arity_different_parameter_type_is_two_variables() {
+  assert(int1300(C1300 { v: 7 }) == 70, "int: {int1300(C1300 { v: 7 })}");
+  assert(text1300(D1300 { v: 7 }) == 10, "text: {text1300(D1300 { v: 7 })}");
+}
+
+// Same parameter list, different RETURN type — the third way one name carries two signatures.
+interface ToInt1300 { fn render(self: Self) -> integer }
+interface ToText1300 { fn render(self: Self) -> text }
+struct E1300 { v: integer }
+struct F1300 { v: integer }
+fn render(self: E1300) -> integer { self.v }
+fn render(self: F1300) -> text { "f{self.v}" }
+fn as_int1300<T: ToInt1300>(x: T) -> integer { x.render() }
+fn as_text1300<T: ToText1300>(x: T) -> text { x.render() }
+
+fn same_parameters_different_return_is_two_variables() {
+  assert(as_int1300(E1300 { v: 7 }) == 7, "int: {as_int1300(E1300 { v: 7 })}");
+  assert(as_text1300(F1300 { v: 7 }) == "f7", "text: {as_text1300(F1300 { v: 7 })}");
+}
+
+// A `T?` discharged with a bare `x?`.  This is the cell the suite caught and the guard did not
+// have: `x?` is `x ?? construct_default(T)`, and for a type variable that default is built by
+// SUB-PARSING the source text `T {}` — so a header holding a placeholder no source can spell
+// had nothing to sub-parse and the discharge failed to type.  Two headers must be present for
+// the second to hold such a placeholder, which is why this cell lives here and not beside the
+// loft#1016 guards.
+interface Marked1300 { fn mark(self: Self) -> integer }
+struct J1300 { v: integer }
+fn mark(self: J1300) -> integer { self.v }
+fn marked1300<T: Marked1300>(x: T, a: T? = null) -> integer { _ = x; a?.mark() }
+fn plain1300<T>(x: T, a: T?) -> T { _ = x; a? }
+
+fn a_deferred_default_survives_a_second_placeholder() {
+  // An ABSENT `a` discharges to `construct_default(J1300)`, which is `J1300 { v: 0 }` — the
+  // record every field defaulted, not the other argument.  That zero is the answer the
+  // deferred default is supposed to produce, and getting it means the sub-parse found the
+  // placeholder this header holds.
+  assert(marked1300(J1300 { v: 7 }) == 0, "absent: {marked1300(J1300 { v: 7 })}");
+  assert(marked1300(J1300 { v: 7 }, J1300 { v: 9 }) == 9,
+         "present: {marked1300(J1300 { v: 7 }, J1300 { v: 9 })}");
+  assert(plain1300(1, 5) == 5, "plain: {plain1300(1, 5)}");
+  assert(plain1300("a", "b") == "b", "plain text: {plain1300(\"a\", \"b\")}");
+}
+
+// The instantiating TYPE is the axis every generic defect in this register turned on, so the
+// two headers are crossed with the kinds a bound can bind: a float, a boolean and an enum
+// beside the integer / struct / text above.
+interface Shown1300 { fn shown(self: Self) -> text }
+interface Twice1300 { fn shown(self: Self, times: integer) -> text }
+enum Colour1300 { Red, Green }
+fn shown(self: float) -> text { "f{self}" }
+fn shown(self: boolean, times: integer) -> text { "b{self}x{times}" }
+fn shown(self: Colour1300) -> text { "c{self as integer}" }
+fn once1300<T: Shown1300>(x: T) -> text { x.shown() }
+fn twice1300<T: Twice1300>(x: T) -> text { x.shown(2) }
+
+fn every_instantiating_kind_reaches_its_own_header() {
+  assert(once1300(1.5) == "f1.5", "float: {once1300(1.5)}");
+  // Discriminants start at 1, so `Green` is 2.
+  assert(once1300(Colour1300.Green) == "c2", "enum: {once1300(Colour1300.Green)}");
+  assert(twice1300(true) == "btruex2", "boolean: {twice1300(true)}");
+}
+
+// ---- the controls ------------------------------------------------------------------------
+
+// Sharing is still the NORM, and it has to be: two headers whose bounds declare the same
+// method the SAME way want one placeholder and one stub.  A cure that split every header
+// would pass every cell above and quietly double the stdlib's stubs.
+interface Same1300a { fn gamma(self: Self) -> integer }
+interface Same1300b { fn gamma(self: Self) -> integer }
+struct G1300 { v: integer }
+fn gamma(self: G1300) -> integer { self.v }
+fn g_one1300<T: Same1300a>(x: T) -> integer { x.gamma() }
+fn g_two1300<T: Same1300b>(x: T) -> integer { x.gamma() + 1 }
+
+fn identical_signatures_still_share() {
+  assert(g_one1300(G1300 { v: 7 }) == 7, "one: {g_one1300(G1300 { v: 7 })}");
+  assert(g_two1300(G1300 { v: 7 }) == 8, "two: {g_two1300(G1300 { v: 7 })}");
+}
+
+// The same BOUND named twice, which is the commonest sharing of all: both headers must reach
+// the one placeholder, and a value must satisfy it from either.
+fn p_one1300<T: Printable>(x: T) -> text { x.to_text() }
+fn p_two1300<T: Printable>(x: T) -> text { "[{x.to_text()}]" }
+
+fn the_same_bound_twice_is_one_variable() {
+  assert(p_one1300(7) == "7", "one: {p_one1300(7)}");
+  assert(p_two1300(7) == "[7]", "two: {p_two1300(7)}");
+  assert(p_one1300("x") == "x", "one text: {p_one1300(\"x\")}");
+}
+
+// An UNBOUNDED `<T>` has no stubs at all and must keep resolving beside the bounded ones.
+fn first1300<T>(v: vector<T>, fallback: T) -> T { v[0] ?? fallback }
+
+fn an_unbounded_variable_is_unaffected() {
+  assert(first1300([4, 5, 6], 0) == 4, "first: {first1300([4, 5, 6], 0)}");
+  assert(first1300(["a"], "z") == "a", "first text: {first1300([\"a\"], \"z\")}");
+}
+
+// The workaround the old refusal named still works, and answers the same as the cure.
+interface Ren1300a { fn delta(self: Self) -> integer }
+interface Ren1300b { fn delta(self: Self, n: integer) -> integer }
+struct H1300 { v: integer }
+struct I1300 { v: integer }
+fn delta(self: H1300) -> integer { self.v }
+fn delta(self: I1300, n: integer) -> integer { self.v * n }
+fn r_one1300<T: Ren1300a>(x: T) -> integer { x.delta() }
+fn r_two1300<U: Ren1300b>(x: U) -> integer { x.delta(3) }
+
+fn renaming_the_variable_still_works() {
+  assert(r_one1300(H1300 { v: 7 }) == 7, "one: {r_one1300(H1300 { v: 7 })}");
+  assert(r_two1300(I1300 { v: 7 }) == 21, "two: {r_two1300(I1300 { v: 7 })}");
+}
+
+// The stdlib's own bounded generics are reached from this file, which is the control that
+// says the split did not strand them: `sum` is `<T: Addable>`, declared before anything here
+// claimed the spelling, and it must still specialise for more than one element type.
+fn the_stdlib_generics_still_resolve() {
+  assert(sum([1, 2, 3], 0) == 6, "sum: {sum([1, 2, 3], 0)}");
+  assert(sum([1.5, 2.5], 0.0) == 4.0, "sum float: {sum([1.5, 2.5], 0.0)}");
+}

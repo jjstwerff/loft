@@ -194,3 +194,55 @@ fn mistyped_file_path_suggests_the_neighbour() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A program that is NOT a script must not be desugared as one — and an escaped quote
+/// inside a format hole used to make it look like one (loft#1271).
+///
+/// `"got: {shout("a\"b")}"` is one literal: `{` opens a hole, the `"` inside it opens a
+/// NESTED string, and only the `"` at hole depth 0 closes it. `split_top_level` read it
+/// flat, ended the item after `shout(`, and the `fn main` that FOLLOWED no longer STARTED
+/// an item — so `is_script` stopped seeing it and desugared an ordinary program. The
+/// symptom was a LEXER error, `fatal: String not correctly terminated`, on a line the
+/// compiler accepts one function up.
+///
+/// This is the end-to-end half, and it needs a PLAIN run: `loft --tests` does not consult
+/// the classifier at all, so the same source passes under the test harness on a build where
+/// this fails. The unit-level half is `loft::script::tests`.
+///
+/// Order is the whole trick and is why the fixture puts the escaped quote in the function
+/// IMMEDIATELY before `fn main`: with another def between them the mis-split resynchronises
+/// and the bug hides, and with `fn main` first it never fires.
+#[test]
+fn an_escaped_quote_in_a_hole_does_not_make_a_program_a_script() {
+    let dir = std::env::temp_dir().join(format!("loft_1271_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let file = dir.join("p.loft");
+    std::fs::write(
+        &file,
+        "fn shout(v: text) -> text { \"{v}!\" }\n\
+         fn probe() -> text { \"got: {shout(\"a\\\"b\")}\" }\n\
+         fn main() { print(\"{probe()}\\n\"); }\n",
+    )
+    .expect("write");
+
+    for backend in ["--interpret", "--native"] {
+        let out = Command::new(loft_bin())
+            .args([backend, file.to_str().unwrap()])
+            .env("LOFT_TIMEOUT", "120")
+            .current_dir(workspace_root())
+            .output()
+            .expect("invoke loft");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "[{backend}] a program with an escaped quote in a hole must run:\n{stderr}"
+        );
+        assert!(
+            stdout.contains("got: a\"b!"),
+            "[{backend}] and the escape must survive as one quote: {stdout:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

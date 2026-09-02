@@ -238,9 +238,12 @@ macro_rules! loft_eprintln {
         {
             $crate::live_dispatch::wasm_host_log(&format!("{}\n", format_args!($($arg)*)));
         }
+        // Through `host_eprint` rather than `eprintln!`: a diagnostic whose write cannot
+        // land must not panic, because a panic whose own message cannot be printed is what
+        // turns `prog 2>&1 | head` into a SIGABRT and a crash report (loft#1289).
         #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))))]
         {
-            eprintln!($($arg)*);
+            $crate::codegen_runtime::host_eprint(&format!("{}\n", format_args!($($arg)*)));
         }
     }};
 }

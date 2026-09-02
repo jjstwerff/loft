@@ -364,7 +364,10 @@ when + the 20-min PR rule.
 **Quality / stability / formal:** [CODE.md](doc/claude/CODE.md) · [DOC_QUALITY.md](doc/claude/DOC_QUALITY.md) ·
 [QUALITY.md](doc/claude/QUALITY.md) open work · [GOALS.md](doc/claude/GOALS.md) (purpose + goals A–F) ·
 [BUS_FACTOR.md](doc/claude/BUS_FACTOR.md) (the development model — repo + agent, no single point of failure) ·
-[STRONG_POINTS.md](doc/claude/STRONG_POINTS.md) · [DESIGN.md](doc/claude/DESIGN.md) algorithms ·
+[STRONG_POINTS.md](doc/claude/STRONG_POINTS.md) ·
+[CONTROL.md](doc/claude/CONTROL.md) the census of where the programmer is NOT in
+control — the SEE/SAY test, and the count that must not grow ·
+[DESIGN.md](doc/claude/DESIGN.md) algorithms ·
 [DESIGN_DECISIONS.md](doc/claude/DESIGN_DECISIONS.md) declined-features register ·
 [DESIGN_PROTOCOL.md](doc/claude/DESIGN_PROTOCOL.md) / [DESIGN_VERIFICATION.md](doc/claude/DESIGN_VERIFICATION.md) ·
 [FORMATTER.md](doc/claude/FORMATTER.md) · stability: [STABILITY_ROADMAP.md](doc/claude/STABILITY_ROADMAP.md)

@@ -31,19 +31,31 @@
 // Type 'loft' on its own and you get a prompt where you can type one line at a
 // time and see the answer straight away:
 //
-//     $ printf '2 + 3\n' | loft repl --fresh
-//     5
-//
-// Typed by hand it looks like this — start it, then type at the prompt:
-//
 //     loft
+//     loft REPL — :help for commands, :quit to exit
 //     loft> 2 + 3
 //     5
 //
 // This is called a REPL, which is short for "read, evaluate, print, loop".
 // It is the quickest way to check what a function does or try an idea.
-// Your session is remembered, so you can close it and come back later —
-// '--fresh' is how you ask for a clean one instead.
+//
+// Started by hand like that, the REPL remembers your session: the values you
+// bound and the functions and structs you defined come back next time, and it
+// says so as it starts.
+//
+//     loft
+//     restored 2 statement(s) from last session
+//     loft>
+//
+// '--fresh' asks for a clean one instead, and ':reset' clears it mid-session.
+//
+// You can also feed it from a pipe, which is handy in a script. That is a
+// different mode: it never reads or writes the saved session, so it always
+// starts empty. The banner and the 'loft>' prompts go to standard error and the
+// answers to standard output, so a script can read just the answers:
+//
+//     $ printf '2 + 3\n' | loft repl --fresh 2>/dev/null
+//     5
 // ## Two ways to run, and why you usually ignore this
 // loft can run your program in two ways. It compiles your program to a fast
 // program first when it can, and otherwise it reads and runs your program
@@ -72,16 +84,30 @@
 //     ok
 //
 // This reports mistakes and runs nothing. It is fast, and it is a good habit
-// while you are still writing.
+// while you are still writing. It leaves a '.loft' folder beside your file to
+// remember what it already worked out, which is why the second run is quicker.
 // ## When loft tells you something is wrong
-// A message from loft names the file, the line, and what to do. Some messages
-// can also show you the exact replacement to write:
+// A message from loft names the file, the line, and what to do. Say unused.loft
+// binds a name it never uses:
 //
-//     $ loft --explain --interpret hello.loft
+//     $ loft --interpret unused.loft
+//     warning[never-read]: Variable unused is never read
+//     note: 1 diagnostic above suggests what to write instead — re-run with `--explain`
 //     hello, world!
 //
-// That prints the suggested fix under each message. It only shows you the fix;
-// it changes nothing, so it is always safe to run.
+// Between those first two lines it also prints the file and line it means, the
+// source line itself, and a caret under the exact spot.
+//
+// That closing note means loft has a replacement in mind. Ask for it:
+//
+//     $ loft --explain --interpret unused.loft
+//     fix  delete `unused`   needs: computing it has no effect you are relying on   [dead-code lint · @F100]
+//
+// The 'fix' line is the suggested replacement and 'needs' is the condition under
+// which it applies — loft cannot know whether you meant to keep the name, so it
+// tells you what it is assuming. The bracket names the topic to read up on; the
+// feature catalogue has a page per tag. '--explain' only SHOWS you the fix. It
+// changes nothing, so it is always safe to run.
 
 fn main() {
   // A program is just a file with a `main` function in it, like this one.

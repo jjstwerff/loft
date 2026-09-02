@@ -3206,6 +3206,189 @@ fn keyed_collection_as_a_vector_element_is_refused() {
         );
 }
 
+/// loft#1275 — a NAMED method required at two arities by one bound set, which stays refused
+/// after the stub key gained the arity.
+///
+/// The key carries the arity now, so two signatures of one name are two stubs and an OPERATOR
+/// reaches both: `-` is unary or binary by its SYNTAX, so `call_op` asks for the exact one.
+/// A method call cannot: it resolves its RECEIVER before its arguments are parsed, so
+/// `x.sizer()` has no arity to ask with. Refusing at the declaration names both arities and
+/// the cure; letting it through would resolve one of them by accident.
+#[test]
+fn one_bound_set_cannot_require_two_signatures_of_one_method() {
+    code!(
+        "interface HasSize1 { fn sizer(self: Self) -> integer }\n\
+         interface HasSize2 { fn sizer(self: Self, scale: integer) -> integer }\n\
+         struct A1301 { v: integer }\n\
+         fn sizer(self: A1301) -> integer { self.v }\n\
+         fn one<T: HasSize1 + HasSize2>(x: T) -> integer { x.sizer() }\n\
+         fn test() { }"
+    )
+    .error(
+        "the bounds on 'T' require two different 'sizer' — one taking 1 parameter(s) and one \
+         taking 2 — and a method call resolves its receiver before its arguments, so only one \
+         of them can be reached. Bound 'T' by the interface that declares the one this body \
+         calls, and give the other its own generic at \
+         one_bound_set_cannot_require_two_signatures_of_one_method:5:40",
+    );
+}
+
+/// loft#1275's own reproducer, and the case that CLOSED `formal/interfaces.md` `D-gen-4`.
+///
+/// `(G-Iface)` calls an interface a set of SIGNATURES, so declaring `-` at both arities asks
+/// for two requirements and not one. `-` desugars to `OpMin` either way, and while the stub
+/// key spelled only the NAME the second declaration was silently dropped — the interface
+/// carried one `OpMin`, and `a - b` under any bound was refused with *"operator 'Min' requires
+/// a concrete type"*. The key carries the arity now, so both are reachable and this compiles
+/// and runs.
+#[test]
+fn one_interface_may_declare_both_arities_of_minus() {
+    code!(
+        "interface SubNeg { op - (self: Self, other: Self) -> Self\n\
+         op - (self: Self) -> Self }\n\
+         fn both<T: SubNeg>(a: T, b: T) -> T { -(a - b) }"
+    )
+    .expr("both(10, 3)")
+    .result(Value::Int(-7));
+}
+
+/// loft#1301 / loft#1300 — two generic headers that both write `T` bind two DIFFERENT
+/// variables, and each is judged against its own bounds.
+///
+/// `formal/interfaces.md` `(G-Gen)` says a header *introduces* its type variable, so the
+/// binding is per-header. The implementation gave the spelling file scope: one placeholder
+/// stood for every `T`, and the bound-method stubs hang off that placeholder. A stub carries a
+/// SIGNATURE, so whichever header was declared first owned it and the second's calls were
+/// checked against a parameter list its author never wrote — order-dependently. Renaming one
+/// variable to `U` cured it, which is what named the axis.
+///
+/// The pair below is the reported reproducer; the full matrix — the two arities of `-`, a
+/// same-arity different-parameter-type pair, a same-parameters different-return pair, and the
+/// sharing that must survive — is
+/// `tests/scripts/1300-a-generic-header-binds-its-own-type-variable.loft`.
+#[test]
+fn two_headers_writing_the_same_type_variable_are_two_variables() {
+    code!(
+        "interface HasSize1 { fn sizer(self: Self) -> integer }\n\
+         interface HasSize2 { fn sizer(self: Self, scale: integer) -> integer }\n\
+         struct A1301 { v: integer }\n\
+         struct B1301 { v: integer }\n\
+         fn sizer(self: A1301) -> integer { self.v }\n\
+         fn sizer(self: B1301, scale: integer) -> integer { self.v * scale }\n\
+         fn one<T: HasSize1>(x: T) -> integer { x.sizer() }\n\
+         fn two<T: HasSize2>(x: T) -> integer { x.sizer(10) }\n\
+         fn test() -> integer { return one(A1301 { v: 7 }) + two(B1301 { v: 7 }); }"
+    )
+    .result(Value::Int(77));
+    // The declaration ORDER was what decided which header owned the stub, so the swap is the
+    // cell that says the cure is not order-sensitive either.
+    code!(
+        "interface HasSize1 { fn sizer(self: Self) -> integer }\n\
+         interface HasSize2 { fn sizer(self: Self, scale: integer) -> integer }\n\
+         struct A1301 { v: integer }\n\
+         struct B1301 { v: integer }\n\
+         fn sizer(self: A1301) -> integer { self.v }\n\
+         fn sizer(self: B1301, scale: integer) -> integer { self.v * scale }\n\
+         fn two<T: HasSize2>(x: T) -> integer { x.sizer(10) }\n\
+         fn one<T: HasSize1>(x: T) -> integer { x.sizer() }\n\
+         fn test() -> integer { return one(A1301 { v: 7 }) + two(B1301 { v: 7 }); }"
+    )
+    .result(Value::Int(77));
+}
+
+/// The CONTROLS, and they are what two earlier attempts at this diagnostic failed.
+///
+/// Sharing a stub is the NORM: same interface twice, or two interfaces declaring the same
+/// method the SAME way, legitimately share one placeholder and one stub. A predicate that
+/// compared the STUB against an interface method rather than child-to-child reported a
+/// conflict on `default/01_code.loft` itself — `assert_eq` and `assert_ne` share
+/// `AssertValue: Equatable + Printable` — and refused every program. Different method NAMES
+/// never collide at all.
+///
+/// The third cell below was the WORKAROUND while two headers writing `T` shared a stub; it
+/// now answers the same as writing `T` twice, and stays as the control that says a renamed
+/// variable did not become a second class of thing.
+#[test]
+fn legitimate_stub_sharing_is_not_a_conflict() {
+    // Same method name, same signature, two generics both using `T`.
+    code!(
+        "interface Q1 { fn gamma(self: Self) -> integer }\n\
+         interface Q2 { fn gamma(self: Self) -> integer }\n\
+         struct B1301 { v: integer }\n\
+         fn gamma(self: B1301) -> integer { self.v }\n\
+         fn one<T: Q1>(x: T) -> integer { x.gamma() }\n\
+         fn two<T: Q2>(x: T) -> integer { x.gamma() + 1 }\n\
+         fn test() -> integer { return one(B1301 { v: 7 }) + two(B1301 { v: 7 }); }"
+    )
+    .result(Value::Int(15));
+    // Different method names, two generics both using `T`.
+    code!(
+        "interface P1 { fn alpha(self: Self) -> integer }\n\
+         interface P2 { fn beta(self: Self, n: integer) -> integer }\n\
+         struct C1301 { v: integer }\n\
+         fn alpha(self: C1301) -> integer { self.v }\n\
+         fn beta(self: C1301, n: integer) -> integer { self.v * n }\n\
+         fn one<T: P1>(x: T) -> integer { x.alpha() }\n\
+         fn two<T: P2>(x: T) -> integer { x.beta(10) }\n\
+         fn test() -> integer { return one(C1301 { v: 7 }) + two(C1301 { v: 7 }); }"
+    )
+    .result(Value::Int(77));
+    // And the cure the message names actually works.
+    code!(
+        "interface R1 { fn delta(self: Self) -> integer }\n\
+         interface R2 { fn delta(self: Self, n: integer) -> integer }\n\
+         struct D1301 { v: integer }\n\
+         fn delta(self: D1301) -> integer { self.v }\n\
+         fn one<T: R1>(x: T) -> integer { x.delta() }\n\
+         fn two<U: R2>(x: U) -> integer { x.delta(1) }\n\
+         fn test() -> integer { return one(D1301 { v: 7 }); }"
+    )
+    .result(Value::Int(7));
+}
+
+/// loft#1298 — the same refusal for the spelling that writes NO type.
+///
+/// The declaration check above was described as *"the one chokepoint every `vector<…>`
+/// element passes through"*, and it is not: an INFERRED literal never writes the type, so
+/// `hs = [mk(1), mk(2)]` where `mk` returns a `hash<E[k]>` reached no check at all. It
+/// panicked the interpreter instead — the element copy landed on `u16::MAX`, which the
+/// source-free bit masks to `0x7FFF`, an index into an 85-row type table.
+///
+/// Refused rather than made to work, and that was MEASURED rather than assumed: giving the
+/// element the collection's own registered row gets past the type table and then corrupts
+/// the block chain (*"block chain is malformed … a block owning no words"*, then a divide by
+/// zero), so the storage has no room for a keyed element either. The message's own cure —
+/// hold it in a struct — is verified to work.
+#[test]
+fn an_inferred_keyed_vector_element_is_refused_too() {
+    code!(
+        "struct Ent { k: integer, v: integer }\n\
+         fn mk() -> hash<Ent[k]> { h: hash<Ent[k]> = []; h }\n\
+         fn test() { hs = [mk(), mk()]; }"
+    )
+    .error(
+        "a `hash` cannot be a vector ELEMENT — a keyed collection has no element form \
+         anything can write, so `vector<hash<…>>` could only ever be declared and stay \
+         empty. Hold it in a struct and make a vector of THAT: the extra record is what \
+         the element would have been anyway. at \
+         an_inferred_keyed_vector_element_is_refused_too:3:30",
+    );
+}
+
+/// The CONTROL for the refusal above: a keyed literal built THROUGH a keyed destination is
+/// a different construct (its elements are the CONTENT struct, not collections) and must
+/// still build, as must a nested VECTOR literal beside it. A refusal that fired on either
+/// would satisfy the test above and take a working spelling with it.
+#[test]
+fn a_keyed_destination_literal_and_a_nested_vector_still_build() {
+    code!(
+        "struct Ent { k: integer, v: integer }\n\
+         fn test() -> integer { h: hash<Ent[k]> = [Ent { k: 1, v: 7 }, Ent { k: 2, v: 8 }]; \
+         vv = [[1, 2], [3, 4]]; return len(h) + len(vv); }"
+    )
+    .result(Value::Int(4));
+}
+
 /// Every keyed kind, not just the one that was reported: `spatial` and `trie`
 /// reach the same dead end, and a rule that names three of five kinds is how
 /// loft#922's field-replace path left two of them broken.
@@ -3245,4 +3428,199 @@ fn every_keyed_kind_is_refused_as_a_vector_element() {
              the element would have been anyway. at \
              every_keyed_kind_is_refused_as_a_vector_element:2:39",
         );
+}
+
+/// loft#1266's sibling from the Safety-chapter review — the enum variant limit.
+///
+/// A plain enum is one byte and both ends of it are reserved: `0` is the undefined value
+/// the variants are numbered away from, and `255` is the null sentinel every scalar type
+/// has (`OpConvBoolFromEnum` is `@v1 != 255 && @v1 != 0`).  So 254 variants is the whole
+/// domain, and the guard used to fire one variant too late in a way that had no upper
+/// bound on the damage: 255 variants COMPILED and the last one answered `null` while
+/// `match` sent it to the wildcard; 256 variants overflowed the `u8` — an internal
+/// compiler error under debug assertions, a wrap to the reserved `0` without them, and the
+/// ICE named a position inside `default/05_coroutine.loft` rather than the enum.
+///
+/// The reading half — that 254 variants still WORK and the last one is an ordinary value —
+/// is `tests/scripts/the-reference-safety-traps-are-what-it-catalogues.loft`, which cannot
+/// hold this cell because the fixed compiler refuses to parse it.
+#[test]
+fn enum_variant_limit_refuses_the_255th() {
+    let variants: Vec<String> = (0..255).map(|i| format!("  V{i},")).collect();
+    let src = format!("enum Wide {{\n{}\n}}\n", variants.join("\n"));
+    code!(&src).error(
+        "Too many enum variants — an enum holds at most 254, because a variant is one byte \
+         and 0 and 255 are reserved at enum_variant_limit_refuses_the_255th:255:8",
+    );
+}
+
+// ── generic bounds refuse exactly what they do not guarantee (Generics-chapter review) ──
+//
+// The reference's table of built-in interfaces was a copy of INTERFACES.md's DESIGN rather
+// than of `default/01_code.loft`, so it promised `-` under `Addable` and all four operators
+// under `Numeric`.  The permitted half is
+// `tests/scripts/the-reference-bounds-permit-what-it-lists.loft`; these are the refusals,
+// as Rust tests rather than `@EXPECT_ERROR` cells so that every one is matched instead of
+// only the first (loft#1261).
+
+/// `Addable` is `+` alone — its declaration carries one method and `-` is not it.
+#[test]
+fn generic_bound_addable_refuses_subtraction() {
+    code!("fn probe<T: Addable>(a: T, b: T) -> T { a - b }\nfn test() { }").error(
+        "generic type T: operator '-' requires a concrete type at \
+         generic_bound_addable_refuses_subtraction:1:47",
+    );
+}
+
+/// `Numeric` is `*` and the unary `-`; `+` belongs to `Addable` and is refused here.
+#[test]
+fn generic_bound_numeric_refuses_addition() {
+    code!("fn probe<T: Numeric>(a: T, b: T) -> T { a + b }\nfn test() { }").error(
+        "generic type T: operator '+' requires a concrete type at \
+         generic_bound_numeric_refuses_addition:1:47",
+    );
+}
+
+/// …and division, which no bound offers at all.
+#[test]
+fn generic_bound_numeric_refuses_division() {
+    code!("fn probe<T: Numeric>(a: T, b: T) -> T { a / b }\nfn test() { }").error(
+        "generic type T: operator '/' requires a concrete type at \
+         generic_bound_numeric_refuses_division:1:47",
+    );
+}
+
+/// An UNBOUNDED T carries no comparison either — the chapter's "you can only assign and
+/// return T" is about `==` as much as about arithmetic.
+#[test]
+fn an_unbounded_generic_refuses_equality() {
+    code!("fn probe<T>(a: T, b: T) -> boolean { a == b }\nfn test() { }").error(
+        "generic type T: operator '==' requires a concrete type at \
+         an_unbounded_generic_refuses_equality:1:45",
+    );
+}
+
+/// A field read needs a concrete type: the bound says which OPERATIONS exist, never which
+/// fields.
+#[test]
+fn a_generic_refuses_field_access() {
+    code!("struct P { f: integer }\nfn probe<T>(a: T) -> integer { a.f }\nfn test() { }").error(
+        "generic type T: field access requires a concrete type at \
+         a_generic_refuses_field_access:2:37",
+    );
+}
+
+/// The type variable has to be reachable from the FIRST argument, because that is what the
+/// call site infers it from.
+#[test]
+fn a_type_variable_must_reach_the_first_parameter() {
+    code!("fn probe<T>(tag: text, x: T) -> T { x }\nfn test() { }")
+        .error(
+            "Type variable T must appear in the first parameter — move T to the first parameter \
+         position at a_type_variable_must_reach_the_first_parameter:1:32",
+        )
+        .warning(
+            "Parameter tag is never read at a_type_variable_must_reach_the_first_parameter:1:36",
+        );
+}
+
+/// A user type that has not defined the bound's operator is refused at the CALL, which is
+/// where the concrete type is known — and the message names the function to write.
+#[test]
+fn a_user_type_missing_the_operator_is_refused_at_the_call() {
+    code!(
+        "struct Pri { value: integer }\n\
+         fn biggest<T: Ordered>(a: T, b: T) -> T { if a > b { a } else { b } }\n\
+         fn test() { r = biggest(Pri{value: 3}, Pri{value: 7}); }"
+    )
+    .error(
+        "'Pri' does not satisfy interface 'Ordered': missing OpLt at \
+         a_user_type_missing_the_operator_is_refused_at_the_call:3:54",
+    )
+    .warning(
+        "Variable r is never read at a_user_type_missing_the_operator_is_refused_at_the_call:3:16",
+    );
+}
+/// A bound is satisfied by a SIGNATURE, not by a name (loft#1274).
+///
+/// `formal/interfaces.md` (G-Sat) says a type satisfies an interface when a function with the
+/// interface's signature is visible — and `Numeric` declares `op - (self: Self) -> Self`, the
+/// UNARY negation. A binary `a - b` in a `<T: Numeric>` body desugars to the same `OpMin`, so
+/// a name-only test said the bound covered it: the call bound one operand too many, dropped
+/// `b`, and computed `-a` on both backends with no diagnostic. The float case answered an
+/// integer, so the result type was wrong too.
+///
+/// It now takes the refusal `Addable` already gave the same expression. No built-in bound
+/// offers binary subtraction; whether one SHOULD is a separate question about letting the two
+/// arities of `OpMin` coexist in one interface.
+///
+/// The reading half — that the operators the bound DOES declare still work, and that the
+/// `!=` / `<=` / `>=` derivations are untouched — is
+/// `tests/scripts/1274-a-bound-is-satisfied-by-signature-not-name.loft`, which cannot hold
+/// this cell because the fixed compiler refuses to parse it.
+#[test]
+fn binary_minus_under_numeric_is_refused_not_bound_to_the_unary_op() {
+    code!("fn gsub<T: Numeric>(a: T, b: T) -> T { a - b }\nfn run() -> integer { gsub(9, 4) }")
+        .error(
+            "generic type T: operator '-' requires a concrete type at \
+             binary_minus_under_numeric_is_refused_not_bound_to_the_unary_op:1:46",
+        );
+}
+
+/// A closure may not replace the whole value of a captured heap PARAMETER (loft#1281).
+///
+/// `(F-ParamRebind)` makes that rebind local to the callee and the capture has no route back
+/// to the parameter's SLOT, so before the refusal the write went to the store the closure
+/// record's DbRef copy names — which `(F-ParamHeap)` makes the CALLER's. `fn f(p:
+/// vector<integer>) { g = fn() { p = [7,7]; }; g(); }` left the caller's `[1,2]` as `[7,7]`
+/// on both backends with nothing reported.
+///
+/// Refusing is the call `D-clo-18` makes for the `&`-scalar shape one rule over: making it
+/// mean what it says needs the binding reachable from the closure plus a write-back, which
+/// the cell machinery cannot supply for a heap value.
+///
+/// The shapes it must NOT reach — a mutation through the capture, a captured LOCAL, a
+/// captured scalar parameter, a `&` parameter — are
+/// `tests/scripts/1281-a-closure-cannot-replace-a-captured-parameter.loft`, which cannot
+/// hold these cells because the fixed compiler refuses to parse them.
+#[test]
+fn a_closure_cannot_replace_a_captured_heap_parameter() {
+    // The cure the message names is the whole of the diagnostic's value, so it is matched in
+    // full rather than by a prefix: a reader who is told only "you cannot" rewrites the
+    // wrong half.
+    let msg = |col: &str| {
+        format!(
+            "Cannot replace the whole value of the captured parameter 'p' from a closure — \
+             the closure shares the caller's storage, so the replacement would reach the \
+             caller, where a rebind of a parameter is local to this function. Change it in \
+             place if the caller should see it (`p.clear()`, `p += [...]`, `p[i] = ...`), or \
+             build a local and use that. at \
+             a_closure_cannot_replace_a_captured_heap_parameter:{col}"
+        )
+    };
+    // every right-hand side, since the defect was in the destination and not the source
+    code!("fn f(p: vector<integer>) { g = fn() { p = [7, 7]; }; g(); }\nfn run() -> integer { 1 }")
+        .error(&msg("1:27"));
+    code!(
+        "fn mk() -> vector<integer> { v: vector<integer> = []; v += [7]; v }\n\
+         fn f(p: vector<integer>) { g = fn() { p = mk(); }; g(); }\nfn run() -> integer { 1 }"
+    )
+    .error(&msg("2:27"));
+    code!(
+        "fn f(p: vector<integer>) { o: vector<integer> = []; o += [7]; \
+         g = fn() { p = o; }; g(); }\nfn run() -> integer { 1 }"
+    )
+    .error(&msg("1:27"));
+    // and every heap KIND, since the leak was not vector-specific
+    code!(
+        "struct R { k: integer, v: integer }\n\
+         fn mkh() -> hash<R[k]> { h: hash<R[k]> = []; h += [R { k: 9, v: 9 }]; h }\n\
+         fn f(p: hash<R[k]>) { g = fn() { p = mkh(); }; g(); }\nfn run() -> integer { 1 }"
+    )
+    .error(&msg("3:22"));
+    code!(
+        "struct S { n: integer }\n\
+         fn f(p: S) { g = fn() { p = S { n: 9 }; }; g(); }\nfn run() -> integer { 1 }"
+    )
+    .error(&msg("2:13"));
 }

@@ -158,7 +158,7 @@ fn main() {
   // made the test that drives this fixture fail for someone else's process.
   // `env_variable` answers "" when unset, so the documented invocation above is
   // unchanged.
-  port_override = env_variable("LOFT_PROBE_PORT");
+  port_override = env_variable("LOFT_PROBE_PORT") ?? "";
   port = if port_override == "" { PORT } else { port_override as integer ?? PORT };
 
   engine_host::run(port, TICK_INTERVAL_US,

@@ -93,7 +93,7 @@ the call site.
 ### Interface declaration
 
 ```loft
-interface Ordered {
+interface Comparable {
     fn less_than(self: Self, other: Self) -> boolean
 }
 
@@ -101,6 +101,10 @@ interface Printable {
     fn to_text(self: Self) -> text
 }
 ```
+
+⚠ The name here is `Comparable` on purpose: the SHIPPED `Ordered` is keyed to `OpLt`, the
+operator form, so a type defining `less_than` does not satisfy it. The method form is for
+interfaces you declare yourself — see the Note under § Bound checking.
 
 `interface` is a new top-level keyword. Each method is a bare signature
 (no body). `Self` is the only type variable allowed inside the interface body.
@@ -115,7 +119,7 @@ spelling that variable's name, and neither library author could see it happen.
 ### Bounded generic function
 
 ```loft
-fn max_of<T: Ordered>(v: vector<T>) -> T {
+fn max_of<T: Comparable>(v: vector<T>) -> T {
     result = v[0];
     for item in v {
         if result.less_than(item) { result = item; }
@@ -148,15 +152,24 @@ fn less_than(self: Priority, other: Priority) -> boolean {
     self.value < other.value
 }
 
-// Priority now satisfies Ordered — no explicit declaration.
+// Priority now satisfies Comparable — no explicit declaration.
 max_of([Priority{value: 3}, Priority{value: 1}, Priority{value: 7}])
 ```
 
-If a method is missing, the compiler reports an error at the call site:
+To satisfy a SHIPPED interface the method is the operator's own name, and one definition
+serves both the bound and the bare operator:
+
+```loft
+fn OpLt(self: Priority, other: Priority) -> boolean { self.value < other.value }
+
+// Priority now satisfies Ordered, and `a < b` works on it as well.
+```
+
+If a method is missing, the compiler reports an error at the call site, naming the one to
+write:
 
 ```
-error: Priority does not satisfy interface Ordered
-  missing: fn less_than(self: Priority, other: Priority) -> boolean
+error: 'Priority' does not satisfy interface 'Ordered': missing OpLt
 ```
 
 ---
@@ -768,51 +781,115 @@ generic constraints rather than classic Go interface values.
 
 ## Standard library interfaces
 
-Phase 1 defines these interfaces in `default/01_code.loft`:
+⚠ **The block below is the DESIGN, not what `default/01_code.loft` contains.** The file
+ships a narrower set, and the reference's Generics chapter copied this list and so promised
+operators the compiler refuses. What actually ships is:
 
 ```loft
-// Comparison — for sorting and min/max
-interface Ordered {
-    fn OpLt(self: Self, other: Self) -> boolean
-    fn OpGt(self: Self, other: Self) -> boolean
+pub interface Ordered   { op < (self: Self, other: Self) -> boolean }
+pub interface Equatable { op == (self: Self, other: Self) -> boolean }
+pub interface Addable   { op + (self: Self, other: Self) -> Self }
+pub interface Numeric   { op * (self: Self, other: Self) -> Self
+                          op - (self: Self) -> Self }              // unary negation
+pub interface Scalable  { fn scale(self: Self, factor: integer) -> integer }
+pub interface Printable { fn to_text(self: Self) -> text }
+```
+
+so `-` is not in `Addable`, `+` and `/` are not in `Numeric`, `Scalable` takes an INTEGER
+factor through a method and answers `integer` rather than `Self`, and no built-in type
+satisfies `Scalable` at all. The derived spellings come free: `>`/`<=`/`>=` from `<`, and
+`!=` from `==`. `tests/scripts/the-reference-bounds-permit-what-it-lists.loft` holds the
+permitted half and `tests/parse_errors.rs`'s `generic_bound_*` family the refused half. A
+binary `a - b` under `Numeric` is REFUSED (loft#1274, fixed): `-` desugars to the same
+`OpMin` name at both arities, and bound satisfaction now compares the SIGNATURE rather than
+the name, so the unary negation no longer answers for the binary spelling. No built-in
+interface offers binary subtraction — write it against a concrete type.
+
+The design as originally written:
+
+```loft
+// Comparison.  `>`, `<=` and `>=` all DERIVE from `<`, so one operator is the whole bound.
+pub interface Ordered {
+  op < (self: Self, other: Self) -> boolean
 }
 
-// Equality — for set membership and index lookup
-interface Equatable {
-    fn OpEq(self: Self, other: Self) -> boolean
-    fn OpNe(self: Self, other: Self) -> boolean
+// Equality.  `!=` derives from `==` for the same reason.
+pub interface Equatable {
+  op == (self: Self, other: Self) -> boolean
 }
 
-// Addition and subtraction — for sum_of and generic accumulators
-interface Addable {
-    fn OpAdd(self: Self, other: Self) -> Self
-    fn OpMin(self: Self, other: Self) -> Self
+// Addition, returning the same type.
+pub interface Addable {
+  op + (self: Self, other: Self) -> Self
 }
 
-// Full scalar arithmetic — all four operators, same-type
-interface Numeric {
-    fn OpAdd(self: Self, other: Self) -> Self
-    fn OpMin(self: Self, other: Self) -> Self
-    fn OpMul(self: Self, other: Self) -> Self
-    fn OpDiv(self: Self, other: Self) -> Self
-    fn OpNeg(self: Self) -> Self
-    fn OpLt(self: Self, other: Self) -> boolean
-    fn OpGt(self: Self, other: Self) -> boolean
+// Multiplication, and UNARY negation.
+pub interface Numeric {
+  op * (self: Self, other: Self) -> Self
+  op - (self: Self) -> Self
 }
 
-// Scaling by a float factor — for normalisation and interpolation
-interface Scalable {
-    fn OpMul(self: Self, factor: float) -> Self
+// BINARY subtraction — a bound of its own, see the note below.
+pub interface Subtractable {
+  op - (self: Self, other: Self) -> Self
 }
 
-// Text conversion — for generic print/log helpers
-interface Printable {
-    fn to_text(self: Self) -> text
+// Integer scaling, as a METHOD rather than `op *` — see the note below.
+pub interface Scalable {
+  fn scale(self: Self, factor: integer) -> integer
+}
+
+// Text conversion — for generic print/log helpers.
+pub interface Printable {
+  fn to_text(self: Self) -> text
 }
 ```
 
-Built-in types (`integer`, `float`) automatically satisfy `Ordered`,
-`Equatable`, `Addable`, and `Numeric` via their existing operator definitions.
+Built-in types (`integer`, `single`, `float`, and for the two comparison bounds `text` and
+`boolean`) satisfy these through their existing operator definitions.
+
+**The list is narrower than it looks, and deliberately so.** Each bound names the FEWEST
+operators the derivations need: `Ordered` carries only `<` because `>`, `<=` and `>=` are
+derived from it, and `Equatable` only `==` for the same reason. An interface demanding every
+spelling would break every user type that implements the minimum.
+
+⚠ **`Numeric`'s `-` is UNARY negation; binary subtraction is `Subtractable`.** The two share
+one desugared name — `-` becomes `OpMin` at either arity — so they are two SIGNATURES of one
+name, and a bound-method stub is keyed by `(name, arity)` to keep them apart. Write
+`<T: Subtractable>` for `a - b`, `<T: Numeric>` for `-a`, and `<T: Numeric + Subtractable>`
+for both; the last is two interfaces on one variable that each name `OpMin`, which is the
+shape that needed the arity in the key (loft#1275).
+
+Subtraction is a separate bound rather than a third requirement on `Numeric` because adding
+one would take satisfaction away from every user type that provides `OpMul` and unary `OpMin`
+today — `(G-Sat)` is structural, so a new requirement is a breaking change
+([COMPATIBILITY.md](COMPATIBILITY.md)).
+
+**Your own interfaces may declare both arities, in ONE interface or one per interface.** An
+interface is a set of SIGNATURES (`(G-Iface)`), so
+
+```loft
+interface SubNeg {
+  op - (self: Self, other: Self) -> Self
+  op - (self: Self) -> Self
+}
+```
+
+compiles and both arities are reachable from a `<T: SubNeg>` body. Two interfaces each
+declaring one arity work too, including when both generics spell their type variable `T` — a
+generic header binds its own type variable (`(G-Gen)`, loft#1300 / loft#1301).
+
+⚠ **A CONCRETE type still provides one arity of a name, not both.** A method key carries the
+receiver and the method name and no arity, so `fn OpMin(self: Money)` and
+`fn OpMin(self: Money, other: Money)` collide as a redefinition. A user type therefore
+satisfies `Numeric` or `Subtractable`, not both — which is the other half of why they are
+separate bounds. Asking a type for the arity it does not have is a compile error naming the
+interface (*"'Money' does not satisfy interface 'Subtractable': missing OpMin"*), not a
+silently dropped operand.
+
+`Scalable` scales through a `scale` METHOD rather than `op *` for the neighbouring reason: it
+would share `Numeric`'s `*` at the SAME arity, and same-name same-arity requirements from two
+interfaces are one stub, so the second is taken to agree with the first.
 `text` satisfies `Ordered` and `Equatable`. No extra declarations are needed.
 
 **Stdlib functions converted from native to bounded-generic loft** (depends on I8):

@@ -73,15 +73,35 @@ pub interface Addable {
 }
 
 // Types that support `*` and `-` (unary negation).
-// Separate from `Addable` to allow fine-grained bounds without stub-name collisions.
+// Separate from `Addable` so a generic can ask for the fewest operators it needs.
 // Satisfied by integer, single, float, and user types defining OpMul and OpMin.
+//
+// Binary subtraction is `Subtractable` below and deliberately NOT here.  Both arities of `-`
+// CAN now be declared by one interface — that is what loft#1275 fixed, and `Subtractable`
+// beside `Numeric` is only a choice about the shipped surface — but adding a requirement to
+// `Numeric` would take satisfaction away from every user type that provides `OpMul` and unary
+// `OpMin` today, which is exactly what COMPATIBILITY.md forbids.
 pub interface Numeric {
   op * (self: Self, other: Self) -> Self
   op - (self: Self) -> Self
 }
 
+// Types that support binary `-` (subtraction), returning the same type.
+// Satisfied by integer, single, float, and user types defining a two-operand OpMin.
+//
+// A bound of its own rather than a third requirement on `Numeric`: a bound set may declare one
+// name at two arities since loft#1275 (`-` desugars to `OpMin` either way, and the stub key
+// carries the arity), so `<T: Numeric + Subtractable>` gets negation and subtraction together
+// from two interfaces that each name `OpMin`.  Before that it could get only one of them.
+pub interface Subtractable {
+  op - (self: Self, other: Self) -> Self
+}
+
 // Types that support integer scaling via a `scale` method.
-// Uses a method (not `op *`) to avoid stub-name collision with `Numeric`.
+// Uses a method (not `op *`) because a `<T: Numeric + Scalable>` would then need two
+// signatures of one name from ONE bound set, which is still refused (loft#1275).
+// Two SEPARATE generics may each bound their own `T` by an interface declaring the same
+// method differently — a header binds its own type variable.
 // User types satisfy Scalable by defining `fn scale(self: T, factor: integer) -> integer`.
 pub interface Scalable {
   fn scale(self: Self, factor: integer) -> integer
@@ -151,8 +171,22 @@ fn OpNot(v1: boolean) -> boolean;
 //
 // Emitted only where the value is NOT provably in range, so ordinary in-range code pays
 // nothing (`parser::expressions::range_guard`).
+// @FR-E-Uncomp-NN — the collapse: a value that does not fit the target's declared range
+// takes the type's DEFAULT, and the sentinel is a value that does not fit either.
+//
+// Whether the sentinel is a legal ANSWER depends on the target, and `dflt` already carries
+// that fact: `uncomputable_default` sets it to `i64::MIN` exactly when the slot can read
+// back null (a nullable target, or `i32`/`i64` whose spare code is the bottom one) and to
+// the type's default otherwise.  So a sentinel is passed through where null is
+// representable and collapsed to the default where it is not — `u8`/`i8`/`u16`/`i16` fill
+// their width and `u32`'s spare is at the top, which no non-null read tests for.
+//
+// The sentinel arm is SILENT on purpose.  It is not a fault of this store: the operation
+// that produced the sentinel reported at its own site, and reporting again would name
+// `-9223372036854775808` as a value outside the range, which is not a number the program
+// ever computed.
 fn OpRangeDefault(val: integer, lo: const integer, hi: const integer, dflt: const integer) -> integer;
-#rust"{{ let _rv = @val; if _rv == i64::MIN || (_rv >= @lo && _rv <= @hi) {{ _rv }} else {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::RangeDefaulted {{ value: _rv, lo: @lo, hi: @hi }}); @dflt }} }}"
+#rust"{{ let _rv = @val; if _rv == i64::MIN {{ if @dflt == i64::MIN {{ _rv }} else {{ @dflt }} }} else if _rv >= @lo && _rv <= @hi {{ _rv }} else {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::RangeDefaulted {{ value: _rv, lo: @lo, hi: @hi }}); @dflt }} }}"
 fn OpConstInt(val: const integer) -> integer;
 #rust"@val"
 fn OpConstShort(val: const i16) -> integer;
@@ -421,12 +455,13 @@ fn OpLtSingle(v1: single, v2: single) -> boolean;
 #rust"(@v1.is_nan() && !@v2.is_nan()) || (!@v1.is_nan() && !@v2.is_nan() && @v1 < @v2)"
 fn OpLeSingle(v1: single, v2: single) -> boolean;
 #rust"@v1.is_nan() || (!@v2.is_nan() && @v1 <= @v2)"
-fn OpFormatSingle(pos: const u16, val: single, width: integer, precision: integer, plus: const boolean, dir: const i8);
+fn OpFormatSingle(pos: const u16, val: single, width: integer, precision: integer, token: const u8, plus: const boolean, dir: const i8);
 fn OpFormatStackSingle(
   pos: const u16,
   val: single,
   width: integer,
   precision: integer,
+  token: const u8,
   plus: const boolean,
   dir: const i8
 );
@@ -641,8 +676,8 @@ fn OpLtFloat(v1: float, v2: float) -> boolean;
 #rust"(@v1.is_nan() && !@v2.is_nan()) || (!@v1.is_nan() && !@v2.is_nan() && @v1 < @v2)"
 fn OpLeFloat(v1: float, v2: float) -> boolean;
 #rust"@v1.is_nan() || (!@v2.is_nan() && @v1 <= @v2)"
-fn OpFormatFloat(pos: const u16, val: float, width: integer, precision: integer, plus: const boolean, dir: const i8);
-fn OpFormatStackFloat(pos: const u16, val: float, width: integer, precision: integer, plus: const boolean, dir: const i8);
+fn OpFormatFloat(pos: const u16, val: float, width: integer, precision: integer, token: const u8, plus: const boolean, dir: const i8);
+fn OpFormatStackFloat(pos: const u16, val: float, width: integer, precision: integer, token: const u8, plus: const boolean, dir: const i8);
 // --- min / max / clamp ---
 // @PLN25 F1b(b): each has a NON-NULL overload (`-> τ`) and a `τ?` overload (`-> τ?`). The call
 // dispatch picks the `τ?` overload whenever ANY argument is STATICALLY nullable, so an explicit
@@ -712,6 +747,7 @@ pub fn approx(both: single, b: single, eps: single) -> boolean {
 #pure
 // --- Text ---
 // Functions for working with text (UTF-8 strings) and character values.
+
 // Read the value of a variable and put a reference to it on the stack
 
 fn OpVarText(pos: const u16) -> text;
@@ -857,7 +893,7 @@ fn OpFreeRefTag(v1: reference, tag: const u16);
 // release it; fresh-store (callee allocated its own and ignored the
 // placeholder) frees the orphan.
 fn OpFreeRefIfDistinct(placeholder: reference, witness: reference);
-#rust"if @placeholder.store_nr != @witness.store_nr {{ s.database.free(&@placeholder); }}"
+#rust"s.database.free_displaced(&@placeholder, &@witness);"
 // `OpFreeRefIfDistinct` for a return whose CALLER reads it as a borrow.
 //
 // Same fresh-store leg: the callee allocated its own store, ignored the placeholder, so the
@@ -1329,7 +1365,7 @@ pub fn log_error(message: text, file: text, line: integer);
 pub fn log_fatal(message: text, file: text, line: integer);
 #impure(host_io)
 fn OpPrint(v1: text);
-#rust"#[cfg(all(target_arch = \"wasm32\", not(target_os = \"wasi\"), not(feature = \"wasm\")))]\ncrate::loft_host_print(@v1.as_ptr(), @v1.len());\n#[cfg(all(not(feature = \"wasm\"), not(target_arch = \"wasm32\")))]\nif !crate::rpc::print_or_capture(@v1) {{ print!(\"{{}}\", @v1); }}\n#[cfg(all(not(feature = \"wasm\"), target_arch = \"wasm32\", target_os = \"wasi\"))]\nprint!(\"{{}}\", @v1);\n#[cfg(feature = \"wasm\")]\ncrate::wasm::output_push(@v1);"
+#rust"#[cfg(all(target_arch = \"wasm32\", not(target_os = \"wasi\"), not(feature = \"wasm\")))]\ncrate::loft_host_print(@v1.as_ptr(), @v1.len());\n#[cfg(all(not(feature = \"wasm\"), not(target_arch = \"wasm32\")))]\nif !crate::rpc::print_or_capture(@v1) {{ crate::codegen_runtime::host_print(@v1); }}\n#[cfg(all(not(feature = \"wasm\"), target_arch = \"wasm32\", target_os = \"wasi\"))]\ncrate::codegen_runtime::host_print(@v1);\n#[cfg(feature = \"wasm\")]\ncrate::wasm::output_push(@v1);"
 // Writes v to standard output without a newline.
 // Use for progress output and building up a line incrementally.
 pub fn print(v1: text) {
@@ -1348,7 +1384,7 @@ pub fn println(v1: text) {
 // / progress / summary lines from machine-readable stdout
 // (JSON, structured data piped to downstream consumers).
 pub fn eprint(v1: text);
-#rust"eprint!(\"{{}}\", @v1)"
+#rust"crate::codegen_runtime::host_eprint(@v1)"
 #impure(host_io)
 
 // Writes v followed by a newline to standard ERROR.
@@ -1444,6 +1480,7 @@ pub fn len(both: spatial) -> integer {
 // the tree is shared, only the key oracle above it differs.
 fn OpLengthTrie(r: trie) -> integer;
 #rust"i64::from(codegen_runtime::trie_len(&@r, &s.database.allocations))"
+// Number of elements in the trie.
 pub fn len(both: trie) -> integer {
   OpLengthTrie(both)
 }

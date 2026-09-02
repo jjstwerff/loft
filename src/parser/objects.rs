@@ -44,6 +44,12 @@ pub(crate) struct FieldSinks {
     /// actually handed records can surprise the author about which set they landed in,
     /// so this, not `found_fields`, is what the advice counts.
     filled_collections: HashSet<String>,
+    /// loft#1266 — the VECTOR members this literal filled in bulk, each owing its linked
+    /// group's other members an `OpIndexGroup`.  Deferred to the end of `parse_object`
+    /// rather than emitted at the field, because the answer depends on which OTHER members
+    /// the literal fills — and a member later in the same literal is not known yet when an
+    /// earlier one is handled.
+    group_fills: Vec<Value>,
 }
 
 impl Parser {
@@ -585,6 +591,19 @@ impl Parser {
             // "not a collection", so the body took the attribute's own `Reference(elem)` type
             // and `v += [x]` inside the lambda reported *"No matching operator 'Add' on
             // 'integer'"* — the ELEMENT's type, for an append to the collection (loft#1209).
+            // @FR-L-CapRef — a `&T` capture is the capture of its POINTEE, which is the
+            // reading half of
+            // the fact `closure_attr_type` decides the storage half of — so the peel has to
+            // happen on both sides or they disagree about what the attribute holds.  Asked
+            // unpeeled, a `&vector<τ>` answered "not a collection", the body took the
+            // attribute's own `Reference(elem)` type, and `p += [9]` inside the lambda
+            // reported *"No matching operator 'Add' on 'integer' and 'integer'"* — the
+            // ELEMENT's type, for an append to the collection.  That is loft#1209's shape
+            // exactly, reached through `&` instead of through `?` (loft#1276).
+            let ctype = match ctype {
+                Type::RefVar(inner) => *inner,
+                other => other,
+            };
             let is_collection_capture = Self::is_collection_type(ctype.base())
                 || self.data.nullable_struct_payload(&ctype).is_some();
             // record the capture for closure record synthesis.
@@ -1775,7 +1794,9 @@ impl Parser {
     ) -> Type {
         let mut t;
         let mut d_nr = if source == u16::MAX {
-            self.data.def_nr(name)
+            // `(G-Gen)` — inside a generic header the spelling names THAT header's type
+            // variable, in a value position as much as in a type one.
+            self.def_nr_in_scope(name)
         } else {
             self.data.source_nr(source, name)
         };
@@ -2499,13 +2520,26 @@ impl Parser {
                             let s: &str = &st;
                             !SKIP_WIDTH.contains(&s) && crate::parser::radix_for(s).is_none()
                         }
-                        LexItem::Integer(_, _) | LexItem::Float(_) => true,
+                        LexItem::Integer(_, _) | LexItem::Float(..) => true,
                         _ => false,
                     } {
-                        if let LexResult {
-                            has: LexItem::Integer(_, true),
-                            position: _pos,
-                        } = self.lexer.peek()
+                        // @FR-F-Spec — a leading zero on the WIDTH is the zero-pad flag.
+                        // Both literal spellings carry it: `{n:08}` lexes as an Integer and
+                        // the dotted `{f:08.2}` — the only spelling that gives a width and a
+                        // precision at once — lexes as a Float, whose parsed value cannot
+                        // answer the question because `08.2` and `8.2` are the same number.
+                        //
+                        // A bare `.P` is the one spelling where the literal ahead is the
+                        // PRECISION and not the width, and a precision has no padding to
+                        // flag.  `state.float` is set by the `.` that `string_states` just
+                        // consumed, so it is what tells the two apart: without it `{f:.0}`
+                        // read its own precision digit as a leading zero and zero-padded a
+                        // field it never asked for.
+                        if !state.float
+                            && matches!(
+                                self.lexer.peek().has,
+                                LexItem::Integer(_, true) | LexItem::Float(_, true)
+                            )
                         {
                             state.token = "0";
                         }
@@ -3440,7 +3474,9 @@ impl Parser {
                 let prev = std::mem::replace(&mut value, Value::Var(tmp));
                 sinks.hoists.push(v_set(tmp, prev));
             }
-            self.handle_field(td_nr, code, list, &field, &mut value, &exp_tp);
+            if let Some(bulk) = self.handle_field(td_nr, code, list, &field, &mut value, &exp_tp) {
+                sinks.group_fills.push(bulk);
+            }
         }
         true
     }
@@ -3519,7 +3555,27 @@ impl Parser {
         // `__ref_p2_N` one (loft#848), and an abandoned construction must clean
         // whichever it took.
         let work_p2 = self.vars.work_ref_p2();
-        if let Value::Var(v_nr) = code {
+        // `code` arriving as `Value::Var(dest)` is the assignment's destination HINT — build
+        // here instead of into a temp.  It is valid for `m = S { … }`, where the literal IS the
+        // whole right-hand side, and invalid the moment the parser descends into a
+        // sub-expression: the hint is threaded down as one `&mut Value` and nothing clears it
+        // on the way (loft#1304).
+        //
+        // A unary prefix operator is the descent this DOES cover — `Parser::prefix_operand` is
+        // set across `-x` / `!x` / `~x`'s operand parse, so `m = -S { … }` no longer builds the
+        // literal into the variable that receives the NEGATION's result.
+        //
+        // ⚠ The POSTFIX descent (`m = S { … }.f(…)`, `m = S { … } + S { … }`) is NOT covered
+        // and stays open on loft#1304.  Two cures were built and measured, and both are
+        // recorded on the issue: a look-ahead past the balanced body is NOT transparent —
+        // `Lexer::revert` replays tokens but its closing `cont()` resets `prev_end` from
+        // wherever the walk stopped, and three parse-error baselines moved a column even when
+        // the answer was DISCARDED — and declining the hint outright loses the `&`-link
+        // reshape refusal, which is derived from the in-place construction.
+        let hint_is_the_whole_value = !self.prefix_operand && !self.inplace_hint_declined;
+        if let Value::Var(v_nr) = code
+            && hint_is_the_whole_value
+        {
             let var_tp = self.vars.tp(*v_nr).clone();
             let type_matches =
                 var_tp.is_unknown() || matches!(&var_tp, Type::Reference(d, _) if *d == td_nr);
@@ -3573,6 +3629,11 @@ impl Parser {
                         &[Value::Var(*v_nr), Value::Var(orig)],
                     ));
                     list.push(self.cl("OpInitRefSentinel", &[Value::Var(*v_nr)]));
+                    // The literal builds IN PLACE, so the detach has to sit here, between
+                    // the construction's own ops.  Tell `parse_assign_op` — which carries
+                    // the same lowering for every OTHER right-hand side — that this
+                    // statement already has one (loft#1290).
+                    self.rebind_lowered = *v_nr;
                 } else if !self.vars.is_argument(*v_nr) {
                     // A non-arg local OWNS its store; the `Set(Null)` lets the
                     // allocator reuse-or-fresh it in place (pre-existing).  A
@@ -3715,6 +3776,39 @@ impl Parser {
             }
         }
         self.lexer.token("}");
+        // Was the destination hint the right call?  Only now can it be asked: the hint is valid
+        // for `m = S { … }`, where the literal IS the whole right-hand side, and a POSTFIX turns
+        // it into a sub-expression — `m = S { … }.f(…)` built the receiver into the variable that
+        // also receives the call's RESULT, so the return buffer overwrote the receiver's store
+        // and the frame freed a reference that no longer described it (loft#1304).
+        //
+        // A single-token `peek_token` is transparent — it takes `&self` and reads the already
+        // lexed token.  Walking PAST the body to ask the same question before the fact is not:
+        // `Lexer::revert` restores `position` by replaying, but its closing `cont()` resets
+        // `prev_end` from wherever the walk stopped, and three parse-error baselines moved a
+        // column even with the answer discarded.
+        //
+        // So the answer arrives too late to have built differently, and the literal is parsed
+        // AGAIN with the hint declined — through the same abandon path the field loop below
+        // uses, which already reverts the lexer and returns the work-refs.  Declining outright
+        // instead of retrying was measured and costs the `&`-link reshape refusal, which is
+        // derived from the in-place construction.
+        if let Some(v_nr) = in_place_var
+            && !self.inplace_hint_declined
+            && !(self.lexer.peek_token(";")
+                || self.lexer.peek_token("}")
+                || self.lexer.peek_token(",")
+                || self.lexer.peek_token(")"))
+        {
+            self.lexer.revert(link);
+            self.vars.clean_work_refs(work);
+            self.vars.clean_work_refs_p2(work_p2);
+            *code = Value::Var(v_nr);
+            let outer = std::mem::replace(&mut self.inplace_hint_declined, true);
+            let tp = self.parse_object(td_nr, code);
+            self.inplace_hint_declined = outer;
+            return tp;
+        }
         // #437 splice: every vector-field header zeroed as one block, directly
         // after the prelude and before the first field's value.  loft#924's group
         // headers lead it — same position, same reason, and a member of a group is
@@ -3734,6 +3828,25 @@ impl Parser {
             self.advise_linked_group_fill(td_nr, &sinks.filled_collections, &literal_pos);
             let primed = std::mem::take(&mut sinks.group_primed);
             self.object_init(&mut list, td_nr, 0, code, &found_fields, &primed);
+            // loft#1266 — the linked-group maintenance a bulk vector fill skips, emitted
+            // once the whole body is read and AFTER `object_init`, which is the last thing
+            // that can write a member's header.  A member this literal filled itself is
+            // skipped: it owns its records, and indexing the group's into it releases them
+            // out from under the member that holds them (measured on the loft#889 shape,
+            // where only `LOFT_POISON=1` shows the read landing on freed bytes).
+            let fills = std::mem::take(&mut sinks.group_fills);
+            if !fills.is_empty() {
+                let skip: std::collections::HashSet<u16> = sinks
+                    .filled_collections
+                    .iter()
+                    .map(|f| self.field_position(td_nr, f))
+                    .collect();
+                let parent_ty = Type::Reference(td_nr, crate::data::Deps::none());
+                for to in &fills {
+                    let ops = self.keyed_sibling_view_fills(to, &parent_ty, &skip);
+                    list.extend(ops);
+                }
+            }
             // emit all field constraint checks after construction completes.
             let assert_dnr = self.data.def_nr("n_assert");
             for a_nr in 0..self.data.def(td_nr).attributes().len() {
@@ -4417,6 +4530,13 @@ impl Parser {
         }
     }
 
+    // Eight with `self`, and the list is two groups that are already named: the FIELD being
+    // handled (`td_nr` / `field` / `value` / `exp_tp`) and where its output goes (`code` /
+    // `list` / `sinks`, of which `sinks` is itself the bundle for the literal-level
+    // accumulators).  There is exactly ONE call site, so a further struct would be packed
+    // once and unpacked once and name nothing that these parameters do not — the same trade
+    // `tree::range_cursors` records for its own list.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn handle_field(
         &mut self,
         td_nr: u32,
@@ -4425,7 +4545,7 @@ impl Parser {
         field: &str,
         value: &mut Value,
         exp_tp: &Type,
-    ) {
+    ) -> Option<Value> {
         let nr = self.data.attr(td_nr, field);
         let td = self.data.attr_type(td_nr, nr);
         // @PLN25 — how a value REACHES the field (a deep copy for a collection, a plain
@@ -4464,7 +4584,7 @@ impl Parser {
             );
             let clear = self.build_nullable_set_null(syn, field_ref);
             list.push(clear);
-            return;
+            return None;
         }
         // loft#1071 — a literal `null` into a USER struct-enum field (`Box { s: null }`
         // where `s: Shape?`).  The sibling arm above answers it for the synthetic
@@ -4491,7 +4611,7 @@ impl Parser {
                 "OpSetInt4",
                 &[code.clone(), Value::Int(item_pos), Value::Int(0)],
             ));
-            return;
+            return None;
         }
         // The source's own spelling decides nothing here: `S?`, a bare `S` and a bare `null`
         // all name the same dense payload, and `needs_nullable_wrap` is the one place that
@@ -4515,7 +4635,7 @@ impl Parser {
             );
             let write = self.emit_nullable_slot_write(syn, &field_ref, value.clone());
             list.extend(write);
-            return;
+            return None;
         }
         if crate::parser::vectors::is_collection(&td_base) {
             // loft#917 — `H { xs: null }` on a field declared `?`.  The header prime in
@@ -4534,7 +4654,7 @@ impl Parser {
                 );
                 let mark = self.mark_collection_absent(code, item_pos);
                 list.push(mark);
-                return;
+                return None;
             }
             // Issue #120: for vector fields assigned from a bare variable
             // (e.g. `BigBox { data: d }`), parse_operators overwrites the
@@ -4578,11 +4698,28 @@ impl Parser {
                     );
                     list.push(self.cl(
                         "OpAppendVector",
-                        &[field_ref, value.clone(), Value::Int(i32::from(elem_tp))],
+                        &[
+                            field_ref.clone(),
+                            value.clone(),
+                            Value::Int(i32::from(elem_tp)),
+                        ],
                     ));
-                } else {
-                    list.push(value.clone());
+                    // loft#1266 — this bulk write owes its linked group the maintenance it
+                    // skips.  A record joining a group one at a time reaches
+                    // `Stores::record_finish`, which walks `other_indexes` and puts it in
+                    // every member; `OpAppendVector` moves them in bulk and reaches none of
+                    // it, so the keyed views stayed empty while the vector held everything —
+                    // `len` answering `0` and a lookup answering `null`, both legal readings
+                    // of a group that is simply empty.  The assignment and append spellings
+                    // gained this in loft#1152; the constructor is their sibling.
+                    //
+                    // Recorded rather than emitted, because which siblings are owed it is not
+                    // decidable here: a member the SAME literal fills owns its own records and
+                    // must be left alone, and a member later in the literal has not been seen
+                    // yet.  `parse_object` knows both once the body is read.
+                    return Some(field_ref);
                 }
+                list.push(value.clone());
             } else if let Some(kt) = self.keyed_field_kt(&td_base)
                 && !self.first_pass
                 && !matches!(value, Value::Insert(_) | Value::Null)
@@ -4617,10 +4754,42 @@ impl Parser {
                 } else {
                     i32::from(kt)
                 };
-                list.push(self.cl(
-                    "OpReplaceKeyed",
-                    &[value.clone(), field_ref, Value::Int(tp_val)],
-                ));
+                // loft#1266 — ask what the SOURCE is, the same question the field
+                // ASSIGNMENT and the two append sites ask (`is_keyed` in
+                // `parse_assign_op_inner` / `parse_assign_op`).  This one did not, so a
+                // plain `vector<E>` reached `OpReplaceKeyed`, which hands the source to
+                // `copy_claims` under the DESTINATION's type and walks a vector's storage
+                // as if it were a hash / index / trie: `hash` found nothing, `index` and
+                // `trie` found one node, and only `sorted` came out right — because a
+                // sorted's own storage IS a sequential vector.  `H { a: rows() }` and
+                // `h.a = rows()` name the same records, so the constructor owes the same
+                // answer the assignment gives, and `OpFillKeyed` is that answer: every
+                // record placed by its own key through `record_finish`.
+                //
+                // No clear precedes it here, unlike the assignment site: the field's
+                // header prime in `parse_object_field` has already zeroed the slot (and
+                // `group_primed` zeroed the whole linked group's), so there is nothing in
+                // the destination to replace.
+                if crate::parser::vectors::is_keyed(exp_tp) {
+                    list.push(self.cl(
+                        "OpReplaceKeyed",
+                        &[value.clone(), field_ref, Value::Int(tp_val)],
+                    ));
+                } else {
+                    let parent_ty = Type::Reference(td_nr, crate::data::Deps::none());
+                    let (parent, parent_tp_id, field_nr) =
+                        self.fill_keyed_site(&field_ref, &parent_ty, kt);
+                    list.push(self.cl(
+                        "OpFillKeyed",
+                        &[
+                            parent,
+                            value.clone(),
+                            Value::Int(tp_val),
+                            Value::Int(i32::from(parent_tp_id)),
+                            Value::Int(i32::from(field_nr)),
+                        ],
+                    ));
+                }
             } else {
                 list.push(value.clone());
             }
@@ -4689,6 +4858,7 @@ impl Parser {
             }
             list.push(self.set_field_no_check(td_nr, nr, 0, code.clone(), value.clone()));
         }
+        None
     }
 
     pub(crate) fn parse_enum_field(

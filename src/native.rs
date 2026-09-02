@@ -1603,7 +1603,7 @@ fn n_store_load_untrusted(stores: &mut Stores, stack: &mut DbRef) {
 /// in the file while still showing the summary on screen.
 fn n_eprint(stores: &mut Stores, stack: &mut DbRef) {
     let v = *stores.get::<Str>(stack);
-    eprint!("{}", v.str());
+    crate::codegen_runtime::host_eprint(v.str());
 }
 
 fn n_directory(stores: &mut Stores, stack: &mut DbRef) {
@@ -2987,13 +2987,12 @@ fn reflect_field_at(
                 (i64::from(v), 0.0, 0, v == 0)
             }
             Some(LayoutNode::Base(BaseKind::Text)) => {
-                // **text-null is CONTENT-based**: a null `text` is a string
-                // record holding the `STRING_NULL` ("\0") bytes, not a 0
-                // pointer. Testing the pointer alone reads a null as the empty
-                // string — and telling `null` from `""` is the distinction this
-                // whole reading exists for, so the content is what decides.
+                // @FR-L-Null-Text — text-null is CONTENT-based, and `Store::text_is_null`
+                // is its one home (an unset handle and an allocated `STRING_NULL` record are
+                // one absence).  Testing the pointer alone reads a null as the empty string,
+                // and telling `null` from `""` is the distinction this reading exists for.
                 let r = store.get_u32_raw(value.rec, at);
-                let null = r == 0 || store.get_str(r) == crate::state::STRING_NULL;
+                let null = store.text_is_null(value.rec, at);
                 (0, 0.0, if null { 0 } else { r }, null)
             }
             // A narrow integer reports `IntegerKind`, so its width and its null
@@ -4119,10 +4118,12 @@ fn n_as_bool(stores: &mut Stores, stack: &mut DbRef) {
     if discr == JV_DISCR_BOOL {
         let bool_tp = stores.name("JBool");
         let value_pos = u32::from(stores.position(bool_tp, "value")) + v.pos;
-        let b = stores.store(&v).get_byte(v.rec, value_pos, 0) != 0;
+        let b = u8::from(stores.store(&v).get_byte(v.rec, value_pos, 0) != 0);
         stores.put(stack, b);
     } else {
-        stores.put(stack, false);
+        // The tri-state null byte (C73 / @PLN17) the `boolean?` declaration promises — not
+        // `false`, which a caller cannot tell from a field that really says false.
+        stores.put(stack, 255u8);
     }
 }
 

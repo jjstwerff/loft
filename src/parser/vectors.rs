@@ -450,7 +450,11 @@ impl Parser {
         }
         if self.lexer.has_token("!") {
             let operand_pos = self.lexer.peek_pos().clone();
+            // The operand is a SUB-expression, so the assignment's destination hint does not
+            // reach it (loft#1304 — see `Parser::prefix_operand`).
+            let outer_prefix = std::mem::replace(&mut self.prefix_operand, true);
             let t = self.parse_part(var_tp, val, parent_tp);
+            self.prefix_operand = outer_prefix;
             // A unary prefix operator must validate its operand like a binary
             // one does, else an undefined name (a pass-1 placeholder Var with no
             // slot) reaches codegen and panics instead of a clean "Unknown
@@ -510,13 +514,21 @@ impl Parser {
             self.call_op(val, "Not", &[arg], &[t])
         } else if self.lexer.has_token("~") {
             let operand_pos = self.lexer.peek_pos().clone();
+            // The operand is a SUB-expression, so the assignment's destination hint does not
+            // reach it (loft#1304 — see `Parser::prefix_operand`).
+            let outer_prefix = std::mem::replace(&mut self.prefix_operand, true);
             let t = self.parse_part(var_tp, val, parent_tp);
+            self.prefix_operand = outer_prefix;
             self.known_var_or_type(val, &operand_pos); // @PLN53 F1-1 (see `!` above)
             let arg = val.clone();
             self.call_op(val, "BitNot", &[arg], &[t])
         } else if self.lexer.has_token("-") {
             let operand_pos = self.lexer.peek_pos().clone();
+            // The operand is a SUB-expression, so the assignment's destination hint does not
+            // reach it (loft#1304 — see `Parser::prefix_operand`).
+            let outer_prefix = std::mem::replace(&mut self.prefix_operand, true);
             let t = self.parse_part(var_tp, val, parent_tp);
+            self.prefix_operand = outer_prefix;
             self.known_var_or_type(val, &operand_pos); // @PLN53 F1-1 (see `!` above)
             // @PLN102 pre-freeze — the leading `-` binds tighter than `**` (loft's uniform
             // rule: a unary prefix binds tighter than any binary op — the `-` is the sign of
@@ -1082,7 +1094,24 @@ impl Parser {
         outer_vars: &Function,
         outer_context: u32,
     ) -> (Vec<(String, Type)>, std::collections::HashMap<String, u32>) {
-        let mut ctx = outer_vars.all_names_and_types();
+        // @FR-L-CapRef — a `&T` parameter offers its POINTEE to a capture, so the peel belongs
+        // HERE, at the
+        // one place the capture context is built, rather than at each consumer.  `&` is a
+        // channel to the CALLER's slot; the capture question — share or copy — is asked of
+        // what it points at, and `(L-CapHeap)` / `(L-CapScalar)` then answer it exactly as
+        // they do for the bare type.  Peeled at each reader instead, the storage half and
+        // the reading half disagreed for a `&vector<τ>`: the body took the attribute's own
+        // `Reference(elem)` type and `p += [9]` reported *"No matching operator 'Add' on
+        // 'integer' and 'integer'"* — the ELEMENT's type, for an append to the collection
+        // (loft#1276, the same shape loft#1209 had through `?`).
+        let mut ctx: Vec<(String, Type)> = outer_vars
+            .all_names_and_types()
+            .into_iter()
+            .map(|(n, t)| match t {
+                Type::RefVar(inner) => (n, *inner),
+                other => (n, other),
+            })
+            .collect();
         let mut owner: std::collections::HashMap<String, u32> = ctx
             .iter()
             .map(|(n, _)| (n.clone(), outer_context))
@@ -1104,6 +1133,66 @@ impl Parser {
             std::mem::replace(&mut self.capture_context, ctx),
             std::mem::replace(&mut self.capture_owner, owner),
         )
+    }
+
+    /// Refuse a whole-value rebind, made inside a closure, of a captured heap PARAMETER
+    /// (loft#1281, `D-clo-20`).
+    ///
+    /// `(F-ParamRebind)` makes such a rebind local to the callee, and the capture has no
+    /// route back to the parameter's SLOT — which is the binding it would have to rebind.
+    /// The closure record holds a COPY of the parameter's DbRef, so the write lands in the
+    /// store that copy points at, and `(F-ParamHeap)` makes that store the CALLER's: the
+    /// caller sees a replacement the rules say is local. Measured before this refusal:
+    /// `fn f(p: vector<integer>) { g = fn() { p = [7,7]; }; g(); }` left the caller's
+    /// `[1,2]` as `[7,7]`, on both backends, with nothing reported.
+    ///
+    /// Refusing rather than lowering it is the same call `D-clo-18` makes one rule over,
+    /// and for the same reason: making it MEAN what it says needs the binding reachable
+    /// from inside the closure plus a write-back, and the cell machinery that gives a
+    /// mutated captured SCALAR exactly that cannot serve a heap value — reads in the
+    /// enclosing body would see the cell while the caller still sees its own slot.
+    ///
+    /// Deliberately narrow, and each exclusion is a shape that works today:
+    /// * a captured LOCAL — there is no caller for the rebind to reach past;
+    /// * a `&` parameter — `(L-CapRef)` captures the pointee and the write-back to the
+    ///   caller is the whole point of the annotation;
+    /// * a scalar or text parameter — the cell machinery boxes it and the write reaches
+    ///   the enclosing slot correctly;
+    /// * every MUTATION-through — `p += [x]`, `p[i] = v`, `p.clear()` — which
+    ///   `(L-CapHeap)` and `(F-ParamGrow)` say must reach the caller, and which do.
+    fn reject_rebound_heap_parameter_captures(&mut self, lambda: u32) {
+        let Some(names) = self.rebound_captures.remove(&lambda) else {
+            return;
+        };
+        for name in names {
+            let v_nr = self.vars.var(&name);
+            if v_nr == u16::MAX || !self.vars.is_argument(v_nr) {
+                continue;
+            }
+            let tp = self.vars.tp(v_nr).clone();
+            if !matches!(
+                tp.base(),
+                Type::Vector(_, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
+                    | Type::Reference(_, _)
+            ) {
+                continue;
+            }
+            self.lexer.to(self.vars.var_source(v_nr));
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Cannot replace the whole value of the captured parameter '{name}' from a \
+closure — the closure shares the caller's storage, so the replacement would reach the \
+caller, where a rebind of a parameter is local to this function. Change it in place if the \
+caller should see it (`{name}.clear()`, `{name} += [...]`, `{name}[i] = ...`), \
+or build a local and use that."
+            );
+        }
     }
 
     /// Take, in THIS scope, every capture the lambda just parsed reaches past it for.
@@ -1298,6 +1387,9 @@ impl Parser {
         self.in_loop = outer_loop;
         self.capture_context = outer_capture;
         self.capture_owner = outer_owner;
+        // The enclosing table is back, so a captured name can finally be asked what it is
+        // bound to out here (loft#1281).
+        self.reject_rebound_heap_parameter_captures(d_nr);
         self.relay_nested_captures(&captured);
 
         self.data.def_used(d_nr);
@@ -1605,6 +1697,9 @@ impl Parser {
         self.in_loop = outer_loop;
         self.capture_context = outer_capture;
         self.capture_owner = outer_owner;
+        // The enclosing table is back, so a captured name can finally be asked what it is
+        // bound to out here (loft#1281).
+        self.reject_rebound_heap_parameter_captures(d_nr);
         self.relay_nested_captures(&captured);
 
         self.data.def_used(d_nr);
@@ -1986,6 +2081,52 @@ impl Parser {
             // promoted to a hidden `&text` out-parameter — and for that one the record
             // stores the value inline and the existing write-back propagates it, which is
             // the pairing `finalize_capture_storage` keeps in step (#687).
+            // A DECLARED `&` SCALAR parameter written from inside a closure is the one
+            // capture shape that cannot be made to mean what it says, and it is refused HERE
+            // rather than allowed to compute quietly (loft#1276, `D-clo-18`).
+            //
+            // Everything else about a `&` capture works, because `closure_attr_type` captures
+            // the POINTEE: a `&S` / `&vector<τ>` shares its DbRef, so a field write, an
+            // element write, an append and even a whole-record rebind all reach the caller
+            // (`(L-CapHeap)`), and a `&integer` / `&text` READ copies at closure creation
+            // (`(L-CapScalar)`).  A scalar WRITE is different in kind: the value lives in the
+            // CALLER's slot, the capture holds a copy of it, and there is no shared record for
+            // the write to land in.  The cell promotion below is what makes this work for a
+            // plain local — and a cell cannot serve a `&`, because reads in the enclosing body
+            // would then see the cell while the caller still sees its own slot.
+            //
+            // Measured before the refusal existed: `fn bump(p: &integer) { g = fn() { p += 1;
+            // }; g(); p = p + 10; }` on `n = 5` answered 15 instead of 16 — the closure's
+            // increment silently dropped, through a parameter whose whole purpose is the
+            // write-back.
+            //
+            // A HIDDEN `&` argument is not a user parameter: `text_return` / `ref_return`
+            // promote a returned text local to a hidden out-parameter, and that one is served
+            // by the existing per-call write-back (#687).  The type cannot tell the two apart
+            // — `fn f(a: &const integer)` is a declared `RefVar` too — so the definition's
+            // `hidden` flag is asked, which is where the fact lives.
+            let is_user_ref_param = matches!(self.vars.tp(v_nr), Type::RefVar(_))
+                && self.vars.is_argument(v_nr)
+                && self
+                    .data
+                    .def(self.context)
+                    .attributes()
+                    .get(v_nr as usize)
+                    .is_some_and(|a| !a.hidden);
+            if is_user_ref_param
+                && let Type::RefVar(inner) = self.vars.tp(v_nr).clone()
+                && cell_struct_name(&inner, &self.data).is_some()
+            {
+                self.lexer.to(self.vars.var_source(v_nr));
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Cannot write to the `&` parameter '{name}' from a closure — a \
+closure captures a scalar BY VALUE, so the write would not reach the caller. Capture a \
+local copy and write it back after the closure runs: `local = {name}; …; {name} = local;`"
+                );
+                continue;
+            }
             if self.vars.is_argument(v_nr) && !matches!(self.vars.tp(v_nr), Type::RefVar(_)) {
                 // A value-const parameter is read-only, and the closure-side write never
                 // reaches `validate_write`'s guard — inside the lambda `name` is a
@@ -2340,6 +2481,25 @@ impl Parser {
         // the lambda was taken for a STRUCT FIELD append, resolved its parent against
         // `Type::Null`, and asked `Data::def` for `u32::MAX`: an internal compiler error on
         // three lines of ordinary source (loft#1209).
+        // @FR-L-CapRef — a `&T` parameter captures as its POINTEE, and that is the rule
+        // rather than a
+        // convenience: `&` is a channel to the CALLER's slot, so the capture question is
+        // asked of what it points at.  `(L-CapHeap)` then shares a `&S` / `&vector<τ>`
+        // exactly as its bare twin — the DbRef is the same one either way — and
+        // `(L-CapScalar)` copies a `&integer` / `&text` at closure creation.  Unpeeled,
+        // every `&` shape fell to `_ => tp.clone()`, kept `RefVar(τ)` as the attribute
+        // type, and reached `get_val`'s catch-all: *"Field access not supported on type
+        // &integer"*, on a lambda body containing no field access (loft#1276).
+        //
+        // ⚠ What this does NOT give back is the `&` itself.  A write THROUGH the capture
+        // to the caller's slot — a scalar write, or a whole-value rebind of a heap
+        // capture — needs the ref in the record and a write-back, which is
+        // `D-clo-18`; `reject_ref_capture_write` refuses those at the capture site
+        // rather than letting them land in a copy.
+        let tp = match tp {
+            Type::RefVar(inner) => inner.as_ref(),
+            other => other,
+        };
         match tp.base() {
             Type::Reference(d, _) => Type::Reference(*d, Deps::share_sentinel()),
             Type::Hash(c, _, _)
@@ -3201,6 +3361,16 @@ impl Parser {
         // collection as a VALUE at all — only through a keyed destination that already
         // existed (a struct-literal field, or a `+=` onto a built collection).
         let keyed_dest = self.keyed_local(vec);
+        // The INFERRED half of loft#923's refusal: this literal's element type was never
+        // written, so the declaration chokepoint in `definitions.rs` never saw it.  A keyed
+        // destination is a different construct — `h = [K { … }]` builds THROUGH `h`
+        // (loft#703) and its elements are `K`, not collections — so it is excluded here the
+        // same way it is below.
+        if !keyed_dest && self.refuse_keyed_vector_element(&in_t) {
+            self.lexer.token("]");
+            *val = Value::Insert(Vec::new());
+            return Type::Unknown(0);
+        }
         let struct_tp = Type::Vector(Box::new(in_t.clone()), Deps::frame(parent_tp.depend()));
         if !is_field && !keyed_dest {
             self.vars
@@ -5238,6 +5408,43 @@ impl Parser {
 /// [`is_collection`] must peel on BOTH of its arms for the same reason.  The two differ by
 /// the `Vector` variant and by nothing else — a difference on the nullability axis makes a
 /// `vector<τ>?` the one collection `is_collection` denies, which is loft#1207.
+impl Parser {
+    /// Refuse a KEYED collection in a vector ELEMENT position, and say so once.
+    ///
+    /// `true` when it fired, so the caller can abandon the construction.
+    ///
+    /// One home for a refusal two sites have to make: the DECLARED spelling
+    /// (`vector<hash<E[k]>>`, caught while the type is parsed) and the INFERRED one
+    /// (`hs = [mk(1), mk(2)]`, which writes no type and so passed the first site by).  A
+    /// keyed collection has no element form anything can write — measured: giving the
+    /// element the collection's own registered row gets past the type table and then
+    /// corrupts the block chain, so the storage has no room for one either (loft#923,
+    /// loft#1298).
+    ///
+    /// Named by its KIND, not by `Type::name`: a keyed type's registered name carries its
+    /// key list in the schema's own spelling (`sorted<E,[("k", true)]>`), which is not what
+    /// the author wrote and not something to hand back to them.
+    pub(crate) fn refuse_keyed_vector_element(&mut self, tp: &Type) -> bool {
+        let kind = match tp.base() {
+            Type::Hash(_, _, _) => "hash",
+            Type::Sorted(_, _, _) => "sorted",
+            Type::Index(_, _, _) => "index",
+            Type::Radix(_, _, _) => "spatial",
+            Type::Trie(_, _, _) => "trie",
+            _ => return false,
+        };
+        diagnostic!(
+            self.lexer,
+            Level::Error,
+            "a `{kind}` cannot be a vector ELEMENT — a keyed collection has no element \
+             form anything can write, so `vector<{kind}<…>>` could only ever be declared \
+             and stay empty. Hold it in a struct and make a vector of THAT: the extra \
+             record is what the element would have been anyway."
+        );
+        true
+    }
+}
+
 pub(crate) fn is_keyed(tp: &Type) -> bool {
     matches!(
         tp.base(),
@@ -5636,35 +5843,58 @@ fn collect_mutated_captures(data: &mut crate::data::Data, lambda_d_nr: u32) {
     data.definitions[lambda_d_nr as usize].mutated_captures = mutated;
 }
 
-/// Op names whose first argument is the target of a mutation.
-/// All write through the closure record's field (when first arg
-/// is a captured-binding placeholder var).
+/// The variable an accessor chain is ROOTED at — `v` for `Var(v)`, `GetVector(Var(v), i)`,
+/// `GetField(GetVector(Var(v), i), f)` and so on; `None` when the chain does not bottom out
+/// in a variable.
 ///
-/// `Definition::original_name()` strips the leading 2 chars
-/// (the `n_` / `Op` prefix) for functions — these names are
-/// the post-strip form, e.g. `OpSetInt` → `SetInt`,
-/// `n_my_fn` → `my_fn`.
-const MUTATING_OP_NAMES: &[&str] = &[
-    "SetInt",
-    "SetByte",
-    "SetShortRaw",
-    "SetInt4",
-    "SetFloat",
-    "SetSingle",
-    "SetText",
-    "SetCharacter",
-    "SetEnum",
-    "AppendVector",
-    "AppendText",
-    "AppendCharacter",
-    "AppendStackText",
-    "AppendStackCharacter",
-    "ClearVector",
-    "ClearText",
-    "ClearStackText",
-    "InsertVector",
-    "RemoveVector",
-];
+/// A write names its target through however many accessors the shape needs, and the DEPTH is
+/// not part of the question *"which binding does this write reach?"*.  Asked one level down,
+/// the walk saw `s.x = 7` on a captured struct and missed `p[0] = 42` on a captured
+/// collection, whose target is `SetInt(GetVector(Var(p), i), …)` — so a `&` parameter written
+/// only that way read as never modified (loft#1276).
+fn accessor_root_var(v: &Value, data: &crate::data::Data) -> Option<u16> {
+    match v.unspan() {
+        Value::Var(var) => Some(*var),
+        Value::Call(d, args)
+            if (*d as usize) < data.definitions.len()
+                && data.def(*d).original_name().starts_with("Get") =>
+        {
+            accessor_root_var(args.first()?, data)
+        }
+        _ => None,
+    }
+}
+
+/// The closure-record attribute index an accessor chain reads, when the chain is rooted at
+/// the CLOSURE PARAMETER — `None` for anything else.
+///
+/// This is the pass-2 spelling of a capture, and the recursion generalises a check that used
+/// to look exactly one level down.  ⚠ Measured 2026-09-01: at the current call ordering
+/// `collect_mutated_captures` always runs with `closure_param == None` (the pre-synthesize
+/// path), so nothing in the shipped suite reaches this — it was already unreached in its
+/// one-level form.  It is kept because the shape is real whenever the threading order puts a
+/// closure parameter here, and losing it would silently drop mutation detection rather than
+/// fail; [`accessor_root_var`] is the sibling that actually fires today.
+fn capture_field_of(
+    v: &Value,
+    closure_param: Option<u16>,
+    data: &crate::data::Data,
+) -> Option<i32> {
+    let Value::Call(d, args) = v.unspan() else {
+        return None;
+    };
+    if (*d as usize) >= data.definitions.len() || !data.def(*d).original_name().starts_with("Get") {
+        return None;
+    }
+    let first = args.first()?;
+    if let Value::Var(var) = first.unspan()
+        && Some(*var) == closure_param
+        && let Some(Value::Int(fld)) = args.get(1).map(Value::unspan)
+    {
+        return Some(*fld);
+    }
+    capture_field_of(first, closure_param, data)
+}
 
 fn walk_for_mutations(
     code: &Value,
@@ -5696,8 +5926,11 @@ fn walk_for_mutations(
         }
         Value::Call(d, args) => {
             if (*d as usize) < data.definitions.len() {
-                let op_name = data.def(*d).original_name();
-                if MUTATING_OP_NAMES.iter().any(|n| *n == op_name)
+                // One home with `find_written_vars` — see `op_writes_first_arg`.  Asked from
+                // its own list, this walker did not know `OpNewRecord`, which is how a
+                // captured collection's append lowers, so the append was not recorded as a
+                // mutation of the capture (loft#1276).
+                if crate::parser::op_writes_first_arg(data.def(*d).name())
                     && let Some(first) = args.first()
                 {
                     // Three write shapes:
@@ -5726,19 +5959,30 @@ fn walk_for_mutations(
                                 mark(variables.name(*v), out);
                             }
                         }
-                        Value::Call(inner_d, inner_args)
-                            if (*inner_d as usize) < data.definitions.len() =>
-                        {
-                            // Detect nested `Call(GetField, [Var(closure_param), Int(fld)])`
-                            let inner_name = data.def(*inner_d).original_name();
-                            if (inner_name == "GetField" || inner_name.starts_with("Get"))
-                                && let Some(inner_first) = inner_args.first()
-                                && let Value::Var(v) = inner_first.unspan()
-                                && Some(*v) == closure_param
-                                && let Some(Value::Int(fld)) = inner_args.get(1).map(Value::unspan)
-                                && (*fld as usize) < captured_names.len()
+                        Value::Call(_, _) => {
+                            // Pass-1 form: the chain is rooted at the captured binding's own
+                            // placeholder VAR rather than at the closure parameter (which does
+                            // not exist yet).  `p[0] = 42` is `SetInt(GetVector(Var(p), 0), …)`,
+                            // so the root var is the capture — one level deeper than the
+                            // `Var(p)` shape an append presents, which is why an element write
+                            // went unrecorded while an append did not (loft#1276).
+                            if let Some(root) = accessor_root_var(first, data)
+                                && root < variables.count()
                             {
-                                mark(&captured_names[*fld as usize].clone(), out);
+                                mark(variables.name(root), out);
+                            }
+                            // A nested accessor chain rooted at the closure record, of ANY
+                            // depth — `Call(Get*, [Var(closure_param), Int(fld)])` and every
+                            // longer chain over it.  One level was enough for `s.x = 7` on a
+                            // captured struct and NOT for `p[0] = 42` on a captured
+                            // collection, whose target is `SetInt(GetVector(GetDbRef(closure,
+                            // fld), i), …)` — two levels, so the write went unrecorded and a
+                            // `&` parameter written only that way read as never modified
+                            // (loft#1276).
+                            if let Some(fld) = capture_field_of(first, closure_param, data)
+                                && (fld as usize) < captured_names.len()
+                            {
+                                mark(&captured_names[fld as usize].clone(), out);
                             }
                         }
                         _ => {}

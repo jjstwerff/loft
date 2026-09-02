@@ -108,7 +108,12 @@ pub(crate) fn target_holds_null(target: &Type, parent: &Type) -> bool {
 }
 
 fn uncomputable_default(nullable: bool, spec: &crate::data::IntegerSpec) -> i64 {
-    if nullable {
+    // C85 says an overflow writes the RESERVED sentinel into a non-null slot, which then
+    // reads as null — so a non-null slot answers null exactly when its type kept a code back
+    // for one.  `i32` is `i32::MIN + 1 ..= i32::MAX` and `u32` is `0 ..= u32::MAX - 1`
+    // whatever the `?`, so both have that code; `u8`/`i8`/`u16`/`i16` fill their width and
+    // have none (loft#1296).
+    if nullable || spec.reserves_sentinel_unconditionally() {
         i64::MIN
     } else {
         spec.default_value()
@@ -1198,7 +1203,24 @@ impl Parser {
             }
             if self.lexer.has_keyword("from") {
                 // CO1.4: yield from sub_gen — desugar to:
-                //   __sub = sub; loop { __item = next(__sub); if !__item break; yield __item; }
+                //   __sub = sub;
+                //   loop { __item = next(__sub); if exhausted(__sub) break; yield __item; }
+                //
+                // The break asks the SUB-GENERATOR whether it is exhausted.  It used to ask
+                // whether the yielded VALUE is truthy (`if !__item break`), which is a
+                // different question that only coincides with exhaustion for the types whose
+                // falsy value happens to be their null sentinel.  Where it did not coincide,
+                // the interpreter got it wrong twice over and `--native` — which compares
+                // against a per-channel exhaust sentinel — stayed right:
+                //
+                //   iterator<boolean>  a delegation TRUNCATED at the first `false`
+                //                      (`true,false,true` delivered `true`), silently
+                //   iterator<float>    / `single`: NaN is not falsy, so the break never
+                //                      fired and the loop ran forever
+                //
+                // `OpCoroutineExhausted` is the question actually being asked, and it is the
+                // same pair the streaming for-loop uses (`parser/control.rs`), so the two
+                // consumers of a generator cannot disagree about when one has ended.
                 let mut sub = Value::Null;
                 let sub_type = self.expression(&mut sub);
                 if let Type::Iterator(inner, _) = &sub_type {
@@ -1214,9 +1236,7 @@ impl Parser {
                         op,
                         vec![Value::Var(sub_var), Value::Int(i32::from(value_size))],
                     );
-                    let mut test = Value::Var(item_var);
-                    self.convert(&mut test, &elem_tp, &Type::Boolean);
-                    test = self.cl("OpNot", &[test]);
+                    let test = self.cl("OpCoroutineExhausted", &[Value::Var(sub_var)]);
                     let lp = vec![
                         crate::data::v_set(item_var, next_call),
                         crate::data::v_if(
@@ -1915,13 +1935,25 @@ use a separate collection or add after the loop"
     /// known at emit time, so the parser names them exactly as the clear does, while the
     /// per-RECORD loop lives inside the op, where the records exist. Naming the members here
     /// and looping there is the split loft#898 already made for the clear.
-    fn keyed_sibling_view_fills(&mut self, to: &Value, parent_tp: &Type) -> Vec<Value> {
+    /// `skip` names byte offsets that must NOT be indexed: members a struct LITERAL fills
+    /// itself, which own their records and re-index nothing (loft#1266).  A statement-level
+    /// caller writes ONE member and passes an empty set — the question cannot arise there,
+    /// because only a constructor writes several members of one group at once.
+    pub(crate) fn keyed_sibling_view_fills(
+        &mut self,
+        to: &Value,
+        parent_tp: &Type,
+        skip: &std::collections::HashSet<u16>,
+    ) -> Vec<Value> {
         let Some((struct_tp, byte_off)) = self.field_site(to, parent_tp) else {
             return Vec::new();
         };
         let members = self.database.keyed_group_members(struct_tp, byte_off);
         let mut ops = Vec::new();
         for (off, coll_tp, _is_view) in members {
+            if skip.contains(&off) {
+                continue;
+            }
             // ⚠ Every OTHER member, not only the views — the filter the RESET beside this
             // one uses answers a different question. A reset may touch only views, because
             // a view owns nothing and the primary's records are released once, by the
@@ -1973,7 +2005,7 @@ use a separate collection or add after the loop"
         if !wrote {
             return;
         }
-        let fills = self.keyed_sibling_view_fills(to, parent_tp);
+        let fills = self.keyed_sibling_view_fills(to, parent_tp, &std::collections::HashSet::new());
         if fills.is_empty() {
             return;
         }
@@ -2214,9 +2246,84 @@ use a separate collection or add after the loop"
     ) -> Type {
         let group_parent = parent_tp.clone();
         let group_to = to.clone();
+        let already = std::mem::replace(&mut self.rebind_lowered, u16::MAX);
         let tp = self.parse_assign_op_inner(code, op, f_type, to, parent_tp, var_nr, skip_validate);
+        self.rebind_local_heap_param(code, op, to, var_nr);
+        self.rebind_lowered = already;
         self.group_reindex_after_vector_write(code, &group_to, &group_parent);
         tp
+    }
+
+    /// `(F-ParamRebind)` — a WHOLE-VALUE reassignment of a user-visible heap PARAMETER
+    /// rebinds LOCALLY, and the rule is about the BINDING, not about the right-hand side's
+    /// spelling: `p = other` is named in the rule's own text beside `p = [..]`.
+    ///
+    /// Only the struct-literal spelling had a lowering (@PLN87 P2.1, inside `parse_object`,
+    /// where a literal that builds IN PLACE needs its detach between the construction's own
+    /// ops).  Every other right-hand side reached codegen as a bare `Set`, which the
+    /// interpreter lowers to a deep copy INTO the record the parameter's slot names — the
+    /// caller's store — while `--native` reassigns its own by-value `DbRef` local.  So five
+    /// of six spellings wrote back to the caller on at least one backend, and three of them
+    /// disagreed between the two, against `ownership.md` `(O-NoDiverge)` (loft#1290).
+    ///
+    /// The lowering is P2.1's, wrapped around the finished statement: free a PRIOR rebind
+    /// store (never the caller's original — that is what the entry witness is for), detach
+    /// the slot WITHOUT freeing, and let the assignment mint into the emptied slot.
+    ///
+    /// A `&`/`RefVar` parameter is the opposite rule (`F-ParamRef` — write-back is what it
+    /// is FOR), a compiler-generated or hidden parameter is a return buffer whose in-place
+    /// write IS its purpose, and a field or element write is not a whole-binding
+    /// reassignment.  Vectors and keyed collections keep their own P2.4 route.
+    ///
+    /// The shape test reads through `Optional`, because `τ?` and `τ` share sentinel storage
+    /// and a rebind of `p: St?` displaces a store exactly as `p: St` does.  It kept the
+    /// caller's VALUE either way — which is what made the gap easy to read as covered — while
+    /// the store the callee minted had no owner: forty calls, forty leaked records.  A
+    /// nullable parameter is still a parameter (loft#1295).
+    fn rebind_local_heap_param(&mut self, code: &mut Value, op: &str, to: &Value, var_nr: u16) {
+        if self.first_pass
+            || op != "="
+            || var_nr == u16::MAX
+            || self.rebind_lowered == var_nr
+            || !matches!(to.unspan(), Value::Var(v) if *v == var_nr)
+            || !(matches!(
+                self.vars.tp(var_nr).base(),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            ) || crate::parser::vectors::is_keyed(self.vars.tp(var_nr)))
+            || !self.vars.is_argument(var_nr)
+            || self.vars.is_compiler_generated(var_nr)
+            || self.is_hidden_param(var_nr)
+        {
+            return;
+        }
+        let orig = self.ensure_rebind_witness(var_nr);
+        let free = self.cl(
+            "OpFreeRefIfDistinct",
+            &[Value::Var(var_nr), Value::Var(orig)],
+        );
+        let detach = self.cl("OpInitRefSentinel", &[Value::Var(var_nr)]);
+        let assign = std::mem::replace(code, Value::Null);
+        *code = Value::Insert(vec![free, detach, assign]);
+    }
+
+    /// Record that this lambda rebinds a captured name whole-value.
+    ///
+    /// Only the FACT is recorded here; whether it is legal depends on what the name is
+    /// bound to in the enclosing scope, which this frame cannot see — the lambda's own
+    /// variable table holds a placeholder. `reject_rebound_heap_parameter_captures` asks
+    /// that question at the lambda's exit.
+    fn note_captured_rebind(&mut self, var_nr: u16, op: &str) {
+        if op != "=" || var_nr == u16::MAX || self.captured_names.is_empty() {
+            return;
+        }
+        let name = self.vars.name(var_nr).to_string();
+        if !self.captured_names.iter().any(|(n, _)| *n == name) {
+            return;
+        }
+        let noted = self.rebound_captures.entry(self.context).or_default();
+        if !noted.contains(&name) {
+            noted.push(name);
+        }
     }
 
     #[allow(clippy::too_many_arguments)] // the wrapper's list, unchanged from before the split
@@ -2237,6 +2344,11 @@ use a separate collection or add after the loop"
         // as that route's target-shape test and every shape it declines falls through
         // unchecked.  Two did.
         self.guard_const_write(var_nr, op);
+        // …and note a whole-value rebind of a CAPTURE here for the same reason: this is the
+        // point that still knows the assignment replaces the whole binding.  By the time the
+        // lambda closes, a vector rebind is a clear plus appends and the `Value::Set` that
+        // said so is gone (loft#1281).
+        self.note_captured_rebind(var_nr, op);
         // Save parent struct type before the RHS parse overwrites parent_tp.
         let lhs_parent_tp = parent_tp.clone();
         // …and, for the same reason, the attribute a `fn(…)` field read on the LEFT came
@@ -3654,7 +3766,8 @@ use a separate collection or add after the loop"
         }
         // Rewrites `code` into an owned copy and returns false, so the general path
         // still emits the `Set(out, …)` that transfers it (loft#775).
-        self.assign_refvar_reference(code, f_type, op);
+        self.assign_refvar_reference(code, f_type, op, var_nr);
+        self.assign_refvar_keyed(code, f_type, op, var_nr);
         if var_nr != u16::MAX && self.create_vector(code, f_type, op, var_nr) {
             return Type::Void;
         }
@@ -3698,11 +3811,23 @@ use a separate collection or add after the loop"
         // An `Optional(τ)` field lays out exactly like `τ` (@PLN25 slice (b)), so the
         // replace it needs is the same one — the `?` is about what the field may hold,
         // not about how it is stored.
+        //
+        // loft#1279 — and a CAPTURED collection is the same lvalue wearing a different op.
+        // @PLN93 taught the APPEND path that a capture resolves to `OpGetDbRef` of the
+        // closure-record field rather than to `OpGetField` (`is_captured_dbref` exists for
+        // exactly that), and the REPLACE path was never told.  Both of this site's symptoms
+        // followed from the one omission: a LITERAL right-hand side still had @PLN93's
+        // build-into-the-target path to run, so it appended to what was already there
+        // (`v = [7,7]` over `[1,2]` read back `[1,2,7,7]`), while every other right-hand
+        // side had nothing to run at all and the statement collapsed to a bare read of its
+        // RHS — the emitted lambda for `c = src` is one `OpGetDbRef` and no store, a write
+        // dropped in silence.  This is P261's case and loft#917's case a third time: the
+        // selector, not the lowering, is what keeps being too narrow.
         if !self.first_pass
             && op == "="
             && var_nr == u16::MAX
             && matches!(f_type.base(), Type::Vector(_, _))
-            && self.is_field(to)
+            && (self.is_field(to) || self.is_captured_dbref(to))
         {
             // Read the `?` BEFORE `.base()` peels it away — it is the whole difference
             // between a field that may record absence and one that may not (loft#917).
@@ -3735,6 +3860,15 @@ use a separate collection or add after the loop"
             }
             let is_empty_literal = matches!(code, Value::Insert(ls) if ls.is_empty());
             let is_nonempty_literal = matches!(code, Value::Insert(ls) if !ls.is_empty());
+            // A vector LITERAL assigned to a CAPTURED collection arrives as a `Block` that
+            // builds its elements STRAIGHT INTO the destination — @PLN93's build-into-target,
+            // which is what makes `coll += [x]` work through a capture — where a struct field
+            // gets a `Value::Insert` of the same ops.  Different wrapper, same situation, and
+            // the cure is P261's either way: run the clear FIRST and let the construction
+            // fill an emptied collection.  Treating it as an ordinary value RHS instead is
+            // what read back EMPTY — the clear ran after the build and erased it.
+            let literal_builds_into_dest =
+                matches!(code, Value::Block(_)) && self.value_writes_into(code, to);
             let rhs_is_vector = matches!(s_type.base(), Type::Vector(_, _));
             if is_empty_literal {
                 *code = Value::Insert(self.clear_vector_field(to, &lhs_parent_tp));
@@ -3747,6 +3881,12 @@ use a separate collection or add after the loop"
                         ls.insert(i, op);
                     }
                 }
+                return Type::Void;
+            }
+            if literal_builds_into_dest {
+                let mut ops = self.clear_vector_field(to, &lhs_parent_tp);
+                ops.push(code.clone());
+                *code = Value::Insert(ops);
                 return Type::Void;
             }
             if !is_nonempty_literal
@@ -4942,6 +5082,77 @@ use a separate collection or add after the loop"
     ///
     /// Restoring on the way out confines each nesting level to its own answer: the inner
     /// parse cannot leak one outward, and cannot destroy the one already standing.
+    /// Does this type carry a `text` anywhere inside a tuple — at the top level or through
+    /// a NESTED tuple member?
+    ///
+    /// The question is about TRANSPORT, not about the top-level shape: a tuple argument is
+    /// passed with borrowed text elements however deeply they sit, so `((integer, text), …)`
+    /// needs the owning promotion exactly as `(integer, text)` does (loft#1278, and the same
+    /// one-level-in fact loft#1005 had to learn on the read side).
+    fn tuple_carries_text(tp: &Type) -> bool {
+        match tp.base() {
+            Type::Tuple(members) => members
+                .iter()
+                .any(|m| matches!(m.base(), Type::Text(_)) || Self::tuple_carries_text(m)),
+            _ => false,
+        }
+    }
+
+    /// Does `hay` WRITE INTO `needle` — is there a mutating call in its tree whose target
+    /// (first argument) is that exact place?
+    ///
+    /// Asked of a right-hand side and its destination, this is *"does this expression
+    /// construct in place?"* — the shape a vector literal takes when the destination is a
+    /// collection it can build straight into.  Such an RHS needs the clear BEFORE it and no
+    /// append after it (loft#1279).
+    ///
+    /// ⚠ *Writes into*, not *mentions*.  Asked as "does the RHS name the destination
+    /// anywhere?", this also answers yes for a comprehension that READS its own destination
+    /// (`s.v = [… for x in s.v]`, loft#1195) — which builds a fresh vector and needs the
+    /// ordinary clear-then-append.  Treating that as build-in-place clears the source before
+    /// the comprehension reads it and assigns nothing back: seven cells of loft#1195's guard
+    /// answered `[]`.  The mutating-op test is what separates reading the destination from
+    /// filling it, and it shares [`crate::parser::op_writes_first_arg`] with the two mutation
+    /// walkers so the three cannot drift.
+    fn value_writes_into(&self, hay: &Value, needle: &Value) -> bool {
+        let hay = hay.unspan();
+        if let Value::Call(d, args) = hay
+            && (*d as usize) < self.data.definitions.len()
+            && crate::parser::op_writes_first_arg(self.data.def(*d).name())
+            && let Some(first) = args.first()
+            && *first.unspan() == *needle.unspan()
+        {
+            return true;
+        }
+        match hay {
+            Value::Call(_, args)
+            | Value::Insert(args)
+            | Value::Tuple(args)
+            | Value::Parallel(args)
+            | Value::CallRef(_, args) => args.iter().any(|a| self.value_writes_into(a, needle)),
+            Value::Block(b) | Value::Loop(b) => b
+                .operators
+                .iter()
+                .any(|o| self.value_writes_into(o, needle)),
+            Value::If(c, t, e) => {
+                self.value_writes_into(c, needle)
+                    || self.value_writes_into(t, needle)
+                    || self.value_writes_into(e, needle)
+            }
+            Value::Set(_, v)
+            | Value::Return(v)
+            | Value::Drop(v)
+            | Value::Yield(v)
+            | Value::TuplePut(_, _, v) => self.value_writes_into(v, needle),
+            Value::Iter(_, a, b, c) => {
+                self.value_writes_into(a, needle)
+                    || self.value_writes_into(b, needle)
+                    || self.value_writes_into(c, needle)
+            }
+            _ => false,
+        }
+    }
+
     pub(crate) fn parse_assign(&mut self, code: &mut Value) -> Type {
         let outer_discharge = self.last_place_discharge;
         let tp = self.parse_assign_inner(code);
@@ -5251,6 +5462,7 @@ use a separate collection or add after the loop"
                 Type::Tuple(ms) => ms.get(lhs.leaf_idx as usize).cloned(),
                 _ => None,
             };
+            let member_for_null = member_tp.clone();
             let seeding = member_tp.as_ref().is_some_and(Self::seeds_lambda_hint);
             let saved_expected = if seeding {
                 let m = member_tp
@@ -5261,9 +5473,74 @@ use a separate collection or add after the loop"
             } else {
                 None
             };
-            self.expression(&mut rhs);
+            let rhs_tp = self.expression(&mut rhs);
             if let Some(prev) = saved_expected {
                 self.expected = prev;
+            }
+            // loft#1282 — `t.1 = null` has to become the ELEMENT TYPE's null sentinel, the
+            // same `OpConv<T>FromNull()` a struct field write emits.  Left as a bare
+            // `Value::Null`, the value generator pushed NOTHING and the `OpPut<T>` below it
+            // popped whatever sat beneath on the eval stack: `b: (integer, integer?)` read
+            // back an address-shaped number, a `text?` element came back holding part of the
+            // format template, and neighbouring shapes reached `Incorrect var` / `var_pos
+            // underflow` / `attempt to subtract with overflow` in codegen.  Corruption, not a
+            // wrong answer.
+            //
+            // Unconditional, exactly as the struct-field path is: whether the member is
+            // DECLARED nullable is a separate question that `(N-Store)` already answers with
+            // its own warning, and storing the sentinel is right either way.
+            if let Some(member) = member_for_null.as_ref() {
+                // loft#1284 — `(N-Store)` covers the direct store, the field, the
+                // call-argument site and the branch join, and a TUPLE ELEMENT reached none of
+                // them: this branch returns before the general assign path that asks.  So
+                // `s.i = null` on a non-null field warned while `c.1 = null` on a non-null
+                // element said nothing, for the same store into the same kind of slot.
+                self.n_store_violation(&rhs_tp, member, "the tuple element", None);
+                // loft#1282 — and the null itself becomes the ELEMENT TYPE's sentinel.  The
+                // warning above is about whether the slot SHOULD hold null; this is what
+                // makes it hold null rather than whatever the eval stack had.
+                if matches!(rhs_tp, Type::Null) && !matches!(member.base(), Type::Null) {
+                    self.convert(&mut rhs, &Type::Null, member);
+                }
+            }
+            // loft#1278 — a by-value tuple PARAMETER carrying text is promoted to an owned
+            // shadow local the first time an element is written, which is the same move a
+            // plain `text` argument already makes (`__tp_<name>`, seeded at function entry).
+            //
+            // A tuple ARGUMENT is passed BORROWED — `--native` lowers it with `&str`
+            // elements, the argument-passing representation TUPLES.md describes — and
+            // nothing gave the callee an owned element when it wrote to one.  A literal
+            // write tried to store a `String` into that `&str` slot (E0308) and a variable
+            // write was refused by borrowck for the same reason, while `--interpret` gave
+            // the copy semantics the reference promises.  Reading was fine, the integer
+            // element was fine, and a tuple LOCAL was fine: the write to a text element
+            // THROUGH the parameter is the whole of it.
+            //
+            // The promotion is what makes the two backends agree, and it agrees with the
+            // documented meaning rather than papering over it: `(F-ParamScalar)` gives a
+            // value parameter its own copy, so writing the callee's copy is exactly right
+            // and the caller's tuple is untouched either way.
+            let mut lhs = lhs;
+            if self.first_pass
+                && self.vars.is_argument(lhs.root)
+                && Self::tuple_carries_text(self.vars.tp(lhs.root))
+            {
+                let name = self.vars.name(lhs.root).to_string();
+                let tp = self.vars.tp(lhs.root).clone();
+                let shadow = self
+                    .vars
+                    .add_variable(&format!("__tp_{name}"), &tp, &mut self.lexer);
+                self.vars.set_promoted_from(shadow, lhs.root);
+                // The promoted local inherits the const axis, so the const guard still
+                // fires on it — the same pairing the text promotion keeps (@PLN40).
+                if self.vars.is_value_const(lhs.root) {
+                    self.vars.set_value_const(shadow);
+                }
+                if self.vars.is_const_binding(lhs.root) {
+                    self.vars.set_const_binding(shadow);
+                }
+                self.vars.remap_name(&name, shadow);
+                lhs.root = shadow;
             }
             *code = build_nested_tuple_assign(code, &lhs, rhs);
             return Type::Void;
@@ -6184,25 +6461,61 @@ use a separate collection or add after the loop"
         code: &mut Value,
         f_type: &Type,
         op: &str,
+        var_nr: u16,
     ) -> bool {
         let Type::RefVar(inner) = f_type else {
             return false;
         };
-        let Type::Reference(td, _) = inner.as_ref() else {
-            return false;
+        // A struct-ENUM is the same record shape one former over — `Type::Enum(_, true, _)` is
+        // exactly what the write-back emitter's own allow-list names beside `Type::Reference`
+        // — and it reached the identical defect: `x = o` left the caller aliasing the source
+        // and, from a callee local, reading a freed record (loft#1303).  A PLAIN enum
+        // (`Enum(_, false, _)`) is a byte with no store and is not here.
+        // `base()` rather than the bare inner: @FR-L-Null gives `layout(τ) = layout(τ?)`, so a
+        // `&S?` displaces a store exactly as its dense twin does.  It is the peel
+        // `Type::is_amp_rebindable_heap` — the one home for *which heap kinds does the `&`
+        // write-back repoint?* — already uses to answer the same question (loft#1291).
+        let (td, is_senum) = match inner.base() {
+            Type::Reference(td, _) => (*td, false),
+            Type::Enum(td, true, _) => (*td, true),
+            _ => return false,
         };
-        if op != "=" || !self.is_field(code) {
+        let record_tp = |td: u32, deps: Deps| {
+            if is_senum {
+                Type::Enum(td, true, deps)
+            } else {
+                Type::Reference(td, deps)
+            }
+        };
+        // A bare VARIABLE right-hand side needs the same materialisation as a field, and
+        // for the same reason one level up: @FR-B-Copy makes a plain heap whole-value bind
+        // a COPY, so the caller's binding must end up owning a store no live binding in
+        // the callee still names.  Installing the source's own store instead gives one
+        // store two owners — @FR-O-Owner — and which half breaks depends only on who else
+        // holds it: a caller-reachable source (`x = o`) leaves the caller aliasing its own
+        // argument and orphans the displaced store, while a callee-LOCAL one (`x = m`) is
+        // freed at the callee's scope exit and the caller reads a freed store (loft#1303).
+        // `x = x` is excluded: it would copy a store onto itself and free the original.
+        //
+        // ⚠ Only for a `&` PARAMETER.  This function serves two constructs, and they want
+        // opposite things from a bare-var right-hand side: @FR-F-ParamRef makes a parameter's
+        // whole-value `x = e` a WRITE-BACK, which installs a store, while `(B-Ref-Alias)`
+        // makes a `&` LOCAL bind (`q = &p`) a live LINK to the source, which must not copy.
+        // The field arm above is unrestricted because it materialises a VIEW rather than a
+        // link, which is right for both (loft#775).
+        let bare_var_rhs = self.vars.is_argument(var_nr)
+            && matches!(code.unspan(), Value::Var(rv) if *rv != var_nr);
+        if op != "=" || !(self.is_field(code) || bare_var_rhs) {
             return false;
         }
         // Keyed on the IR SHAPE, not on the right-hand side's deps: deps accumulate
         // while a body parses, so a deps test would mint the work-ref on pass 2 only
         // and shift every later `__ref_N` — the cross-pass divergence the H5 contract
-        // catches.  A field read is a field read on both passes.
-        let td = *td;
+        // catches.  A field read is a field read on both passes, and so is a bare var.
         let kt = self.data.def(td).known_type();
         let w = self
             .vars
-            .work_refs(&Type::Reference(td, Deps::none()), &mut self.lexer);
+            .work_refs(&record_tp(td, Deps::none()), &mut self.lexer);
         self.vars.set_skip_free(w);
         if self.first_pass {
             return false;
@@ -6216,7 +6529,7 @@ use a separate collection or add after the loop"
                 Value::Call(copy_d, vec![view, Value::Var(w), Value::Int(i32::from(kt))]),
                 Value::Var(w),
             ],
-            Type::Reference(td, Deps::frame1(w)),
+            record_tp(td, Deps::frame1(w)),
             "materialized_amp_field",
         );
         // @PLN130 — a NECESSARY copy that was nonetheless invisible: a program whose only
@@ -6227,6 +6540,106 @@ use a separate collection or add after the loop"
             w,
             kt,
             crate::copy_manifest::Origin::ParserMaterialise,
+        );
+        false
+    }
+
+    /// Materialise a `&`-KEYED-parameter write-back's right-hand side into its own store.
+    ///
+    /// The keyed sibling of [`Self::assign_refvar_reference`], and the same rule: a
+    /// whole-value `x = e` on a `&hash<T[k]>` (or `sorted`/`index`/`spatial`/`trie`)
+    /// REPOINTS the caller's slot (@FR-F-ParamRef), so whatever store it installs the caller
+    /// now owns.  @FR-B-Copy makes a plain heap whole-value bind a COPY, so that store has to
+    /// be one no live binding in the callee still names — otherwise @FR-O-Owner's single owner
+    /// is violated and one of two things goes wrong, depending only on who else holds it:
+    ///
+    /// * a source the CALLER can still reach (`x = o`, a plain heap parameter, which
+    ///   `(F-ParamHeap)` makes an alias of the caller's argument) leaves the caller's two
+    ///   bindings naming one store — mutating one is visible through the other — and
+    ///   orphans the store the write-back displaced;
+    /// * a source the CALLEE owns (`x = m`, its own minted local) is freed at the callee's
+    ///   scope exit, and every later read in the caller is a use-after-free that answers
+    ///   correctly until the slot is handed out again (loft#1303).
+    ///
+    /// The cure is the one the caller's frame needs either way: mint a fresh store, deep-copy
+    /// the source into it, and let the general path install THAT — after which codegen's
+    /// `amp_owned_writeback` leg sees an owned value and releases the displaced store, guarded
+    /// by `Stores::free_displaced` where the caller's binding does not own it (loft#1287).
+    ///
+    /// Copying INTO the target's existing store instead — the in-place refill a `&vector`
+    /// takes — is not available here: it never repoints, so through a plain forwarder the
+    /// write reaches the caller's CALLER, which `(F-ParamRebind)` forbids (loft#1291's
+    /// vector half, measured and backed out).
+    ///
+    /// Keyed on the IR SHAPE for [`Self::assign_refvar_reference`]'s reason — deps accumulate
+    /// as a body parses, so a deps test would mint the work-ref on pass 2 alone and shift
+    /// every later `__ref_N`. A field read and a bare variable are both the same shape on
+    /// both passes. `x = x` is excluded: it would copy a store onto itself and then free the
+    /// original as the displaced one.
+    ///
+    /// Answers `false` like its sibling, so the general path still emits the `Set(x, …)`
+    /// that installs the materialised store.
+    pub(crate) fn assign_refvar_keyed(
+        &mut self,
+        code: &mut Value,
+        f_type: &Type,
+        op: &str,
+        var_nr: u16,
+    ) -> bool {
+        let Type::RefVar(inner) = f_type else {
+            return false;
+        };
+        // `base()` for the sibling's reason: @FR-L-Null makes a `&hash<T[k]>?` the same
+        // question as its dense twin — the storage is what gets displaced.
+        let inner = inner.base();
+        if !crate::parser::vectors::is_keyed(inner) {
+            return false;
+        }
+        // The `&` PARAMETER write-back only — `(B-Ref-Alias)` makes a `&` local bind a live
+        // link to its source, which a copy would break.  See the sibling's gate.
+        //
+        // A FIELD right-hand side (`x = h.hs`) is the same defect and is measured: it left the
+        // caller aliasing the holder's collection, so `h.hs += …` was visible through `x`'s
+        // caller and the displaced store leaked.  The struct sibling has materialised a field
+        // since loft#775; no keyed site ever did.
+        let materialisable =
+            self.is_field(code) || matches!(code.unspan(), Value::Var(rv) if *rv != var_nr);
+        if op != "=" || !self.vars.is_argument(var_nr) || !materialisable {
+            return false;
+        }
+        let mut dep_free = inner.clone();
+        if let Some(d) = dep_free.deps_mut() {
+            *d = Deps::none();
+        }
+        let w = self.vars.work_refs(&dep_free, &mut self.lexer);
+        self.vars.set_skip_free(w);
+        if self.first_pass {
+            return false;
+        }
+        let Some(kt) = self.keyed_type_id(&dep_free) else {
+            return false;
+        };
+        let kt = i32::from(kt);
+        // No `0x8000` source-free bit: the source is a live binding — the caller's, or the
+        // callee's own local — and its own scope frees it.  That is the same reading
+        // `OpReplaceKeyed`'s local-assignment site gives the bit (@FR-O-Move: a store the
+        // callee only BORROWED is not the callee's to give away).
+        let src = std::mem::replace(code, Value::Null);
+        *code = v_block(
+            vec![
+                v_set(w, Value::Null),
+                self.cl("OpDatabase", &[Value::Var(w), Value::Int(kt)]),
+                self.cl("OpReplaceKeyed", &[src, Value::Var(w), Value::Int(kt)]),
+                Value::Var(w),
+            ],
+            {
+                let mut t = dep_free.clone();
+                if let Some(d) = t.deps_mut() {
+                    *d = Deps::frame1(w);
+                }
+                t
+            },
+            "materialized_amp_keyed",
         );
         false
     }

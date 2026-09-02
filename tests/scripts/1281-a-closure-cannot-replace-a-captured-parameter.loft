@@ -1,0 +1,94 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// What a closure may do to a captured heap PARAMETER, and the one thing it may not.
+//
+// `(F-ParamRebind)` makes a whole-value rebind of a heap parameter local to the callee, and
+// `(L-CapHeap)` shares the captured collection.  Both are right; what does not follow is
+// that the CALLER sees the rebind.  Written inside a closure it did: the closure record
+// holds a COPY of the parameter's DbRef, the rebind lowered to a clear plus a refill of the
+// store that copy names, and `(F-ParamHeap)` makes that store the caller's — so
+// `fn f(p: vector<integer>) { g = fn() { p = [7,7]; }; g(); }` left the caller's `[1,2]` as
+// `[7,7]`, on both backends, with nothing reported (loft#1281, `D-clo-20`).
+//
+// It is REFUSED now rather than lowered, which is the call `D-clo-18` makes one rule over
+// for the `&`-scalar shape and for the same reason: making it mean what it says needs the
+// binding reachable from inside the closure plus a write-back, and the cell machinery that
+// gives a mutated captured SCALAR exactly that cannot serve a heap value — reads in the
+// enclosing body would then see the cell while the caller still sees its own slot.
+//
+// EVERYTHING HERE IS A CONTROL.  The refusal is in `tests/parse_errors.rs`
+// (`a_closure_cannot_replace_a_captured_heap_parameter`), because a file containing the
+// refused spelling does not parse and none of these rows would run.  Each row below is a
+// shape the refusal must NOT reach, and each one is a way the cure could have been written
+// too widely:
+//
+// @falsified-at: none — this is a LOCK.  Every row passed before the refusal existed and
+//   passes after it, which is the point: the change may only remove one spelling.  Run it
+//   against a build whose predicate is widened (drop the `is_argument` test, or the
+//   `RefVar` exclusion, or match `Type::Text`) and the corresponding row stops COMPILING —
+//   that is the direction it fails in, and it is why the rows are ordinary code rather
+//   than `@EXPECT_ERROR` cells.
+
+struct S { n: integer }
+
+// (L-CapHeap): a mutation THROUGH the capture reaches the caller, at every shape.
+fn cap_append(p: vector<integer>) { g = fn() { p += [9]; }; g(); }
+fn cap_elem(p: vector<integer>) { g = fn() { p[0] = 9; }; g(); }
+fn cap_clear(p: vector<integer>) { g = fn() { p.clear(); }; g(); }
+fn cap_field(s: S) { g = fn() { s.n = 9; }; g(); }
+
+// A captured LOCAL may be rebound: there is no caller for it to reach past.
+fn local_rebind() -> integer {
+  loc: vector<integer> = [];
+  loc += [1];
+  loc += [2];
+  g = fn() { loc = [7, 7]; };
+  g();
+  len(loc)
+}
+
+// A scalar parameter may be rebound: the cell machinery boxes it, and the write reaches
+// the enclosing slot rather than a shared store.
+fn scalar_rebind(n: integer) -> integer {
+  g = fn() { n = 7; };
+  g();
+  n
+}
+
+// A `&` parameter is (L-CapRef): the closure captures the POINTEE and the write-back to
+// the caller is the whole purpose of the annotation.
+fn amp_grow(v: &vector<integer>) { g = fn() { v += [9]; }; g(); }
+
+fn test_a_mutation_through_a_capture_reaches_the_caller() {
+  a: vector<integer> = [];
+  a += [1];
+  a += [2];
+  cap_append(a);
+  assert(len(a) == 3 && a[2] == 9, "append through a capture reaches the caller: {a}");
+
+  b: vector<integer> = [];
+  b += [1];
+  b += [2];
+  cap_elem(b);
+  assert(b[0] == 9, "an element write through a capture reaches the caller: {b}");
+
+  c: vector<integer> = [];
+  c += [1];
+  c += [2];
+  cap_clear(c);
+  assert(len(c) == 0, "a clear through a capture reaches the caller: {len(c)}");
+
+  s = S { n: 1 };
+  cap_field(s);
+  assert(s.n == 9, "a field write through a capture reaches the caller: {s.n}");
+}
+
+fn test_the_shapes_the_refusal_must_not_reach() {
+  assert(local_rebind() == 2, "a captured LOCAL may be rebound: {local_rebind()}");
+  assert(scalar_rebind(1) == 7, "a captured scalar PARAMETER may be rebound: {scalar_rebind(1)}");
+  d: vector<integer> = [];
+  d += [1];
+  amp_grow(d);
+  assert(len(d) == 2 && d[1] == 9, "a `&` parameter still takes its write-back: {d}");
+}

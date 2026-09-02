@@ -158,20 +158,57 @@ against a uniform run — whole-program `--native`, or `--interpret` with
 
 ---
 
-## Surfaced 2026-08-20 while fixing something else — filed
+## Surfaced 2026-08-20 while fixing something else — all five CLOSED (re-measured 2026-09-02)
 
-Each was met while working a neighbouring defect and verified against the pre-fix
-binary as PRE-EXISTING, then deliberately left rather than folded into an unrelated
-change. All five are now tracked; the repro, the measured workaround and the
-both-backends result live on the issue.
+**All five are gone**, re-verified on 2026-09-02 by running each repro on this tree rather
+than reading the row — which is the whole reason this document says to re-verify a caveat.
+`#1032` (a generic returning `iterator<T>` walks) and `#1034` (a declared `(text?, integer)`
+local is accepted) are simply fixed. The other three left something behind.
+
+**#1033 repaid the re-verification twice.** It had been CLOSED, and it still reproduced — no
+longer as the refusal it was filed as, but as a `null` answer with no diagnostic, so it had
+moved from `sev:low` to `silent-wrong` while nobody was looking. Its title was wrong too: a
+plain `fn f(v: vector<integer>)` was affected identically and a generic over a STRUCT element
+was fine, so the axis was never the generic. It was the `par` element STRIDE for a nested
+vector, computed from the inner element's type — fixed the same day, guard
+`tests/scripts/1033-a-par-worker-gets-the-right-nested-vector.loft`.
+
+**#1030 / #1009 / #1296 — settled, and the answer is a table rather than a rule.** A width
+type's out-of-range `+=` no longer keeps `260`. What it answers depends on whether the spec
+has a spare code to spell null WITH, which `formal/types.md` now states and this tree
+measures: `integer` and `i32` keep a code at the bottom and answer **`null`** (which is why
+`i32 = -2147483648` is refused); `u32` has a spare code at the TOP that no non-null read
+tests for, and `u8`/`i8`/`u16`/`i16` have none at all because the range fills the width — all
+of those answer **the type's default**. Measured here: `u32` and `u8` answer `0`, `i32`
+answers `null`. The default is a legal value of the type, so nothing holds a non-`τ` value,
+but it cannot be told from a computed one — `τ?` is the spelling that always answers null,
+because a nullable narrow alias sacrifices an edge value to reserve one.
+
+**#1031 — `u32` is one short of its name, by construction.** The local and the field agree
+now. `u32 = 4294967295` is still refused: `default/01_code.loft` declares `u32` as
+`integer limit(0, 4294967294) size(4)`, keeping the top code back — and per the table above
+that reserved code is the one no non-null read tests for, so it buys the refusal without
+buying a null. The 2026-08 changelog line "`u32` finally holding every `u32`" overstated the
+fix, and is corrected.
+
+The lesson the rows leave behind: a closed issue is a claim about a build, and the build has
+moved. The rows below are kept for their repros; every issue is closed.
 
 | | issue | shape |
 |---|---|---|
-| `integer limit(lo,hi)` is not bounded on `+=` — the `u8` spelling of the same range is; the local keeps `260` | [#1030](https://github.com/loft-lang/loft/issues/1030) | `silent-wrong` |
-| a `u32` local clamps to `0` where the `u32` FIELD wraps to `4294967291`, same write; and `u32 = 4294967295` is refused inside its own range | [#1031](https://github.com/loft-lang/loft/issues/1031) | `silent-wrong` |
-| a generic returning `iterator<T>` panics the interpreter and will not compile on `--native`; its element type does not monomorphise | [#1032](https://github.com/loft-lang/loft/issues/1032) | `sev:high` |
-| a generic function is not callable inside a `par` worker | [#1033](https://github.com/loft-lang/loft/issues/1033) | `sev:low` |
-| a declared `(text?, integer)` local is refused, though the same tuple type is accepted as a return | [#1034](https://github.com/loft-lang/loft/issues/1034) | `sev:low` |
+| a generic function inside a `par` worker answers **`null`** | [#1033](https://github.com/loft-lang/loft/issues/1033) | `silent-wrong` |
+
+**Four of the five are gone because they are FIXED** — re-verified on 2026-09-02 by running
+each repro on this tree, which is the reason this table says to re-run rather than trust a
+note. `#1030` (`integer limit(0,255) += 10` → `0`, not `260`), `#1031` (a `u32` local and
+field now agree), `#1032` (a generic returning `iterator<T>` walks), `#1034` (a declared
+`(text?, integer)` local is accepted).
+
+**#1033 stayed, and it CHANGED SHAPE under the same re-verification**, which is why it is
+worth the row: it no longer refuses the program, it compiles and answers `null` with no
+diagnostic, so it moved from `sev:low` to `silent-wrong`. Both controls pass — the generic
+without `par` answers `6`, and `par` with a plain function answers `9` — so it is the pairing
+and neither half alone. Reopened.
 
 **Two entries that were here are gone because they are FIXED**, both confirmed by
 re-running their repros on both backends before filing anything — which is the reason
@@ -669,9 +706,11 @@ The decided fix is live: `default/06_json.loft` defines the
 `JBool` / `JNull`) and `json_parse(text) -> JsonValue` is the one
 entry point, working on both backends.  The old text-based surface
 (`json_items` etc.) is gone — calling it is an "Unknown function"
-error.  The residual JSON gap is diagnostics on the one-stage
-auto-wrap `Struct.parse(text)` (Q1 — see
-[QUALITY.md § Open work](QUALITY.md#open-work--actionable-summary)).
+error.  The Q1 residual — diagnostics on the one-stage auto-wrap
+`Struct.parse(text)` — CLOSED 2026-08-20: both spellings report, and
+they differ in which half of the answer they give (the one-stage form
+names the position, `line 1:33 path:addr.zip`; the staged form names
+the types, `Addr.zip: expected JNumber, got JString`).
 
 ### ~~C7 / P22~~ — `spatial<T>` diagnostic — DONE
 `spatial<T[x,y]>` / `spatial<T[x,y,z]>` (@PLN48) shipped as a working keyed

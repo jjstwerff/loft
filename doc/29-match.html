@@ -20,12 +20,12 @@
 <style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
 </head>
 <body>
-<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <a href="libraries.html">Libraries</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <span class="cur">Match</span> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <a href="38-call-it-yourself.html">Call it yourself</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <a href="libraries.html">Libraries</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <span class="cur">Match</span> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <a href="38-call-it-yourself.html">Call it yourself</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries.html">Optional C libraries</a> · <a href="stdlib-system-directories.html">System directories</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations.html">Vector operations</a> · <a href="stdlib-stack-traces.html">Stack traces</a> · <a href="stdlib-coroutines.html">Coroutines</a> · <a href="stdlib-json.html">JSON</a> · <a href="stdlib-type-reflection.html">Type reflection</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>Match</h1>
 <article>
 <p>The <code>match</code> expression lets you compare a value against a series of patterns and run different code for each case.  It is similar to <code>switch</code> in other languages but more powerful: patterns can destructure structs, bind fields to local variables, and include <code>if</code> guards. Match is an expression — it returns a value, so you can assign the result or use it directly inside a larger expression.</p>
 <h2 id="simple-enum-matching">Simple enum matching</h2>
-<p>The most common use: branch on an enum variant.  Every variant must be covered or a <code>_</code> wildcard must appear — the compiler checks exhaustiveness.</p>
+<p>The most common use: branch on an enum variant.  Every variant must be covered or a <code>_</code> wildcard must appear — for an ENUM the compiler checks exhaustiveness, because it knows the whole set of variants.</p>
 <pre><code><span class="kw">enum</span> <span class="en">Direction</span> { <span class="en">North</span>, <span class="en">South</span>, <span class="en">East</span>, <span class="en">West</span> }</code></pre>
 <p>A struct-enum: its variants carry named fields, which a match arm can destructure.</p>
 <pre><code><span class="kw">enum</span> <span class="en">Shape</span> {
@@ -38,6 +38,15 @@
     <span class="en">South</span> =&gt; <span class="st">"south"</span>,
     <span class="en">East</span>  =&gt; <span class="st">"east"</span>,
     <span class="en">West</span>  =&gt; <span class="st">"west"</span>,
+  }
+}</code></pre>
+<p>A guard reading the field its own pattern bound.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">size_of</span>(s: <span class="en">Shape</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  match s {
+    <span class="en">Circle</span> { radius } <span class="kw">if</span> radius &gt; <span class="nm">10</span> =&gt; <span class="st">"big circle"</span>,
+    <span class="en">Circle</span> { radius } =&gt; <span class="st">"small circle"</span>,
+    <span class="en">Rect</span> { w, h } <span class="kw">if</span> w == h =&gt; <span class="st">"square"</span>,
+    <span class="en">Rect</span> { w, h } =&gt; <span class="st">"rect"</span>,
   }
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
@@ -59,7 +68,7 @@
   };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(shape_area == <span class="nm">12</span>, <span class="st">"struct-enum destructure: {shape_area}"</span>);</code></pre>
 <h2 id="guards">Guards</h2>
-<p>Add <code>if condition</code> after a pattern to restrict when the arm matches. The guard can reference variables bound by the pattern.</p>
+<p>Add <code>if condition</code> after a pattern to restrict when the arm matches. A guard can reject, so a guarded arm never counts towards covering an enum: a match whose arms name every variant but guard them all is still refused.</p>
 <pre><code>  v = <span class="nm">42</span>;
   label = match v {
     <span class="nm">0</span>      =&gt; <span class="st">"zero"</span>,
@@ -68,8 +77,14 @@
     _      =&gt; <span class="st">"normal"</span>,
   };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(label == <span class="st">"normal"</span>, <span class="st">"guard: {label}"</span>);</code></pre>
+<p>A guard can also read what the PATTERN bound, which is where guards earn their keep — the field is in scope inside the condition.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">size_of</span>(<span class="en">Circle</span> { radius: <span class="nm">20</span> }) == <span class="st">"big circle"</span>, <span class="st">"guard on a binding"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">size_of</span>(<span class="en">Circle</span> { radius: <span class="nm">2</span> }) == <span class="st">"small circle"</span>, <span class="st">"guard on a binding, false"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">size_of</span>(<span class="en">Rect</span> { w: <span class="nm">3</span>, h: <span class="nm">3</span> }) == <span class="st">"square"</span>, <span class="st">"guard comparing two bindings"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">size_of</span>(<span class="en">Rect</span> { w: <span class="nm">3</span>, h: <span class="nm">4</span> }) == <span class="st">"rect"</span>, <span class="st">"guard comparing two bindings, false"</span>);</code></pre>
 <h2 id="wildcard">Wildcard <code>_</code></h2>
-<p>The underscore <code>_</code> matches anything.  Put it last as a catch-all. Without it, the compiler will reject the match if any value could fall through without matching.</p>
+<p>The underscore <code>_</code> matches anything, and it must be the LAST arm: it matches everything, so an arm written after it could never be selected, and the compiler says so.</p>
+<p>Whether you NEED a <code>_</code> depends on the subject.  For an enum the compiler knows every variant, so it requires them all to be covered or a <code>_</code> to be present, and refuses the match otherwise — naming the variants you left out. For an integer, character or text subject there is no finite set to check, so no <code>_</code> is required and none is missed: a value that matches no arm makes the match answer null.  That is the case to watch, because nothing warns you — see "When nothing matches" below.</p>
 <pre><code>  x = <span class="nm">7</span>;
   kind = match x {
     <span class="nm">1</span> =&gt; <span class="st">"one"</span>,
@@ -120,6 +135,24 @@
     <span class="en">East</span> | <span class="en">West</span>   =&gt; <span class="st">"horizontal"</span>,
   };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(axis == <span class="st">"vertical"</span>, <span class="st">"multi-pattern: {axis}"</span>);</code></pre>
+<h2 id="tuple-patterns">Tuple patterns</h2>
+<p>A tuple subject matches element by element.  Write <code>_</code> for an element you do not care about.</p>
+<pre><code>  point = (<span class="nm">2</span>, <span class="st">"b"</span>);
+  where = match point {
+    (<span class="nm">0</span>, _)   =&gt; <span class="st">"origin row"</span>,
+    (<span class="nm">2</span>, <span class="st">"a"</span>) =&gt; <span class="st">"two-a"</span>,
+    (<span class="nm">2</span>, <span class="st">"b"</span>) =&gt; <span class="st">"two-b"</span>,
+    _        =&gt; <span class="st">"elsewhere"</span>,
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(where == <span class="st">"two-b"</span>, <span class="st">"tuple pattern: {where}"</span>);</code></pre>
+<h2 id="when-nothing-matches">When nothing matches</h2>
+<p>This match names no <code>_</code>, and 7 is none of its arms.  On an enum that would not compile; on a scalar there is no finite set to check, so the match answers null and the null travels on.  Give the result a fallback with <code>??</code>, or add a <code>_</code> arm — the compiler will not remind you.</p>
+<pre><code>  unmatched = match <span class="nm">7</span> {
+    <span class="nm">1</span> =&gt; <span class="st">"one"</span>,
+    <span class="nm">2</span> =&gt; <span class="st">"two"</span>,
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(unmatched == <span class="kw">null</span>, <span class="st">"a scalar match that selects no arm answers null"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((unmatched ?? <span class="st">"none"</span>) == <span class="st">"none"</span>, <span class="st">"so give it a fallback"</span>);</code></pre>
 <h2 id="nested-match">Nested match</h2>
 <p>Match can appear inside other expressions, including other match arms.</p>
 <pre><code>  n = <span class="nm">15</span>;
@@ -155,7 +188,8 @@
 // or use it directly inside a larger expression.
 // ## Simple enum matching
 // The most common use: branch on an enum variant.  Every variant must be covered
-// or a `_` wildcard must appear — the compiler checks exhaustiveness.
+// or a `_` wildcard must appear — for an ENUM the compiler checks exhaustiveness,
+// because it knows the whole set of variants.
 enum Direction { North, South, East, West }
 
 // A struct-enum: its variants carry named fields, which a match arm can destructure.
@@ -170,6 +204,16 @@ fn direction_name(d: Direction) -&gt; text {
     South =&gt; "south",
     East  =&gt; "east",
     West  =&gt; "west",
+  }
+}
+
+// A guard reading the field its own pattern bound.
+fn size_of(s: Shape) -&gt; text {
+  match s {
+    Circle { radius } if radius &gt; 10 =&gt; "big circle",
+    Circle { radius } =&gt; "small circle",
+    Rect { w, h } if w == h =&gt; "square",
+    Rect { w, h } =&gt; "rect",
   }
 }
 
@@ -197,7 +241,8 @@ fn main() {
   assert(shape_area == 12, "struct-enum destructure: {shape_area}");
   // ## Guards
   // Add `if condition` after a pattern to restrict when the arm matches.
-  // The guard can reference variables bound by the pattern.
+  // A guard can reject, so a guarded arm never counts towards covering an enum:
+  // a match whose arms name every variant but guard them all is still refused.
   v = 42;
   label = match v {
     0      =&gt; "zero",
@@ -206,10 +251,25 @@ fn main() {
     _      =&gt; "normal",
   };
   assert(label == "normal", "guard: {label}");
+
+  // A guard can also read what the PATTERN bound, which is where guards earn
+  // their keep — the field is in scope inside the condition.
+  assert(size_of(Circle { radius: 20 }) == "big circle", "guard on a binding");
+  assert(size_of(Circle { radius: 2 }) == "small circle", "guard on a binding, false");
+  assert(size_of(Rect { w: 3, h: 3 }) == "square", "guard comparing two bindings");
+  assert(size_of(Rect { w: 3, h: 4 }) == "rect", "guard comparing two bindings, false");
   // ## Wildcard `_`
-  // The underscore `_` matches anything.  Put it last as a catch-all.
-  // Without it, the compiler will reject the match if any value could
-  // fall through without matching.
+  // The underscore `_` matches anything, and it must be the LAST arm: it matches
+  // everything, so an arm written after it could never be selected, and the
+  // compiler says so.
+  //
+  // Whether you NEED a `_` depends on the subject.  For an enum the compiler
+  // knows every variant, so it requires them all to be covered or a `_` to be
+  // present, and refuses the match otherwise — naming the variants you left out.
+  // For an integer, character or text subject there is no finite set to check,
+  // so no `_` is required and none is missed: a value that matches no arm makes
+  // the match answer null.  That is the case to watch, because nothing warns you
+  // — see "When nothing matches" below.
   x = 7;
   kind = match x {
     1 =&gt; "one",
@@ -262,6 +322,30 @@ fn main() {
     East | West   =&gt; "horizontal",
   };
   assert(axis == "vertical", "multi-pattern: {axis}");
+  // ## Tuple patterns
+  // A tuple subject matches element by element.  Write `_` for an element you
+  // do not care about.
+  point = (2, "b");
+  where = match point {
+    (0, _)   =&gt; "origin row",
+    (2, "a") =&gt; "two-a",
+    (2, "b") =&gt; "two-b",
+    _        =&gt; "elsewhere",
+  };
+  assert(where == "two-b", "tuple pattern: {where}");
+
+  // ## When nothing matches
+  // This match names no `_`, and 7 is none of its arms.  On an enum that would
+  // not compile; on a scalar there is no finite set to check, so the match
+  // answers null and the null travels on.  Give the result a fallback with `??`,
+  // or add a `_` arm — the compiler will not remind you.
+  unmatched = match 7 {
+    1 =&gt; "one",
+    2 =&gt; "two",
+  };
+  assert(unmatched == null, "a scalar match that selects no arm answers null");
+  assert((unmatched ?? "none") == "none", "so give it a fallback");
+
   // ## Nested match
   // Match can appear inside other expressions, including other match arms.
   n = 15;

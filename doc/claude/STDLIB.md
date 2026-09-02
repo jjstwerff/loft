@@ -651,7 +651,7 @@ call; the stdlib does not, and did not meaningfully do so before.
 | Function | Description |
 |----------|-------------|
 | `content(self: File) -> text?` | Reads the entire file as a UTF-8 text value. **Null** when there is no text to read: the file is missing, the path is a directory, or the bytes are not valid UTF-8. `""` means the file really is empty. |
-| `lines(self: File) -> vector<text>` | Reads the file and splits it into lines. |
+| `lines(self: File) -> vector<text>` | Reads the file and splits it into lines. **Empty** wherever `content()` is null — a missing file, a directory, or bytes that are not UTF-8 — so a loop over it runs zero times and reads exactly like a loop over an empty file. `lines()` has no null of its own to carry the distinction; ask `content()` when it matters. |
 
 `content()` is nullable because `""` cannot carry three different meanings.  A
 non-UTF-8 file used to answer `""`, indistinguishable from an empty one, so a
@@ -1113,7 +1113,7 @@ response = json_object([
 return response.to_json_pretty();
 ```
 
-### Legacy text-based API (transitional)
+### The struct-shaped API
 
 | Expression | Description |
 |---|---|
@@ -1132,7 +1132,13 @@ errs = user#errors;              // TEXT, not a collection — and the read clea
 if errs != "" { log_warn(errs); } // `for e in user#errors` iterates nothing
 ```
 
-New code should prefer the `JsonValue` surface; the text-based `Struct.parse(text)` form is slated for withdrawal in the 0.9.0 milestone (see [QUALITY.md § P54](QUALITY.md#active-sprint--p54-jsonvalue-enum)).
+Reach for this form when you KNOW the document's shape and it maps onto a struct you have
+declared, and for the `JsonValue` surface above when you do not, or when your program has
+to report precisely what was wrong.  Both are supported.  (This section was headed
+"Legacy text-based API (transitional)" and announced a withdrawal in 0.9.0 — that was
+written on 2026-04-14 for the 0.8.4 RC and no roadmap row, decision record or
+`#superseded` marker ever scheduled it.  What P54 actually withdrew was `json_items` and
+its peers, which are gone.)
 
 ---
 

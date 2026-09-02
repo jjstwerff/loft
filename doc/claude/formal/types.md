@@ -178,6 +178,33 @@ fake non-null on an op that can miss.
 > overflow: `(N-Store)` never fires because the op is typed non-null. This is a **deliberate,
 > bounded soundness edge** (parallel to a non-null `float` holding a `NaN`), not a deviation to
 > close — the reachable-fault ops (`/`, `%`, `v[i]`, parse) stay `τ?` as above.
+>
+> **A sentinel has to EXIST for that to be writable, and for the width aliases it sometimes
+> does not.** The rule reaches exactly the specs that keep a code back for null and put it at
+> the BOTTOM, which is the code a non-null read already reports as null:
+>
+> | spec | spare code? | overflow answers |
+> |---|---|---|
+> | `integer` (i64), `i32` | yes, and it is the bottom (`i32` is `i32::MIN + 1 ..= i32::MAX`, which is why `i32 = -2147483648` is refused) | `null` |
+> | `u32` | yes, but at the TOP — no non-null read tests for it, and writing it renders `4294967295`, outside the type's own range | the type's default |
+> | `u8`, `i8`, `u16`, `i16` | no: the range FILLS the width, so all 256 / 65 536 codes are values | the type's default |
+>
+> The default is `(E-Uncomp-NN)`'s and is at least a legal value of the type, so nothing holds
+> a non-`τ` value — but it is indistinguishable from a computed one, which is the price of a
+> width with no code to spare. `τ?` is the spelling that always answers `null`, because a
+> nullable narrow alias sacrifices an edge value to reserve one (`(N-Reserve)`). loft#1296.
+>
+> **And the answer does not depend on where the slot lives.** The collapse site
+> (`OpRangeDefault`, shared by both backends) exempted the sentinel unconditionally, so a
+> non-null narrow LOCAL — an `i64` until it is materialised — held it and read back `null`,
+> while the same overflow reaching a FIELD or an ELEMENT narrowed to the default. One
+> declared type, two answers, decided by whether the arithmetic landed exactly on the
+> sentinel. The guard now reads the target's nullability off `dflt`, which
+> `uncomputable_default` already sets to `i64::MIN` exactly when the slot can read back null,
+> so a sentinel is passed through where null is representable and collapsed where it is not
+> (loft#1305). The RETURN divergence closed with it — the interpreter kept the sentinel in an
+> 8-byte slot and native emitted `as u8` — because the sentinel no longer survives the store
+> (loft#1306).
 
 Nullability is **range-driven**, so the discharge burden is proportional to *real* risk,
 not theoretical: `a op b` and `e as τ` are **non-null when the result provably fits** the

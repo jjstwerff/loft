@@ -28,6 +28,12 @@
 // DEFAULT rather than a wrapped or aliased value, for the `u8` spelling and the
 // `integer limit(0, 255)` spelling alike.
 //
+// ⚠ "the type's DEFAULT" is the answer only where the type has NO code to spare for null.
+// loft#1296 split the six: `i32` reserves `i32::MIN` in either spelling, so C85's *"write
+// the reserved sentinel, which then reads as null"* applies to it and its two cells below
+// now assert `null`.  `u8`/`i8`/`u16`/`i16` fill their width, and `u32`'s spare code is the
+// TOP one, which no non-null read tests — those five keep the default.
+//
 // Sizes are pinned too, because "takes up less space" is the other half of the entry's
 // promise and it is the half that holds exactly.
 
@@ -123,13 +129,21 @@ fn main() {
   // the only spec left whose range IS the signed-32 range is the `i32` alias itself.
   // The result was the exact shape this issue is about, four aliases later: a local
   // holding a value its own type cannot represent.
+  // ⚠ These two cells CHANGED on 2026-09-02 (loft#1296), and the change is the rules
+  // correcting the guard rather than the other way round.  `formal/types.md` says an
+  // overflow yields `null`, and C85 says how a NON-null slot manages it: *"on overflow they
+  // write the reserved sentinel into that non-null slot — which then reads as null"*.  `i32`
+  // is `i32::MIN + 1 ..= i32::MAX` in either spelling — which is why `i32 = -2147483648` is
+  // refused as out of range — so it HAS that reserved code, and the bottom code is the one a
+  // non-null read already reports as null.  The four narrower aliases above fill their width
+  // and have no code to spare, which is why their cells still read `0`.
   k1009: i32 = 2147483647;
   k1009 += 1;
-  assert(k1009 == 0, "an i32 past 2147483647 takes its DEFAULT, 0, got {k1009}");
+  assert(k1009 == null, "an i32 past 2147483647 reads as null (C85), got {k1009}");
 
   l1009: i32 = -2147483647;
   l1009 -= 1;
-  assert(l1009 == 0, "and one below its floor takes the same default, got {l1009}");
+  assert(l1009 == null, "and one below its floor reads as null too, got {l1009}");
 
   // In-range `i32` arithmetic is untouched, both directions — the guard fires on the
   // VALUE, exactly as it does for the narrower four above.

@@ -36,9 +36,10 @@
 // stops at the first failure.
 //
 // One of them is also a claim the COMPILER makes: `s.on == null` warns
-// `redundant-null-check`, *"'on' is 'not null', comparison is always false"* — and on the
-// unfixed build that comparison was `true`.  The lint was right about the type and wrong
-// about the value, which is the shape of the defect in one line.
+// `redundant-null-check` — and on the unfixed build that comparison was `true`.  The lint was
+// right about the type and wrong about the value, which is the shape of the defect in one
+// line.  Its wording says so now (loft#1297): *"'on' is 'not null', so this is false unless a
+// null reached the slot anyway"*, where it used to promise *"always false"* outright.
 //
 // @falsified-at: 48544f1e — interpret exit 1 -> 0, interpret 1 assertion failures -> 0, native
 // exit 1 -> 0, native 1 assertion failures -> 0.  The count is 1 because a failed assert stops

@@ -353,7 +353,16 @@ impl Output<'_> {
         vals: &[Value],
         stack: bool,
     ) -> std::io::Result<()> {
-        if let [Value::Var(nr), val, width, prec, Value::Boolean(plus), dir] = vals {
+        if let [
+            Value::Var(nr),
+            val,
+            width,
+            prec,
+            Value::Int(token),
+            Value::Boolean(plus),
+            dir,
+        ] = vals
+        {
             let s_nr = self.var_place(*nr);
             let val_expr = self.generate_expr_buf(val)?;
             let width_expr = self.generate_expr_buf(width)?;
@@ -362,7 +371,7 @@ impl Output<'_> {
             let prefix = if stack { "" } else { "&mut " };
             write!(
                 w,
-                "ops::format_float({prefix}{s_nr}, {val_expr}, {width_expr}, {prec_expr}, {plus}, {dir_expr} as i8)"
+                "ops::format_float({prefix}{s_nr}, {val_expr}, {width_expr}, {prec_expr}, {token} as u8, {plus}, {dir_expr} as i8)"
             )?;
             return Ok(());
         }
@@ -376,7 +385,16 @@ impl Output<'_> {
         vals: &[Value],
         stack: bool,
     ) -> std::io::Result<()> {
-        if let [Value::Var(nr), val, width, prec, Value::Boolean(plus), dir] = vals {
+        if let [
+            Value::Var(nr),
+            val,
+            width,
+            prec,
+            Value::Int(token),
+            Value::Boolean(plus),
+            dir,
+        ] = vals
+        {
             let s_nr = self.var_place(*nr);
             let val_expr = self.generate_expr_buf(val)?;
             let width_expr = self.generate_expr_buf(width)?;
@@ -385,7 +403,7 @@ impl Output<'_> {
             let prefix = if stack { "" } else { "&mut " };
             write!(
                 w,
-                "ops::format_single({prefix}{s_nr}, {val_expr}, {width_expr}, {prec_expr}, {plus}, {dir_expr} as i8)"
+                "ops::format_single({prefix}{s_nr}, {val_expr}, {width_expr}, {prec_expr}, {token} as u8, {plus}, {dir_expr} as i8)"
             )?;
             return Ok(());
         }

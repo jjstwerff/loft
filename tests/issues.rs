@@ -6679,12 +6679,16 @@ fn q4_constructor_to_json_cross_check_string() {
 /// extractor's read position for each primitive variant.
 #[test]
 fn q4_constructor_as_bool_round_trips() {
+    // `-> boolean?`, because `as_bool` is declared nullable now (loft#1302) and returning it
+    // through a non-null `boolean` is what `(N-Store)` exists to catch — the warning it
+    // raises here is correct, and silencing it by keeping the old signature would be pinning
+    // the defect. The round trip is unchanged: the value still comes back.
     code!(
-        "fn run_q4cab() -> boolean {
+        "fn run_q4cab() -> boolean? {
     json_bool(true).as_bool()
 }"
     )
-    .expr("run_q4cab()")
+    .expr("run_q4cab() == true")
     .result(Value::Boolean(true));
 }
 
@@ -6964,17 +6968,40 @@ fn p54_as_text_on_jnumber_returns_null() {
     .result(Value::Boolean(true));
 }
 
-/// Extractor null-on-mismatch — `as_bool()` on a JNull returns
-/// `false` (the boolean null sentinel).
+/// Extractor null-on-mismatch — `as_bool()` on a JNull answers NULL, like its three
+/// siblings and like its own documentation.
+///
+/// It used to answer `false`, and this test used to pin that — its own comment called `false`
+/// *"the boolean null sentinel"*, which it is not (255 is). Written to the documented intent
+/// and then asserting whatever was there, with a parenthetical over the gap: `false` is a
+/// value a caller cannot tell from a field that really says false, which is the whole defect
+/// (loft#1302).
+///
+/// The declaration is `-> boolean?` now, because that is what carries the sentinel out; the
+/// test's own signature moves with it.
 #[test]
-fn p54_as_bool_on_jnull_returns_false() {
+fn p54_as_bool_on_jnull_is_null() {
     code!(
-        "fn run_abon() -> boolean {
+        "fn run_abon() -> boolean? {
     json_null().as_bool()
 }"
     )
-    .expr("run_abon()")
-    .result(Value::Boolean(false));
+    .expr("run_abon() == null")
+    .result(Value::Boolean(true));
+}
+
+/// The CONTROL for the cell above: a JBool that really says `false` still answers `false`.
+/// A cure that answered null for every falsey reading would satisfy the null test and destroy
+/// the only value `as_bool` exists to return.
+#[test]
+fn p54_as_bool_on_a_real_false_is_false() {
+    code!(
+        "fn run_abf() -> boolean? {
+    json_parse(\"{{\\\"b\\\":false}}\").field(\"b\").as_bool()
+}"
+    )
+    .expr("run_abf() == false")
+    .result(Value::Boolean(true));
 }
 
 /// Extractor `as_long()` truncates float toward zero (NOT round,
@@ -11779,7 +11806,7 @@ fn test() {
     if g.name == null { assert(false, \"unreachable\"); }
 }"
     )
-    .warning("Redundant null check — 'name' is 'not null', comparison is always false at p285_genuine_redundant_check_still_warns:4:24")
+    .warning("Redundant null check — 'name' is 'not null', so this is false unless a null reached the slot anyway (an overflow, a NaN, or an out-of-range read) at p285_genuine_redundant_check_still_warns:4:24")
     .result(Value::Null);
 }
 
@@ -18476,4 +18503,49 @@ fn test() {
 }"
     )
     .result(Value::Null);
+}
+
+// ── An arm after a total `_` names the rule it breaks ────────────────────
+//
+// A total `_` matches everything, so an arm written after it can never be selected. Both match
+// paths — the enum one in `parse_match` and the scalar one in `parse_scalar_match` — used to
+// `break` out of the arm loop at that point and let the next arm meet the closing-brace
+// expectation, which reported `Expect token }`: the right caret with the wrong reason, and on
+// the scalar path it cascaded into four more errors about the rest of the line, none of which
+// mentioned the wildcard. The Match chapter states this rule as "put it last", so the compiler
+// is what a reader meets when they get it wrong.
+#[test]
+fn an_arm_after_a_total_wildcard_says_so_on_the_scalar_path() {
+    code!(
+        "fn test() { r = match 2 { 1 => \"one\", _ => \"other\", 2 => \"two\" }; print(\"{r}\"); }"
+    )
+    .error(
+        "a `_` arm matches everything, so this arm can never be selected — move `_` to the end \
+at an_arm_after_a_total_wildcard_says_so_on_the_scalar_path:1:54",
+    );
+}
+
+#[test]
+fn an_arm_after_a_total_wildcard_says_so_on_the_enum_path() {
+    code!(
+        "enum D { North, South, East }
+fn test() { r = match D.South { North => \"n\", _ => \"other\", South => \"s\" }; print(\"{r}\"); }"
+    )
+    .error(
+        "a `_` arm matches everything, so this arm can never be selected — move `_` to the end \
+at an_arm_after_a_total_wildcard_says_so_on_the_enum_path:2:66",
+    );
+}
+
+/// The carve-out that keeps the check above from being wrong: a GUARDED `_ if cond` is NOT
+/// total — the guard can reject — so arms are expected to follow it and must stay legal. This
+/// is the same distinction `(M-Total)` draws for exhaustiveness, asked at the parse site.
+#[test]
+fn a_guarded_wildcard_still_admits_the_arms_after_it() {
+    code!(
+        "fn test() {
+  r = match 7 { _ if 7 < 0 => \"neg\", _ if 7 > 100 => \"big\", 7 => \"seven\", _ => \"other\" };
+  assert(r == \"seven\", \"a guarded _ does not close the arm list: {r}\");
+}"
+    );
 }

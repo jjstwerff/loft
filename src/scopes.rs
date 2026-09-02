@@ -6972,6 +6972,8 @@ impl Scopes {
         let mut ls: Vec<Value> = Vec::new();
         // @PLN90 / loft#506 — POST-call store-backs for computed-lvalue `&`-write-back args.
         let mut postamble: Vec<Value> = Vec::new();
+        // loft#1287 — the rebind witnesses to mark protected-from-free for THIS call.
+        let mut amp_foreign: Vec<u16> = Vec::new();
         // #248 (interpreter arg-layout) — when the call's first argument is a
         // borrowed receiver pushed via `OpCreateStack(Var(_))` (a `&self` / `&T`
         // method or free-function call), a LATER argument that is an inline
@@ -7054,6 +7056,29 @@ impl Scopes {
                 Value::Span(b) if matches!(b.1, Value::Insert(_)) => b.1,
                 other => other,
             };
+            // loft#1287 — a `&` argument whose binding this frame does NOT own.  The
+            // callee's write-back releases the store the binding stopped naming, and it
+            // cannot see whose that store is: for a plain heap PARAMETER it is the store the
+            // CALLER handed down (`formal/calls.md` F-ParamHeap), owned a frame further up.
+            // Freeing it there is a use-after-free plus a double free against the real
+            // owner's own release.  The rebind witness names that store — the parameter's
+            // ENTRY store, which is the only one this frame never owns, so a REPEATED call
+            // still lets the callee release the fresh store the previous one installed.
+            // `free_displaced` honours the mark; `(F-ParamRebind)`'s function-exit
+            // `OpFreeRefIfDistinct(param, witness)` releases what the binding ends up naming.
+            if outer_call != u32::MAX
+                && let Value::Call(cs, cargs) = scanned.unspan()
+                && *cs == create_stack_nr
+                && let Some(Value::Var(v)) = cargs.first().map(Value::unspan)
+                && let Some(orig) = function.rebind_orig(*v)
+                && data
+                    .def(outer_call)
+                    .attributes()
+                    .get(arg_idx)
+                    .is_some_and(|at| at.typedef.is_amp_rebindable_heap())
+            {
+                amp_foreign.push(orig);
+            }
             if let Value::Insert(ops) = scanned {
                 // Existing A5.6 hoisting: lift Set(w, Null) for owned Reference.
                 let is_a56_hoisted = Self::is_null_init_preamble(&ops, function);
@@ -7271,6 +7296,19 @@ impl Scopes {
             } else {
                 ls.push(scanned);
             }
+        }
+        for (i, orig) in amp_foreign.iter().enumerate() {
+            preamble.insert(
+                i,
+                Value::Call(
+                    data.def_nr("n_protect_store_frees"),
+                    vec![Value::Var(*orig)],
+                ),
+            );
+            postamble.push(Value::Call(
+                data.def_nr("n_unprotect_store_frees"),
+                vec![Value::Var(*orig)],
+            ));
         }
         (preamble, ls, postamble)
     }
@@ -7643,6 +7681,40 @@ impl Scopes {
     /// Every unresolved position answers `false`, which leaves the leak that was already
     /// there.  That is the direction this whole gate takes when it cannot name what it
     /// would be freeing: a wrong `true` frees a store the caller still holds.
+    /// A monomorph whose return sites are direct CALLS delivers a fresh store when every
+    /// one of those callees does — loft#1273.
+    ///
+    /// `fn add<T: Addable>(a: T, b: T) -> T { a + b }` lowers its tail to
+    /// `Call(n_OpAdd, …)`, and the user's `OpAdd` mints a record. `monomorph_return_is_fresh`
+    /// cannot see that — a callee's ownership is not a fact this body carries — so the
+    /// result was never lifted and one record was retained per call, unbounded in a loop,
+    /// while the bound spelling (`r = add(…); r.v`) was clean all along.
+    ///
+    /// The three questions are the fn-ref twin's, for the same reasons: the target must have
+    /// a BODY, must not return a borrowed view — a callee handing back its own argument
+    /// would make the lift free the caller's record — and must itself be proven fresh, so
+    /// the proof stays positive and one unreadable link refuses the chain.
+    ///
+    /// One level, deliberately. A delegate that itself delegates answers `false` and keeps
+    /// its leak, which is the direction every gate here takes when it cannot name what it
+    /// would be freeing; recursing would also need a cycle guard for mutual recursion.
+    /// No `self`: unlike the fn-ref twin, which resolves a closure through the caller's
+    /// `fnref_target`, the target here is written in the IR and only `Data` is needed.
+    fn monomorph_delegated_return_is_fresh(data: &Data, def: &crate::data::Definition) -> bool {
+        let Some(targets) = def.monomorph_direct_call_return_targets() else {
+            return false;
+        };
+        targets.iter().all(|&d_nr| {
+            if d_nr as usize >= data.definitions() as usize {
+                return false;
+            }
+            let target = data.def(d_nr);
+            target.code != Value::Null
+                && !target.returns_borrowed_view()
+                && target.monomorph_return_is_fresh()
+        })
+    }
+
     fn monomorph_fnref_return_is_fresh(
         &self,
         val: &Value,
@@ -8140,7 +8212,10 @@ impl Scopes {
                 def.name.starts_with("n_")
                     || (def.name.starts_with("t_")
                         && (def.attr_names.contains_key("__retbuf")
-                            || def.monomorph_return_is_fresh()))
+                            || def.monomorph_return_is_fresh()
+                            // loft#1273 — a tail that DELEGATES (`a + b` is `Call(n_OpAdd)`)
+                            // is a shape the callee's own body settles.
+                            || Self::monomorph_delegated_return_is_fresh(data, def)))
             };
             if lift_owned_return && def.code != Value::Null {
                 // The same `returns_borrowed_view()` question its struct-enum sibling below

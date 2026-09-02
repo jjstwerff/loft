@@ -1,0 +1,10 @@
+// want: ERROR
+// (N-Decl): a DECLARED local is a COMMITMENT, so this boundary REFUSES where
+// every other boundary warns.  The severity split is the finding, not a defect.
+fn main() {
+  q: integer? = 9223372036854775807;
+  q += 1;
+  x: integer = 0;
+  x = q;
+  println("{x}");
+}

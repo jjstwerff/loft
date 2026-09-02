@@ -9,6 +9,181 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A keyed `&` write-back does not release the caller's collection (2026-09-02)
+
+loft#1287 settled that a `&` parameter's whole-value write-back may release the store it
+displaced only where the caller's binding OWNS it, and through a plain forwarder it does not —
+`formal/calls.md` `(F-ParamHeap)` makes a plain heap parameter alias ITS caller's argument, so
+the store belongs two frames down.  The rebind WITNESS carries that fact: it names the
+parameter's ENTRY store, `scopes::scan_args` marks that store free-protected for the call, and
+`Stores::free_displaced` refuses it.
+
+The witness was minted behind an ALLOW-LIST written TWICE — `Type::Reference |
+Type::Enum(_, true, _)`, once in `parser/mod.rs` and once in `scopes.rs` — so it covered a
+struct and a struct-enum and nothing else.  Every KEYED collection fell through both:
+
+```loft
+fn set_h(x: &hash<E[k]>) { x = mk(); }
+fn fwd_h(x: hash<E[k]>)  { set_h(x); }
+```
+
+and the callee released the caller's collection.  **The value read back CORRECTLY**, which is
+why two independent boundary matrices scored this row as passing.  A freed store keeps its bytes
+until its slot is handed out; put one allocation between the call and the read and the
+interpreter panics on a corrupt reference, with `LOFT_STRICT_STORES=1` reporting seven
+lifetime violations and one store never freed.  `sev:high`, `silent-wrong`.
+
+The predicate has one home now — `Type::is_amp_rebindable_heap` — because its two askers must
+agree: one mints the witness and the other uses it, and a site that said yes while the other
+said no would either free a store belonging to a frame below or leak the fresh one.
+
+### A `&sorted` write-back reaches the caller, where the write used to vanish (2026-09-02)
+
+`formal/calls.md` `(F-ParamRef)` makes a `&` parameter the explicit write-back channel.  A
+`&sorted<T[k]>` was refused instead — *"Parameter 'x' has & but is never modified"* — and that
+refusal was the only thing stopping a lost write.  Give the body any other write and the program
+compiles, and the assignment is silently discarded with the callee's collection leaked:
+
+```loft
+fn set_s(x: &sorted<E[k]>) { x = mks(); for e in x { e.v = e.v; } }
+    IR:  [3] n_mk();          // no Set at all; the result is thrown away
+```
+
+`&hash` and `&index` were correct in the same position, and `is_keyed`, `keyed_type_id` and
+`base()` treat the three alike — so the difference had to be a site that names ONE kind.
+`collections.rs::towards_set` returned the right-hand side alone for `RefVar(Vector | Sorted)`.
+That is right for a vector: `assign_refvar_vector` has by then lowered the write into ops that
+fill the target in place, and the shapes it declines — a bracket literal, a comprehension —
+carry their own appends.  A `sorted` never had that lowering, so its right-hand side was a bare
+VALUE and returning it dropped the write.  The condition now names the fact (*the right-hand
+side has already written the target*) instead of the type former, and the arm has read this way
+since the initial commit, so a `&sorted` whole-value write-back has never worked.
+
+⚠ Two things this leaves, both uniform across the keyed kinds and neither this fix's doing.
+NO `+=` spelling works on a `&` keyed parameter — bracketed literal, bare element and whole
+collection alike are refused with *"cannot change type from `&hash<…>` to `vector<E>`"*, a type
+the program never wrote, because @P277's interception asks `is_keyed`, which peels `Optional`
+and not `RefVar` (the remaining half of loft#1292). And a bare-VAR right-hand side mismanages
+the store in both directions: from a caller-reachable value the displaced store LEAKS, from a
+callee-local one the callee's scope-exit free makes it a USE-AFTER-FREE in the caller
+(loft#1303, filed — one question, since `(O-Latest)` puts ownership on the binding that ends up
+naming the store and nothing moves it).
+
+⚠ The VECTOR half of loft#1291 is NOT closed.  A `&vector<T>` write-back is `OpClearVector` plus
+a refill of the SHARED backing, so it never repoints and there is no displaced store to protect:
+it answers WRONG where the keyed kinds corrupted quietly.  Letting it take the fresh-backing
+rebind `vectors.rs::vector_db_init` already builds was measured and BACKED OUT — it does not
+compile on `--native`, it turns two previously-compiling right-hand sides into refusals, and the
+interpreter's `OpCreateStack` did not isolate the forwarder's frame the way the struct and keyed
+kinds do.  The cells are on the issue.
+
+### A generic header binds its OWN type variable (2026-09-02)
+
+Two generic functions that both wrote `T` — the universal convention — shared one type
+variable. The bound-method stubs hang off the type variable's placeholder definition and carry
+a SIGNATURE, so whichever header was declared first owned the stub and the second's calls were
+checked against a parameter list its author never wrote (loft#1301):
+
+```loft
+interface HasSize1 { fn sizer(self: Self) -> integer }
+interface HasSize2 { fn sizer(self: Self, scale: integer) -> integer }
+fn one<T: HasSize1>(x: T) -> integer { x.sizer() }
+fn two<T: HasSize2>(x: T) -> integer { x.sizer(10) }
+    ->  error: Too many parameters for T#g.sizer
+```
+
+Order-dependent: swap the two declarations and the error swapped with them. `formal/
+interfaces.md` `(G-Gen)` says a header *introduces* its type variable, so the binding is
+per-header and this was a deviation (`D-gen-3`), not a design question.
+
+The placeholder is now keyed on `(spelling, bound set)`, and the spelling resolves against the
+enclosing header before the flat namespace — `Parser::def_nr_in_scope`, read from
+`parse_type_inner` and `parse_constant_value`. Sharing stays the norm: two headers with the
+same bounds reach one placeholder and one set of stubs, which is what keeps the stdlib's many
+`<T>` templates on one definition.
+
+Four spellings were broken and two of them were unreported, because the conflict diagnostic
+loft#1301 shipped compares parameter COUNTS and a signature is not an arity: different arity;
+the two arities of `-`, which both desugar to `OpMin` (loft#1300); same arity with a different
+parameter TYPE, which failed as *"expected integer, got text"*; and same parameters with a
+different RETURN type.
+
+Two details the change carries. A second placeholder is minted under a name no source can
+spell (`T#2`), so `Type::name` and every diagnostic that prints one render the spelling
+instead, and the `x?` default — which sub-parses `T {}` as SOURCE — pins the header's binding
+over the sub-parse. And the mint asks `Data::name_taken_anywhere`, not `def_nr`: the
+placeholder is registered as a store structure under `__typevar_<name>`, a registry with no
+source in its key, so two libraries each taking the first name their own source had free
+registered the same structure twice and aborted the compiler.
+
+Still refused, and now with a message that says why: ONE bound set requiring two signatures of
+one method name — an interface declaring `-` at both arities, or `<T: A + B>` where both
+declare `sizer`. There the two requirements really are on one variable and a bound method is
+reached by NAME; that is loft#1275 (`D-gen-4`).
+
+### A bounded generic that DELEGATES still owns the store it hands back (2026-09-01)
+
+`fn add<T: Addable>(a: T, b: T) -> T { a + b }` retained one record per call when its result
+was consumed inline — unbounded in a loop — while `r = add(…); r.v` was clean all along,
+because the `Set` gives the store an owner. The answer was right and nothing reported it
+(loft#1273).
+
+`scopes::inline_struct_return` lifts a call's owned aggregate into a `__lift_N` the caller
+frees, and for a monomorph it needs POSITIVE proof the return is fresh: specialisation loses
+the return dep, so the dep-based guards cannot tell a minted return from one handing back an
+argument, and lifting the latter would double free. `monomorph_return_is_fresh` reads the
+body's return sites for that proof and answered `false` here, because the tail of `{ a + b }`
+is `Call(n_OpAdd, …)` — whether a CALLEE's result is owned is not a fact that body carries.
+
+`Data` holds every definition, so the caller now resolves the tail's target and asks it the
+same three questions the fn-ref twin asks (loft#1176): has a body, does not return a borrowed
+view, and is itself fresh. One level, and one unreadable link refuses the chain — the proof
+stays positive and under-approximating.
+
+⚠ **`loft --tests` does not report a leak**, so the guard lives in
+`tests/leak_cases/clean/`, which runs a plain program on both backends; the `tests/scripts`
+file beside it carries the values, and specifically the rows that must NOT lift.
+
+
+### A format hole holding an escaped quote ended a top-level item early (2026-09-01)
+
+`"got: {shout("a\"b")}"` compiled inside `fn main` and was refused in every other function,
+with `fatal: String not correctly terminated` pointing at the closing quote of a string the
+compiler accepts one function up (loft#1271).
+
+**The lexer was never the defect**, though the message came from it —
+`Lexer::hole_closes_on_this_line` already keeps the right stack. `split_top_level`'s item
+scanner read the string FLAT, stopping at the first unescaped `"`, which is the one before
+`a`. The item then ended inside the literal, the `fn main` that FOLLOWED no longer STARTED an
+item, `is_script` stopped seeing it, and an ordinary program was desugared as a beginner
+script; the lexer was reporting the mangled source. That is why ORDER decided it: with
+`fn main` first, the misplaced boundary lands after it and the same bytes compile.
+
+`scan_string_end` now keeps the lexer's rule — inside a string `{` opens a hole (`{{`/`}}`
+are literal braces), inside a hole `"` opens a nested string, and the literal ends only at a
+`"` at hole depth 0 — which also clears the corpus sweep
+`script::tests::no_corpus_file_classifies_as_script` was failing on.
+
+
+### A bound is satisfied by a signature, not by a name (2026-09-01)
+
+`a - b` inside a `<T: Numeric>` body compiled and computed `-a`, dropping the second operand,
+on both backends with no diagnostic — and the float case answered an integer, so the result
+type was wrong too (loft#1274).
+
+`formal/interfaces.md` (G-Sat) satisfies an interface when a function with the interface's
+SIGNATURE is visible, parameter list included. `has_bound_for_method` compared only the name,
+and `-` desugars to `OpMin` at BOTH arities: `Numeric` declares `op - (self: Self) -> Self`,
+the unary negation, so a binary `-` matched it and the call bound one operand too many. It now
+compares the arity the use site passes, and `a - b` takes the refusal `Addable` already gave
+the same expression.
+
+No built-in bound offers binary subtraction — `-` being one name at two arities is why — which
+is loft#1275, a design question rather than part of this fix. `INTERFACES.md` § Standard
+library interfaces and the reference's Generics chapter both claimed a wider `Numeric` and a
+wider `Addable` than `default/01_code.loft` ships; both now describe the file.
+
+
 ### `#remove` inside a keyed range: an ICE, and then a skipped element (2026-09-01)
 
 Two defects, one behind the other (loft#1272).

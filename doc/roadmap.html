@@ -10,23 +10,29 @@
 <nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <span class="cur">Roadmap</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-a10-field-iteration-support-types.html">A10: Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>Roadmap</h1>
 <article>
-<p>Loft is under active development. Everything documented on the language pages works today. This page describes where the project is headed.</p>
+<p>Loft is under active development. Every code example on the language pages is executed by the test suite on both backends, so what they show runs today. This page describes where the project is headed.</p>
 
 <p>The project goal is <strong>browser games that anyone can play via a shared link</strong>. Native OpenGL is supported for desktop enthusiasts. Server and multiplayer features come after the single-player browser experience works.</p>
 
+<p>Since <strong>2026-06</strong> loft ships on a calendar version: a release is named for
+its month, which <code>Cargo.toml</code> spells <code>2026.6.0</code>, <code>2026.7.0</code>,
+<code>2026.8.0</code> — <code>loft --version</code> prints the one you have. The semver
+milestones below were the plan before that switch; the two numbered ones have shipped, and
+1.0.0 is still the name of the finish line rather than a month.</p>
+
 <table>
-<thead><tr><th>Version</th><th>Headline</th></tr></thead>
+<thead><tr><th>Release</th><th>Headline</th><th>Status</th></tr></thead>
 <tbody>
-<tr><td><strong>0.8.4</strong></td><td>Awesome Brick Buster — a game worth sharing</td></tr>
-<tr><td>0.8.5</td><td>Working Moros editor — paint hex scenes in the browser</td></tr>
-<tr><td>0.9.0</td><td>Fully working loft language — feature-complete + verified</td></tr>
-<tr><td>1.0.0</td><td>Totally sure everything works — IDE + multiplayer + stability contract</td></tr>
+<tr><td>0.8.4</td><td>Awesome Brick Buster — a game worth sharing</td><td>shipped 2026-04-24</td></tr>
+<tr><td>0.8.5</td><td>Language maturity</td><td>shipped 2026-06-07</td></tr>
+<tr><td>2026-06 … <strong>2026-08</strong></td><td>Monthly releases; 2026-08 is the heap-correctness one</td><td><strong>current</strong></td></tr>
+<tr><td>1.0.0</td><td>Totally sure everything works — IDE + multiplayer + stability contract</td><td>the finish line</td></tr>
 </tbody>
 </table>
 
 <!-- ── 0.8.4 ────────────────────────────────────────────────────────────── -->
 
-<h2 id="current-084">Current release — 0.8.4: Awesome Brick Buster</h2>
+<h2 id="current-084">0.8.4 (shipped 2026-04-24): Awesome Brick Buster</h2>
 
 <p>0.8.4 turns <a href="https://loft-lang.org/loft/brick-buster.html">Brick Buster</a> from a tech demo into a game someone would actually want to share with a friend, and makes sharing trivial via single-file HTML export.</p>
 
@@ -54,7 +60,7 @@
 
 <!-- ── 0.8.5 ────────────────────────────────────────────────────────────── -->
 
-<h2 id="next-085">Next — 0.8.5: Working Moros editor</h2>
+<h2 id="next-085">0.8.5 (shipped 2026-06-07): Working Moros editor</h2>
 
 <p>The Moros hex RPG scene editor runs end-to-end in the browser: load a map, paint hexes, place walls and items, see a live 3D preview, export to GLB. Web only — multiplayer comes in 1.0.0.</p>
 
@@ -74,9 +80,9 @@
 
 <h3 id="language-polish">Language polish</h3>
 <ul>
-<li><strong>Error recovery</strong> — the parser continues after a token-level failure and reports multiple errors in a single pass.</li>
-<li><strong>REPL</strong> — running <code>loft</code> with no arguments starts an interactive session; definitions persist across lines.</li>
-<li><strong>Developer warnings</strong> — Clippy-inspired lints for common mistakes.</li>
+<li><strong>Error recovery</strong> — the parser continues after a token-level failure and reports multiple errors in a single pass — <strong>shipped</strong> (a two-error program reports both in one pass).</li>
+<li><strong>REPL</strong> — running <code>loft</code> with no arguments starts an interactive session; definitions persist across lines — <strong>shipped</strong> (bare <code>loft</code> starts one and restores the last session).</li>
+<li><strong>Developer warnings</strong> — Clippy-inspired lints for common mistakes — <strong>shipped</strong> (a two-tier warning/advice set with <code>--explain</code> fix lines).</li>
 <li><strong>AOT library compilation</strong> — automatically compile libraries to native shared libs for faster startup.</li>
 <li><strong>Stdlib hygiene</strong> — name-clash warnings and a <code>std::</code> prefix for shadowed builtins; library enums in <code>match</code> arms without qualification.</li>
 </ul>
@@ -86,15 +92,15 @@
 
 <h3 id="dx">Developer experience</h3>
 <ul>
-<li>TextMate grammar for <code>.loft</code> syntax highlighting.</li>
-<li>VS Code extension with snippets and a run task.</li>
-<li>Quick-start <code>examples/</code> directory.</li>
-<li>CI covering package tests and native codegen.</li>
+<li>TextMate grammar for <code>.loft</code> syntax highlighting — <strong>shipped</strong> (<code>editors/vscode/syntaxes/loft.tmLanguage.json</code>).</li>
+<li>VS Code extension with snippets and a run task — <strong>shipped</strong> (<code>editors/vscode/</code>, plus <code>loft-lsp</code> and <code>loft-dap</code>).</li>
+<li>Quick-start <code>examples/</code> directory — <strong>shipped</strong> (<code>examples/</code>).</li>
+<li>CI covering package tests and native codegen — <strong>shipped</strong> (<code>make ci</code>).</li>
 </ul>
 
 <h3 id="packaging">Packaging and FFI</h3>
 <ul>
-<li><strong>Lock file</strong> (<code>loft.lock</code>) for reproducible builds.</li>
+<li><strong>Lock file</strong> (<code>loft.lock</code>) for reproducible builds — <strong>shipped</strong> (<code>loft install</code> writes it).</li>
 <li><strong>Generic FFI marshaller</strong> — zero-boilerplate native functions from a <code>#native</code> signature; generic <code>cdylib</code> loader scans exports into a hash map.</li>
 </ul>
 

@@ -204,6 +204,21 @@ never a store still reachable from a live binding (a use-after-free); (4) never 
 Unlike a read/write, a bad free is a genuine **fault**, not a null-continue — it corrupts the
 heap, so the discipline is a hard invariant, not a degradable value.
 
+**The `free_protected` side condition is the one a CALLEE cannot decide for itself, and it is
+enforced where the decision is made.** A free releases a store the *frame doing the freeing*
+believes it owns, and one construct hands that belief across a frame boundary: a `&`
+parameter's whole-value write-back installs a store the callee minted and displaces whatever
+the caller's binding named. The callee sees a `DbRef` and nothing else — not whether the
+caller OWNS that store. Where the caller's binding is a plain heap PARAMETER it does not
+(`calls.md` F-ParamHeap: the parameter aliases *its* caller's argument), so the store belongs
+to a frame two below and the free is an `H-FreeTwice` waiting for the real owner's own
+release, with every read in between a use-after-free. The call site is the only place that
+knows, so it MARKS the store for the duration of the call and `Stores::free_displaced`
+refuses it — the marker is how a static ownership fact reaches a callee compiled once for
+every caller (loft#1287, `scopes::scan_args`). Nothing widens: the mark names one store, the
+parameter's ENTRY store, so a REPEATED call still releases the fresh store the previous one
+installed, which the frame does own.
+
 ### The soundness bridge — a well-typed program never faults a free
 
 ```
@@ -220,8 +235,10 @@ emits a free on a store the value provably OWNS, at its last use, so LIFO holds,
 never freed, and nothing freed is later read.
 
 ⚠ **That discharge is only as strong as the checker's register, and the register is not at
-zero.** `ownership.md` is at `OPEN: 1` — `D-own-8`, *"a Join's ownership fact is true on one
-path only"* — which is a PATH-COMPLETENESS gap, precisely the property `H-Sound` leans on. So
+zero.** `ownership.md` is at `OPEN: 3` — `D-own-26` (free-deciding proxy sites that never consult
+`O-Override`), `D-own-16` (a value that reads the local it assigns never frees what it
+displaces) and `D-own-8` (*"a Join's ownership fact is true on one path only"*). The last is a
+PATH-COMPLETENESS gap, precisely the property `H-Sound` leans on. So
 the free rules below are currently discharged by a checker with an open hole in the relevant
 direction. Re-read that entry before treating a free fault here as impossible. This doc
 defines the cliff; ownership.md proves the program walks the path beside it. The
@@ -246,9 +263,9 @@ contract (this file). What remains is the SAME meta-deviation, not a heap-specif
   supplies the contract the oracle's heap-touching cases are read against.
 - **The lifetime side has the strongest standing proof, and it is not complete.** The free
   discipline's soundness (`H-Sound`) rests on [ownership.md](ownership.md), whose register was
-  at 0 when this line was written (2026-07-04) and is at **`OPEN: 1`** today: `D-own-8`, a
-  Join's ownership fact holding on one path only. That is a path-completeness gap, and
-  path-completeness is what `H-Sound` consumes — so the discharge is real but qualified.
+  at 0 when this line was written (2026-07-04) and is at **`OPEN: 3`** today, of which
+  `D-own-8` — a Join's ownership fact holding on one path only — is a path-completeness gap,
+  and path-completeness is what `H-Sound` consumes — so the discharge is real but qualified.
   ⚠ A claim about another doc's register goes stale silently; re-read the register rather
   than this sentence.
 

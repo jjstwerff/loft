@@ -347,9 +347,9 @@ Element size is computed from `self.database.size(element_type.known_type)` — 
 
 ### Multi-threading Safety
 
-A worker does **not** get a semantically-independent copy of everything to mutate. Captured parent state is **read-only** (@PLN102 C93 — a `ParentWrite` from inside a worker is a compile error, `scopes.rs`), so it is logically **shared**, not owned per-worker; only the worker-mutated stores (the element buffer, the return buffer) need to be per-worker. `Stores::clone_for_worker()` currently snapshots this **conservatively** — it takes a locked copy of every in-use store — but because captured state is *provably unwritten*, those copies are safe to elide: a worker may **read a provably-unwritten captured reference directly** rather than slicing a large read-only structure into every job (the copy-elision optimisation). Freed store slots (`.free == true`) are replaced with fresh unlocked `Store::new(100)` instances so that `State::new_worker → Stores::database` can safely re-initialise them without hitting the "Write to locked store" debug assert.
+A worker does **not** get a semantically-independent copy of everything to mutate. Captured parent state is **read-only** (@PLN102 C93 — a `ParentWrite` from inside a worker is a compile error, `scopes.rs`), so it is logically **shared**, not owned per-worker; only the worker-mutated stores (the element buffer, the return buffer) need to be per-worker. `Stores::clone_for_light_worker()` implements that: because captured state is *provably unwritten*, a worker **reads the captured stores directly** rather than slicing a large read-only structure into every job. Freed store slots (`.free == true`) are replaced with fresh unlocked `Store::new(100)` instances so that `State::new_worker → Stores::database` can safely re-initialise them without hitting the "Write to locked store" debug assert.
 
-**Read-only sharing (@PLN108, shipped 2026-07-17 — interpreter).** The per-worker byte-copy above is pure conservatism: a worker's captured parent state is read-only (@PLN102 C93 — a `ParentWrite` from a worker is a compile error), so every parent store is provably unwritten for the par's lifetime, and the dispatcher joins all workers before the borrowed parent drops. So `run_parallel_discard` / `run_parallel_queue` now **BORROW** the parent stores read-only (`clone_for_light_worker`: shares each store's `ptr`, `read_only:true`, `borrowed:true` ⇒ `Drop` skips dealloc) instead of copying — a copy-elision, no semantic change. It is **auto-selected by heap size**: `par_share_for(stores)` borrows only when `Stores::active_clone_bytes() ≥ 2 MB` (above which the saved copy beats the borrow's `thread::scope` per-call spawn); below that the cheap rayon-pool clone wins. `LOFT_PAR_SHARE=0`/`=1` force off/on. Net: a par over a large read-only structure no longer pays a copy of the whole session heap per worker (measured flat vs 53× growth). Safety is compiler-carried (the dispatcher's `&Stores` signature proves parent-unwritten) + `read_only` runtime write-panic, and it is **ASan + TSan clean** (a positive-control race fires, so the clean run is non-vacuous). `--native` par is a separate codegen path and still copies — a native analogue is deferred (see `plans/108-share-read-only-stores/`).
+**Read-only sharing (@PLN108, shipped 2026-07-17 — interpreter).** The per-worker byte-copy above is pure conservatism: a worker's captured parent state is read-only (@PLN102 C93 — a `ParentWrite` from a worker is a compile error), so every parent store is provably unwritten for the par's lifetime, and the dispatcher joins all workers before the borrowed parent drops. So `run_parallel_discard` / `run_parallel_queue` now **BORROW** the parent stores read-only (`clone_for_light_worker`: shares each store's `ptr`, `read_only:true`, `borrowed:true` ⇒ `Drop` skips dealloc) instead of copying — a copy-elision, no semantic change. There is **exactly ONE clone path** — always the read-only borrow. The original design auto-selected it by heap size (`par_share_for`, a 2 MB threshold, `LOFT_PAR_SHARE=0`/`=1`); the redesign retired both, so no data-dependent switch decides how a `par` shares (`src/parallel.rs`: *"no byte-copy, no size heuristic, no second `thread::scope` dispatcher"*). Net: a par over a large read-only structure no longer pays a copy of the whole session heap per worker (measured flat vs 53× growth). Safety is compiler-carried (the dispatcher's `&Stores` signature proves parent-unwritten) + `read_only` runtime write-panic, and it is **ASan + TSan clean** (a positive-control race fires, so the clean run is non-vacuous). `--native` par is no longer separate: `src/codegen_runtime.rs`'s dispatchers call the same `parallel::parallel_workers` template, so both backends share the borrow.
 
 ### Example
 
@@ -414,7 +414,18 @@ needed** (the iterator cannot be partitioned natively).  Normally a
 into **contiguous index ranges** (`[start,end)` per thread) and fetches
 element `i` via `vector::get_vector(input, elem_size, i)` — i.e. it needs
 **O(1) random access by index** over a known row count with a uniform
-element size.  The parser enforces this at
+element size.
+
+⚠ **`elem_size` is the width of the SLOT the container holds, not of what
+the element points at**, and the two part company for a nested collection:
+a `vector<vector<T>>` stores a 4-byte record index per row whatever `T` is.
+`par_elem_size` reached it through `type_elm`, which resolves a
+`vector<integer>` element to `integer` and answered 8 — so the worker
+strode twice per row, saw rows 0 and 2, and then read past the end, where
+C80 hands back the element's default rather than faulting. `vector<text>`
+was the one inner type that worked, because `text`'s db size is 4 by
+coincidence. A wrong stride here is silent by construction: the runtime has
+no row identity to check the fetch against (loft#1033).  The parser enforces this at
 `src/parser/collections.rs:1855` (`"par(...) requires a vector<T> input"`).
 A `for`-iterable is otherwise one of: an index-addressable vector; a
 counted range; or a **sequential cursor** (keyed B-tree/hash `OpStep`,

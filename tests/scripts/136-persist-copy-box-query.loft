@@ -20,7 +20,7 @@ struct Pin {
 }
 
 fn main() {
-  img = env_variable("LOFT_PERSIST_TEST_IMG");
+  img = env_variable("LOFT_PERSIST_TEST_IMG") ?? "";
   if img == "" { return }
 
   for t in [0, 1, 2, 3, 4, 5] {

@@ -1,0 +1,48 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The two refusals the `&`-capture fix KEEPS (loft#1276).  Its passing twin is
+// `1276-a-closure-captures-a-ref-parameter.loft`; these shapes cannot live there because a
+// file that must compile cannot also carry the ones that must not.
+//
+// 1. A `&` SCALAR written from inside a closure.  The capture holds a COPY of the caller's
+//    value — `(L-CapScalar)` — so there is no shared record for the write to land in, and
+//    before this refusal existed the program compiled and answered quietly wrong: `bump(n)`
+//    on `n = 5` gave 15 where 16 is correct, the closure's increment dropped through a
+//    parameter whose whole purpose is the write-back.  Refusing is the point; `D-clo-18` in
+//    formal/closures.md records that it is a deviation and not a decision.
+//
+// 2. A `&` parameter that is genuinely only READ.  Widening the write-walk to credit a
+//    lambda's writes must not credit a lambda's READS as well — this cell is what says the
+//    lint that was right is still right.
+//
+// @falsified-at: 9d571f60 — interpret exit 1 -> 0, interpret expectations FAIL/3 -> 3/3,
+//   native exit 1 -> 0, native expectations FAIL/3 -> 3/3.
+//
+//   On the control the read-only cells are refused for the RIGHT reason and the scalar-write
+//   cell is refused for four WRONG ones, so the expectation set as a whole fails there; here
+//   all three match.  Negative control run by hand: replacing the first expectation's text
+//   with a string nothing emits turns the file red, which is what says the cell is load-
+//   bearing rather than merely present.
+
+// ⚠ This declaration is load-bearing for the HARNESS, not for the test.  An `@EXPECT_ERROR`
+// before the first `fn`/`struct`/`enum` binds FILE-level rather than to the function under
+// it, and a file-level expectation is checked but not named in the run's report — so the
+// first cell read as *"0 expected errors"* while still being enforced.  A green line that
+// under-reports what it checked is the shape a later reader deletes as dead.
+struct Anchor1276 { unused: integer }
+
+// @EXPECT_ERROR: Cannot write to the `&` parameter 'p' from a closure
+fn pe_1276_scalar_write_from_a_closure(p: &integer) {
+  g = fn() { p += 1; };
+  g();
+}
+
+// @EXPECT_ERROR: has & but is never modified
+fn pe_1276_read_only_ref_is_still_reported(q: &integer) -> integer { q + 0 }
+
+// @EXPECT_ERROR: has & but is never modified
+fn pe_1276_read_only_ref_read_from_a_closure(r: &integer) -> integer {
+  g = fn() -> integer { r + 0 };
+  g()
+}

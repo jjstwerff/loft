@@ -208,6 +208,82 @@ fn skip_trivia(b: &[u8], mut i: usize) -> usize {
     }
 }
 
+/// The offset just past the `"` string literal whose opening quote is at `open`.
+///
+/// A loft string is not flat. `{ … }` opens a format HOLE whose contents are CODE, and code
+/// can contain another string — so `"got: {shout("a\"b")}"` is ONE literal. Stopping at the
+/// first unescaped `"` ends it after `shout(`, and the rest of the line is then read as code
+/// with a stray quote in it.
+///
+/// The cost of getting it wrong is not a bad boundary, it is a misclassified FILE:
+/// `split_top_level` ended the item early, so the `fn main` that followed no longer STARTED
+/// an item, `is_script` stopped seeing it, and an ordinary program was desugared as a
+/// beginner script. The symptom was a lexer error — *"String not correctly terminated"* — on
+/// a line the compiler accepts one function up, which is why it read as a lexer defect
+/// (loft#1271). The lexer is fine: `Lexer::hole_closes_on_this_line` already keeps this
+/// stack, and moving the same line above `fn main` compiles it.
+///
+/// The rule, mirroring that function: inside a string, `{` opens a hole (`{{` and `}}` are
+/// literal braces) and the literal ends only at a `"` seen at hole depth 0; inside a hole,
+/// `"` opens a nested string, `{`/`}` nest as code braces, and `'` / `` ` `` open literals
+/// that cannot contain one.
+fn scan_string_end(b: &[u8], open: usize) -> usize {
+    let n = b.len();
+    // `true` = inside a string literal, `false` = inside a `{…}` hole (code).
+    let mut ctx = vec![true];
+    let mut i = open + 1;
+    while i < n {
+        if b[i] == b'\\' {
+            i += 2;
+            continue;
+        }
+        if *ctx.last().unwrap_or(&true) {
+            match b[i] {
+                b'{' | b'}' if b.get(i + 1).copied() == Some(b[i]) => i += 2,
+                b'{' => {
+                    ctx.push(false);
+                    i += 1;
+                }
+                b'"' => {
+                    ctx.pop();
+                    if ctx.is_empty() {
+                        return i + 1;
+                    }
+                    i += 1;
+                }
+                _ => i += 1,
+            }
+        } else {
+            match b[i] {
+                b'"' => {
+                    ctx.push(true);
+                    i += 1;
+                }
+                b'{' => {
+                    ctx.push(false);
+                    i += 1;
+                }
+                b'}' => {
+                    ctx.pop();
+                    i += 1;
+                }
+                // A char or raw-string literal inside a hole cannot itself hold a hole, so
+                // it is skipped whole rather than pushed.
+                b'\'' | b'`' => {
+                    let close = b[i];
+                    i += 1;
+                    while i < n && b[i] != close {
+                        i += if b[i] == b'\\' { 2 } else { 1 };
+                    }
+                    i += 1;
+                }
+                _ => i += 1,
+            }
+        }
+    }
+    n
+}
+
 /// Scan one top-level item from `start`, tracking bracket depth and skipping string
 /// contents (both `"…"` and `` `…` `` raw strings) and comments, and return the offset
 /// just past its end: the first depth-0 `;`, the `}` that closes a top-level body back
@@ -237,11 +313,7 @@ fn scan_item_end(src: &str, start: usize, stmt_boundary: bool) -> usize {
     while i < n {
         match b[i] {
             b'"' => {
-                i += 1;
-                while i < n && b[i] != b'"' {
-                    i += if b[i] == b'\\' { 2 } else { 1 };
-                }
-                i += 1;
+                i = scan_string_end(b, i);
                 continue;
             }
             b'`' => {
@@ -464,7 +536,7 @@ fn is_fn_main(item: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_script, split_top_level};
+    use super::{is_script, scan_string_end, split_top_level};
 
     // ── injected-fault controls ──────────────────────────────────────────────
     #[test]
@@ -693,6 +765,78 @@ mod tests {
     fn split_counts_top_level_items() {
         let items = split_top_level("fn a() {}\nfn b() {}\nstruct S { x: integer }\n");
         assert_eq!(items.len(), 3, "items: {items:?}");
+    }
+
+    /// A format hole holding a string with an ESCAPED QUOTE is one literal, and the item
+    /// scan must not end inside it (loft#1271).
+    ///
+    /// `"got: {shout("a\"b")}"` is a single string: `{` opens a hole, the `"` inside it
+    /// opens a NESTED string, and only the `"` at hole depth 0 closes the literal. Reading
+    /// it flat ended the item after `shout(`, so the `fn main` that followed no longer
+    /// STARTED an item, `is_script` stopped seeing it, and an ordinary program was desugared
+    /// as a beginner script — surfacing as a LEXER error on a line the compiler accepts.
+    ///
+    /// Order is what made it look mysterious and is why both orders are here: with `fn main`
+    /// FIRST the misplaced boundary falls after it, `is_fn_main` still matches, and the same
+    /// bytes compile.
+    #[test]
+    fn an_escaped_quote_inside_a_hole_does_not_end_the_item() {
+        let probe_first = "fn shout(v: text) -> text { \"{v}!\" }\n\
+                           fn probe() { println(\"got: {shout(\"a\\\"b\")}\"); }\n\
+                           fn main() { probe(); }\n";
+        assert!(
+            !is_script(probe_first),
+            "a file whose `fn main` follows the escaped quote is not a script: {:?}",
+            split_top_level(probe_first)
+        );
+        assert_eq!(
+            split_top_level(probe_first).len(),
+            3,
+            "three defs, and the escaped quote splits none of them: {:?}",
+            split_top_level(probe_first)
+        );
+
+        // The order that always worked — the control for the sentence above.
+        let main_first = "fn shout(v: text) -> text { \"{v}!\" }\n\
+                          fn main() { probe(); }\n\
+                          fn probe() { println(\"got: {shout(\"a\\\"b\")}\"); }\n";
+        assert!(
+            !is_script(main_first),
+            "control: main first is not a script"
+        );
+        assert_eq!(split_top_level(main_first).len(), 3, "control: three items");
+    }
+
+    /// The scanner's own rule, read directly rather than through `is_script`: `{{`/`}}` are
+    /// literal braces, a hole nests, and a string inside a hole is skipped whole.
+    #[test]
+    fn scan_string_end_spans_holes_and_their_nested_strings() {
+        let cases: &[&str] = &[
+            r#""plain""#,
+            // the loft#1271 shape: a hole holding a string that holds an escaped quote
+            r#""got: {shout("a\"b")}""#,
+            // `{{`/`}}` are literal braces and open no hole
+            r#""{{literal}} {f("x")}""#,
+            // a `}` INSIDE a nested string does not close the hole around it
+            r#""{f("}")}""#,
+            // a plain escape, with no hole anywhere
+            r#""esc \" inside""#,
+        ];
+        for src in cases {
+            let b = src.as_bytes();
+            assert_eq!(
+                scan_string_end(b, 0),
+                b.len(),
+                "the whole literal is one string: {src}"
+            );
+        }
+        // Two literals side by side stop at the first one's own closing quote.
+        let two = r#""a" + "b""#;
+        assert_eq!(
+            scan_string_end(two.as_bytes(), 0),
+            3,
+            "first literal is `\"a\"`"
+        );
     }
 
     // ── the corpus sweep: EVERY file the compiler accepts must be NOT-a-script ──

@@ -32,3 +32,4 @@ F89	exempt	The test runner runs `fn test_*`. Every file in this directory is alr
 F101	exempt	`loft build` produces artefacts for declared targets. The demonstration is the artefact set on disk, covered by the build/deliver tests.
 F102	exempt	The Android target produces a signed APK. Proven by `tests/android_target.rs`; a `.loft` file cannot package itself.
 F103	exempt	`deliver` / `expose` hand a value to JAVASCRIPT. The other half of the demonstration is JS, so it lives in the browser-interop suites rather than in a loft file that has no host to hand anything to.
+F43	exempt	The example needs a REGISTRY package (`use random`), and a `use` that has to resolve one cannot run inside the catalogue's per-example timeout on a cold cache — so the entry shows a fragment on purpose and says so. The functions themselves are covered by the stdlib random tests.

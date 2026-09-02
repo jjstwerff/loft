@@ -29,7 +29,7 @@ const TICK_INT_US: integer = 33333;
 const SIGHT_RANGE: float   = 80.0;
 
 fn env_int(name: text, dflt: integer) -> integer {
-  raw = env_variable(name);
+  raw = env_variable(name) ?? "";
   if raw == "" { dflt } else { raw as integer }
 }
 

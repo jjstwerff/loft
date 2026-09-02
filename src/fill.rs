@@ -418,7 +418,9 @@ fn range_default(s: &mut State) {
     let v_val = *s.get_stack::<i64>();
     let new_value = {
         let _rv = v_val;
-        if _rv == i64::MIN || (_rv >= v_lo && _rv <= v_hi) {
+        if _rv == i64::MIN {
+            if v_dflt == i64::MIN { _rv } else { v_dflt }
+        } else if _rv >= v_lo && _rv <= v_hi {
             _rv
         } else {
             s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::RangeDefaulted {
@@ -1442,9 +1444,7 @@ fn free_ref_tag(s: &mut State) {
 fn free_ref_if_distinct(s: &mut State) {
     let v_witness = *s.get_stack::<DbRef>();
     let v_placeholder = *s.get_stack::<DbRef>();
-    if v_placeholder.store_nr != v_witness.store_nr {
-        s.database.free(&v_placeholder);
-    }
+    s.database.free_displaced(&v_placeholder, &v_witness);
 }
 
 fn free_ref_or_hand_up(s: &mut State) {
@@ -2327,10 +2327,10 @@ fn print(s: &mut State) {
     crate::loft_host_print(v_v1.str().as_ptr(), v_v1.str().len());
     #[cfg(all(not(feature = "wasm"), not(target_arch = "wasm32")))]
     if !crate::rpc::print_or_capture(v_v1.str()) {
-        print!("{}", v_v1.str());
+        crate::codegen_runtime::host_print(v_v1.str());
     }
     #[cfg(all(not(feature = "wasm"), target_arch = "wasm32", target_os = "wasi"))]
-    print!("{}", v_v1.str());
+    crate::codegen_runtime::host_print(v_v1.str());
     #[cfg(feature = "wasm")]
     crate::wasm::output_push(v_v1.str());
 }

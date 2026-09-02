@@ -128,7 +128,7 @@ fn a_browser_page_reads_a_store_out_of_its_own_filesystem() {
         &src,
         "struct Rec { r_key: text, r_n: integer }\n\
          fn main() {\n\
-         \x20 if env_variable(\"MAKE_STORE\") != \"\" {\n\
+         \x20 if (env_variable(\"MAKE_STORE\") ?? \"\") != \"\" {\n\
          \x20   h: hash<Rec[r_key]> = [];\n\
          \x20   h[\"a\"] = Rec { r_key: \"a\", r_n: 7 };\n\
          \x20   println(\"persist={store_persist_copy(h, \\\"page.store\\\")}\");\n\

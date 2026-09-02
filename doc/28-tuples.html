@@ -20,22 +20,26 @@
 <style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
 </head>
 <body>
-<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <a href="libraries.html">Libraries</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <span class="cur">Tuples</span> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <a href="38-call-it-yourself.html">Call it yourself</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <a href="libraries.html">Libraries</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <span class="cur">Tuples</span> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <a href="38-call-it-yourself.html">Call it yourself</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries.html">Optional C libraries</a> · <a href="stdlib-system-directories.html">System directories</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations.html">Vector operations</a> · <a href="stdlib-stack-traces.html">Stack traces</a> · <a href="stdlib-coroutines.html">Coroutines</a> · <a href="stdlib-json.html">JSON</a> · <a href="stdlib-type-reflection.html">Type reflection</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>Tuples</h1>
 <article>
 <p>A tuple groups a fixed number of values of possibly different types. You do not need to give a tuple a name — use it directly where you need to pass or return multiple values together. Access individual elements with <code>.0</code>, <code>.1</code>, etc.</p>
 <h2 id="creating-tuples">Creating tuples</h2>
 <p>Write the elements in parentheses, separated by commas. The compiler infers the element types from what you put in. You can add an explicit type annotation when needed.</p>
+<h2 id="elements-of-different-types">Elements of different types</h2>
+<p>The elements do not have to share a type — this is the usual reason to reach for a tuple instead of a vector.</p>
 <h2 id="accessing-elements">Accessing elements</h2>
-<p>Use <code>.0</code>, <code>.1</code>, <code>.2</code>, ... to read individual elements.</p>
+<p>Use <code>.0</code>, <code>.1</code>, <code>.2</code>, ... to read individual elements. The index is part of the program text, so it is checked when you compile: naming an element the tuple does not have is an error, never a null.</p>
 <h2 id="modifying-elements">Modifying elements</h2>
 <p>Tuple elements can be reassigned like ordinary variables.</p>
 <h2 id="tuples-as-function-parameters">Tuples as function parameters</h2>
-<p>Pass a tuple to a function by value (a copy) or by reference. A value parameter gets its own copy — changes inside the function do not affect the caller. A reference parameter (<code>&amp;</code>) gives the function a direct link to the caller's tuple so it can modify individual elements in place.</p>
+<p>Pass a tuple to a function by value (a copy) or by reference. A value parameter gets its own copy — changes inside the function do not affect the caller. A reference parameter (<code>&amp;</code>) gives the function a direct link to the caller's tuple so it can modify individual elements in place. A <code>&amp;</code> tuple holds scalar elements only.</p>
 <h2 id="returning-tuples">Returning tuples</h2>
 <p>A function can return a tuple to give back more than one value at once.</p>
 <h2 id="destructuring">Destructuring</h2>
 <p>Assign a tuple to multiple names in one step using the <code>(a, b) = expr</code> form. This is concise when a function returns a tuple and you need both values.</p>
+<h2 id="comparing-tuples">Comparing tuples</h2>
+<p>Two tuples of the same shape compare element by element, left to right.</p>
 <h2 id="three-or-more-elements">Three or more elements</h2>
 <p>Tuples can have any number of elements.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">min_max</span>(lo: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hi: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>) {
@@ -50,6 +54,15 @@
   pair.<span class="nm">0</span> = pair.<span class="nm">1</span>;
   pair.<span class="nm">1</span> = tmp;
 }</code></pre>
+<p>Writes to its own copy.  The caller's tuple is a different tuple, so the write below is invisible outside this function.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">doubled_first</span>(p: (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>)) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  p.<span class="nm">0</span> = p.<span class="nm">0</span> * <span class="nm">2</span>;
+  p.<span class="nm">0</span> + p.<span class="nm">1</span>
+}</code></pre>
+<p>A tuple is the natural return type when the two values have different types.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">label_and_score</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>) {
+  <span class="kw">if</span> n &gt;= <span class="nm">50</span> { (<span class="st">"pass"</span>, n) } <span class="kw">else</span> { (<span class="st">"fail"</span>, n) }
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="creating-tuples">Creating tuples</h2>
 <pre><code>  t = (<span class="nm">10</span>, <span class="nm">20</span>);
@@ -58,15 +71,31 @@
 <p>Type annotation</p>
 <pre><code>  w: (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>) = (<span class="nm">3</span>, <span class="nm">4</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(w.<span class="nm">0</span> + w.<span class="nm">1</span> == <span class="nm">7</span>, <span class="st">"annotated sum: {w.0+w.1}"</span>);</code></pre>
+<h2 id="elements-of-different-types">Elements of different types</h2>
+<p>Each element keeps its own type, and <code>.0</code> / <code>.1</code> read them as that type.</p>
+<pre><code>  entry = (<span class="nm">1</span>, <span class="st">"one"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(entry.<span class="nm">0</span> == <span class="nm">1</span>, <span class="st">"entry.0: {entry.0}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(entry.<span class="nm">1</span> == <span class="st">"one"</span>, <span class="st">"entry.1: {entry.1}"</span>);</code></pre>
+<pre><code>  mixed: (<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">boolean</a></span>) = (<span class="st">"pi"</span>, <span class="nm">3.5</span>, <span class="kw">true</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mixed.<span class="nm">0</span> == <span class="st">"pi"</span>, <span class="st">"mixed.0: {mixed.0}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mixed.<span class="nm">1</span> == <span class="nm">3.5</span>, <span class="st">"mixed.1: {mixed.1}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mixed.<span class="nm">2</span>, <span class="st">"mixed.2: {mixed.2}"</span>);</code></pre>
+<p>A tuple element may itself be a tuple.</p>
+<pre><code>  nested = (<span class="nm">1</span>, (<span class="nm">2</span>, <span class="nm">3</span>));
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(nested.<span class="nm">1.0</span> == <span class="nm">2</span> &amp;&amp; nested.<span class="nm">1.1</span> == <span class="nm">3</span>, <span class="st">"nested: {nested.1.0},{nested.1.1}"</span>);</code></pre>
 <h2 id="modifying-elements">Modifying elements</h2>
 <pre><code>  v = (<span class="nm">1</span>, <span class="nm">2</span>);
   v.<span class="nm">0</span> = <span class="nm">10</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(v.<span class="nm">0</span> + v.<span class="nm">1</span> == <span class="nm">12</span>, <span class="st">"after assign: {v.0}+{v.1}"</span>);</code></pre>
-<h2 id="tuples-as-value-parameters">Tuples as value parameters</h2>
+<h2 id="tuples-as-function-parameters">Tuples as function parameters</h2>
+<p><code>doubled_first</code> writes to its parameter and returns what it computed. The caller's tuple still reads 10 — the parameter was a copy of it.</p>
 <pre><code>  p = (<span class="nm">10</span>, <span class="nm">20</span>);
-  sum = p.<span class="nm">0</span> + p.<span class="nm">1</span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">30</span>, <span class="st">"sum: {sum}"</span>);</code></pre>
+  inner = <span class="fn-call">doubled_first</span>(p);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(inner == <span class="nm">40</span>, <span class="st">"the function saw its own doubled copy: {inner}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(p.<span class="nm">0</span> == <span class="nm">10</span>, <span class="st">"and the caller's tuple is untouched: {p.0}"</span>);</code></pre>
+<p>⚠ Writing to a TEXT element of a value parameter — <code>p.1 = "…"</code> where the parameter is <code>(integer, text)</code> — will not compile on --native today, though the interpreter runs it (loft#1278).  Until that closes, copy the parameter into a local first and write there: <code>q = p; q.1 = "…";</code>.</p>
 <h2 id="tuples-as-reference-parameters-swap-in-place">Tuples as reference parameters (swap in place)</h2>
+<p>A <code>&amp;</code> tuple holds scalar elements only.  <code>&amp;(text, …)</code> is refused when you compile, naming the element type — text lives on the heap, and a reference tuple has nowhere to put it.</p>
 <pre><code>  pair = (<span class="nm">3</span>, <span class="nm">7</span>);
   <span class="fn-call">swap_ints</span>(pair);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(pair.<span class="nm">0</span> == <span class="nm">7</span> &amp;&amp; pair.<span class="nm">1</span> == <span class="nm">3</span>, <span class="st">"after swap: ({pair.0},{pair.1})"</span>);</code></pre>
@@ -78,17 +107,33 @@
 <pre><code>  bounds2 = <span class="fn-call">min_max</span>(<span class="nm">1</span>, <span class="nm">9</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bounds2.<span class="nm">0</span> == <span class="nm">1</span>, <span class="st">"min2: {bounds2.0}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bounds2.<span class="nm">1</span> == <span class="nm">9</span>, <span class="st">"max2: {bounds2.1}"</span>);</code></pre>
+<p>A returned tuple with elements of different types works the same way.</p>
+<pre><code>  graded = <span class="fn-call">label_and_score</span>(<span class="nm">72</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(graded.<span class="nm">0</span> == <span class="st">"pass"</span> &amp;&amp; graded.<span class="nm">1</span> == <span class="nm">72</span>, <span class="st">"graded: {graded.0},{graded.1}"</span>);</code></pre>
 <h2 id="destructuring">Destructuring</h2>
 <pre><code>  (lo, hi) = <span class="fn-call">min_max</span>(<span class="nm">8</span>, <span class="nm">3</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(lo == <span class="nm">3</span>, <span class="st">"destructured lo: {lo}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(hi == <span class="nm">8</span>, <span class="st">"destructured hi: {hi}"</span>);</code></pre>
+<p>Destructuring works for mixed types too, and for more than two names.</p>
+<pre><code>  (name, score) = <span class="fn-call">label_and_score</span>(<span class="nm">20</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(name == <span class="st">"fail"</span> &amp;&amp; score == <span class="nm">20</span>, <span class="st">"destructured mixed: {name},{score}"</span>);</code></pre>
+<h2 id="comparing-tuples">Comparing tuples</h2>
+<p>The first element decides; later elements are consulted only while the earlier ones are equal.  Text elements compare by value.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">1</span>, <span class="nm">9</span>) &lt; (<span class="nm">2</span>, <span class="nm">0</span>), <span class="st">"the first element decides"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">1</span>, <span class="nm">9</span>) &lt; (<span class="nm">1</span>, <span class="nm">10</span>), <span class="st">"it ties, so the second decides"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!((<span class="nm">1</span>, <span class="nm">9</span>) &lt; (<span class="nm">1</span>, <span class="nm">9</span>)), <span class="st">"identical is not strictly less"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">1</span>, <span class="nm">9</span>) &lt;= (<span class="nm">1</span>, <span class="nm">9</span>), <span class="st">"but it is less-or-equal"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">1</span>, <span class="st">"abc"</span>) == (<span class="nm">1</span>, <span class="st">"abc"</span>), <span class="st">"text compares by value, not identity"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">1</span>, <span class="st">"abc"</span>) != (<span class="nm">1</span>, <span class="st">"abd"</span>), <span class="st">"and differing text is not equal"</span>);</code></pre>
 <h2 id="three-or-more-elements">Three or more elements</h2>
 <pre><code>  u = (<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u.<span class="nm">0</span> + u.<span class="nm">1</span> + u.<span class="nm">2</span> == <span class="nm">6</span>, <span class="st">"triple sum: {u.0}+{u.1}+{u.2}"</span>);</code></pre>
 <pre><code>  triple = (<span class="nm">10</span>, <span class="nm">20</span>, <span class="nm">30</span>);
   triple.<span class="nm">1</span> = <span class="nm">99</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(triple.<span class="nm">0</span> == <span class="nm">10</span> &amp;&amp; triple.<span class="nm">1</span> == <span class="nm">99</span> &amp;&amp; triple.<span class="nm">2</span> == <span class="nm">30</span>,
-    <span class="st">"triple modified: ({triple.0},{triple.1},{triple.2})"</span>);
+    <span class="st">"triple modified: ({triple.0},{triple.1},{triple.2})"</span>);</code></pre>
+<pre><code>  wide = (<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>, <span class="nm">6</span>, <span class="nm">7</span>, <span class="nm">8</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(wide.<span class="nm">7</span> == <span class="nm">8</span>, <span class="st">"eight elements, last one reachable: {wide.7}"</span>);
 }</code></pre>
 <section id="loft-panel" class="loft-panel" hidden>
 <h2>Run it yourself</h2>
@@ -113,8 +158,13 @@
 // Write the elements in parentheses, separated by commas.
 // The compiler infers the element types from what you put in.
 // You can add an explicit type annotation when needed.
+// ## Elements of different types
+// The elements do not have to share a type — this is the usual reason to
+// reach for a tuple instead of a vector.
 // ## Accessing elements
 // Use '.0', '.1', '.2', ... to read individual elements.
+// The index is part of the program text, so it is checked when you compile:
+// naming an element the tuple does not have is an error, never a null.
 // ## Modifying elements
 // Tuple elements can be reassigned like ordinary variables.
 // ## Tuples as function parameters
@@ -123,11 +173,14 @@
 // affect the caller.
 // A reference parameter ('&amp;') gives the function a direct link to the caller's
 // tuple so it can modify individual elements in place.
+// A '&amp;' tuple holds scalar elements only.
 // ## Returning tuples
 // A function can return a tuple to give back more than one value at once.
 // ## Destructuring
 // Assign a tuple to multiple names in one step using the '(a, b) = expr' form.
 // This is concise when a function returns a tuple and you need both values.
+// ## Comparing tuples
+// Two tuples of the same shape compare element by element, left to right.
 // ## Three or more elements
 // Tuples can have any number of elements.
 
@@ -145,6 +198,18 @@ fn swap_ints(pair: &amp;(integer, integer)) {
   pair.1 = tmp;
 }
 
+// Writes to its own copy.  The caller's tuple is a different tuple, so the
+// write below is invisible outside this function.
+fn doubled_first(p: (integer, integer)) -&gt; integer {
+  p.0 = p.0 * 2;
+  p.0 + p.1
+}
+
+// A tuple is the natural return type when the two values have different types.
+fn label_and_score(n: integer) -&gt; (text, integer) {
+  if n &gt;= 50 { ("pass", n) } else { ("fail", n) }
+}
+
 fn main() {
   // ## Creating tuples
   t = (10, 20);
@@ -155,17 +220,43 @@ fn main() {
   w: (integer, integer) = (3, 4);
   assert(w.0 + w.1 == 7, "annotated sum: {w.0+w.1}");
 
+  // ## Elements of different types
+  // Each element keeps its own type, and '.0' / '.1' read them as that type.
+  entry = (1, "one");
+  assert(entry.0 == 1, "entry.0: {entry.0}");
+  assert(entry.1 == "one", "entry.1: {entry.1}");
+
+  mixed: (text, float, boolean) = ("pi", 3.5, true);
+  assert(mixed.0 == "pi", "mixed.0: {mixed.0}");
+  assert(mixed.1 == 3.5, "mixed.1: {mixed.1}");
+  assert(mixed.2, "mixed.2: {mixed.2}");
+
+  // A tuple element may itself be a tuple.
+  nested = (1, (2, 3));
+  assert(nested.1.0 == 2 &amp;&amp; nested.1.1 == 3, "nested: {nested.1.0},{nested.1.1}");
+
   // ## Modifying elements
   v = (1, 2);
   v.0 = 10;
   assert(v.0 + v.1 == 12, "after assign: {v.0}+{v.1}");
 
-  // ## Tuples as value parameters
+  // ## Tuples as function parameters
+  // 'doubled_first' writes to its parameter and returns what it computed.
+  // The caller's tuple still reads 10 — the parameter was a copy of it.
   p = (10, 20);
-  sum = p.0 + p.1;
-  assert(sum == 30, "sum: {sum}");
+  inner = doubled_first(p);
+  assert(inner == 40, "the function saw its own doubled copy: {inner}");
+  assert(p.0 == 10, "and the caller's tuple is untouched: {p.0}");
+
+  // ⚠ Writing to a TEXT element of a value parameter — 'p.1 = "…"' where the
+  // parameter is '(integer, text)' — will not compile on --native today,
+  // though the interpreter runs it (loft#1278).  Until that closes, copy the
+  // parameter into a local first and write there: 'q = p; q.1 = "…";'.
 
   // ## Tuples as reference parameters (swap in place)
+  // A '&amp;' tuple holds scalar elements only.  '&amp;(text, …)' is refused when you
+  // compile, naming the element type — text lives on the heap, and a reference
+  // tuple has nowhere to put it.
   pair = (3, 7);
   swap_ints(pair);
   assert(pair.0 == 7 &amp;&amp; pair.1 == 3, "after swap: ({pair.0},{pair.1})");
@@ -180,10 +271,28 @@ fn main() {
   assert(bounds2.0 == 1, "min2: {bounds2.0}");
   assert(bounds2.1 == 9, "max2: {bounds2.1}");
 
+  // A returned tuple with elements of different types works the same way.
+  graded = label_and_score(72);
+  assert(graded.0 == "pass" &amp;&amp; graded.1 == 72, "graded: {graded.0},{graded.1}");
+
   // ## Destructuring
   (lo, hi) = min_max(8, 3);
   assert(lo == 3, "destructured lo: {lo}");
   assert(hi == 8, "destructured hi: {hi}");
+
+  // Destructuring works for mixed types too, and for more than two names.
+  (name, score) = label_and_score(20);
+  assert(name == "fail" &amp;&amp; score == 20, "destructured mixed: {name},{score}");
+
+  // ## Comparing tuples
+  // The first element decides; later elements are consulted only while the
+  // earlier ones are equal.  Text elements compare by value.
+  assert((1, 9) &lt; (2, 0), "the first element decides");
+  assert((1, 9) &lt; (1, 10), "it ties, so the second decides");
+  assert(!((1, 9) &lt; (1, 9)), "identical is not strictly less");
+  assert((1, 9) &lt;= (1, 9), "but it is less-or-equal");
+  assert((1, "abc") == (1, "abc"), "text compares by value, not identity");
+  assert((1, "abc") != (1, "abd"), "and differing text is not equal");
 
   // ## Three or more elements
   u = (1, 2, 3);
@@ -193,6 +302,9 @@ fn main() {
   triple.1 = 99;
   assert(triple.0 == 10 &amp;&amp; triple.1 == 99 &amp;&amp; triple.2 == 30,
     "triple modified: ({triple.0},{triple.1},{triple.2})");
+
+  wide = (1, 2, 3, 4, 5, 6, 7, 8);
+  assert(wide.7 == 8, "eight elements, last one reachable: {wide.7}");
 }
 </pre>
 <style>.loft-panel{margin:2em 0;padding:1em;border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa}.loft-panel h2{margin-top:0}.lp-note{color:#57606a;font-size:0.9em;margin:0 0 0.8em}.lp-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:0.8em}.loft-panel button{background:#2563eb;color:#fff;border:0;border-radius:4px;padding:5px 14px;font-size:0.9em;font-weight:600;cursor:pointer}.loft-panel button:disabled{opacity:0.4;cursor:default}.lp-status{font-size:0.85em;color:#57606a}.lp-status.lp-ok{color:#1a7f37}.lp-status.lp-err{color:#cf222e}.lp-status.lp-info{color:#57606a}.lp-output{background:#fff;border:1px solid #d0d7de;border-radius:4px;padding:8px;min-height:2.2em;max-height:16em;overflow:auto;white-space:pre-wrap;margin:0 0 0.8em}.lp-frame{background:#fff;border:1px solid #d0d7de;border-radius:4px;padding:8px;margin-bottom:0.8em}.lp-frame-head{font-size:0.85em;color:#57606a;margin-bottom:6px}.lp-locals{display:flex;gap:6px;flex-wrap:wrap}.lp-local,.lp-callable{background:#eaeef2;border-radius:3px;padding:2px 6px;font-size:0.85em;cursor:pointer}.lp-local:hover,.lp-callable:hover{background:#d0d7de}.lp-callables{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:0.8em}.lp-prompt{display:flex;gap:6px;align-items:center}.lp-caret{color:#2563eb;font-weight:700}.lp-prompt input{flex:1;padding:6px 8px;border:1px solid #d0d7de;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.9em}.lp-log{margin-top:0.6em;display:flex;flex-direction:column;gap:4px;max-height:14em;overflow:auto}.lp-row{display:flex;gap:8px;align-items:baseline;font-size:0.9em}.lp-q{color:#2563eb;flex:0 0 auto}.lp-a{color:#1f2328;word-break:break-word}.lp-row.lp-warn .lp-a{color:#9a6700}.lp-lines{margin-top:1em}.lp-lines summary{cursor:pointer;font-size:0.9em;color:#57606a}.lp-src{margin:0.6em 0 0;padding-left:3.5em;background:#fff;border:1px solid #d0d7de;border-radius:4px;max-height:20em;overflow:auto}.lp-line{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.82em;white-space:pre;cursor:pointer;padding:0 4px}.lp-line:hover{background:#eaeef2}.lp-line.lp-break{background:#ffebe9;outline:1px solid #cf222e}@media print{.loft-panel{display:none}}</style>

@@ -6,6 +6,8 @@
 // Loaded after 03_text.loft.  These types are used by the stack_trace()
 // native function (TR1.3) to expose call-frame information to loft programs.
 
+// ---  Stack traces  ---
+
 /// Typed union of inspectable argument/variable values.
 /// Each variant wraps one primitive type so that match expressions can
 /// recover the concrete value from a StackFrame's argument list.

@@ -1,0 +1,8 @@
+// @PLN152 phase B — overflow into a u16 slot.
+// Rule: formal/types.md spare-code table + (E-Uncomp-NN).
+// @EXPECT: a06_ovf_u16 = 0
+fn main() {
+  x: u16 = 65530;
+  x += 10;
+  println("a06_ovf_u16 = {x}");
+}

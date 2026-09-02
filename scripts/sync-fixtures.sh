@@ -129,6 +129,21 @@ EOF
 #   rejects).  Drop this line when loft-libs-net ships the `text?` migration
 #   (the web/server republish) and bump PINNED_REFS instead.
 #
+# - game_protocol/examples/*.loft (12 files) — loft#1302: `env_variable` now
+#   answers null for a variable that is not set, where it used to answer `""`.
+#   Every one of these examples reads a port or a delay with the idiom
+#   `raw = env_variable(N); if raw == "" { default }`, and null is not `""`, so
+#   without the fixture's `?? ""` the default branch stops firing and the URL
+#   becomes `ws://localhost:{null}/`.  The `?? ""` restores the previous answer
+#   exactly and is the spelling 79 other call sites in this repo already used.
+#   ⚠ This one is NOT only a fixture concern: game_protocol-v0.1.2 AND the
+#   current v0.1.3 both carry the bare idiom, so the published library needs the
+#   same edit — the fixture patch keeps the suite honest, it does not make the
+#   shipped package correct.  Drop these lines when loft-libs-net ships a
+#   game_protocol tag carrying `?? ""` and bump PINNED_REFS instead.
+#   (Same shape as the web `text?` patch above — a null-semantics change the
+#   upstream tag predates.)
+#
 # Fixture files the canonical repo does NOT HAVE AT ALL — a fork, not a patch.
 #
 # ⚠ THIS LIST IS GATED, AND `LOCAL_PATCHES` IS NOT.  The distinction is the point: a
@@ -173,6 +188,19 @@ web/src/web.loft
 # the fixture is the newer artifact and the tag is the stale one.
 web/tests/pack.loft
 time/src/time.loft
+# --- loft#1302 env_variable answers null when unset -------------------------------
+game_protocol/examples/tictactoe_client_v2.loft
+game_protocol/examples/tictactoe_client_v3_probe.loft
+game_protocol/examples/tictactoe_server_v2.loft
+game_protocol/examples/tictactoe_server_v3.loft
+game_protocol/examples/v5_t1_binary_client.loft
+game_protocol/examples/v5_t1_binary_server.loft
+game_protocol/examples/v5_t2_session_blobs_client.loft
+game_protocol/examples/v5_t2_session_blobs_server.loft
+game_protocol/examples/v5_t3_n_clients_client.loft
+game_protocol/examples/v5_t3_n_clients_server.loft
+game_protocol/examples/v5_t4_catch_up_client.loft
+game_protocol/examples/v5_t4_catch_up_server.loft
 game_protocol/examples/tictactoe_client_v2.loft
 game_protocol/examples/tictactoe_client_v3_probe.loft
 game_protocol/examples/v5_t1_binary_client.loft

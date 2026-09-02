@@ -200,6 +200,32 @@ pub struct Parser {
     /// True while parsing an expression inside a format string `{…}`.
     /// Prevents the `v: type = expr` annotation from consuming `:`.
     pub(crate) in_format_expr: bool,
+    /// Is the value being parsed the OPERAND of a unary prefix operator (`-x`, `!x`, `~x`)?
+    ///
+    /// The assignment's destination hint — `code` arriving as `Value::Var(dest)`, meaning
+    /// "build here instead of into a temp" — is valid only for the OUTERMOST value of a
+    /// right-hand side, and the three prefix handlers pass it straight into their operand.
+    /// `m = -S { … }` therefore built the literal into `m`, which is also where the NEGATION's
+    /// result lands, and the frame then freed a reference that no longer described it
+    /// (loft#1304).  `Parser::parse_object` declines the hint while this is set.
+    ///
+    /// A flag rather than a fresh `Value` for the operand: the hint reaches `parse_object`
+    /// through a `&mut Value` threaded down several frames, and swapping it out here would
+    /// also take the in-place path away from a vector literal and a comprehension, which are
+    /// not what broke.
+    pub(crate) prefix_operand: bool,
+    /// Set while `Parser::parse_object` RE-parses a literal with the destination hint declined.
+    ///
+    /// The hint is only valid for the outermost value of a right-hand side, and whether a
+    /// literal is that can only be known once its body has been consumed and the next token
+    /// read.  So the check happens at the END — a single-token `peek_token`, which takes
+    /// `&self` and is transparent, unlike a walk past the body (loft#1304: a multi-token
+    /// look-ahead leaves `prev_end` at the end of the scan and shifts every later caret).
+    /// A literal that turns out to be a sub-expression is then parsed AGAIN from its own
+    /// `link`, through the abandon path the field loop already uses, with this set.
+    ///
+    /// One retry, never two: the flag both requests the second parse and stops it asking again.
+    pub(crate) inplace_hint_declined: bool,
     /// True while parsing the LHS of a tuple destructuring — `(a, b) = expr`.
     /// The names there are BINDINGS, exactly like the `x` in `x = expr`, so a
     /// name that also belongs to a definition must still mint a variable
@@ -333,6 +359,16 @@ pub struct Parser {
     /// Whether [`Parser::assign_target`] is being REPLACED (`=`) rather than appended to.
     /// Meaningless while `assign_target` is `u16::MAX`.
     pub(crate) assign_replaces: bool,
+    /// The user-visible heap PARAMETER whose whole-binding reassignment already carried its
+    /// own `(F-ParamRebind)` lowering; `u16::MAX` otherwise.  Read and cleared by
+    /// [`Parser::parse_assign_op`], which supplies that lowering for every OTHER right-hand
+    /// side (loft#1290).
+    ///
+    /// A struct LITERAL builds IN PLACE, so its detach-and-mint has to sit inside
+    /// `parse_object` between the construction's own ops; every other spelling produces a
+    /// finished value the statement can be wrapped around.  Two sites, one rule, and this
+    /// says which of them ran.
+    pub(crate) rebind_lowered: u16,
     /// @PLN86 step 0.1 — true while parsing the BODY of a sandboxed def.  Gates
     /// the parser nesting guard so it never touches trusted code (zero cost
     /// there); set per-def in `parse_function`, cleared at its end.
@@ -575,6 +611,13 @@ pub struct Parser {
     /// decided correctly. A vector rather than a set: the order is the order stubs were
     /// created, so the refresh is deterministic.
     bound_method_stubs: Vec<(u32, u32, u32)>,
+    /// Which interface METHOD each bound stub was minted from — durable across both passes.
+    ///
+    /// [`Parser::bound_method_stubs`] cannot answer this: `refresh_bound_method_stubs` takes
+    /// it between the passes, so on pass 2 — the pass that reports — it is empty.  The
+    /// conflict check in `create_bound_method_stubs` needs the ORIGIN to compare this bound's
+    /// method against the one already holding the stub name (loft#1301).
+    stub_origin: std::collections::HashMap<u32, u32>,
     /// Set by `parse_in_range` when `rev(collection)` (without a `..` range) is parsed.
     /// Consumed by `fill_iter` to add the reverse bit (64) into the `on` byte of OpIterate/OpStep.
     reverse_iterator: bool,
@@ -721,6 +764,14 @@ pub struct Parser {
     /// minted in the frame that holds the variable, not in the closure that passes it along
     /// (loft#1236).
     pub(crate) capture_owner: std::collections::HashMap<String, u32>,
+    /// Captures a lambda REBINDS whole-value (`p = [..]`), keyed by the lambda's def.
+    ///
+    /// Recorded where the assignment is parsed, because by the time the lambda closes its
+    /// body is already lowered — a vector rebind is a clear plus appends by then, and the
+    /// `Value::Set` that says "whole value" is gone. Judged at the lambda's exit, which is
+    /// the first point that has the ENCLOSING variable table back and can ask whether the
+    /// captured name is a parameter (loft#1281).
+    pub(crate) rebound_captures: std::collections::HashMap<u32, Vec<String>>,
     /// Accumulates captured variable names and types during lambda body parsing.
     /// Reset at the start of each lambda; read after parsing to synthesize the closure record.
     pub(crate) captured_names: Vec<(String, Type)>,
@@ -734,6 +785,29 @@ pub struct Parser {
     /// definition time — nullability is decided at instantiation by whatever
     /// concrete element type the caller's vector carries).  Reset per function.
     pub(crate) cur_type_var: u32,
+    /// The SOURCE spelling of the type variable [`Self::cur_type_var`] holds — `"T"` for
+    /// `fn f<T: …>`, empty outside a generic function.
+    ///
+    /// `formal/interfaces.md` `(G-Gen)`: a generic header *introduces* its type variable, so
+    /// the binding is per-header.  Two functions that both write `T` name two different
+    /// variables, and `parse_type` therefore resolves the spelling against THIS header
+    /// before it asks the global definition table (loft#1300, loft#1301).
+    pub(crate) cur_type_var_name: String,
+    /// The placeholder definition standing for a `(type-variable spelling, bound set)` pair.
+    ///
+    /// Sharing one placeholder across generic functions is what lets the stdlib's many
+    /// `<T>` templates resolve against one definition, and it stays the norm — but the
+    /// placeholder is also what KEYS the bound-method stubs (`t_<LEN>T#g_<method>`), and a
+    /// stub carries a SIGNATURE.  Two headers whose bounds require different signatures of
+    /// one method name therefore need different placeholders, or the second's calls are
+    /// checked against the first's stub and refused against a signature the reader never
+    /// wrote.  Keyed on the bound NAMES as written, which are the same on both passes even
+    /// where an interface is still a forward reference.
+    pub(crate) type_var_holders: std::collections::HashMap<(String, String), u32>,
+    /// The bound-set key each placeholder in [`Self::type_var_holders`] was claimed for, so
+    /// a header meeting an already-claimed spelling can tell "the same variable again" from
+    /// "a second variable that happens to be spelled the same".
+    pub(crate) type_var_bounds: std::collections::HashMap<u32, String>,
     // maps fn-ref variable numbers to their closure record work variable numbers.
     pub(crate) closure_vars: std::collections::HashMap<u16, u16>,
     // last closure work variable created by emit_lambda_code (transient).
@@ -970,13 +1044,16 @@ static SKIP_WIDTH: [&str; 2] = ["}", "."];
 /// instead of the JSON the author asked for.
 ///
 /// `-1` is the JSON pseudo-radix (`OutputState::db_format` reads its sign); `1` is
-/// scientific notation.
+/// scientific notation; [`ops::HEX_UPPER`](crate::ops::HEX_UPPER) is hexadecimal in upper
+/// case, which needs a value of its own because `16` renders lower case.
 pub(crate) fn radix_for(id: &str) -> Option<i32> {
     let lower = id.to_lowercase();
     if lower == "j" || lower == "json" {
         Some(-1)
-    } else if id == "x" || id == "X" {
+    } else if id == "x" {
         Some(16)
+    } else if id == "X" {
+        Some(i32::from(crate::ops::HEX_UPPER))
     } else if id == "b" {
         Some(2)
     } else if id == "o" {
@@ -1037,7 +1114,7 @@ impl Default for Parser {
     }
 }
 
-fn is_op(name: &str) -> bool {
+pub(crate) fn is_op(name: &str) -> bool {
     name.len() >= 3 && name.starts_with("Op") && name.chars().nth(2).unwrap().is_uppercase()
 }
 
@@ -1129,6 +1206,8 @@ impl Parser {
             cc_deepest: HashMap::new(),
             cc_nest: 0,
             in_format_expr: false,
+            prefix_operand: false,
+            inplace_hint_declined: false,
             in_tuple_lhs: false,
             sandbox: crate::sandbox::SandboxConfig::default(),
             def_sandbox: HashMap::new(),
@@ -1150,6 +1229,7 @@ impl Parser {
             amp_head: false,
             assign_target: u16::MAX,
             assign_replaces: false,
+            rebind_lowered: u16::MAX,
             in_sandbox: false,
             parse_depth: 0,
             depth_overflowed: false,
@@ -1168,6 +1248,7 @@ impl Parser {
             adopted_ret_defs: std::collections::HashSet::new(),
             literal_chain_lhs: std::collections::HashSet::new(),
             bound_method_stubs: Vec::new(),
+            stub_origin: std::collections::HashMap::new(),
             reverse_iterator: false,
             iterable_context: false,
             last_range_from: None,
@@ -1213,10 +1294,14 @@ impl Parser {
             fields_of: u32::MAX,
             capture_context: Vec::new(),
             capture_owner: std::collections::HashMap::new(),
+            rebound_captures: std::collections::HashMap::new(),
             captured_names: Vec::new(),
             fn_lambdas: std::collections::HashMap::new(),
             closure_param: u16::MAX,
             cur_type_var: u32::MAX,
+            cur_type_var_name: String::new(),
+            type_var_holders: std::collections::HashMap::new(),
+            type_var_bounds: std::collections::HashMap::new(),
             closure_vars: std::collections::HashMap::new(),
             last_closure_work_var: u16::MAX,
             last_closure_alloc: None,
@@ -5021,6 +5106,26 @@ impl Parser {
             && self.data.is_type_var_placeholder(d_nr)
     }
 
+    /// Resolve a NAME the source wrote, giving the enclosing generic header first refusal.
+    ///
+    /// `formal/interfaces.md` `(G-Gen)` — a header `fn f<T: I>` *introduces* `T`, so inside
+    /// it the spelling names that header's variable and not whatever the flat namespace holds
+    /// under the same letter.  Two headers may both write `T` while binding different
+    /// placeholders, and the second's is minted under a name no source can spell, so this is
+    /// the only route back to it.
+    ///
+    /// One home, because a spelling that resolves one way in a type position and another in a
+    /// value position is two variables wearing one name.
+    pub(crate) fn def_nr_in_scope(&self, name: &str) -> u32 {
+        if !self.cur_type_var_name.is_empty()
+            && name == self.cur_type_var_name
+            && self.cur_type_var != u32::MAX
+        {
+            return self.cur_type_var;
+        }
+        self.data.def_nr(name)
+    }
+
     /// Check if a type is a generic type variable (a dummy struct used as T).
     /// Returns the type variable name if it is, None otherwise.
     pub(crate) fn generic_type_name(&self, tp: &Type) -> Option<&str> {
@@ -5057,6 +5162,9 @@ impl Parser {
         let name = data.def(child_nr).name();
         let self_prefix = format!("t_{}Self_", "Self".len());
         Some(if let Some(rest) = name.strip_prefix("__iface_") {
+            // `__iface_<interface>#<arity>_<method>` — the arity keeps two signatures of one
+            // name apart (loft#1275) and sits BEFORE the underscore, on the interface's side,
+            // so what comes back here is the method name and nothing else.
             rest.split_once('_')
                 .map_or_else(|| rest.to_string(), |(_, m)| m.to_string())
         } else if let Some(rest) = name.strip_prefix(&self_prefix) {
@@ -5074,7 +5182,21 @@ impl Parser {
     /// that declares it), which is why this used to read only the function. An interface's
     /// ASSOCIATED type carries its own bounds — `type Rows: Cursor` says which methods a
     /// `Self.Rows` value has, and the enclosing generic's bounds say nothing about it.
-    pub(crate) fn has_bound_for_method(&self, method: &str, holder_nr: u32) -> bool {
+    ///
+    /// `arity` is the number of arguments the use site passes, INCLUDING the receiver, or
+    /// `None` where the caller has no arity to offer (a field, a bare method name). It is not
+    /// decoration: `formal/interfaces.md` (G-Sat) satisfies a bound only when a function with
+    /// the interface's SIGNATURE is visible, and a name alone is not a signature. `Numeric`
+    /// declares `op - (self: Self) -> Self` — UNARY negation — and a binary `a - b` in a
+    /// `<T: Numeric>` body desugars to the same `OpMin`, so a name-only test said the bound
+    /// covered it. The call then bound one operand too many, dropped `b`, and computed `-a`
+    /// on both backends with no diagnostic (loft#1274).
+    pub(crate) fn has_bound_for_method(
+        &self,
+        method: &str,
+        holder_nr: u32,
+        arity: Option<usize>,
+    ) -> bool {
         let from_holder = (holder_nr != u32::MAX)
             .then(|| &self.data.definitions[holder_nr as usize].bounds)
             .filter(|b| !b.is_empty());
@@ -5087,7 +5209,11 @@ impl Parser {
         };
         for &iface_nr in bounds {
             for child_nr in self.data.children_of(iface_nr) {
-                if Self::interface_method_name(&self.data, child_nr).as_deref() == Some(method) {
+                if Self::interface_method_name(&self.data, child_nr).as_deref() != Some(method) {
+                    continue;
+                }
+                // A name is not a signature: where the caller knows the arity, it must match.
+                if arity.is_none_or(|n| self.data.attributes(child_nr) == n) {
                     return true;
                 }
             }
@@ -5507,6 +5633,7 @@ impl Parser {
         } else {
             // generic-specific error for method calls on T.
             if let Some(tv_name) = types.first().and_then(|t| self.generic_type_name(t)) {
+                let tv_name = crate::data::Data::type_var_spelling(tv_name);
                 diagnostic_at!(
                     self.lexer,
                     name_pos,
@@ -6694,6 +6821,22 @@ impl Parser {
     /// declared on an associated type (@PLN125 A2c). Answering with the reasons rather
     /// than emitting them lets each caller say whose promise was broken; the words after
     /// the colon are the same either way.
+    /// The parameter count a SIGNATURE declares — hidden parameters excluded.
+    ///
+    /// The raw count is not the signature's: a struct-returning function carries a hidden
+    /// return buffer and a bound stub carries one too, so comparing raw counts makes a
+    /// two-operand operator look like a three-parameter function (loft#1299).
+    fn visible_arity(data: &Data, d_nr: u32) -> usize {
+        if d_nr == u32::MAX || d_nr as usize >= data.definitions.len() {
+            return usize::MAX;
+        }
+        data.definitions[d_nr as usize]
+            .attributes()
+            .iter()
+            .filter(|a| !a.hidden)
+            .count()
+    }
+
     fn satisfaction_failures(&self, iface_nr: u32, concrete_nr: u32) -> Vec<String> {
         let concrete_name = self.data.def(concrete_nr).name().to_string();
         let concrete_type = self.data.def(concrete_nr).returned().clone();
@@ -6724,6 +6867,27 @@ impl Parser {
                     let s_type = self.data.def(s_nr).returned().clone();
                     found = self.data.find_fn(u16::MAX, &method_suffix, &s_type);
                 }
+            }
+            // `(G-Sat)` satisfies a bound against the SIGNATURE `[Self ↦ C](p̄ -> R)`, and
+            // `find_fn` takes a name and a receiver and no arity.  While no interface could
+            // declare one name twice that gap was invisible; now that `Subtractable` asks for a
+            // two-operand `OpMin`, a type providing only the UNARY one answered the name and
+            // satisfied the bound, and the monomorph then called it with one operand too many
+            // and dropped the second — `diff(a, b)` computed `-a`, on both backends, with no
+            // diagnostic.  That is loft#1274's defect at the satisfaction site rather than the
+            // use site (loft#1275).
+            //
+            // Compared on the VISIBLE count on both sides: a struct-returning function carries
+            // a hidden return buffer that an interface declaration does not, so the raw counts
+            // disagree by design.  The re-ask goes through `possible_with_signature` — the same
+            // resolver `re_resolve_call` uses for the same question — so satisfaction and
+            // monomorphisation cannot disagree about which definition a signature names.
+            let want = Self::visible_arity(&self.data, child_nr);
+            if found != u32::MAX && Self::visible_arity(&self.data, found) != want {
+                found = self
+                    .data
+                    .possible_with_signature(&method_suffix, want, &concrete_type)
+                    .unwrap_or(u32::MAX);
             }
             if found == u32::MAX {
                 out.push(format!("missing {method_suffix}"));
@@ -7003,6 +7167,32 @@ impl Parser {
             name
         };
         let mut resolved = data.find_fn(u16::MAX, fn_name, &concrete_arg);
+        // `formal/interfaces.md` `(G-Sat)` judges a bound against the SIGNATURE
+        // `[Self ↦ C](p̄ -> R)` — the parameter list included — and `find_fn` takes a name and
+        // a receiver and no arity.  `-` desugars to `OpMin` at BOTH arities, so an interface
+        // declaring `op - (self: Self, other: Self)` resolved to the UNARY `OpMinSingleInt`
+        // and the monomorph dropped the second operand: `diff(10, 3)` answered `-10`, on both
+        // backends with no diagnostic (loft#1299).
+        //
+        // The stub's VISIBLE parameter count is the comparand — a stub carries hidden ones (a
+        // return buffer), so its raw count is 3 where the operator takes 2.  Measured: the `+`
+        // stub is 3 raw / 2 visible against `OpAddInt` (2) and the unary `-` stub is 2 raw / 1
+        // visible against `OpMinSingleInt` (1); only binary `-` disagreed.
+        //
+        // Re-asked of the `possible` map rather than refused, because the right definition IS
+        // there — `integer` has `OpMinInt` beside `OpMinSingleInt` — and it is the same list
+        // `call_op` resolves a concrete `a - b` from, so the two paths cannot drift about
+        // which definitions an operator has.  (Unresolving instead was tried and is worse: the
+        // stub reaches runtime with no diagnostic to attach.)
+        if resolved != u32::MAX {
+            let want = def.attributes().iter().filter(|a| !a.hidden).count();
+            if data.attributes(resolved) != want
+                && let Some(by_signature) =
+                    data.possible_with_signature(fn_name, want, &concrete_arg)
+            {
+                resolved = by_signature;
+            }
+        }
         // @PLN25 E2 — a bounded-generic method call whose receiver monomorphises to a synth
         // `__nullable<S>` (a nullable vector element, e.g. `for x in v: vector<T>` where
         // `T = IfItem` → `__nullable<IfItem>`, then `x.is_valid()`) must resolve to S's CONCRETE
@@ -10669,14 +10859,22 @@ impl Parser {
                 };
             }
             let op_method = format!("Op{}", rename(op));
-            let stub_name = crate::data::Data::bound_stub_name(&tv_name, &op_method);
+            // The stub is keyed per SIGNATURE, and `list.len()` is this call's arity — the
+            // same count `has_bound_for_method` compares below.  `-` reaches here at BOTH
+            // arities as `OpMin`, and picking the stub by name alone is what kept a bound from
+            // offering binary subtraction beside unary negation (loft#1275).
+            let stub_name = crate::data::Data::bound_stub_name(&tv_name, &op_method, list.len());
             let stub_nr = self.data.def_nr(&stub_name);
             // Only use the T-stub if the CURRENT function's bounds declare this method.
             // Without this check, T-stubs from unrelated bounded generics (e.g., stdlib's
             // sum<T: Addable>) would leak into unbound generics like `fn bad<T>(x+y)`.
             if stub_nr != u32::MAX
                 && self.context != u32::MAX
-                && self.has_bound_for_method(&op_method, self.data.def_nr(&tv_name))
+                && self.has_bound_for_method(
+                    &op_method,
+                    self.data.def_nr(&tv_name),
+                    Some(list.len()),
+                )
             {
                 let tp = self.call_nr(code, stub_nr, list, types, false, &[], None);
                 if tp != Type::Null {
@@ -10704,9 +10902,9 @@ impl Parser {
             // above has come up empty — a bound that DOES declare `!=` keeps its own.
             if op == "!="
                 && self.context != u32::MAX
-                && self.has_bound_for_method("OpEq", self.data.def_nr(&tv_name))
+                && self.has_bound_for_method("OpEq", self.data.def_nr(&tv_name), Some(2))
             {
-                let eq_stub = crate::data::Data::bound_stub_name(&tv_name, "OpEq");
+                let eq_stub = crate::data::Data::bound_stub_name(&tv_name, "OpEq", 2);
                 let eq_nr = self.data.def_nr(&eq_stub);
                 if eq_nr != u32::MAX {
                     let mut eq_code = Value::Null;
@@ -10738,9 +10936,9 @@ impl Parser {
             if op == "<="
                 && self.context != u32::MAX
                 && list.len() == 2
-                && self.has_bound_for_method("OpLt", self.data.def_nr(&tv_name))
+                && self.has_bound_for_method("OpLt", self.data.def_nr(&tv_name), Some(2))
             {
-                let lt_stub = crate::data::Data::bound_stub_name(&tv_name, "OpLt");
+                let lt_stub = crate::data::Data::bound_stub_name(&tv_name, "OpLt", 2);
                 let lt_nr = self.data.def_nr(&lt_stub);
                 if lt_nr != u32::MAX {
                     // SWAPPED: `a <= b` is `!(b < a)`.
@@ -10846,7 +11044,10 @@ impl Parser {
             return Type::Unknown(0);
         }
         // generic-specific error message for operators on T.
-        let generic_name = types.iter().find_map(|t| self.generic_type_name(t));
+        let generic_name = types
+            .iter()
+            .find_map(|t| self.generic_type_name(t))
+            .map(crate::data::Data::type_var_spelling);
         if let Some(tv_name) = generic_name {
             specific!(
                 self.lexer,
@@ -11230,6 +11431,41 @@ impl Parser {
             {
                 actual.push(actual_code);
                 continue;
+            }
+            // loft#1287 — a plain heap PARAMETER handed to a `&` parameter the callee
+            // REBINDS.  The write-back installs a store the callee minted and displaces the
+            // one this binding named, so BOTH ownership questions land here: a plain heap
+            // parameter aliases the caller's argument (`formal/calls.md` F-ParamHeap), so the
+            // displaced store belongs to a frame above and is not the callee's to free, while
+            // the fresh one has no owner at all until this binding takes it — which is what
+            // `(F-ParamRebind)` means by *the rebind is LOCAL*.
+            //
+            // The rebind witness answers both.  It snapshots the parameter's ENTRY store, so
+            // the call-site bracket (`scopes::scan_args`) can mark exactly the store this
+            // frame does not own, and the function-exit `OpFreeRefIfDistinct(param, witness)`
+            // releases the rebound one.  It is the same P2.1 machinery a rebind written in
+            // THIS body already gets; only the spelling of the rebind is different.
+            let mut amp_rebind_arg = u16::MAX;
+            if !self.first_pass
+                && tp.is_amp_rebindable_heap()
+                && let Value::Var(v) = actual_code.unspan()
+                && self.vars.is_argument(*v)
+                && !matches!(self.vars.tp(*v), Type::RefVar(_))
+                && !self.vars.is_compiler_generated(*v)
+                && !self.is_hidden_param(*v)
+            {
+                let v = *v;
+                let mut cache: HashMap<u32, Vec<bool>> = HashMap::new();
+                if callee_param_rebinds_owned(d_nr, &self.data, &mut cache)
+                    .get(nr)
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    amp_rebind_arg = v;
+                }
+            }
+            if amp_rebind_arg != u16::MAX {
+                self.ensure_rebind_witness(amp_rebind_arg);
             }
             if !self.convert(&mut actual_code, actual_type, &tp) {
                 if report {
@@ -15270,10 +15506,29 @@ impl Parser {
             }
         }
         written.extend(propagated);
+        // A write from inside a CLOSURE lives in the lambda's own definition, so walking this
+        // function's code cannot see it.  Two routes reach the same fact and both feed the
+        // `&`-parameter test below, so both are kept: this one reads the mutated-capture set
+        // already recorded on this definition (`accumulate_scalars_to_box`, filled as each
+        // lambda is parsed) and answers by variable INDEX.  Without it the `const` half
+        // contradicted the refusal one line above it — `fn f(p: const integer) { g = fn() {
+        // p += 1; }; }` reported both "Cannot modify const parameter 'p' from a closure" and
+        // "'p' is const but is never modified".
+        for name in self.data.def(self.context).scalars_to_box() {
+            let v = self.vars.var(name);
+            if v != u16::MAX {
+                written.insert(v);
+            }
+        }
+        // The second route walks the lambda's own code and answers by parameter NAME, which
+        // is what a `&` parameter needs — the lambda is its own definition (loft#1276).
+        let mut lambda_written: HashSet<String> = HashSet::new();
+        lambda_mutated_captures(&code, &self.data, &mut lambda_written);
         for (a_nr, a) in arguments.iter().enumerate() {
             if matches!(a.typedef, Type::RefVar(_))
                 && !a.constant
                 && !written.contains(&(a_nr as u16))
+                && !lambda_written.contains(&a.name)
             {
                 // loft#1003 — point at the `&` itself when the declaration captured it.
                 // The fallback is the variable's source, which for a parameter is a position
@@ -15770,6 +16025,55 @@ fn collect_vars_in(val: &Value, result: &mut HashSet<u16>) {
     }
 }
 
+/// Does this operator WRITE THROUGH its first argument?
+///
+/// One home for a question two walkers used to answer from lists of their own, and the
+/// lists had drifted apart in both directions: `find_written_vars` (which decides whether a
+/// `&` parameter is ever modified) knew `OpNewRecord` and the keyed writes but not the text
+/// ones, while `walk_for_mutations` (which decides which captures a lambda mutates) knew the
+/// text ones and not `OpNewRecord` — so an append to a captured collection, which lowers to
+/// `OpNewRecord` + `OpFinishRecord` through the closure record, was invisible to it.  A `&`
+/// parameter whose only write was that append then read as never modified, and
+/// `fn add(p: &vector<integer>) { g = fn() { p += [9]; }; g(); }` was refused with
+/// *"has & but is never modified"* while the append it makes reaches the caller correctly
+/// (loft#1276).
+///
+/// The list is the UNION, because each side's extras are genuine first-argument writes; the
+/// name is the RAW one (`OpSetInt`, not `SetInt`) so a user function cannot collide with the
+/// `Op` prefix.
+///
+/// ⚠ `OpCopyRecord` is NOT here — it writes through its SECOND argument, and its callers
+/// handle that separately.
+pub(crate) fn op_writes_first_arg(name: &str) -> bool {
+    name.starts_with("OpSet")
+        || name.starts_with("OpAppendStack")
+        || name.starts_with("OpClearStack")
+        || name == "OpNewRecord"
+        || name == "OpAppendCopy"
+        || name == "OpAppendVector"
+        || name == "OpAppendText"
+        || name == "OpAppendCharacter"
+        || name == "OpClearVector"
+        || name == "OpClearText"
+        || name == "OpClearKeyed"
+        // @P320: keyed-remove `coll[key] = null` lowers to `OpHashRemove(coll, …)`
+        // (collections.rs::towards_set_hash_remove), so it mutates its first arg just like
+        // OpSetKeyed / OpClearKeyed.  Without this a `&` param whose only mutation is a
+        // keyed remove was wrongly rejected as "never modified".
+        || name == "OpHashRemove"
+        || name == "OpInsertVector"
+        || name == "OpRemoveVector"
+        // Delivers into its FIRST arg (`vector_replace(&r, &other, tp)`) — the NRVO return
+        // buffer. Today every emit site also writes that slot another way (a
+        // `__retbuf = call(…)` Set, or the BlockTail path's `OpClearVector`), so the
+        // omission is masked INCIDENTALLY rather than by design.
+        || name == "OpReplaceVector"
+        // The second half of an append through a collection the caller owns; it names the
+        // same collection `OpNewRecord` did, and a walker that sees only one of the pair
+        // reads a completed append as half of one.
+        || name == "OpFinishRecord"
+}
+
 /// Recursively walk a Value IR tree and collect all variable indices that are written.
 /// A variable is considered written if:
 /// - It appears as the target of `Value::Set(v, ...)`,
@@ -15798,28 +16102,7 @@ pub(crate) fn find_written_vars(
             // is `OpGetField(Var(c), …)`) correctly marks `c` as written via
             // collect_vars_in.  Previously the OpAppend*/OpClear* family only checked for
             // a bare `Value::Var` arg, missing the field-access shape.
-            let first_arg_write = def.name().starts_with("OpSet")
-                || def.name().starts_with("OpAppendStack")
-                || def.name().starts_with("OpClearStack")
-                || def.name() == "OpNewRecord"
-                || def.name() == "OpAppendCopy"
-                || def.name() == "OpAppendVector"
-                || def.name() == "OpClearVector"
-                || def.name() == "OpClearKeyed"
-                || def.name() == "OpSetKeyed"
-                // @P320: keyed-remove `coll[key] = null` lowers to
-                // `OpHashRemove(coll, …)` (collections.rs::towards_set_hash_remove),
-                // so it mutates its first arg just like OpSetKeyed/OpClearKeyed.
-                // Without this a `&` param whose only mutation is a keyed remove
-                // was wrongly rejected as "never modified".
-                || def.name() == "OpHashRemove"
-                || def.name() == "OpInsertVector"
-                || def.name() == "OpRemoveVector"
-                // Delivers into its FIRST arg (`vector_replace(&r, &other, tp)`) — the NRVO
-                // return buffer. Today every emit site also writes that slot another way
-                // (a `__retbuf = call(…)` Set, or the BlockTail path's `OpClearVector`), so
-                // the omission is masked INCIDENTALLY rather than by design.
-                || def.name() == "OpReplaceVector";
+            let first_arg_write = op_writes_first_arg(def.name());
             // OpCopyRecord(src, dst, type) writes through `dst` (arg[1]).
             // Used by struct field whole-replacement (`s.i = fresh`) where the
             // destination is `OpGetField(s, …)`.
@@ -15891,6 +16174,61 @@ pub(crate) fn find_written_vars(
     }
 }
 
+/// The capture NAMES that lambdas defined inside `code` write to.
+///
+/// `find_written_vars` walks one function's own body, and a lambda is a separate
+/// definition — so a parameter whose only write happens inside a closure reads as never
+/// written there.  For a `&` parameter that turns into an assertion that is not merely
+/// unhelpful but false: `fn bump(p: &integer) { g = fn() { p += 1; }; g(); }` was refused
+/// with *"Parameter 'p' has & but is never modified; remove the &"*, and following that
+/// cure turns an out-parameter into a by-value one — so the reader loses the write-back
+/// the signature exists for (loft#1276).
+///
+/// The lambda records what it writes as `Definition::mutated_captures`, by NAME, which is
+/// why this answers in names: the caller matches them against its own parameter names.
+/// Same class as @P320, where a keyed remove was the write `find_written_vars` could not
+/// see; here it is the whole lambda body.
+fn lambda_mutated_captures(code: &Value, data: &Data, names: &mut HashSet<String>) {
+    match code.unspan() {
+        Value::FnRef(d_nr, _, _) if *d_nr >= 0 && (*d_nr as usize) < data.definitions.len() => {
+            for n in data.def(*d_nr as u32).mutated_captures() {
+                names.insert(n.clone());
+            }
+        }
+        Value::Call(_, args) => {
+            for a in args {
+                lambda_mutated_captures(a, data, names);
+            }
+        }
+        Value::Block(block) | Value::Loop(block) => {
+            for item in &block.operators {
+                lambda_mutated_captures(item, data, names);
+            }
+        }
+        Value::Insert(list) | Value::Tuple(list) | Value::Parallel(list) => {
+            for item in list {
+                lambda_mutated_captures(item, data, names);
+            }
+        }
+        Value::If(cond, then, els) => {
+            lambda_mutated_captures(cond, data, names);
+            lambda_mutated_captures(then, data, names);
+            lambda_mutated_captures(els, data, names);
+        }
+        Value::Set(_, v)
+        | Value::Return(v)
+        | Value::Drop(v)
+        | Value::Yield(v)
+        | Value::TuplePut(_, _, v) => lambda_mutated_captures(v, data, names),
+        Value::Iter(_, create, next, extra) => {
+            lambda_mutated_captures(create, data, names);
+            lambda_mutated_captures(next, data, names);
+            lambda_mutated_captures(extra, data, names);
+        }
+        _ => {}
+    }
+}
+
 /// for the given user-defined function, return a boolean per
 /// parameter indicating whether its body writes that parameter
 /// (directly or through a transitive call).  Results are memoised
@@ -15922,6 +16260,152 @@ fn callee_param_writes(fn_nr: u32, data: &Data, cache: &mut HashMap<u32, Vec<boo
         .collect();
     cache.insert(fn_nr, merged.clone());
     merged
+}
+
+/// For each parameter of `fn_nr`, does the body REASSIGN the whole binding (`p = …`)?
+///
+/// The narrower sibling of [`callee_param_writes`], and the difference is the whole point:
+/// that one answers *"is this parameter written at all"*, which a FIELD write satisfies, and a
+/// field write is exactly the case the `slow-reference-parameter` advice exists to flag.  Only
+/// a whole-binding reassignment is what `&` is for, so only that may silence it.
+///
+/// Interprocedural for the same reason the write query is: a FORWARDER never reassigns —
+/// its callee does — so the one shape where a `&` is carrying someone else's write-back is
+/// exactly the shape a body-local walk reads as redundant (loft#1286).
+///
+/// The recursion is broken by the same placeholder-then-merge the write query uses, and the
+/// `cache` is shared with it deliberately: both are keyed by definition and neither writes an
+/// entry the other reads, because this one never calls `find_written_vars`.
+pub(crate) fn callee_param_reassigns(
+    fn_nr: u32,
+    data: &Data,
+    cache: &mut HashMap<u32, Vec<bool>>,
+) -> Vec<bool> {
+    if let Some(v) = cache.get(&fn_nr) {
+        return v.clone();
+    }
+    let def = data.def(fn_nr);
+    let n = def.attributes().len();
+    cache.insert(fn_nr, vec![false; n]);
+    if *def.code() == Value::Null || n == 0 {
+        return vec![false; n];
+    }
+    let body = def.code().clone();
+    let mut out = vec![false; n];
+    collect_param_reassigns(&body, data, n, &mut out, cache);
+    let prev = cache.get(&fn_nr).cloned().unwrap_or_else(|| vec![false; n]);
+    let merged: Vec<bool> = prev.iter().zip(out.iter()).map(|(a, b)| *a || *b).collect();
+    cache.insert(fn_nr, merged.clone());
+    merged
+}
+
+/// Walk `code` marking every parameter slot that is reassigned — directly by a `Value::Set`,
+/// or by being handed on to a callee that reassigns the parameter it lands in.
+fn collect_param_reassigns(
+    code: &Value,
+    data: &Data,
+    n_params: usize,
+    out: &mut [bool],
+    cache: &mut HashMap<u32, Vec<bool>>,
+) {
+    if let Value::Set(v, _) = code.unspan()
+        && (*v as usize) < n_params
+    {
+        out[*v as usize] = true;
+    }
+    if let Value::Call(fn_nr, args) = code.unspan()
+        && *data.def(*fn_nr).code() != Value::Null
+    {
+        let callee = callee_param_reassigns(*fn_nr, data, cache);
+        for (i, arg) in args.iter().enumerate() {
+            if i < callee.len()
+                && callee[i]
+                && let Value::Var(v) = arg.unspan()
+                && (*v as usize) < n_params
+            {
+                out[*v as usize] = true;
+            }
+        }
+    }
+    code.for_each_child(&mut |child| collect_param_reassigns(child, data, n_params, out, cache));
+}
+
+/// For each parameter of `fn_nr`, does a call to it REBIND that parameter to a store the
+/// callee OWNS?
+///
+/// The narrower sibling of [`callee_param_reassigns`]: that one answers *"is the whole
+/// binding reassigned"*, which a rebind to a BORROWED value also satisfies.  Only an OWNED
+/// value displaces a store — the callee mints a new one and the binding stops naming what it
+/// named — so only that asks the ownership-transition question this answers.
+///
+/// The caller of such a function needs the answer at the CALL SITE: the write-back lands in
+/// the caller's binding, so the store the binding stopped naming and the fresh one it now
+/// names are both the caller's question to settle, and the callee cannot see which of them it
+/// owns (loft#1287).
+///
+/// Interprocedural for the same reason its sibling is — a FORWARDER never reassigns, its
+/// callee does — and it shares the recursion-breaking placeholder-then-merge.  The `cache` is
+/// its own: the two queries answer different questions about the same key.
+pub(crate) fn callee_param_rebinds_owned(
+    fn_nr: u32,
+    data: &Data,
+    cache: &mut HashMap<u32, Vec<bool>>,
+) -> Vec<bool> {
+    if let Some(v) = cache.get(&fn_nr) {
+        return v.clone();
+    }
+    let def = data.def(fn_nr);
+    let n = def.attributes().len();
+    cache.insert(fn_nr, vec![false; n]);
+    if *def.code() == Value::Null || n == 0 {
+        return vec![false; n];
+    }
+    let body = def.code().clone();
+    let mut out = vec![false; n];
+    collect_param_rebinds_owned(&body, fn_nr, data, n, &mut out, cache);
+    let prev = cache.get(&fn_nr).cloned().unwrap_or_else(|| vec![false; n]);
+    let merged: Vec<bool> = prev.iter().zip(out.iter()).map(|(a, b)| *a || *b).collect();
+    cache.insert(fn_nr, merged.clone());
+    merged
+}
+
+/// Walk `code` marking every parameter slot rebound to an OWNED value — directly by a
+/// `Value::Set`, or by being handed on to a callee that rebinds the parameter it lands in.
+fn collect_param_rebinds_owned(
+    code: &Value,
+    fn_nr: u32,
+    data: &Data,
+    n_params: usize,
+    out: &mut [bool],
+    cache: &mut HashMap<u32, Vec<bool>>,
+) {
+    if let Value::Set(v, rhs) = code.unspan()
+        && (*v as usize) < n_params
+        && !matches!(rhs.unspan(), Value::Null)
+        && matches!(
+            crate::use_analysis::ownership_of(data, fn_nr, rhs),
+            crate::use_analysis::Own::Owned
+        )
+    {
+        out[*v as usize] = true;
+    }
+    if let Value::Call(callee, args) = code.unspan()
+        && *data.def(*callee).code() != Value::Null
+    {
+        let inner = callee_param_rebinds_owned(*callee, data, cache);
+        for (i, arg) in args.iter().enumerate() {
+            if i < inner.len()
+                && inner[i]
+                && let Value::Var(v) = arg.unspan()
+                && (*v as usize) < n_params
+            {
+                out[*v as usize] = true;
+            }
+        }
+    }
+    code.for_each_child(&mut |child| {
+        collect_param_rebinds_owned(child, fn_nr, data, n_params, out, cache);
+    });
 }
 
 /// Like `find_written_vars` but only collects variables that are FIELD-written

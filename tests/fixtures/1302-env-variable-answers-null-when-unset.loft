@@ -1,0 +1,100 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// `default/02_files.loft` promises *"Returns the value of the environment variable name, or
+// null if it is not set"*, and the sentence reaches the published Standard Library.  It never
+// did: `Stores::os_variable` ended in `.unwrap_or_default()`, so an unset variable and one set
+// to the empty string were the same answer and the `== null` test the doc invites could not
+// fire.  A program could not tell a variable it must be given from one deliberately blanked,
+// and the issue reporting it recorded *"there is no workaround — the distinction is not
+// observable"* (loft#1302).
+//
+// The return TYPE was never the obstacle: `text` carries null in-band, which is how
+// `JsonValue::as_text` answers null through a plain `-> text`.  Only the `unwrap_or_default()`
+// stood in the way.
+//
+// This is a PRE-FREEZE fix and could not be made after the flip.  COMPATIBILITY.md says a
+// change to the observable result of a functioning program is a regression *"even when the old
+// result was wrong"* — and ~80 call sites in this repo read `""` as "unset".  What licenses it
+// is that `CONTRACT_VERSION` is still **0**: *"the only era with no promise… every surface may
+// move"*, and the pre-freeze audit exists to fix exactly this before it is frozen, because
+// *"the cost of a miss is not a later fix, it is a permanent scar."*
+//
+// The environment is supplied by `tests/env_variable_null.rs`, which runs this file on BOTH
+// backends with the three variables below set, unset and set-empty.  A `.loft` guard cannot
+// set its own environment, so that runner is part of this guard rather than a wrapper around
+// it — and it is also the control: with the variables absent the SET rows FAIL rather than
+// pass vacuously, which is why the file lives under `tests/fixtures/` and not
+// `tests/scripts/`.  `loft_suite` sweeps the latter with the ambient environment, and a guard
+// that needs three variables set would either be skipped there or report on an environment
+// nobody chose.
+//
+// @falsified-at: released 2026.8.0 (the behaviour predates every commit on this branch, so the
+//   installed binary is the control) — interpret 1 assertion failure -> 0, native 1 -> 0, and
+//   the OK line is never reached on either.
+//
+//   ⚠ Measured cell by cell, and only ONE of the five falsifies: `an unset variable is null`.
+//   The others were already green on the control and are here as controls rather than as
+//   evidence — in particular `a_variable_set_to_the_empty_string_is_not_null` passes on BOTH
+//   trees, which is exactly its job: a cure that answered null for every variable would satisfy
+//   the falsifying cell and destroy the function, and this is the cell that would catch it.
+//   Recording which cells cannot fail is the point; a five-cell guard whose header claims five
+//   moved would be overstating its own evidence.
+
+fn a_variable_that_is_not_set_reads_null() {
+  v = env_variable("LOFT_1302_ABSENT");
+  assert(v == null, "an unset variable is null");
+}
+
+fn a_variable_set_to_a_value_reads_it_back() {
+  // The control that matters most: an answer of null for EVERYTHING would satisfy every cell
+  // above and destroy the function.
+  v = env_variable("LOFT_1302_SET");
+  assert(v == "hello", "a set variable reads back: [{v}]");
+  assert(v != null, "a set variable is not null");
+}
+
+fn a_variable_set_to_the_empty_string_is_not_null() {
+  // THE DISTINCTION.  Both of these answered `""` before, so this cell and the first one were
+  // the same measurement and neither could fail.
+  e = env_variable("LOFT_1302_EMPTY");
+  assert(e != null, "a variable set to the empty string is NOT null");
+  assert(e == "", "…and it is the empty text: [{e}]");
+}
+
+fn the_coalescing_idiom_still_answers_what_it_did() {
+  // 79 of this repo's call sites already write `?? ""`, and every one of them keeps its exact
+  // previous answer — the `??` simply starts firing where it used to be inert.  That is what
+  // makes the change survivable at all, and it is worth pinning.
+  a = env_variable("LOFT_1302_ABSENT") ?? "";
+  assert(a == "", "unset ?? \"\" is the empty text");
+  s = env_variable("LOFT_1302_SET") ?? "";
+  assert(s == "hello", "set ?? \"\" is the value");
+  e = env_variable("LOFT_1302_EMPTY") ?? "";
+  assert(e == "", "empty ?? \"\" is the empty text");
+}
+
+fn the_whole_environment_still_lists() {
+  // `env_variables()` is the other half of the surface and is untouched: it lists what is SET,
+  // so the variable that is absent must not appear and the empty one must.
+  seen_set = false;
+  seen_empty = false;
+  seen_absent = false;
+  for e in env_variables() {
+    if e.name == "LOFT_1302_SET" { seen_set = true; }
+    if e.name == "LOFT_1302_EMPTY" { seen_empty = true; }
+    if e.name == "LOFT_1302_ABSENT" { seen_absent = true; }
+  }
+  assert(seen_set, "env_variables lists the set one");
+  assert(seen_empty, "env_variables lists the empty one");
+  assert(!seen_absent, "env_variables does not list the absent one");
+}
+
+pub fn main() {
+  a_variable_that_is_not_set_reads_null();
+  a_variable_set_to_a_value_reads_it_back();
+  a_variable_set_to_the_empty_string_is_not_null();
+  the_coalescing_idiom_still_answers_what_it_did();
+  the_whole_environment_still_lists();
+  println("1302 env ok");
+}

@@ -139,6 +139,10 @@ heap-returning tail discarded 800 000 times holds a flat resident size).
                    (F-ParamRef), and it is the only local one.
   (F-ParamRef)     a `&`-typed parameter (binding.md) is the EXPLICIT write-back channel: a
                    whole-value `p = e` on a `&T` parameter DOES write through to the caller.
+                   It is TRANSITIVE: passing a `&T` parameter on to another `&T` parameter
+                   forwards the reference rather than dereferencing it, so the innermost
+                   reassignment reaches the outermost caller at any depth.  A forwarder
+                   therefore needs the `&` even though its own body never assigns.
 ```
 
 **In words.** What a call can do to its arguments depends on the type. A **scalar** argument is
@@ -151,6 +155,21 @@ only rebinds the callee's local name; the caller keeps its value. To get write-b
 whole-value assignment, the parameter must be declared `&T` ([binding.md](binding.md)) — that is
 the one explicit channel. (Verified: `e.h=99` in a callee ⇒ caller sees `99`; `n=n+1` on a scalar
 ⇒ caller unchanged; `v=[9,9]` on a plain vector param ⇒ caller unchanged.)
+
+**A rebind need not be WRITTEN in the body it is local to.** `(F-ParamRebind)` is about the
+binding, not about the spelling: a plain heap parameter handed to a `&` parameter is rebound by
+the CALLEE's write-back, and the rule reads the same — the caller two frames up keeps its value,
+and the frame the write-back landed in sees the fresh one for the rest of its body.
+
+    fn replace(b: &B)      { b = B { items: [9, 9] }; }
+    fn forward(b: B)       { replace(b); }              // b rebinds LOCALLY
+    fn main() { a = B { items: [1,2,3] }; forward(a); }  // a is still [1,2,3]
+
+That is also where the fresh store's owner is: `ownership.md` `(O-Latest)` puts ownership on the
+LATEST assignment to a binding, and the write-back IS one. Both halves were missing — the store
+the binding stopped naming was released by the callee, which cannot see that a plain heap
+parameter's store belongs to a frame below it, and the fresh one was owned by nobody (loft#1287,
+`heap.md` H-Free's `free_protected` side condition).
 
 **A PARAMETER is not a BIND, and reading one as the other is what put the opposite claim into two
 shipped documents.** `binding.md` `(B-Copy)` says a plain bind COPIES — `c = b; c += [4]` leaves
@@ -201,8 +220,13 @@ can get back is an explicit `&T` return, which binding.md governs.
 
 ## Deviations
 
-**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
-the companion [calls-history.md](calls-history.md).
+**OPEN: 1.**
+- **D-call-7** (loft#1287) — a plain heap parameter forwarded into a reassigning `&`
+  parameter leaks the replaced store, one per call. The ANSWER is `(F-ParamRebind)`
+  working as written; the missing half is the free.
+
+The full register — this entry plus every closed one with its dates and issue numbers —
+is the companion [calls-history.md](calls-history.md).
 
 ## Conformance
 
@@ -227,7 +251,48 @@ the companion [calls-history.md](calls-history.md).
 - **Heap mutate-through (`F-ParamHeap`)** — `fn mut(e: E){ e.h=99 }` makes the caller's `o.h==99`;
   `fn f(v){ v[0]=99 }` makes the caller's `orig[0]==99`.
 - **Heap reassign is local (`F-ParamRebind`)** — `fn re(v){ v=[9,9] }` leaves the caller's
-  `o[0]==1`; only a `&`-param would write back.
+  `o[0]==1`; only a `&`-param would write back. The rule names two spellings, so the oracle
+  crosses the RIGHT-HAND SIDE with the type: {struct, struct-enum} × {literal, call, another
+  local}, both backends, in
+  `tests/scripts/1290-a-heap-parameter-rebind-is-local-in-every-spelling.loft`, with a FIELD
+  write (`F-ParamHeap`), a `&` parameter (`F-ParamRef`) and a plain LOCAL as the controls.
+  The COLLECTION half is
+  `tests/scripts/1294-a-keyed-parameter-rebind-is-local.loft` — all five keyed kinds
+  (`hash`, `sorted`, `index`, `spatial`, `trie` are what `is_keyed` names) crossed with the
+  same right-hand sides plus the empty literal, a CONDITIONAL rebind and a double one, with
+  the vector kind and an append (`F-ParamGrow`) as its controls. Its whole row wrote back to
+  the caller: a keyed `=` lowers to `OpReplaceKeyed`, which deep-copies into the store the
+  target's slot names, and for a parameter that is the CALLER's (loft#1294).  The NULLABLE
+  row is `tests/scripts/1295-a-nullable-parameter-rebind-has-an-owner.loft`, and it moves a
+  different channel: the caller's VALUE was right there all along and the store the callee
+  minted had no owner, one orphaned record per call (loft#1295).  `τ?` and `τ` share sentinel
+  storage, so a nullable parameter is still a parameter.
+  ⚠ **That cross is what this line was missing, and `OPEN: 0` read green over it for a year.**
+  The one-cell oracle above asked only `p = [<literal>]`, which was the one spelling with a
+  lowering: `p = other` — named in the rule's own text — wrote back to the caller on BOTH
+  backends, `p = call()` on the interpreter, and three of the six cells DISAGREED between the
+  backends against `(O-NoDiverge)` (loft#1290). A register is only as strong as the oracle
+  under it; re-measure before trusting a zero.
+- **The `&` write-back leaves the CALLER owning its store (`F-ParamRef` × `B-Copy` ×
+  `O-Owner`)** — the rule above says a `&` parameter's whole-value `p = e` writes through; what
+  it installs is [binding.md](binding.md)'s question, and `(B-Copy)` answers it: a plain heap
+  whole-value source is COPIED, so the store the caller ends up owning must be one no live
+  binding in the callee still names.  A bare-VARIABLE source installed the source's own store
+  instead, and `(O-Owner)`'s single owner broke in whichever direction the other holder pointed
+  — a caller-reachable source (`x = o`, which `(F-ParamHeap)` makes an alias of the caller's
+  argument) left the caller's two bindings naming one store and orphaned the displaced one,
+  while a callee-LOCAL source (`x = m`) was freed at the callee's scope exit and every later
+  read in the caller was a use-after-free.  Both answered CORRECTLY at the call, which is why
+  the issue that found the leak scored the value ✔ and never saw the alias: it takes a later
+  mutation of the source to see one and a store-slot recycle to see the other.  The oracle is
+  `tests/scripts/1303-an-amp-write-back-leaves-the-caller-owning-its-store.loft` — the source
+  crossed with the type: {caller-reachable parameter, callee local, field} × {`hash`, `sorted`,
+  `index`, `spatial`, `trie`, struct, struct-enum}, with a minting CALL (already correct — its
+  buffer is a temp nothing else names, the transfer `(O-Move)` describes), the `vector` kind
+  (whose in-place refill is already `(B-Copy)` and has no displaced store), a plain forwarder
+  (`F-ParamRebind` — the write-back must still stop there) and a repeated call as controls.
+  `x = x` has no cell: the language refuses that spelling, and excluding it from the
+  materialisation is what keeps the refusal (loft#1303).
 - **Return independence (`F-Ret`)** — `a = mk(); a[0]=99; b = mk()` leaves `b[0]==1`.
 
 D-op-1's falsifier applies: any program where the interpreter and `--native` disagree on argument

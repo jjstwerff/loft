@@ -61,10 +61,21 @@ and can emit Rust code for host integration.
 | `character` | A single Unicode character                       |
 | `text`      | A UTF-8 string; `len()` counts bytes             |
 
-A type is **non-null by default** — a plain `integer` / `text` / `Row` never holds
-`null`. Add `?` to make it nullable: `integer?` holds a value or `null`. (The old
-`not null` modifier is now the default and is **deprecated** — it parses as a no-op
-and warns; delete it. See "Fields" below.)
+A type is **non-null by default**: you cannot *store* a `null` into a plain
+`integer` / `text` / `Row` — the compiler stops the write and asks you to discharge
+it (`??`, `?`, `match`) or to declare the slot `integer?`. Add `?` to make it
+nullable: `integer?` holds a value or `null`. (The old `not null` modifier is now
+the default and is **deprecated** — it parses as a no-op and warns; delete it.
+See "Fields" below.)
+
+**Non-null is a rule about writes, not a guarantee about reads.** A *fault* can still
+leave the reserved pattern in a non-null slot: an integer overflow writes the sentinel
+and the slot then reads `null`, and a non-null `float` can hold a `NaN` the same way
+(the deliberate, bounded edge in
+[DESIGN_DECISIONS C85](DESIGN_DECISIONS.md#c85--overflow-arithmetic-types-non-null-the-game-keeps-running-dont-force-integer-on-every--)).
+A width with no code to spare — `u8`, `i8`, `u16`, `i16` — cannot hold the pattern at
+all, so the same fault leaves the type's default there instead. So `x == null` on a
+non-null slot is not dead code.
 
 #### Null representation
 
@@ -1213,8 +1224,18 @@ the closure record died, and the caller's value went dangling, typically surfaci
 as a crash much later in an unrelated function that touched the same value.
 
 **Limitations:**
-- Capturing closures in `vector<fn(...)>` is supported only for non-capturing lambdas or when all elements are the same closure type.
-- `spatial<T>` collections cannot store closures.
+- A **collection cannot hold a capturing closure** — `vector<fn(…)>` and the keyed
+  collections take non-capturing lambdas only, whatever their types (@P213/@P214: the
+  closure record has no co-located layout yet).  One capturing element is enough to
+  refuse the literal, and so is a collection of a STRUCT whose field holds one.
+  A struct field on its own is fine: `Holder { f: fn(x: integer) -> integer { x + a } }`
+  captures and calls normally — which is what makes the compiler's advice work, namely
+  keep the captured state in a struct and store a non-capturing `fn` that reads it.
+- A `&` parameter cannot be captured at all, in any shape (loft#1276).
+
+`spatial` is not an exception to any of this: it stores a non-capturing `fn` field and calls
+it (`for e in sp { e.f(21) }` answers), and it refuses a capturing one with the same message
+every other collection gives.
 
 See [THREADING.md](THREADING.md) § fn Expression for how function references are used with `par(...)`.
 
@@ -1492,7 +1513,7 @@ Inside a loop, the iteration variable supports several attributes using `#`:
 | `v#next`     | For **text** loops only: byte offset immediately **after** the current character.    |
 | `v#count`    | Number of iterations completed so far (works on all collection types).               |
 | `v#first`    | `true` for the first element only (works on all collection types).                   |
-| `v#remove`   | Remove the current element (filtered loops only; see below).                         |
+| `v#remove`   | Remove the current element — in a filtered loop or a plain one (see below).          |
 
 **Collection type support matrix:**
 
@@ -1549,7 +1570,9 @@ This protects against infinite loops (vectors re-read their length each step) an
 corruption (sorted/index insertions invalidate stored iterator positions).
 
 Exceptions:
-- `e#remove` in a filtered loop is safe and allowed — it adjusts the iterator position after removal.
+- `e#remove` is safe and allowed — it adjusts the iterator position after removal, so every
+  element is still visited. A filter chooses WHICH elements to drop; it is not what makes
+  removal legal, and `for e in v { e#remove; }` empties the vector visiting each element once.
 - Field accesses are not blocked: `db.items += x` is allowed even if `db.items` is iterated via a local variable.
 
 ### While loops

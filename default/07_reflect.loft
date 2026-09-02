@@ -17,6 +17,8 @@
 // @PLN97 layout dump. Reading it rather than the type table is what stops
 // reflection becoming a second, drifting description of the same layout.
 
+// ---  Type reflection  ---
+
 /// What a type IS — the discriminant a caller matches on before reading the
 /// fields that only some kinds have.
 ///

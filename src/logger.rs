@@ -227,16 +227,20 @@ impl Logger {
     ///
     /// Unchanged when nothing to strip applies — a stdlib file, a library from elsewhere,
     /// or a path already relative. An absolute path is still better than a wrong one.
-    fn display_path<'a>(&self, loft_file: &'a str) -> &'a str {
-        let Some(ref base) = self.source_base else {
-            return loft_file;
+    ///
+    /// The separator is always `/`, on every platform, via [`crate::portable_path`]. A record
+    /// is shipped OFF the machine that wrote it, so the host's separator is not part of what
+    /// the file is called; and the `[levels]` keys this value is matched against are written
+    /// `sub/` in a config file that is checked in and shared, so a host-specific spelling
+    /// matched nothing there and the record named a file no reader could search for.
+    fn display_path(&self, loft_file: &str) -> String {
+        let relative = match self.source_base.as_ref().and_then(|base| base.to_str()) {
+            Some(base) => loft_file
+                .strip_prefix(base)
+                .map_or(loft_file, |rest| rest.trim_start_matches(['/', '\\'])),
+            None => loft_file,
         };
-        let Some(base) = base.to_str() else {
-            return loft_file;
-        };
-        loft_file
-            .strip_prefix(base)
-            .map_or(loft_file, |rest| rest.trim_start_matches(['/', '\\']))
+        crate::portable_path::portable_str(relative)
     }
 
     /// Write a log record.  Applies rate limiting and level filtering.
@@ -250,7 +254,8 @@ impl Logger {
         // record itself.  While the record carried an absolute path, a `[levels]` prefix
         // key such as `src/` could not match ANY file and the feature the generated config
         // documents had no working spelling (loft#1264).
-        let loft_file = self.display_path(loft_file);
+        let displayed = self.display_path(loft_file);
+        let loft_file: &str = &displayed;
 
         // Level filter
         if sev < self.effective_level(loft_file) {

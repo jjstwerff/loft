@@ -1,0 +1,4 @@
+fn main() {
+  unused = 1;
+  println("hello, world!");
+}

@@ -716,6 +716,7 @@ impl State {
 
     pub fn format_float(&mut self) {
         let pos = self.code::<u16>();
+        let token = self.code::<u8>();
         let plus = self.code::<bool>();
         let dir = self.code::<i8>();
         let precision = *self.get_stack::<i64>();
@@ -724,12 +725,13 @@ impl State {
         let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let s = self.string_mut(pos - 24);
         text_tl_fmt(tl_fn, s, |s| {
-            ops::format_float(s, val, width, precision, plus, dir)
+            ops::format_float(s, val, width, precision, token, plus, dir)
         });
     }
 
     pub fn format_stack_float(&mut self) {
         let pos = self.code::<u16>();
+        let token = self.code::<u8>();
         let plus = self.code::<bool>();
         let dir = self.code::<i8>();
         let precision = *self.get_stack::<i64>();
@@ -738,12 +740,13 @@ impl State {
         let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let s = self.string_ref_mut(pos - 24); // f64(8)+i64(8)+i64(8) = 24 bytes popped
         text_tl_fmt(tl_fn, s, |s| {
-            ops::format_float(s, val, width, precision, plus, dir)
+            ops::format_float(s, val, width, precision, token, plus, dir)
         });
     }
 
     pub fn format_single(&mut self) {
         let pos = self.code::<u16>();
+        let token = self.code::<u8>();
         let plus = self.code::<bool>();
         let dir = self.code::<i8>();
         let precision = *self.get_stack::<i64>();
@@ -755,12 +758,13 @@ impl State {
         let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let s = self.string_mut(pos - n);
         text_tl_fmt(tl_fn, s, |s| {
-            ops::format_single(s, val, width, precision, plus, dir)
+            ops::format_single(s, val, width, precision, token, plus, dir)
         });
     }
 
     pub fn format_stack_single(&mut self) {
         let pos = self.code::<u16>();
+        let token = self.code::<u8>();
         let plus = self.code::<bool>();
         let dir = self.code::<i8>();
         let precision = *self.get_stack::<i64>();
@@ -771,7 +775,7 @@ impl State {
         let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let s = self.string_ref_mut(pos - n);
         text_tl_fmt(tl_fn, s, |s| {
-            ops::format_single(s, val, width, precision, plus, dir)
+            ops::format_single(s, val, width, precision, token, plus, dir)
         });
     }
 

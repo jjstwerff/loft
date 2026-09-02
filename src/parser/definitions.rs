@@ -526,9 +526,26 @@ impl Parser {
             if !self.lexer.has_token(",") || self.lexer.peek_token("}") {
                 break;
             }
-            if nr == 255 {
-                self.lexer
-                    .diagnostic(Level::Error, "Too many enumerate values");
+            // A plain enum is ONE BYTE and both ends of it are reserved: `0` is the
+            // undefined value the variants are numbered away from (`nr + 1` below), and
+            // `255` is the null sentinel every scalar type has
+            // (formal/types.md § Per-type null, `OpConvBoolFromEnum` = `@v1 != 255 && @v1
+            // != 0`).  So the highest variant a program can READ BACK is `254`, and the
+            // 254th variant is the last one.  The refusal has to come BEFORE the next
+            // variant is numbered, because numbering it is what breaks: variant 255 takes
+            // the null sentinel and answers `null` from a name that matched, and variant
+            // 256 overflows the `u8` — an internal compiler error under debug assertions,
+            // a wrap to the reserved `0` without them.
+            if nr == 253 {
+                self.lexer.diagnostic(
+                    Level::Error,
+                    "Too many enum variants — an enum holds at most 254, because a variant is one byte and 0 and 255 are reserved",
+                );
+                // Skip the rest of the variant list rather than breaking out mid-name: the
+                // caller's `token("}")` is standing at the next variant otherwise, and one
+                // count mistake reported four diagnostics — the real one and three
+                // `Expect token` cascades behind it.  The `}` is left for that caller.
+                self.lexer.recover_to(&["}"]);
                 break;
             }
             nr += 1;
@@ -1184,6 +1201,7 @@ impl Parser {
         // @PLN25 E2 — clear any type-var from a previous function before parsing
         // this one; set below if this function is generic.
         self.cur_type_var = u32::MAX;
+        self.cur_type_var_name.clear();
         if !self.default && !is_lower(&fn_name) && !is_op(&fn_name) {
             diagnostic!(
                 self.lexer,
@@ -1241,6 +1259,11 @@ impl Parser {
             // resolves it to Reference(d, []).  The definition is never
             // compiled — it only exists for the template's type resolution.
             if is_generic {
+                let bounds_key = Self::type_var_bounds_key(&pending_bounds);
+                let claimed = self
+                    .type_var_holders
+                    .get(&(type_var_name.clone(), bounds_key.clone()))
+                    .copied();
                 let existing = self.data.def_nr(&type_var_name);
                 // A prior generic's type-var placeholder is an attribute-less `Struct`, safe to
                 // reuse (that is how `<T>` is shared across functions). Any OTHER existing def
@@ -1249,7 +1272,8 @@ impl Parser {
                 // name. Report it (mirroring the `type X conflicts with …` diagnostic) instead
                 // of silently binding the parameter to that def and panicking later in
                 // `predict_generic_return_type`.
-                let collision = existing != u32::MAX
+                let collision = claimed.is_none()
+                    && existing != u32::MAX
                     && !(self.data.def(existing).def_type() == DefType::Struct
                         && self.data.def(existing).attributes().is_empty());
                 if collision {
@@ -1268,22 +1292,66 @@ impl Parser {
                     // Stop treating the function as generic so the unresolved parameter never
                     // reaches the generic type-resolution path (which would panic).
                     is_generic = false;
-                } else if self.first_pass && existing == u32::MAX {
-                    // register the type variable as a struct so parse_type
-                    // resolves it to Reference(d, []).  The definition is never
-                    // compiled — it only exists for the template's type resolution.
-                    let tv_nr =
+                } else if let Some(holder) = claimed {
+                    // This exact `(spelling, bounds)` header has been seen — on the other
+                    // pass, or in another function declaring the same variable the same way.
+                    self.cur_type_var = holder;
+                } else {
+                    // `(G-Gen)`: this header INTRODUCES the variable.  It may reuse the
+                    // placeholder the spelling already names, but only while that placeholder
+                    // stands for the same bound set — a second bound set is a second variable
+                    // and needs a placeholder of its own, because the placeholder is what keys
+                    // the bound-method stubs (loft#1300, loft#1301).
+                    let reusable = existing != u32::MAX
+                        && self
+                            .type_var_bounds
+                            .get(&existing)
+                            .is_none_or(|b| *b == bounds_key);
+                    let holder = if reusable {
+                        existing
+                    } else if !self.first_pass {
+                        // Placeholders are minted on the first pass; reaching here on the
+                        // second means the first refused this header, and there is nothing
+                        // to bind.
+                        u32::MAX
+                    } else {
+                        // register the type variable as a struct so parse_type
+                        // resolves it to Reference(d, []).  The definition is never
+                        // compiled — it only exists for the template's type resolution.
+                        //
+                        // Under its own spelling while that is free; otherwise under a name
+                        // the source cannot write, since `#` is not an identifier character,
+                        // so `T#2` is reachable only through this header.
+                        //
+                        // Uniqueness is asked PROGRAM-WIDE, not of this source: the
+                        // placeholder is registered as a store structure under
+                        // `__typevar_<name>`, and that registry is not keyed by source.
+                        let mut name = type_var_name.clone();
+                        let mut n = 1;
+                        while self.data.name_taken_anywhere(&name) {
+                            n += 1;
+                            name = format!("{type_var_name}#{n}");
+                        }
+                        let tv_nr = self.data.add_def(&name, self.lexer.pos(), DefType::Struct);
                         self.data
-                            .add_def(&type_var_name, self.lexer.pos(), DefType::Struct);
-                    self.data
-                        .set_returned(tv_nr, Type::Reference(tv_nr, crate::data::Deps::none()));
+                            .set_returned(tv_nr, Type::Reference(tv_nr, crate::data::Deps::none()));
+                        tv_nr
+                    };
+                    if holder != u32::MAX {
+                        self.type_var_holders
+                            .insert((type_var_name.clone(), bounds_key.clone()), holder);
+                        self.type_var_bounds.insert(holder, bounds_key);
+                    }
+                    self.cur_type_var = holder;
                 }
             }
-            // @PLN25 E2 — record the type-var def_nr (valid in both passes: the
-            // stub was just added in the first pass, already exists in the
-            // second) so `e2_nullable_elem` leaves a generic `vector<T>` dense.
+            // @PLN25 E2 — the type-var def_nr is recorded above (valid in both passes: the
+            // placeholder is added on the first and found again on the second) so
+            // `e2_nullable_elem` leaves a generic `vector<T>` dense.  It is also what
+            // `parse_type` resolves the spelling to from here on, which is what keeps two
+            // headers writing `T` apart.
             if is_generic {
-                self.cur_type_var = self.data.def_nr(&type_var_name);
+                self.cur_type_var_name.clone_from(&type_var_name);
             }
             if !self.parse_arguments(&fn_name, &mut arguments) {
                 return true;
@@ -1323,8 +1391,10 @@ impl Parser {
         }
         // validate that the type variable appears in the first parameter.
         if is_generic && !arguments.is_empty() {
-            let tv_nr = self.data.def_nr(&type_var_name);
-            let has_tv = arguments[0].typedef.contains_def(tv_nr);
+            // The HEADER's variable, not whatever the spelling names globally: two headers
+            // writing `T` bind two placeholders, and the parameter was resolved against
+            // this one.
+            let has_tv = arguments[0].typedef.contains_def(self.cur_type_var);
             if !has_tv && !self.first_pass {
                 diagnostic!(
                     self.lexer,
@@ -1469,7 +1539,7 @@ impl Parser {
             // the body parser can emit `Value::Call(t_stub_nr, ...)` for method/op calls on T.
             // `re_resolve_call` then substitutes these with the concrete type's implementation.
             let iface_nrs: Vec<u32> = self.data.definitions[self.context as usize].bounds.clone();
-            self.create_bound_method_stubs(&type_var_name, &iface_nrs);
+            self.create_bound_method_stubs(self.cur_type_var, &iface_nrs);
         }
         let mut returned_not_null = false;
         let mut result = if self.lexer.has_token("->") {
@@ -2574,7 +2644,9 @@ impl Parser {
                 return None;
             }
         } else {
-            self.data.def_nr(type_name)
+            // `(G-Gen)` — the enclosing generic header gets first refusal on the spelling
+            // (loft#1300, loft#1301).
+            self.def_nr_in_scope(type_name)
         };
         if self.first_pass && tp_nr == u32::MAX && type_name != "spatial" {
             // @P296-sibling — for a qualified `lib::Type` reference, `tp_nr`
@@ -2919,9 +2991,15 @@ impl Parser {
                         // default) as a no-op, for back-compat with existing source.
                         self.has_deprecated_not_null();
                         self.lexer.closing_angle();
-                        // loft#923 — a KEYED collection is not a vector element, and
-                        // saying so here is the whole of it: this is the one
-                        // chokepoint every `vector<…>` element passes through.
+                        // loft#923 — a KEYED collection is not a vector element.
+                        //
+                        // ⚠ This is the chokepoint every WRITTEN `vector<…>` element passes
+                        // through, and that is not every vector: an INFERRED literal
+                        // (`hs = [mk(1), mk(2)]`) never writes the type, so it reached no
+                        // check here and panicked the interpreter instead — the copy landed
+                        // on `u16::MAX`, which the source-free bit masks to `0x7FFF`, an
+                        // index into an 85-row table (loft#1298).  `parse_vector` asks
+                        // `refuse_keyed_vector_element` for the same refusal.
                         //
                         // Nothing could ever fill one. A literal element types as the
                         // CONTENT struct ("cannot store vector<E> elements in a
@@ -2940,25 +3018,7 @@ impl Parser {
                         // registered name carries its key list in the schema's own
                         // spelling (`sorted<E,[("k", true)]>`), which is not what the
                         // author wrote and not something to hand back to them.
-                        let kind = match tp.base() {
-                            Type::Hash(_, _, _) => Some("hash"),
-                            Type::Sorted(_, _, _) => Some("sorted"),
-                            Type::Index(_, _, _) => Some("index"),
-                            Type::Radix(_, _, _) => Some("spatial"),
-                            Type::Trie(_, _, _) => Some("trie"),
-                            _ => None,
-                        };
-                        if let Some(kind) = kind {
-                            diagnostic!(
-                                self.lexer,
-                                Level::Error,
-                                "a `{kind}` cannot be a vector ELEMENT — a keyed \
-                                 collection has no element form anything can write, so \
-                                 `vector<{kind}<…>>` could only ever be declared and \
-                                 stay empty. Hold it in a struct and make a vector of \
-                                 THAT: the extra record is what the element would have \
-                                 been anyway."
-                            );
+                        if self.refuse_keyed_vector_element(&tp) {
                             return Some(Type::Unknown(0));
                         }
                         // @PLN25 storage-vs-access-nullability: DENSE by default; the
@@ -3725,6 +3785,18 @@ impl Parser {
         }
     }
 
+    /// The key that identifies a generic header's BOUND SET — the bound names as written,
+    /// ordered and de-duplicated so `<T: A + B>` and `<T: B + A>` are one set.
+    ///
+    /// Deliberately the spellings and not the resolved `def_nr`s: an interface may still be
+    /// a forward reference on the first pass, and the key has to answer the same on both.
+    fn type_var_bounds_key(bounds: &[String]) -> String {
+        let mut names: Vec<&str> = bounds.iter().map(String::as_str).collect();
+        names.sort_unstable();
+        names.dedup();
+        names.join("+")
+    }
+
     /// I7/I8.1: build the `t_<LEN><Holder>_<method>` stubs that let a body call a bound
     /// interface's methods on a value whose type is not concrete yet.
     ///
@@ -3742,9 +3814,13 @@ impl Parser {
     /// pass the interface method's return type can still be an unresolved forward
     /// reference: [`Parser::refresh_bound_method_stubs`] re-derives the signature between
     /// the passes, where every type IS resolved.
-    fn create_bound_method_stubs(&mut self, holder_name: &str, bounds: &[u32]) {
-        let holder_nr = self.data.def_nr(holder_name);
-        if holder_nr == u32::MAX || holder_name.is_empty() || self.data.def_nr("Self") == u32::MAX {
+    fn create_bound_method_stubs(&mut self, holder_nr: u32, bounds: &[u32]) {
+        if holder_nr == u32::MAX || self.data.def_nr("Self") == u32::MAX {
+            return;
+        }
+        let holder_name = self.data.def(holder_nr).name().to_string();
+        let holder_name = holder_name.as_str();
+        if holder_name.is_empty() {
             return;
         }
         // loft#1153 — this is the ONE place that knows a definition is a bound HOLDER, so it is
@@ -3761,15 +3837,72 @@ impl Parser {
                 let Some(method_suffix) = Self::interface_method_name(&self.data, child_nr) else {
                     continue;
                 };
-                let t_stub_name = crate::data::Data::bound_stub_name(holder_name, &method_suffix);
-                if self.data.def_nr(&t_stub_name) != u32::MAX {
-                    continue; // already created (e.g. multiple bounds share a method)
+                // The stub is keyed per SIGNATURE, so the arity is part of the name.  Two
+                // requirements of one name at different arities are two stubs, which is what
+                // lets `Numeric` declare unary negation beside binary subtraction — both
+                // desugar to `OpMin` (loft#1275, `formal/interfaces.md` `D-gen-4`).
+                let t_stub_name = crate::data::Data::bound_stub_name(
+                    holder_name,
+                    &method_suffix,
+                    self.data.attributes(child_nr),
+                );
+                let existing_stub = self.data.def_nr(&t_stub_name);
+                // Two arities of one NAMED method cannot both be reached, and this is the only
+                // place that can say so.  An OPERATOR's arity is fixed by its syntax — `-a` is
+                // one operand and `a - b` is two — so `call_op` asks for the exact stub and
+                // both are usable, which is what loft#1275 opened up.  A method call resolves
+                // its RECEIVER before its arguments are parsed, so `x.sizer()` has no arity to
+                // ask with; `find_fn` answers "ambiguous" and the caller can only report a
+                // field it could not resolve.  Refusing at the DECLARATION names both arities
+                // and the cure instead.
+                if self.first_pass
+                    && existing_stub == u32::MAX
+                    && !crate::parser::is_op(&method_suffix)
+                    && let Some(other) = (1..=crate::data::Data::MAX_BOUND_ARITY)
+                        .filter(|a| *a != self.data.attributes(child_nr))
+                        .find(|a| {
+                            self.data.def_nr(&crate::data::Data::bound_stub_name(
+                                holder_name,
+                                &method_suffix,
+                                *a,
+                            )) != u32::MAX
+                        })
+                {
+                    let spelling = crate::data::Data::type_var_spelling(holder_name);
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "the bounds on '{spelling}' require two different '{method_suffix}' — \
+                         one taking {} parameter(s) and one taking {} — and a method call \
+                         resolves its receiver before its arguments, so only one of them can \
+                         be reached. Bound '{spelling}' by the interface that declares the one \
+                         this body calls, and give the other its own generic",
+                        other,
+                        self.data.attributes(child_nr),
+                    );
+                }
+                if existing_stub != u32::MAX {
+                    // Sharing one stub is the NORM and now the only case that reaches here:
+                    // two bounds declaring the same method the SAME way, or the same header
+                    // seen again on the second pass, want the same stub.  A pair that
+                    // disagreed on ARITY used to land here too and had to be refused, because
+                    // one name could hold only one signature; the key carries the arity now,
+                    // so they are two stubs and never meet (loft#1275).
+                    //
+                    // Two bounds agreeing on the arity and disagreeing on the parameter TYPES
+                    // still share, and still silently take the first.  That was true before
+                    // this change as well — the check it replaces compared arities only — so
+                    // it is an unclosed gap and not a regression.
+                    continue;
                 }
                 let t_stub_nr =
                     self.data
                         .add_def(&t_stub_name, self.lexer.pos(), DefType::Function);
                 self.bound_method_stubs
                     .push((t_stub_nr, child_nr, holder_nr));
+                // Durable, unlike the vec above, which `refresh_bound_method_stubs` takes
+                // between the passes — leaving nothing for the conflict check to compare.
+                self.stub_origin.insert(t_stub_nr, child_nr);
                 self.set_bound_stub_signature(t_stub_nr, child_nr, holder_nr);
             }
         }
@@ -4065,7 +4198,8 @@ impl Parser {
                         // the associated type, so it needs the same dispatch stubs a bounded
                         // type variable gets.  This is the whole of "an associated type is a
                         // type variable owned by the interface".
-                        self.create_bound_method_stubs(&assoc_def, &resolved);
+                        let assoc_nr = self.data.def_nr(&assoc_def);
+                        self.create_bound_method_stubs(assoc_nr, &resolved);
                     }
                 }
                 self.lexer.has_token(";");
@@ -4132,7 +4266,13 @@ impl Parser {
             // `children_of(d_nr)` enumerates them for satisfaction checking;
             // T-stub creation strips the prefix to extract the method name.
             if self.first_pass && d_nr != u32::MAX {
-                let stub_name = format!("__iface_{d_nr}_{method_name}");
+                // The arity is part of the name for the same reason it keys a BOUND stub:
+                // `(G-Iface)` calls an interface a set of SIGNATURES, and a name is not one.
+                // Without it a second `op -` — binary subtraction beside unary negation, both
+                // spelled `OpMin` — collided with the first and the `def_nr` guard below
+                // silently dropped it, so the interface never carried two requirements and no
+                // bound could offer `a - b` (loft#1275, `D-gen-4`).
+                let stub_name = format!("__iface_{d_nr}#{}_{method_name}", args.len());
                 if self.data.def_nr(&stub_name) == u32::MAX {
                     let stub_nr =
                         self.data

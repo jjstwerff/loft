@@ -281,7 +281,13 @@ pub fn format_text(s: &mut String, val: &str, width: i64, dir: i8, token: u8) {
     };
     // dir=2 means "unset default"; text defaults to left-align (-1)
     let dir = if dir == 2 { -1 } else { dir };
-    let mut tokens = width as usize;
+    // @FR-F-Spec — a width is a MINIMUM field size, so anything at or below zero asks for
+    // no padding.  Callers reach a negative one by arithmetic rather than by spelling it:
+    // `format_prefixed` and `format_signed` subtract the sign or the `0x` marker they
+    // emitted themselves, and a spec with no width at all starts that subtraction from 0.
+    // `as usize` turned those into ~1.8e19 pad characters, which is an unbounded
+    // allocation rather than a wrong string — `println("{-1:0}")` was OOM-killed.
+    let mut tokens = width.max(0) as usize;
     for _ in val.chars() {
         if tokens == 0 {
             break;
@@ -833,6 +839,52 @@ pub fn format_long_with_tag(
     format_long(s, val, radix, width, token, plus, note, dir);
 }
 
+/// The character that pads a `null` out to its field.
+///
+/// @FR-F-Spec-Zero — a zero pad fills a NUMBER, and `null` is a sentinel, not a number:
+/// F-Spec already draws that line for the sign flag ("`null` … takes none"), and the pad
+/// is the same question. `0000null` reads as a numeric value and is a rendering of nothing,
+/// so a null keeps the space pad whatever the spec asked for. Every other pad character is
+/// field-shaping and applies unchanged.
+fn null_pad(token: u8) -> u8 {
+    if token == b'0' { b' ' } else { token }
+}
+
+/// Whether an already-rendered number is the null sentinel's text rather than digits.
+fn is_null_text(res: &str) -> bool {
+    res == "null"
+}
+
+/// The pseudo-radix that renders hexadecimal in UPPER case — `{255:X}` is `FF`.
+///
+/// @FR-F-Spec — the spec's radix field is already a render MODE wearing a radix's name
+/// (`radix_for` answers `-1` for JSON and `1` for scientific), so upper-case hex takes a
+/// value of its own rather than a second argument on four opcodes.  It has to be
+/// distinguishable from `16`: `x` and `X` both mapped to `16` and the renderer wrote
+/// `{val:x}`, so `X` — a spelling the compiler's own "use `x`, `X`, `b`, `o` or `d`"
+/// diagnostic tells the reader to reach for — answered lower case with nothing saying so.
+pub const HEX_UPPER: u8 = 17;
+
+/// Emit `digits` behind a `prefix` — a sign, or a `0b` / `0o` / `0x` radix marker.
+///
+/// @FR-F-Spec-Zero — a ZERO pad fills the number, so the prefix stays in front of the
+/// zeros it adds: `{-1:04}` is `-001`, not `0-01`, and `{255:#06x}` is `0x00ff`, not
+/// `000xff`.  Every other pad token pads the rendering as a whole, so there the prefix
+/// simply travels with the digits.  One home for both, because the decimal arm carried
+/// the sign half alone and the three radix arms kept producing a prefix a reader cannot
+/// paste back into a program.
+fn format_prefixed(s: &mut String, prefix: &str, digits: &str, width: i64, dir: i8, token: u8) {
+    if token == b'0' && !prefix.is_empty() {
+        *s += prefix;
+        format_text(s, digits, width - prefix.chars().count() as i64, dir, token);
+        return;
+    }
+    let mut res = String::with_capacity(prefix.len() + digits.len());
+    res += prefix;
+    res += digits;
+    format_text(s, &res, width, dir, token);
+}
+
 /**
 Format an integer.
 # Panics
@@ -849,42 +901,40 @@ pub fn format_int(
     note: bool,
 ) {
     if val == i32::MIN {
-        format_text(s, "null", width, 1, token);
+        format_text(s, "null", width, 1, null_pad(token));
         return;
     }
     let mut res = String::new();
-    match radix {
+    let prefix = match radix {
         2 => {
-            res += if note { "0b" } else { "" };
             write!(res, "{val:b}").unwrap();
+            if note { "0b" } else { "" }
         }
         8 => {
-            res += if note { "0o" } else { "" };
             write!(res, "{val:o}").unwrap();
+            if note { "0o" } else { "" }
         }
         10 => {
-            let sign = if val >= 0 {
-                if plus { "+" } else { "" }
-            } else {
-                "-"
-            };
-            if token == b'0' && !sign.is_empty() {
-                // Sign before zeros: "-01" not "0-1"
-                *s += sign;
-                write!(res, "{}", val.abs()).unwrap();
-                format_text(s, &res, width - 1, 1, token);
-                return;
-            }
-            res += sign;
             write!(res, "{}", val.abs()).unwrap();
+            if val < 0 {
+                "-"
+            } else if plus {
+                "+"
+            } else {
+                ""
+            }
         }
         16 => {
-            res += if note { "0x" } else { "" };
             write!(res, "{val:x}").unwrap();
+            if note { "0x" } else { "" }
+        }
+        HEX_UPPER => {
+            write!(res, "{val:X}").unwrap();
+            if note { "0x" } else { "" }
         }
         _ => panic!("Unknown radix"),
-    }
-    format_text(s, &res, width, 1, token);
+    };
+    format_prefixed(s, prefix, &res, width, 1, token);
 }
 
 /**
@@ -910,51 +960,54 @@ pub fn format_long(
     // We use dir=2 as "unset/default" from the parser, mapped to right-align here.
     let dir = if dir == 2 { 1 } else { dir };
     if val == i64::MIN {
-        format_text(s, "null", width, dir, token);
+        format_text(s, "null", width, dir, null_pad(token));
         return;
     }
     let mut res = String::new();
-    match radix {
+    let prefix = match radix {
         2 => {
-            if note {
-                res += "0b";
-            }
             write!(res, "{val:b}").unwrap();
+            if note { "0b" } else { "" }
         }
         8 => {
-            if note {
-                res += "0o";
-            }
             write!(res, "{val:o}").unwrap();
+            if note { "0o" } else { "" }
         }
         10 => {
-            let sign = if val >= 0 {
-                if plus { "+" } else { "" }
-            } else {
-                "-"
-            };
-            if token == b'0' && !sign.is_empty() {
-                // Sign before zeros: "-01" not "0-1"
-                *s += sign;
-                write!(res, "{}", val.abs()).unwrap();
-                format_text(s, &res, width - 1, dir, token);
-                return;
-            }
-            res += sign;
             write!(res, "{}", val.abs()).unwrap();
+            if val < 0 {
+                "-"
+            } else if plus {
+                "+"
+            } else {
+                ""
+            }
         }
         16 => {
-            res += if note { "0x" } else { "" };
             write!(res, "{val:x}").unwrap();
+            if note { "0x" } else { "" }
+        }
+        HEX_UPPER => {
+            write!(res, "{val:X}").unwrap();
+            if note { "0x" } else { "" }
         }
         _ => panic!("Unknown radix"),
-    }
-    format_text(s, &res, width, dir, token);
+    };
+    format_prefixed(s, prefix, &res, width, dir, token);
 }
 
 use std::fmt::Write as _;
 
-pub fn format_float(s: &mut String, val: f64, width: i64, precision: i64, plus: bool, dir: i8) {
+#[allow(clippy::too_many_arguments)]
+pub fn format_float(
+    s: &mut String,
+    val: f64,
+    width: i64,
+    precision: i64,
+    token: u8,
+    plus: bool,
+    dir: i8,
+) {
     let dir = if dir == 2 { 1 } else { dir };
     let mut res = String::new();
     // @PLN10 — NaN is the float null sentinel (`?? ` / `!` treat it as null) and
@@ -968,10 +1021,19 @@ pub fn format_float(s: &mut String, val: f64, width: i64, precision: i64, plus: 
         write!(res, "{val}").unwrap();
     }
     sign_a_number(&mut res, plus);
-    format_text(s, &res, width, dir, b' ');
+    format_signed(s, &res, width, dir, token);
 }
 
-pub fn format_single(s: &mut String, val: f32, width: i64, precision: i64, plus: bool, dir: i8) {
+#[allow(clippy::too_many_arguments)]
+pub fn format_single(
+    s: &mut String,
+    val: f32,
+    width: i64,
+    precision: i64,
+    token: u8,
+    plus: bool,
+    dir: i8,
+) {
     let dir = if dir == 2 { 1 } else { dir };
     let mut res = String::new();
     // @PLN10 — NaN is the float null sentinel; render as `null` (see `format_float`).
@@ -983,7 +1045,32 @@ pub fn format_single(s: &mut String, val: f32, width: i64, precision: i64, plus:
         write!(res, "{val}").unwrap();
     }
     sign_a_number(&mut res, plus);
-    format_text(s, &res, width, dir, b' ');
+    format_signed(s, &res, width, dir, token);
+}
+
+/// Pad an already-rendered and already-signed number, keeping a zero pad behind its sign.
+///
+/// @FR-F-Spec-Zero — the float twin of [`format_prefixed`]: a `-` or `+` is part of the number,
+/// not of the digits a zero pad fills, so `{-3.5:08}` is `-00003.5`.  `null` (the NaN
+/// sentinel) is not a number and takes no zero pad — `{nf:08}` is five spaces and `null`,
+/// which is what `format_long` already answers for the integer sentinel.
+fn format_signed(s: &mut String, res: &str, width: i64, dir: i8, token: u8) {
+    if token == b'0'
+        && !is_null_text(res)
+        && let Some(sign) = res.strip_prefix(['-', '+'])
+    {
+        s.push(res.as_bytes()[0] as char);
+        format_text(s, sign, width - 1, dir, token);
+        return;
+    }
+    // `null_pad` applies to the SENTINEL only: a real number keeps whatever pad the spec
+    // asked for, which is the whole point of the zero pad reaching these renderers.
+    let pad = if is_null_text(res) {
+        null_pad(token)
+    } else {
+        token
+    };
+    format_text(s, res, width, dir, pad);
 }
 
 /// Give an already-rendered number the `+` the format asked for.

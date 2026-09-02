@@ -20,22 +20,27 @@
 <style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
 </head>
 <body>
-<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <a href="libraries.html">Libraries</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <span class="cur">Coroutines</span> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <a href="38-call-it-yourself.html">Call it yourself</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <a href="libraries.html">Libraries</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <span class="cur">Coroutines</span> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <a href="38-call-it-yourself.html">Call it yourself</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries.html">Optional C libraries</a> · <a href="stdlib-system-directories.html">System directories</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations.html">Vector operations</a> · <a href="stdlib-stack-traces.html">Stack traces</a> · <a href="stdlib-coroutines.html">Coroutines</a> · <a href="stdlib-json.html">JSON</a> · <a href="stdlib-type-reflection.html">Type reflection</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>Coroutines</h1>
 <article>
-<p>#warn Variable d is never read @TITLE: Lazy sequences with generators and yield A generator function produces values one at a time. Declare the return type as <code>iterator&lt;T&gt;</code> and use <code>yield</code> to emit each value. The function body is suspended between yields and resumed when the next value is requested.  When the body finishes the generator is exhausted. Generators are useful when you want to produce values on demand, stop early with <code>break</code>, or chain sequences without building intermediate collections.</p>
-<h2 id="declaring-a-generator-function">Declaring a generator function</h2>
-<p>A function whose return type is <code>iterator&lt;T&gt;</code> is a generator. <code>yield value</code> emits one item and pauses; the next call resumes from there.</p>
+<p>A generator function produces values one at a time. Declare the return type as <code>iterator&lt;T&gt;</code> and use <code>yield</code> to emit each value. The function body is suspended between yields and resumed when the next value is requested.  When the body finishes the generator is exhausted. Generators are useful when you want to produce values on demand, stop early with <code>break</code>, or chain sequences without building intermediate collections.</p>
 <h2 id="iterating-with-a-for-loop">Iterating with a for loop</h2>
 <p>A <code>for</code> loop drives the generator forward automatically. The body runs once per yielded value. Use <code>break</code> to stop early without consuming the rest.</p>
+<h2 id="the-body-really-is-suspended">The body really is suspended</h2>
+<p>Calling a generator runs none of its body; each advance runs exactly one more slice, up to the next <code>yield</code>.  Write the loop so its body ENDS in a single <code>yield</code> and this holds on both backends.</p>
 <h2 id="manual-advance-with-next-and-exhausted">Manual advance with next() and exhausted()</h2>
-<p>Call <code>next(gen)</code> yourself when you need fine-grained control. <code>exhausted(gen)</code> returns true once there are no more values.</p>
+<p>Call <code>next(gen)</code> yourself when you need fine-grained control.</p>
 <h2 id="generators-with-parameters">Generators with parameters</h2>
 <p>A generator function may take any parameters, including text. Parameter values are preserved across yields so the generator can use them throughout its lifetime.</p>
 <h2 id="delegation-with-yield-from">Delegation with yield from</h2>
 <p><code>yield from sub_gen()</code> forwards all values from another generator inline, as if each of its yields appeared at this point directly.</p>
 <h2 id="early-termination-with-break">Early termination with break</h2>
 <p>Stopping a <code>for</code> loop before the generator is exhausted is safe. The abandoned generator frame is freed automatically.</p>
+<h2 id="a-generator-runs-once-and-has-no-return">A generator runs once, and has no return</h2>
+<p>Two rules a reader coming from another language will look for.</p>
+<pre><code><span class="kw">struct</span> <span class="en">Trace</span> {
+  steps: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">count_up</span>(start: <span class="ty"><a href="stdlib-types.html">integer</a></span>, stop: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
   <span class="kw">for</span> i <span class="kw">in</span> start..stop {
     yield i;
@@ -44,6 +49,13 @@
 <pre><code><span class="kw">fn</span> <span class="fn-call">squares</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
   <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">1..</span>=n {
     yield i * i;
+  }
+}</code></pre>
+<p>Records one step per value produced, so the consumer can see how much of the body actually ran.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">counted</span>(<span class="kw">limit</span>: <span class="ty"><a href="stdlib-types.html">integer</a></span>, t: <span class="en">Trace</span>) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">1..</span>=<span class="kw">limit</span> {
+    t.steps += <span class="nm">1</span>;
+    yield i;
   }
 }</code></pre>
 <p>Yields the length of <code>s</code> twice — shows that a text parameter survives yields.</p>
@@ -60,9 +72,25 @@
   yield from <span class="fn-call">inner_vals</span>();
   yield <span class="nm">2</span>;
 }</code></pre>
+<p>Delegating to a generator that takes an ARGUMENT is written as a plain forwarding loop rather than <code>yield from</code> — see the note in that section.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">scaled_by</span>(factor: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  yield factor;
+  yield factor * <span class="nm">10</span>;
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">forwards_with_argument</span>() -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  <span class="kw">for</span> v <span class="kw">in</span> <span class="fn-call">scaled_by</span>(<span class="nm">4</span>) {
+    yield v;
+  }
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">large_range</span>(<span class="kw">limit</span>: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
   <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">1..</span>=<span class="kw">limit</span> {
     yield i;
+  }
+}</code></pre>
+<p>Ends early with <code>break</code>.  A generator has no <code>return</code>, so <code>break</code> is how a body stops before its loop would.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">first_positive</span>(v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  <span class="kw">for</span> x <span class="kw">in</span> v {
+    <span class="kw">if</span> x &gt; <span class="nm">0</span> { yield x; <span class="kw">break</span>; }
   }
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
@@ -82,16 +110,28 @@
     <span class="kw">if</span> idx == <span class="nm">4</span> { <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s == <span class="nm">16</span>, <span class="st">"sq4: {s}"</span>); }
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(idx == <span class="nm">4</span>, <span class="st">"squares count: {idx}"</span>);</code></pre>
+<h2 id="the-body-really-is-suspended">The body really is suspended</h2>
+<p><code>counted</code> is asked for a thousand values and the loop breaks after six. Its step counter shows the body ran six times, not a thousand — the work for the values nobody asked for was never done.</p>
+<p>⚠ That holds on BOTH backends for the shape written here: a loop whose body ends in one unconditional <code>yield</code>.  Other shapes — a statement after the yield, a yield inside an <code>if</code> or <code>match</code>, a nested loop, a <code>continue</code> — still run the whole loop eagerly on --native, so their side effects happen for values the consumer never asks for (measured: 1000 steps where the interpreter does 5).  The VALUES are the same either way; it is the side effects that differ.  Keep the yield last, or do not put observable work in a generator body.  COROUTINE.md tracks this as CL-9.</p>
+<pre><code>  trace = <span class="en">Trace</span> { steps: <span class="nm">0</span> };
+  seen = <span class="nm">0</span>;
+  <span class="kw">for</span> n <span class="kw">in</span> <span class="fn-call">counted</span>(<span class="nm">1000</span>, trace) {
+    seen += <span class="nm">1</span>;
+    <span class="kw">if</span> seen &gt; <span class="nm">5</span> { <span class="kw">break</span>; }
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(trace.steps == <span class="nm">6</span>, <span class="st">"the body ran once per value asked for: {trace.steps}"</span>);</code></pre>
 <h2 id="manual-advance-with-next-and-exhausted">Manual advance with next() and exhausted()</h2>
+<p><code>exhausted</code> is true once an advance has run off the END of the body — not as soon as the last value has been handed out.  After the third value here there are no more values, and <code>exhausted</code> is still false; it takes one more <code>next</code> to discover the end, and that call answers null.</p>
+<p>So <code>while !exhausted(g)</code> runs one iteration too many.  Drive the generator with <code>for</code>, or stop on the null that <code>next</code> answers.</p>
 <pre><code>  gen = <span class="fn-call">count_up</span>(<span class="nm">10</span>, <span class="nm">13</span>);
   a = <span class="fn-call">next</span>(gen);
   b = <span class="fn-call">next</span>(gen);
   c = <span class="fn-call">next</span>(gen);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(a == <span class="nm">10</span> &amp;&amp; b == <span class="nm">11</span> &amp;&amp; c == <span class="nm">12</span>, <span class="st">"manual next: {a},{b},{c}"</span>);</code></pre>
-<p>One extra advance past the last element; exhausted() is true after that.</p>
-<pre><code>  d = <span class="fn-call">next</span>(gen);
-  done = <span class="fn-call">exhausted</span>(gen);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(done, <span class="st">"exhausted after last value"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(a == <span class="nm">10</span> &amp;&amp; b == <span class="nm">11</span> &amp;&amp; c == <span class="nm">12</span>, <span class="st">"manual next: {a},{b},{c}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-coroutines.html">exhausted</a></span>(gen), <span class="st">"not yet exhausted, though no values remain"</span>);
+  past_end = <span class="fn-call">next</span>(gen);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(past_end == <span class="kw">null</span>, <span class="st">"next past the last value answers null"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-coroutines.html">exhausted</a></span>(gen), <span class="st">"and now it is exhausted"</span>);</code></pre>
 <h2 id="generators-with-parameters">Generators with parameters</h2>
 <p><code>len_twice</code> takes a text parameter and yields its length twice. The text value is preserved across the yield.</p>
 <pre><code>  lt_total = <span class="nm">0</span>;
@@ -105,6 +145,12 @@
     yf_total += n;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(yf_total == <span class="nm">33</span>, <span class="st">"yield from: 1+10+20+2={yf_total}"</span>);</code></pre>
+<p>⚠ <code>yield from</code> works today only for a sub-generator that takes NO arguments; with an argument it will not compile on --native, though the interpreter runs it (loft#1277).  Until that closes, forward such a generator with a plain loop — <code>for v in sub(arg) { yield v; }</code>, which means the same thing and works on both backends.</p>
+<pre><code>  fwd_total = <span class="nm">0</span>;
+  <span class="kw">for</span> n <span class="kw">in</span> <span class="fn-call">forwards_with_argument</span>() {
+    fwd_total += n;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(fwd_total == <span class="nm">44</span>, <span class="st">"forwarded with an argument: 4+40={fwd_total}"</span>);</code></pre>
 <h2 id="early-termination-with-break">Early termination with break</h2>
 <p>Stop after the first 5 values from a 1000-element generator.</p>
 <pre><code>  limit_total = <span class="nm">0</span>;
@@ -112,7 +158,20 @@
     <span class="kw">if</span> n &gt; <span class="nm">5</span> { <span class="kw">break</span>; }
     limit_total += n;
   }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(limit_total == <span class="nm">15</span>, <span class="st">"early break sum 1..5: {limit_total}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(limit_total == <span class="nm">15</span>, <span class="st">"early break sum 1..5: {limit_total}"</span>);</code></pre>
+<h2 id="a-generator-runs-once-and-has-no-return">A generator runs once, and has no return</h2>
+<p>A generator is single-pass.  Once it is exhausted it stays exhausted, so a second <code>for</code> over the same generator value runs its body zero times — quietly, because an exhausted iterator is empty rather than an error.  Call the generator function again when you need the sequence again.</p>
+<pre><code>  once = <span class="fn-call">count_up</span>(<span class="nm">1</span>, <span class="nm">4</span>);
+  first_pass = <span class="nm">0</span>;
+  <span class="kw">for</span> n <span class="kw">in</span> once { first_pass += n; }
+  second_pass = <span class="nm">0</span>;
+  <span class="kw">for</span> n <span class="kw">in</span> once { second_pass += n; }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(first_pass == <span class="nm">6</span>, <span class="st">"first pass: {first_pass}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(second_pass == <span class="nm">0</span>, <span class="st">"the same generator a second time is empty: {second_pass}"</span>);</code></pre>
+<p>And a generator has no <code>return</code>: values leave it only through <code>yield</code>, so <code>return</code>, <code>return value</code> and a body ending in a value are all refused at compile time.  <code>break</code> is how a body ends early — <code>first_positive</code> yields the first positive element and stops there.</p>
+<pre><code>  fp_seq = <span class="nm">0</span>;
+  <span class="kw">for</span> n <span class="kw">in</span> <span class="fn-call">first_positive</span>([-<span class="nm">1</span>, <span class="nm">5</span>, <span class="nm">9</span>]) { fp_seq = fp_seq * <span class="nm">10</span> + n; }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(fp_seq == <span class="nm">5</span>, <span class="st">"first_positive stops after its one value: {fp_seq}"</span>);
 }</code></pre>
 <section id="loft-panel" class="loft-panel" hidden>
 <h2>Run it yourself</h2>
@@ -128,7 +187,6 @@
 <pre id="lp-source" hidden>// Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Coroutines
-// #warn Variable d is never read
 // @TITLE: Lazy sequences with generators and yield
 // A generator function produces values one at a time.
 // Declare the return type as 'iterator&lt;T&gt;' and use 'yield' to emit each value.
@@ -136,16 +194,16 @@
 // value is requested.  When the body finishes the generator is exhausted.
 // Generators are useful when you want to produce values on demand, stop early
 // with 'break', or chain sequences without building intermediate collections.
-// ## Declaring a generator function
-// A function whose return type is 'iterator&lt;T&gt;' is a generator.
-// 'yield value' emits one item and pauses; the next call resumes from there.
 // ## Iterating with a for loop
 // A 'for' loop drives the generator forward automatically.
 // The body runs once per yielded value.
 // Use 'break' to stop early without consuming the rest.
+// ## The body really is suspended
+// Calling a generator runs none of its body; each advance runs exactly one
+// more slice, up to the next 'yield'.  Write the loop so its body ENDS in a
+// single 'yield' and this holds on both backends.
 // ## Manual advance with next() and exhausted()
 // Call 'next(gen)' yourself when you need fine-grained control.
-// 'exhausted(gen)' returns true once there are no more values.
 // ## Generators with parameters
 // A generator function may take any parameters, including text.
 // Parameter values are preserved across yields so the generator can
@@ -156,6 +214,12 @@
 // ## Early termination with break
 // Stopping a 'for' loop before the generator is exhausted is safe.
 // The abandoned generator frame is freed automatically.
+// ## A generator runs once, and has no return
+// Two rules a reader coming from another language will look for.
+
+struct Trace {
+  steps: integer,
+}
 
 fn count_up(start: integer, stop: integer) -&gt; iterator&lt;integer&gt; {
   for i in start..stop {
@@ -166,6 +230,15 @@ fn count_up(start: integer, stop: integer) -&gt; iterator&lt;integer&gt; {
 fn squares(n: integer) -&gt; iterator&lt;integer&gt; {
   for i in 1..=n {
     yield i * i;
+  }
+}
+
+// Records one step per value produced, so the consumer can see how much of the
+// body actually ran.
+fn counted(limit: integer, t: Trace) -&gt; iterator&lt;integer&gt; {
+  for i in 1..=limit {
+    t.steps += 1;
+    yield i;
   }
 }
 
@@ -186,9 +259,30 @@ fn outer_combined() -&gt; iterator&lt;integer&gt; {
   yield 2;
 }
 
+// Delegating to a generator that takes an ARGUMENT is written as a plain
+// forwarding loop rather than 'yield from' — see the note in that section.
+fn scaled_by(factor: integer) -&gt; iterator&lt;integer&gt; {
+  yield factor;
+  yield factor * 10;
+}
+
+fn forwards_with_argument() -&gt; iterator&lt;integer&gt; {
+  for v in scaled_by(4) {
+    yield v;
+  }
+}
+
 fn large_range(limit: integer) -&gt; iterator&lt;integer&gt; {
   for i in 1..=limit {
     yield i;
+  }
+}
+
+// Ends early with 'break'.  A generator has no 'return', so 'break' is how a
+// body stops before its loop would.
+fn first_positive(v: vector&lt;integer&gt;) -&gt; iterator&lt;integer&gt; {
+  for x in v {
+    if x &gt; 0 { yield x; break; }
   }
 }
 
@@ -211,16 +305,44 @@ fn main() {
   }
   assert(idx == 4, "squares count: {idx}");
 
+  // ## The body really is suspended
+  // 'counted' is asked for a thousand values and the loop breaks after six.
+  // Its step counter shows the body ran six times, not a thousand — the work
+  // for the values nobody asked for was never done.
+  //
+  // ⚠ That holds on BOTH backends for the shape written here: a loop whose body
+  // ends in one unconditional 'yield'.  Other shapes — a statement after the
+  // yield, a yield inside an 'if' or 'match', a nested loop, a 'continue' —
+  // still run the whole loop eagerly on --native, so their side effects happen
+  // for values the consumer never asks for (measured: 1000 steps where the
+  // interpreter does 5).  The VALUES are the same either way; it is the side
+  // effects that differ.  Keep the yield last, or do not put observable work in
+  // a generator body.  COROUTINE.md tracks this as CL-9.
+  trace = Trace { steps: 0 };
+  seen = 0;
+  for n in counted(1000, trace) {
+    seen += 1;
+    if seen &gt; 5 { break; }
+  }
+  assert(trace.steps == 6, "the body ran once per value asked for: {trace.steps}");
+
   // ## Manual advance with next() and exhausted()
+  // 'exhausted' is true once an advance has run off the END of the body — not
+  // as soon as the last value has been handed out.  After the third value here
+  // there are no more values, and 'exhausted' is still false; it takes one more
+  // 'next' to discover the end, and that call answers null.
+  //
+  // So 'while !exhausted(g)' runs one iteration too many.  Drive the generator
+  // with 'for', or stop on the null that 'next' answers.
   gen = count_up(10, 13);
   a = next(gen);
   b = next(gen);
   c = next(gen);
   assert(a == 10 &amp;&amp; b == 11 &amp;&amp; c == 12, "manual next: {a},{b},{c}");
-  // One extra advance past the last element; exhausted() is true after that.
-  d = next(gen);
-  done = exhausted(gen);
-  assert(done, "exhausted after last value");
+  assert(!exhausted(gen), "not yet exhausted, though no values remain");
+  past_end = next(gen);
+  assert(past_end == null, "next past the last value answers null");
+  assert(exhausted(gen), "and now it is exhausted");
 
   // ## Generators with parameters
   // 'len_twice' takes a text parameter and yields its length twice.
@@ -238,6 +360,17 @@ fn main() {
   }
   assert(yf_total == 33, "yield from: 1+10+20+2={yf_total}");
 
+  // ⚠ 'yield from' works today only for a sub-generator that takes NO
+  // arguments; with an argument it will not compile on --native, though the
+  // interpreter runs it (loft#1277).  Until that closes, forward such a
+  // generator with a plain loop — 'for v in sub(arg) { yield v; }', which
+  // means the same thing and works on both backends.
+  fwd_total = 0;
+  for n in forwards_with_argument() {
+    fwd_total += n;
+  }
+  assert(fwd_total == 44, "forwarded with an argument: 4+40={fwd_total}");
+
   // ## Early termination with break
   // Stop after the first 5 values from a 1000-element generator.
   limit_total = 0;
@@ -246,6 +379,27 @@ fn main() {
     limit_total += n;
   }
   assert(limit_total == 15, "early break sum 1..5: {limit_total}");
+
+  // ## A generator runs once, and has no return
+  // A generator is single-pass.  Once it is exhausted it stays exhausted, so a
+  // second 'for' over the same generator value runs its body zero times —
+  // quietly, because an exhausted iterator is empty rather than an error.  Call
+  // the generator function again when you need the sequence again.
+  once = count_up(1, 4);
+  first_pass = 0;
+  for n in once { first_pass += n; }
+  second_pass = 0;
+  for n in once { second_pass += n; }
+  assert(first_pass == 6, "first pass: {first_pass}");
+  assert(second_pass == 0, "the same generator a second time is empty: {second_pass}");
+
+  // And a generator has no 'return': values leave it only through 'yield', so
+  // 'return', 'return value' and a body ending in a value are all refused at
+  // compile time.  'break' is how a body ends early — 'first_positive' yields
+  // the first positive element and stops there.
+  fp_seq = 0;
+  for n in first_positive([-1, 5, 9]) { fp_seq = fp_seq * 10 + n; }
+  assert(fp_seq == 5, "first_positive stops after its one value: {fp_seq}");
 }
 </pre>
 <style>.loft-panel{margin:2em 0;padding:1em;border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa}.loft-panel h2{margin-top:0}.lp-note{color:#57606a;font-size:0.9em;margin:0 0 0.8em}.lp-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:0.8em}.loft-panel button{background:#2563eb;color:#fff;border:0;border-radius:4px;padding:5px 14px;font-size:0.9em;font-weight:600;cursor:pointer}.loft-panel button:disabled{opacity:0.4;cursor:default}.lp-status{font-size:0.85em;color:#57606a}.lp-status.lp-ok{color:#1a7f37}.lp-status.lp-err{color:#cf222e}.lp-status.lp-info{color:#57606a}.lp-output{background:#fff;border:1px solid #d0d7de;border-radius:4px;padding:8px;min-height:2.2em;max-height:16em;overflow:auto;white-space:pre-wrap;margin:0 0 0.8em}.lp-frame{background:#fff;border:1px solid #d0d7de;border-radius:4px;padding:8px;margin-bottom:0.8em}.lp-frame-head{font-size:0.85em;color:#57606a;margin-bottom:6px}.lp-locals{display:flex;gap:6px;flex-wrap:wrap}.lp-local,.lp-callable{background:#eaeef2;border-radius:3px;padding:2px 6px;font-size:0.85em;cursor:pointer}.lp-local:hover,.lp-callable:hover{background:#d0d7de}.lp-callables{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:0.8em}.lp-prompt{display:flex;gap:6px;align-items:center}.lp-caret{color:#2563eb;font-weight:700}.lp-prompt input{flex:1;padding:6px 8px;border:1px solid #d0d7de;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.9em}.lp-log{margin-top:0.6em;display:flex;flex-direction:column;gap:4px;max-height:14em;overflow:auto}.lp-row{display:flex;gap:8px;align-items:baseline;font-size:0.9em}.lp-q{color:#2563eb;flex:0 0 auto}.lp-a{color:#1f2328;word-break:break-word}.lp-row.lp-warn .lp-a{color:#9a6700}.lp-lines{margin-top:1em}.lp-lines summary{cursor:pointer;font-size:0.9em;color:#57606a}.lp-src{margin:0.6em 0 0;padding-left:3.5em;background:#fff;border:1px solid #d0d7de;border-radius:4px;max-height:20em;overflow:auto}.lp-line{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.82em;white-space:pre;cursor:pointer;padding:0 4px}.lp-line:hover{background:#eaeef2}.lp-line.lp-break{background:#ffebe9;outline:1px solid #cf222e}@media print{.loft-panel{display:none}}</style>

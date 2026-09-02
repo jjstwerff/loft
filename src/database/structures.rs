@@ -1643,7 +1643,26 @@ impl Stores {
             | Parts::Index(_, _, _)
             | Parts::Array(_)
             | Parts::Vector(_) => {
-                self.store_mut(rec).set_u32_raw(rec.rec, rec.pos, 0);
+                // Zero is the EMPTY collection, which is the right absent value for a
+                // field that cannot be null — but it is the WRONG one for a field
+                // declared `?`, and this arm was the only one in the match that did not
+                // ask.  `DbRef::ABSENT_REC` is the third state (loft#917), the same code
+                // `mark_collection_absent` writes and `vector::is_absent_collection`
+                // reads, so an absent `vector<T>?` reads back `null` rather than `[]` —
+                // which is the entire distinction the `?` was written to express.
+                //
+                // Only for `Absent::Final`, and the reason is the same one the text arm
+                // gives: a PREFILL runs per record on the allocation path and is
+                // overwritten by whatever fills the field, so marking it absent there
+                // makes an empty `[]` the JSON walker DID write read back as null — the
+                // handle it leaves at zero is the prefilled one.  A `Final` is a decision
+                // that the field is not there.
+                let v = if nullable && why == Absent::Final {
+                    DbRef::ABSENT_REC
+                } else {
+                    0
+                };
+                self.store_mut(rec).set_u32_raw(rec.rec, rec.pos, v);
             }
             // Plan-06 phase 4d.C step 2: default for a 12-byte
             // stored DbRef = the null-DbRef bytes (store_nr=u16::MAX,

@@ -1383,3 +1383,169 @@ fn main() { x = 0; f(&x); print(\"{x}\\n\"); }
         "scalar & is always needed — W4 must NOT fire; got stderr={diag:?}"
     );
 }
+
+// ── loft#1286 — a FORWARDED `&` is not redundant ────────────────────────────
+//
+// `slow-reference-parameter` asks whether the whole binding is ever reassigned, and a
+// FORWARDER never reassigns — its callee does.  So the one shape where the `&` is carrying
+// someone else's write-back was exactly the shape a body-local walk read as redundant, and
+// taking the advice there SILENTLY LOSES the write-back: the lint fired only on the correct
+// spelling and said nothing about the broken one.
+//
+// `callee_param_reassigns` is the interprocedural half.  It asks about REASSIGNMENT rather
+// than about writes on purpose — its sibling `callee_param_writes` also answers yes to a
+// FIELD write, which is precisely the case this advice exists to flag, so using it would have
+// silenced the lint everywhere instead of at the forwarders.
+//
+// Falsified by counting: on released `loft 2026.8.0` the program below draws the advice on
+// FIVE of its five `&` parameters; here it draws TWO, the field-writing pair.  The count is
+// the assertion for that reason — a bare `contains` would have passed on both builds.
+
+const FWD_1286: &str = "\
+struct B { items: vector<integer> }
+fn reassign(b: &B) { b = B { items: [9] }; }
+fn fieldonly(b: &B) { b.items = [7]; }
+fn fwd1(b: &B) { reassign(b); }
+fn fwd2(b: &B) { fwd1(b); }
+fn fwd3(b: &B) { fwd2(b); }
+fn fwd_field(b: &B) { fieldonly(b); }
+fn main() {
+  a = B { items: [0] };  fwd3(a);       print(\"fwd3={a.items}\\n\");
+  b = B { items: [0] };  fwd1(b);       print(\"fwd1={b.items}\\n\");
+  c = B { items: [0] };  fwd_field(c);  print(\"fwdfield={c.items}\\n\");
+  d = B { items: [0] };  reassign(d);   print(\"direct={d.items}\\n\");
+}
+";
+
+#[test]
+fn forwarded_ref_parameter_is_not_advised_away_1286() {
+    let (stdout, diag, _code) = run_with_warnings("fwd_ref_1286", FWD_1286);
+    // The advice must name ONLY the two field-writing forms.  Counting is what makes this a
+    // real assertion: a bare `contains` would pass while the forwarders were still flagged.
+    let hits = diag.matches("only slows it down").count();
+    assert_eq!(
+        hits, 2,
+        "expected the advice on `fieldonly` and `fwd_field` and on nothing else; \
+         got {hits} occurrences in {diag:?}"
+    );
+    for quiet in ["fwd1", "fwd2", "fwd3", "reassign"] {
+        assert!(
+            !diag.contains(&format!("parameter `{quiet}`")),
+            "`{quiet}` forwards or performs a reassignment, so its & is load-bearing; \
+             got {diag:?}"
+        );
+    }
+    // And the write-back the `&` carries actually arrives — through three levels of
+    // forwarding, which is what says the interprocedural walk follows the chain rather than
+    // looking one call deep.
+    for expect in ["fwd3=[9]", "fwd1=[9]", "fwdfield=[7]", "direct=[9]"] {
+        assert!(
+            stdout.contains(expect),
+            "expected {expect:?} in the output; got {stdout:?}"
+        );
+    }
+}
+
+#[test]
+fn a_field_only_ref_parameter_is_still_advised_1286() {
+    // The control that keeps the fix honest: widening the predicate must not silence the
+    // case the advice exists for.  A `&` whose body only writes a FIELD is redundant, and
+    // dropping it keeps the same answer.
+    let source = "\
+struct S { a: integer }
+fn f(s: &S) { s.a = 1; }
+fn main() { v = S { a: 0 }; f(v); print(\"a={v.a}\\n\"); }
+";
+    let (stdout, diag, _code) = run_with_warnings("field_only_1286", source);
+    assert!(
+        diag.contains("only slows it down"),
+        "a field-only & is still redundant and must still be advised; got {diag:?}"
+    );
+    assert!(
+        stdout.contains("a=1"),
+        "the field write lands; got {stdout:?}"
+    );
+}
+
+// ── loft#1284 — (N-Store) reaches a TUPLE ELEMENT destination ───────────────
+//
+// `(N-Store)` covers the direct store, the field, the call-argument site and the branch join
+// (`D-Null-Join`), and a tuple ELEMENT reached none of them: the tuple-element assign branch
+// returns before the general assign path that asks.  So `s.i = null` on a non-null FIELD
+// warned while `c.1 = null` on a non-null ELEMENT said nothing, for the same store into the
+// same kind of slot.
+//
+// Both halves are asserted here rather than in a `.loft` guard, because half the claim is an
+// ABSENCE — the nullable spellings must stay QUIET — and a script guard can pin a
+// diagnostic's presence but not its absence.
+//
+// Falsified by counting: released `loft 2026.8.0` emits ZERO warnings for the program below —
+// not three of five, none — and here it emits three, on exactly the non-null destinations.
+
+const NSTORE_TUPLE_1284: &str = "\
+fn maybe(k: integer) -> integer? { if k > 0 { k } else { null } }
+fn main() {
+  a = (1, 5);                       a.1 = null;      print(\"1={a.1}\\n\");
+  b: (integer, integer?) = (1, 5);  b.1 = null;      print(\"2={b.1}\\n\");
+  c = (1, 5);                       c.1 = maybe(0);  print(\"3={c.1}\\n\");
+  d: (integer, integer?) = (1, 5);  d.1 = maybe(0);  print(\"4={d.1}\\n\");
+  e = (1, \"s\");                     e.1 = null;      print(\"5={e.1}\\n\");
+}
+";
+
+#[test]
+fn n_store_warns_on_a_non_null_tuple_element_1284() {
+    let (stdout, diag, _code) = run_with_warnings("nstore_tuple_1284", NSTORE_TUPLE_1284);
+    // THREE non-null destinations and two nullable ones.  The count is the assertion: a bare
+    // `contains` would pass while the nullable rows were also being flagged.
+    let hits = diag.matches("the tuple element").count();
+    assert_eq!(
+        hits, 3,
+        "expected (N-Store) on the three NON-NULL element destinations and on neither \
+         nullable one; got {hits} in {diag:?}"
+    );
+    // The bare-`null` form and the `τ?`-value form are different branches of the check, so
+    // each is named rather than trusting the count alone.
+    assert!(
+        diag.contains(
+            "`null` is stored into the tuple element of the non-null scalar type `integer`"
+        ),
+        "the bare-null branch did not fire; got {diag:?}"
+    );
+    assert!(
+        diag.contains("a nullable `integer?` is stored into the tuple element"),
+        "the nullable-value branch did not fire; got {diag:?}"
+    );
+    assert!(
+        diag.contains("non-null scalar type `text`"),
+        "the text element was not covered; got {diag:?}"
+    );
+    // The store PROCEEDS in every row — the warning is a nudge, not a refusal, and the slot
+    // holds the sentinel (loft#1282).
+    for expect in ["1=null", "2=null", "3=null", "4=null", "5=null"] {
+        assert!(
+            stdout.contains(expect),
+            "expected {expect:?} — the store proceeds and the slot reads back null; \
+             got {stdout:?}"
+        );
+    }
+}
+
+#[test]
+fn n_store_keeps_its_hard_error_for_a_narrow_tuple_element_1284() {
+    // The warn/error split is `(N-Store)`'s, not the destination's: a NARROW width spends its
+    // whole range on real values, so a null there would silently corrupt and stays a hard
+    // ERROR — for a tuple element exactly as for a field.
+    let source = "\
+fn main() {
+  n: (integer, u8) = (1, 5);
+  n.1 = null;
+  print(\"v={n.1}\\n\");
+}
+";
+    let (_stdout, diag, _code) = run_with_warnings("nstore_narrow_1284", source);
+    assert!(
+        diag.contains("cannot be stored into the tuple element"),
+        "a narrow element must keep the hard error, not soften to a warning; got {diag:?}"
+    );
+}

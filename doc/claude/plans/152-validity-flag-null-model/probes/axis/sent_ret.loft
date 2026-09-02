@@ -1,0 +1,4 @@
+// overflow shape: 250 + i64::MAX -> lands ON the i64 sentinel
+// storage: ret
+fn mk(big: integer) -> u8 { x: u8 = 250; x += big; x }
+fn main() { println("{mk(9223372036854775807)}"); }

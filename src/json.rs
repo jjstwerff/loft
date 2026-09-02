@@ -511,7 +511,7 @@ impl<'a> JParser<'a> {
                 Err(("unexpected end of input".to_string(), self.bytes.len()))
             }
             LexItem::Token(t) if t == "-" => self.parse_number(),
-            LexItem::Integer(..) | LexItem::Long(_) | LexItem::Float(_) | LexItem::Single(_) => {
+            LexItem::Integer(..) | LexItem::Long(_) | LexItem::Float(..) | LexItem::Single(_) => {
                 self.parse_number()
             }
             LexItem::Token(t) if t == "[" => self.parse_array(),

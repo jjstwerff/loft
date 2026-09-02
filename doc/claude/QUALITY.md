@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 358 | 334 | **24** |
+| 363 | 339 | **24** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -2419,12 +2419,54 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 670 | 318 | 5 | **347** |
+| 679 | 326 | 5 | **348** |
+
+The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.
+
+loft#1291 moved one site OFF the opaque column — the first entry here that does.
+`Type::is_amp_rebindable_heap` is the one home for *"is this a `&` parameter whose whole-value
+write-back displaces a store?"*, and it asks `inner.base()` because a `&hash<T[k]>?` parameter is
+rebindable exactly as its dense twin is: @FR-L-Null says the storage is the same, and it is the
+storage that gets displaced. It replaced two `matches!` arms that named variants bare, in
+`parser/mod.rs` and `scopes.rs` — the two sites that must agree about it, one minting the rebind
+witness and the other using it.
+
+loft#1281's refusal added a site on the SEEING-THROUGH side and left the opaque column
+alone: `reject_rebound_heap_parameter_captures` asks whether a captured parameter is a heap
+kind, and asks it of `tp.base()` — so a `vector<T>?` answers the same as a `vector<T>`, which
+is what the question wants, since nullability has nothing to do with whether a rebind can
+reach the caller. It is the counterpart of the loft#1286 note below: a question asked about a
+TYPE need not add an opaque site if it peels, and peeling was the correct reading here rather
+than a concession.
+
+loft#1286's first fix added a site on the OPAQUE side that matched
+`Type::RefVar(Type::Reference(..))` on the raw `typedef` to ask whether a callee's parameter
+was a `&`. It did not survive: the fix that ships asks the interprocedural question instead
+(`callee_param_reassigns` — does the callee REASSIGN it), which needs no wrapper match at
+all. Worth recording as a shape rather than a count: a question asked about a TYPE tends to
+add an opaque site, and the same question asked about BEHAVIOUR did not need one.
 
 loft#1245 added `use_analysis::callref_captures` on the seeing-through side (the opaque
 column unchanged): it asks whether a fn-ref CAPTURES by matching `Type::Function` through
 `.base()`, because the same fn-ref reaches it as `fn(τ) -> ρ` and as `fn(τ) -> ρ?` and a
 capture is a capture either way.
+
+loft#1291 moved one site OFF the opaque column — the first entry here that does.
+`Type::is_amp_rebindable_heap` is the one home for *"is this a `&` parameter whose whole-value
+write-back displaces a store?"*, and it asks `inner.base()` because a `&hash<T[k]>?` parameter is
+rebindable exactly as its dense twin is: @FR-L-Null says the storage is the same, and it is the
+storage that gets displaced. It replaced two `matches!` arms that named variants bare, in
+`parser/mod.rs` and `scopes.rs` — the two sites that must agree about it, one minting the rebind
+witness and the other using it.
+
+loft#1303 moved a second site off the opaque column and added its sibling already transparent —
+the only entry so far to do both, and the reason is that it followed loft#1291's peel rather than
+re-deriving one.  `assign_refvar_reference` materialises a `&` parameter's write-back source into
+its own store, and it named `Type::Reference` bare; the keyed sibling it needed
+(`assign_refvar_keyed`) would have been a second such site.  Both now ask `inner.base()`, which is
+the peel `Type::is_amp_rebindable_heap` above already uses for the SAME question — what does this
+`&` write-back displace — so a `&hash<T[k]>?` reaches the materialiser exactly as its dense twin
+does.
 
 loft#1254 added the empty-stub return classifier on the same side, and the opaque column again
 did not move: it asks whether a stub's return is HANDLE-carried, peeling first for the same

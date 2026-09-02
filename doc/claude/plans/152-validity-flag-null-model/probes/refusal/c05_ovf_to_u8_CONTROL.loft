@@ -1,0 +1,6 @@
+// want: COMPILES
+fn main() {
+  x: u8 = 250;
+  x += 10;
+  println("c05 = {x}");
+}

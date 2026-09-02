@@ -2994,8 +2994,23 @@ impl Parser {
             // still built underneath, because a template's IR is type-checked and
             // slot-allocated even though it never runs (loft#1016).
             Type::Reference(d_nr, _) if self.data.is_type_var_placeholder(*d_nr) => {
-                let name = self.data.def(*d_nr).name().to_string();
+                // The sub-parse is SOURCE text, so it needs the spelling the header wrote —
+                // a second header binding the same letter holds a placeholder minted as
+                // `T#2`, which no source can name.  Pinning the enclosing header's binding
+                // over the sub-parse is what makes the spelling resolve back to THIS
+                // placeholder rather than to whichever one the letter names elsewhere.
+                let d_nr = *d_nr;
+                let name =
+                    crate::data::Data::type_var_spelling(self.data.def(d_nr).name()).to_string();
+                let saved = (
+                    self.cur_type_var,
+                    std::mem::take(&mut self.cur_type_var_name),
+                );
+                self.cur_type_var = d_nr;
+                self.cur_type_var_name.clone_from(&name);
                 let (v, t) = self.subparse_default(&format!("{name} {{}}"), tp);
+                self.cur_type_var = saved.0;
+                self.cur_type_var_name = saved.1;
                 Some((v_block(vec![v], t.clone(), Self::TV_DEFAULT_BLOCK), t))
             }
             // A record defaults to `S{}` — every field defaulted, exactly the value a
@@ -3504,12 +3519,22 @@ impl Parser {
                         self.lexer,
                         Level::Warning,
                         code = "redundant-null-check",
-                        "Redundant null check — '{lhs_not_null_name}' is 'not null', comparison is always {always}",
+                        "Redundant null check — '{lhs_not_null_name}' is 'not null', so this is {always} unless a null reached the slot anyway (an overflow, a NaN, or an out-of-range read)",
                     );
+                    // CONDITIONAL, not mechanical.  A non-null slot CAN observably hold null:
+                    // `formal/types.md` C85 writes the reserved sentinel there on an integer
+                    // overflow (and names a `float` holding `NaN` as the parallel), and C80
+                    // answers an out-of-range read with null while the index expression stays
+                    // typed non-null.  So `s.a == null` on a non-null `integer` field is TRUE
+                    // after `s.a = big * big`, and deleting it removes the one test that
+                    // catches that (loft#1297).
                     self.lexer.fix_last(crate::diagnostics::Fix {
-                        kind: crate::diagnostics::FixKind::Mechanical,
-                        title: "delete the check — its answer is already known".to_string(),
-                        condition: None,
+                        kind: crate::diagnostics::FixKind::Conditional,
+                        title: "delete the check".to_string(),
+                        condition: Some(
+                            "no overflow, NaN or out-of-range read can have reached this slot"
+                                .to_string(),
+                        ),
                         edit: None,
                         concept: "nullable values",
                         concept_ref: "@F1",
@@ -3535,13 +3560,17 @@ impl Parser {
                         self.lexer,
                         Level::Warning,
                         code = "redundant-null-check",
-                        "Redundant null check — '{}' is 'not null', comparison is always {always}",
+                        "Redundant null check — '{}' is 'not null', so this is {always} unless a null reached the slot anyway (an overflow, a NaN, or an out-of-range read)",
                         self.expr_not_null_name,
                     );
+                    // Conditional for the reason the mirrored arm above gives (loft#1297).
                     self.lexer.fix_last(crate::diagnostics::Fix {
-                        kind: crate::diagnostics::FixKind::Mechanical,
-                        title: "delete the check — its answer is already known".to_string(),
-                        condition: None,
+                        kind: crate::diagnostics::FixKind::Conditional,
+                        title: "delete the check".to_string(),
+                        condition: Some(
+                            "no overflow, NaN or out-of-range read can have reached this slot"
+                                .to_string(),
+                        ),
                         edit: None,
                         concept: "nullable values",
                         concept_ref: "@F1",
@@ -4132,12 +4161,45 @@ impl Parser {
             {
                 continue;
             }
+            // A reassignment of the whole binding is what `&` is FOR, and it need not be
+            // written here: a FORWARDER (`fn forward(b: &B) { replace_ref(b); }`) never
+            // reassigns — its callee does — so the one shape where the `&` is carrying
+            // someone else's write-back is exactly the shape a body-local walk reads as
+            // redundant.  Taking the advice there silently LOSES the write-back, which makes
+            // it the worst kind of false positive: it fired only on the correct spelling and
+            // said nothing about the broken one (loft#1286).
+            //
+            // `callee_param_reassigns` is the interprocedural half, and it asks about
+            // REASSIGNMENT rather than about writes — its sibling `callee_param_writes` would
+            // also answer yes to a FIELD write, which is precisely the case this advice
+            // exists to flag.
             let mut reassigned = false;
+            let mut cache: std::collections::HashMap<u32, Vec<bool>> =
+                std::collections::HashMap::new();
             body.walk(&mut |node| {
                 if matches!(node, Value::Set(v, _) if *v == var) {
                     reassigned = true;
                 }
             });
+            if !reassigned {
+                let data = &self.data;
+                body.walk(&mut |node| {
+                    if let Value::Call(fn_nr, args) = node.unspan()
+                        && *data.def(*fn_nr).code() != Value::Null
+                    {
+                        let callee =
+                            crate::parser::callee_param_reassigns(*fn_nr, data, &mut cache);
+                        for (i, arg) in args.iter().enumerate() {
+                            if i < callee.len()
+                                && callee[i]
+                                && matches!(arg.unspan(), Value::Var(v) if *v == var)
+                            {
+                                reassigned = true;
+                            }
+                        }
+                    }
+                });
+            }
             if reassigned {
                 continue;
             }

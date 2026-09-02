@@ -1,0 +1,8 @@
+// @PLN152 phase B — overflow into a integer slot.
+// Rule: formal/types.md spare-code table + (E-Uncomp-NN).
+// @EXPECT: a01_ovf_integer = null
+fn main() {
+  x: integer = 9223372036854775807;
+  x += 1;
+  println("a01_ovf_integer = {x}");
+}

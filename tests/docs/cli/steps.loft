@@ -1,0 +1,12 @@
+fn add_up(n: integer) -> integer {
+  half = n / 2;
+  half + half
+}
+
+fn main() {
+  total = 0;
+  for i in 1..4 {
+    total += add_up(i * 2);
+  }
+  println("total={total}");
+}

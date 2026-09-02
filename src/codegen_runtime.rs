@@ -453,6 +453,57 @@ pub fn OpFreeRefTag(cell: &std::cell::UnsafeCell<Stores>, db: DbRef, tag: i64) {
     OpFreeRef(cell, db, "");
 }
 
+/// Write `s` to standard output, treating a CLOSED stdout as the ordinary end of a pipeline
+/// rather than a fault.
+///
+/// `print!` panics on any write error, so `prog | head` — the most ordinary shell idiom there
+/// is — ended in a Rust panic naming a `std` source line; and when stderr shared the closed
+/// pipe the panic PRINTER failed too, the process ABORTED, and the crash reporter wrote a
+/// report blaming a line of `default/01_code.loft` that has nothing wrong with it
+/// (loft#1289).  A reader that stops reading is not this program's error: stop writing and
+/// leave, which is what every other tool on a pipeline does.
+///
+/// Exit **0** rather than by signal.  `head` itself exits 0, and a pipeline written to stop
+/// early is doing what it was written to do — under `set -o pipefail` a signal would report
+/// the idiom as a failure.
+///
+/// The interpreter (`fill.rs`) and the `#rust` template the native generator emits both call
+/// THIS, so the two backends cannot answer a broken pipe differently.
+///
+/// # Panics
+///
+/// On a write error that is NOT a broken pipe — a full disk, an I/O error on a redirect.
+/// That is a real fault and keeps the loudness `print!` had; only the closed reader is
+/// reinterpreted as an ending.
+pub fn host_print(s: &str) {
+    use std::io::Write;
+    let broken = {
+        let mut out = std::io::stdout().lock();
+        match out.write_all(s.as_bytes()) {
+            Ok(()) => false,
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => true,
+            // Anything else — a full disk, an I/O error on a redirect — is a real fault and
+            // keeps the loudness `print!` had.
+            Err(e) => panic!("failed printing to stdout: {e}"),
+        }
+    };
+    if broken {
+        std::process::exit(0);
+    }
+}
+
+/// Write `s` to standard error, ignoring a write that cannot land.
+///
+/// The counterpart of [`host_print`], and it does NOT exit: stderr being closed says nothing
+/// about the program's own output, so `prog 2>/dev/full` or a reader that stopped reading the
+/// diagnostics stream must not end the run.  What it must never do is panic — a panic whose
+/// message cannot be printed is what turns a broken pipe into a SIGABRT and a crash report
+/// (loft#1289).
+pub fn host_eprint(s: &str) {
+    use std::io::Write;
+    let _ = std::io::stderr().write_all(s.as_bytes());
+}
+
 /// conditionally free `placeholder` — only when its `store_nr`
 /// differs from `witness`'s.  Emitted for `__ref_N` work-refs whose
 /// value might alias a still-live Reference variable in the current
@@ -465,9 +516,7 @@ pub fn OpFreeRefIfDistinct(
     witness: DbRef,
 ) {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
-    if placeholder.store_nr != witness.store_nr {
-        stores.free(&placeholder);
-    }
+    stores.free_displaced(&placeholder, &witness);
 }
 
 /// Free an `on=4` iteration scratch at loop exit — a dedicated store goes back
@@ -2944,17 +2993,18 @@ pub fn t_9JsonValue_as_number(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) ->
     }
 }
 
-/// JsonValue.as_bool() — return the JBool payload, or false for any
-/// other variant.  Mirrors interp `n_as_bool`.
-pub fn t_9JsonValue_as_bool(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> bool {
+/// JsonValue.as_bool() — the JBool payload, or the tri-state NULL byte for any other
+/// variant, which is what the declaration's `boolean?` promises.  Mirrors interp `n_as_bool`.
+pub fn t_9JsonValue_as_bool(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> u8 {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
     if discr == crate::native::JV_DISCR_BOOL {
         let bool_tp = stores.name("JBool");
         let value_pos = u32::from(stores.position(bool_tp, "value")) + v.pos;
-        stores.store(&v).get_byte(v.rec, value_pos, 0) != 0
+        u8::from(stores.store(&v).get_byte(v.rec, value_pos, 0) != 0)
     } else {
-        false
+        // The tri-state null (C73 / @PLN17), which the `boolean?` return renders as `u8`.
+        255
     }
 }
 

@@ -305,6 +305,36 @@ impl IntegerSpec {
     /// `i32::MIN`/`i64::MIN` for null, outside this narrow mechanism; an
     /// un-annotated `limit(...)` whose range does not fill the width already has a
     /// spare code and needs no sacrifice.)
+    /// Can a NON-nullable slot of this spec hold a value that reads back as null?
+    ///
+    /// Two conditions, and both are about storage rather than about the `?`:
+    ///
+    /// 1. the declared range must not FILL the fixed width, or there is no spare code —
+    ///    `u8`/`i8`/`u16`/`i16` use all 256 / 65 536 of theirs, while `i32` is
+    ///    `i32::MIN + 1 ..= i32::MAX` and `u32` is `0 ..= u32::MAX - 1`, which is why
+    ///    `i32 = -2147483648` is refused as out of range in either spelling;
+    /// 2. the spare code must be the one a NON-null read already reports as null, which is
+    ///    the BOTTOM code — the same `i32::MIN` / `i64::MIN` plain `integer` uses.  An
+    ///    unsigned spec's spare code is the TOP one, and no non-null read tests for it: a
+    ///    `u32` field holding it renders `4294967295`, a value outside the type's own
+    ///    declared range, which is worse than the in-range answer it replaces.
+    ///
+    /// So this is exactly the specs for which `formal/types.md` C85 — *"on overflow they
+    /// write the reserved sentinel into that non-null slot, which then reads as null"* — has
+    /// a sentinel to write (loft#1296).
+    #[must_use]
+    pub fn reserves_sentinel_unconditionally(&self) -> bool {
+        let Some(size) = self.forced_size.map(NonZeroU8::get) else {
+            return false;
+        };
+        // A wider `forced_size` never reaches here — the wide template is excluded before
+        // the range questions are asked — and `1 << 64` would not be a shift.
+        if size >= 8 {
+            return false;
+        }
+        self.min < 0 && self.range() < (1_i64 << (8 * i64::from(size)))
+    }
+
     fn reserves_narrow_sentinel(&self, nullable: bool) -> bool {
         if !nullable {
             return false;
@@ -1767,6 +1797,38 @@ impl Type {
         self.peel_optional().0
     }
 
+    /// Is this a `&` parameter whose whole-value write-back INSTALLS a store the callee
+    /// minted and DISPLACES whatever the caller's binding named?
+    ///
+    /// That is the question loft#1287's rebind witness answers, and it has two askers that
+    /// must agree: `Parser::call_arguments` mints the witness, and `scopes::scan_args` uses it
+    /// to mark the parameter's ENTRY store free-protected for the duration of the call.  A
+    /// site that said yes while the other said no would either free a store belonging to a
+    /// frame below (a use-after-free plus a double free) or leak the fresh one — so this is
+    /// one home rather than two `matches!` arms, which is how the keyed kinds came to be
+    /// missing from both (loft#1291).
+    ///
+    /// The set is every HEAP kind a binding can be repointed at: a struct, a struct-enum, a
+    /// vector, and the five keyed collections.  A scalar is copied and a `&`-tuple's elements
+    /// are stack values, so neither displaces a store.
+    #[must_use]
+    pub fn is_amp_rebindable_heap(&self) -> bool {
+        let Type::RefVar(inner) = self else {
+            return false;
+        };
+        matches!(
+            inner.base(),
+            Type::Reference(_, _)
+                | Type::Enum(_, true, _)
+                | Type::Vector(_, _)
+                | Type::Hash(_, _, _)
+                | Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
+        )
+    }
+
     /// The type the return-buffer machinery should treat this return as (loft#938).
     ///
     /// `Optional(Vector(τ))` peels to `Vector(τ)`: a nullable COLLECTION return lays out
@@ -2549,6 +2611,12 @@ impl Type {
             Type::Optional(tp) => format!("{}?", tp.name(data)),
             Type::Rewritten(tp) => tp.name(data),
             Type::RefVar(tp) => format!("&{}", tp.name(data)),
+            // A type-variable placeholder renders under the spelling its header wrote: two
+            // headers may both write `T` and bind different placeholders, so the second is
+            // minted as `T#2`, and a diagnostic must name what the reader wrote.
+            Type::Enum(t, _, _) | Type::Reference(t, _) if data.is_type_var_placeholder(*t) => {
+                Data::type_var_spelling(&data.def(*t).name).to_string()
+            }
             Type::Enum(t, _, _) | Type::Reference(t, _) => data.def(*t).name.clone(),
             Type::Text(_) => "text".to_string(),
             Type::Vector(tp, _) if matches!(tp as &Type, Type::Unknown(_)) => "vector".to_string(),
@@ -3936,6 +4004,53 @@ pub struct Definition {
 }
 
 impl Definition {
+    /// Is `def` a CORPUS ENTRY POINT — a function a `tests/scripts/` harness may call on its own
+    /// in a file that declares no `main`?
+    ///
+    /// The corpus is a DIFFERENTIAL: the same file, both backends, the same answer.  That holds
+    /// only while both halves run the same SET of functions, so the question has to have ONE
+    /// answer.  It did not: `tests/wrap.rs` excluded value-returning helpers and `tests/native.rs`
+    /// did not, so 165 zero-parameter value-returning functions across 66 corpus files were
+    /// executed on the native pass and on no other — and a differential that runs different code
+    /// on its two sides cannot report a divergence (loft#1293).
+    ///
+    /// The three exclusions, and why each is not a style rule:
+    ///
+    /// * a **parameter** cannot be supplied, so the call cannot be made at all — hidden
+    ///   `__work_` / `__ref_` buffers are the compiler's, not the author's, and do not count;
+    /// * a **generator** (`-> iterator<T>`) must be driven by a `for`, and calling one standalone
+    ///   runs none of its body;
+    /// * a **value-returning** helper hands back a store the call then throws away, which leaks
+    ///   it — and the convention the corpus is written to is that entry points return `Void` and
+    ///   helpers return values for assignment.
+    ///
+    /// `src/main.rs`'s shipped native entry-point generator asks the same question about the
+    /// `test_*` naming rule and says so in as many words: *"a generated entry point that runs a
+    /// different SET than the interpreter is a backend divergence the suite reads as a wrong
+    /// answer."*  This is that sentence applied to the two TEST harnesses.
+    #[must_use]
+    pub fn is_corpus_entry_point(&self) -> bool {
+        if !matches!(self.def_type, DefType::Function) {
+            return false;
+        }
+        if !self.name.starts_with("n_") || self.name.starts_with("n___lambda_") {
+            return false;
+        }
+        if self.position.file.starts_with("default/") || self.position.file.starts_with("default\\")
+        {
+            return false;
+        }
+        // Only the AUTHOR's parameters count: `text_return` / `ref_return` add hidden buffers.
+        if self
+            .attributes
+            .iter()
+            .any(|a| !a.name.starts_with("__work_") && !a.name.starts_with("__ref_"))
+        {
+            return false;
+        }
+        matches!(self.returned, Type::Void)
+    }
+
     // ─── @PLN11 arc C — store-backed-field read seam ───────────────────────
     //
     // Read accessors for the `Definition` fields that live in the store schema
@@ -4283,6 +4398,52 @@ impl Definition {
             }
         }
         if slots.is_empty() { None } else { Some(slots) }
+    }
+
+    /// The definitions every return site DELEGATES to, when each site is a direct call —
+    /// loft#1273.
+    ///
+    /// [`Self::monomorph_return_is_fresh`] answers `false` for a tail like `a + b`, whose
+    /// lowering is `Call(n_OpAdd, …)`: the ownership of what comes back is the CALLEE's
+    /// fact, and this body cannot read another definition. It is not unreachable, only
+    /// unreachable from here — `Data` has every definition, so the caller's lift can ask the
+    /// same body-shaped question of each target. This reports which ones to ask.
+    ///
+    /// The fn-ref twin above resolves through the CALLER's closure because the target is a
+    /// runtime value; here the target is written in the IR, so no argument has to be
+    /// resolved and only the callee's own body is consulted.
+    ///
+    /// `None` where a site is neither already fresh nor exactly such a call, which keeps the
+    /// under-approximation composing the way [`Self::site_is_fresh`]'s own arms do: one
+    /// unreadable site refuses the whole body, costing the leak that was already there
+    /// rather than licensing a free this cannot justify.
+    ///
+    /// It reports the TARGETS only. Whether each delivers something the caller may adopt is
+    /// the caller's question, because answering it needs `returns_borrowed_view` on the
+    /// target — a body that hands back its own argument must NOT be lifted, or the free
+    /// releases the caller's record while the variable holding it is still live.
+    #[must_use]
+    pub fn monomorph_direct_call_return_targets(&self) -> Option<Vec<u32>> {
+        let vars = &self.variables;
+        let sites = self.return_sites();
+        if sites.is_empty() {
+            return None;
+        }
+        let mut targets: Vec<u32> = Vec::new();
+        for site in &sites {
+            if Self::site_is_fresh(site.unspan(), vars) {
+                continue;
+            }
+            match site.unspan() {
+                Value::Call(d_nr, _) => targets.push(*d_nr),
+                _ => return None,
+            }
+        }
+        if targets.is_empty() {
+            None
+        } else {
+            Some(targets)
+        }
     }
 
     /// Does ANY return site hand back what a fn-ref PARAMETER answered — loft#1176?
@@ -5747,6 +5908,33 @@ impl Data {
         &self.possible[start]
     }
 
+    /// The operator definition whose SIGNATURE matches — same candidate list the concrete
+    /// path walks, asked with the arity and receiver instead of the name alone.
+    ///
+    /// `formal/interfaces.md` `(G-Sat)` satisfies a bound with a function of signature
+    /// `[Self ↦ C](p̄ -> R)`, the parameter list included, and `-` desugars to `OpMin` at BOTH
+    /// arities.  [`Self::find_fn`] takes a name and a receiver and no arity, so for a bound
+    /// requiring binary `-` it answered the UNARY `OpMinSingleInt` and the call bound one
+    /// operand too many — `diff(10, 3)` computed `-10` (loft#1299).
+    ///
+    /// Deliberately the `possible` map and not a fresh scan: it is where `call_op` finds the
+    /// concrete operator, so the two paths cannot come to disagree about which definitions
+    /// exist for an operator. `call_op` picks among them by TRYING each (`call_nr` answers
+    /// `Type::Null` on a mismatch); this is that question asked statically, which is all a
+    /// `&Data` resolver can do.
+    #[must_use]
+    pub fn possible_with_signature(&self, start: &str, arity: usize, first: &Type) -> Option<u32> {
+        let want = self.type_def_nr(first);
+        self.possible.get(start)?.iter().copied().find(|&d| {
+            let def = &self.definitions[d as usize];
+            def.attributes().len() == arity
+                && def
+                    .attributes()
+                    .first()
+                    .is_some_and(|a| self.type_def_nr(&a.typedef) == want)
+        })
+    }
+
     /// @PLN99 Arc C — register `d_nr` into the `possible[prefix]` operator map.
     /// A user-defined conversion (`fn OpConvXFromY`) is a global stored `n_OpConv…`,
     /// so it skips `add_op`'s name-gated registration and never entered `possible` —
@@ -6225,6 +6413,12 @@ impl Data {
         // `type_def_nr` peel still governs LAYOUT (Optional shares the base's
         // storage); this only distinguishes the def KEY. Gate-OFF no `Optional`
         // exists, so the name is the base — byte-identical.
+        // NOT routed through `bound_stub_name` for a holder receiver, though the two spellings
+        // then differ: `Self` is itself marked a bound holder, so every interface method
+        // declaration would be renamed and no interface would resolve at all (measured — a
+        // one-method `Sizable` answered garbage and the stdlib's `sum<T: Addable>` panicked).
+        // A DECLARATION keyed here is a concrete function; only the stubs a BOUND mints are
+        // keyed per signature (loft#1275).
         let sig = Self::sig_type_name(&self.key_type_name(type_nr), &arguments[0].typedef);
         Some(format!("t_{}{}_{fn_name}", sig.len(), sig))
     }
@@ -6233,6 +6427,12 @@ impl Data {
     /// (loft#1153).  `#` cannot occur in a loft identifier, so no user type can produce it, and
     /// `generation::sanitize` maps it before anything reaches Rust.
     const HOLDER_MARK: &'static str = "#g";
+
+    /// The largest parameter count (receiver included) a bound-method stub is probed for.
+    /// `find_fn` has no arity to offer, so it sweeps this range; the `param-count` advice
+    /// already calls eight REQUIRED parameters too many, so a bound method beyond it is not a
+    /// shape the language encourages.
+    pub(crate) const MAX_BOUND_ARITY: usize = 9;
 
     /// The internal name of a BOUND-METHOD STUB for `holder` — a generic's type variable, or an
     /// interface's associated type.
@@ -6243,16 +6443,57 @@ impl Data {
     /// took that method away from every struct spelling the variable's name: the struct's own
     /// declaration was refused as a redefinition, and a value of it resolved to the stub.
     ///
-    /// The marker sits INSIDE the length-counted portion, so the `t_<LEN><Type>_<method>`
-    /// readers (`api_surface::method_name`, the `OpIndex` refusal) still split it correctly.
+    /// The marker AND the arity sit INSIDE the length-counted portion, so the
+    /// `t_<LEN><Type>_<method>` readers (`api_surface::method_name`, the `OpIndex` refusal,
+    /// `re_resolve_call`'s name extraction) still split it correctly and read the METHOD name
+    /// unchanged.  Putting the arity after the method instead was measured and is wrong: nine
+    /// sites strip `t_` and take what follows the first underscore, so the monomorphiser looked
+    /// for a concrete `sizer#1`, found nothing, and a one-method `Sizable` answered garbage
+    /// while the stdlib's `sum<T: Addable>` panicked.  The arity is part of the KEY and never
+    /// part of the NAME.
+    ///
+    /// The key carries the ARITY because `formal/interfaces.md` `(G-Iface)` calls an interface
+    /// a set of SIGNATURES, and a name is not a signature.  `-` desugars to `OpMin` at both
+    /// arities, so a name-only key let a bound set hold only one of unary negation and binary
+    /// subtraction — no built-in bound could offer `a - b`, and an interface declaring both was
+    /// refused (loft#1275, `D-gen-4`).  It is the SAME pair `has_bound_for_method` compares at
+    /// the use site, and the visible count on both sides: a stub carries hidden parameters (a
+    /// return buffer) that an interface method does not, so the raw counts disagree by design
+    /// (loft#1299).
     ///
     /// ⚠ One home, because several sites construct or look this up, and a stub minted under one
     /// spelling and sought under another is not an error — it is silently unresolvable, which
-    /// reads as *"the bound does not supply that method."*
+    /// reads as *"the bound does not supply that method."*  That is why the arity goes in the
+    /// KEY rather than into a second lookup: a caller that forgot to pass it would not fail.
     #[must_use]
-    pub fn bound_stub_name(holder: &str, method: &str) -> String {
-        let h = format!("{holder}{}", Self::HOLDER_MARK);
+    pub fn bound_stub_name(holder: &str, method: &str, arity: usize) -> String {
+        let h = format!("{holder}{}{arity}", Self::HOLDER_MARK);
         format!("t_{}{}_{method}", h.len(), h)
+    }
+
+    /// Is `name` taken by a definition in ANY source?
+    ///
+    /// [`Self::def_nr`] answers for the CURRENT source plus the stdlib, which is the right
+    /// question when resolving a name the source wrote.  It is the wrong one when MINTING an
+    /// internal name that has to be unique program-wide: a second type-variable placeholder
+    /// is registered as a store structure under `__typevar_<name>`, and that registry has no
+    /// source in its key — so two libraries each picking the first name their own source had
+    /// free registered the same structure twice and aborted the compiler.
+    #[must_use]
+    pub fn name_taken_anywhere(&self, name: &str) -> bool {
+        self.def_names.keys().any(|(n, _)| n == name)
+    }
+
+    /// The spelling a type-variable placeholder was DECLARED under.
+    ///
+    /// Two generic headers may both write `T` while binding different variables
+    /// (`formal/interfaces.md` `(G-Gen)`), so the second's placeholder is minted under an
+    /// internal name — `T#2` — that the source cannot write.  A DIAGNOSTIC has to name the
+    /// variable the reader wrote, so every message that prints a placeholder's name goes
+    /// through here; the internal name stays the key everything else looks up.
+    #[must_use]
+    pub fn type_var_spelling(name: &str) -> &str {
+        name.split_once('#').map_or(name, |(base, _)| base)
     }
 
     /// Is this mangled name a bound-method STUB?  Exact, by the marker
@@ -6276,8 +6517,18 @@ impl Data {
 
     /// The full method key for `method` on the definition `type_nr` — the ONE spelling every
     /// site must use, whether `type_nr` is a concrete type or a bound holder.
+    ///
+    /// `arity` is the number of parameters INCLUDING the receiver.  It reaches the key only for
+    /// a bound HOLDER, whose stubs are keyed per signature ([`Self::bound_stub_name`]); a
+    /// concrete type's methods keep the `t_<LEN><Type>_<method>` spelling `CODE.md` documents,
+    /// because those are resolved by `find_fn` against the argument TYPES and never by name
+    /// alone.
     #[must_use]
-    pub fn method_key(&self, type_nr: u32, method: &str) -> String {
+    pub fn method_key(&self, type_nr: u32, method: &str, arity: usize) -> String {
+        let d = &self.definitions[type_nr as usize];
+        if d.bound_holder {
+            return Self::bound_stub_name(&d.name, method, arity);
+        }
         let n = self.key_type_name(type_nr);
         format!("t_{}{}_{method}", n.len(), n)
     }
@@ -6634,6 +6885,31 @@ impl Data {
         let type_nr = self.type_def_nr(tp);
         if type_nr == u32::MAX {
             // No method dispatch for types like Function; fall back to n_ global.
+            return self.source_nr(source, &format!("n_{fn_name}"));
+        }
+        // A bound HOLDER's stubs are keyed per SIGNATURE (loft#1275), and this entry point has
+        // no arity to offer: a method call's arguments are not parsed when its receiver is
+        // resolved.  So probe the arities the language admits and answer only when ONE bound
+        // signature carries the name — which is every shipped program, `Walkable::children`
+        // included.  Where a bound set declares one name at two arities the answer is
+        // genuinely ambiguous here, and the sites that DO know their arity — the operator
+        // paths, which read it off the syntax — ask [`Self::bound_stub_name`] directly.
+        if self.definitions[type_nr as usize].bound_holder {
+            let holder = &self.definitions[type_nr as usize].name;
+            let mut found = u32::MAX;
+            for arity in 1..=Self::MAX_BOUND_ARITY {
+                let d_nr = self.source_nr(source, &Self::bound_stub_name(holder, fn_name, arity));
+                if d_nr == u32::MAX {
+                    continue;
+                }
+                if found != u32::MAX {
+                    return u32::MAX; // two signatures, and nothing here can choose
+                }
+                found = d_nr;
+            }
+            if found != u32::MAX {
+                return found;
+            }
             return self.source_nr(source, &format!("n_{fn_name}"));
         }
         let base = self.key_type_name(type_nr);

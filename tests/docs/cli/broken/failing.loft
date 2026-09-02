@@ -1,0 +1,9 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// The deliberately failing test chapter 35 shows.  It lives in its own directory
+// so a run pointed at the fixture root stays green.
+fn double(n: integer) -> integer { n * 2 }
+
+fn test_double_of_two() {
+  assert(double(2) == 5, "double(2) should be 5");
+}

@@ -4103,8 +4103,24 @@ impl State {
 
         // Generate all args: visible params, then work-buffer blocks (12B DbRefs each),
         // then closure arg (12B DbRef).  Blocks produce the correct type/size automatically.
-        for arg in args.iter() {
-            self.generate_node(arg, stack, false);
+        //
+        // A `fn(…)` PARAMETER takes the whole 20-byte pair, and a bare fn-ref name lowers to
+        // the lone d_nr — eight bytes.  `declared_size` below counts the pair either way, so
+        // the short push left the frame twelve bytes out and the call ran off it: on
+        // `--interpret` the program produced NO OUTPUT AT ALL and exited 0 (not even the
+        // print before the call), and `--native` passed an `i64` where the callee's parameter
+        // is a `(u32, DbRef)` (loft#1285).  A fn-ref VARIABLE already holds the pair, which
+        // is why `lf(v)` worked and `lf(dbl)` did not.
+        //
+        // `gen_fn_ref_value_node` is the same top-up the tuple-element write and the
+        // first-Set path use, so the three spellings of "put a fn-ref in a 20-byte slot"
+        // cannot drift (loft#1069's family).
+        for (i, arg) in args.iter().enumerate() {
+            if i < param_types.len() && matches!(param_types[i].base(), Type::Function(_, _, _)) {
+                self.gen_fn_ref_value_node(arg, stack);
+            } else {
+                self.generate_node(arg, stack, false);
+            }
         }
 
         // fn-ref variable is below all pushed arguments.
@@ -4607,10 +4623,10 @@ impl State {
             // ops sit on the write-back branch only).  Heap inner type only; scalar
             // `&` has no store to free.
             let amp_owned_writeback = stack.function.is_argument(var)
-                && matches!(
+                && (matches!(
                     *tp,
                     Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
-                )
+                ) || crate::parser::vectors::is_keyed(&tp))
                 && matches!(
                     crate::use_analysis::ownership_of(stack.data, stack.def_nr, value),
                     crate::use_analysis::Own::Owned
@@ -4638,7 +4654,15 @@ impl State {
                 // would skip.
                 Type::Boolean => stack.add_op("OpSetBoolean", self),
                 Type::Enum(_, false, _) => stack.add_op("OpSetByte", self),
+                // A KEYED collection joins the store-backed kinds: its slot holds a DbRef
+                // exactly as a vector's does, so the write-back repoints it the same way.
+                // The list was Vector/Reference/Enum and a `&hash<T[k]>` fell into the
+                // `panic!` — an allow-list whose omission costs an ICE rather than an
+                // optimisation, which is the trade the other way round (loft#1292).
                 Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _) => {
+                    stack.add_op("OpSetStackRef", self);
+                }
+                ref other if crate::parser::vectors::is_keyed(other) => {
                     stack.add_op("OpSetStackRef", self);
                 }
                 _ => panic!("Unknown reference variable type"),

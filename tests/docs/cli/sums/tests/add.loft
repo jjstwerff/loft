@@ -1,0 +1,4 @@
+use sums::*;
+fn test_add_adds() {
+  assert(add(2, 3) == 5, "add sums its two arguments");
+}

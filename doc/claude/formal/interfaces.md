@@ -120,8 +120,20 @@ decided boundary, so it belongs here as a scope rule, not as a deviation to clos
 
 ## Deviations
 
-**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
-the companion [interfaces-history.md](interfaces-history.md).
+**OPEN: 0.**  `D-gen-4` closed 2026-09-02 (loft#1275): a bound-method stub is keyed by
+`(name, arity)`, so one bound set holds two SIGNATURES of one name and an interface may declare
+`-` at both arities.  The record, and the four closed deviations, are in the companion
+[interfaces-history.md](interfaces-history.md).
+
+⚠ **Closed for an OPERATOR, and the residue is a rule the language keeps rather than a
+deviation.**  An operator's arity is fixed by its SYNTAX, so the call site asks for the exact
+stub.  A named method resolves its RECEIVER before its arguments are parsed, so `x.sizer()` has
+no arity to ask with, and one bound set requiring `sizer` at two arities is refused at the
+declaration — which is `(G-Iface)` satisfied and a *parsing* order, not a rule bent.  Separately
+a CONCRETE receiver has no arity in its method key either, so a user type provides one arity of
+`-` and not both; that is why the shipped surface puts binary subtraction in `Subtractable`
+rather than adding it to `Numeric`, where it would have taken satisfaction away from every user
+type that provides `OpMul` and unary `OpMin` today.
 
 ## Conformance
 
@@ -132,8 +144,25 @@ the companion [interfaces-history.md](interfaces-history.md).
   on both backends.
 - **Satisfaction failure is static (`G-Check`)** — calling a `T: Sizable` generic with a `struct
   Bare` lacking `size` fails to compile: `'Bare' does not satisfy interface 'Sizable': missing size`.
+- **Satisfaction is per SIGNATURE, not per name (`G-Sat`)** — `(G-Sat)` judges against
+  `[Self ↦ C](p̄ -> R)`, and the check asked `find_fn`, which takes a name and a receiver and no
+  arity.  While no interface could declare one name twice that gap could not be reached; the
+  moment `Subtractable` asked for a two-operand `OpMin`, a type providing only the UNARY one
+  answered the name, satisfied the bound, and the monomorph called it with one operand too many
+  and dropped the second — `diff(a, b)` computed `-a` on both backends with no diagnostic, which
+  is loft#1274's defect at the satisfaction site.  The comparison is the VISIBLE parameter count
+  on both sides (a struct return carries a hidden buffer an interface declaration does not), and
+  the re-ask goes through `possible_with_signature`, the resolver monomorphisation already uses,
+  so the two cannot disagree about which definition a signature names.  Oracle:
+  `tests/scripts/1275-a-bound-offers-both-arities-of-minus.loft`.
 - **No dynamic dispatch (`G-Scope`)** — `x: Sizable = Box{…}` is rejected; an interface names a
   generic bound, never a variable's type.
+- **A header binds its OWN variable (`G-Gen`)** — `fn one<T: HasSize1>(x: T)` beside
+  `fn two<T: HasSize2>(x: T)`, where the two interfaces declare `sizer` with different
+  signatures, compiles and each call resolves against its own bound.  The spelling is shared;
+  the variable is not.  (Until 2026-09-02 one placeholder — and so one bound-method stub —
+  stood for every `T` in the program, and the second header's calls were checked against the
+  first's signatures; `D-gen-3`.)
 
 D-op-1's falsifier applies: any program a monomorphized generic evaluates differently on the two
 backends — or that one driver accepts and another rejects — is the definitional error this doc names.

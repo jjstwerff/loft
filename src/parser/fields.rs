@@ -265,7 +265,7 @@ impl Parser {
                 };
                 let stub_nr = self.data.find_fn(u16::MAX, &field, &t);
                 if stub_nr != u32::MAX
-                    && self.has_bound_for_method(&field, holder_nr)
+                    && self.has_bound_for_method(&field, holder_nr, None)
                     && self.lexer.has_token("(")
                 {
                     return self.parse_method(code, stub_nr, t.clone());
@@ -414,6 +414,7 @@ impl Parser {
             } else if !self.first_pass {
                 // generic-specific error for field access on T.
                 if let Some(tv_name) = self.generic_type_name(&t) {
+                    let tv_name = crate::data::Data::type_var_spelling(tv_name);
                     diagnostic!(
                         self.lexer,
                         Level::Error,
@@ -1324,7 +1325,9 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
         // loft#1153 — a HOLDER's stub and a concrete type's method are spelled differently,
         // and this site looks up BOTH: `x[0]` reaches here for a bounded type variable and for a
         // struct defining `OpIndex` alike.  `method_key` is the one home that knows which.
-        let md = self.data.def_nr(&self.data.method_key(d, "OpIndex"));
+        // `x[i]` is arity 2 — receiver plus index — which is what keys a HOLDER's stub
+        // (loft#1275); for a concrete type the arity is not part of the spelling.
+        let md = self.data.def_nr(&self.data.method_key(d, "OpIndex", 2));
         if md == u32::MAX || !matches!(self.data.def_type(md), DefType::Function | DefType::Generic)
         {
             return u32::MAX;
@@ -1335,7 +1338,7 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
         // subscript a type it was never promised anything about. So for a holder the
         // lookup is not enough; the BOUNDS have to declare it. (The same guard the
         // binary-operator path carries, for the same reason.)
-        if self.data.is_type_var_placeholder(d) && !self.has_bound_for_method("OpIndex", d) {
+        if self.data.is_type_var_placeholder(d) && !self.has_bound_for_method("OpIndex", d, None) {
             return u32::MAX;
         }
         md
@@ -1447,7 +1450,8 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
                 Type::Reference(d, _) | Type::Enum(d, _, _)
                     if self.data.is_type_var_placeholder(*d) =>
                 {
-                    let name = self.data.def(*d).name().to_string();
+                    let name =
+                        crate::data::Data::type_var_spelling(self.data.def(*d).name()).to_string();
                     diagnostic!(
                         self.lexer,
                         Level::Error,

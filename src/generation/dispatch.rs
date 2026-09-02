@@ -311,13 +311,14 @@ impl Output<'_> {
                 // twin of the interp stash + `OpFreeRefIfDistinct` at the RefVar-set
                 // site (codegen.rs).  Heap inner type only; a `RefVar(Text)` buffer
                 // has no such displaced store.
-                let amp_owned_writeback = matches!(
+                let amp_owned_writeback = (matches!(
                     **inner,
                     Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                ) && matches!(
-                    crate::use_analysis::ownership_of(self.data, self.def_nr, to),
-                    crate::use_analysis::Own::Owned
-                );
+                ) || crate::parser::vectors::is_keyed(inner))
+                    && matches!(
+                        crate::use_analysis::ownership_of(self.data, self.def_nr, to),
+                        crate::use_analysis::Own::Owned
+                    );
                 let needs_text_coerce = matches!(**inner, Type::Text(_));
                 // A `&boolean` slot holds the tri-state STORAGE byte (`u8`: 0/1/255,
                 // null-capable) while an expression like `!b` produces a two-state
@@ -347,11 +348,12 @@ impl Output<'_> {
                 }
                 self.output_code_inner(w, to)?;
                 if amp_owned_writeback {
-                    write!(
-                        w,
-                        "; if _old_disp.store_nr != var_{name}.store_nr {{ \
-                         OpFreeRef(cell, _old_disp, \"_old_disp\"); }} }}"
-                    )?;
+                    // Through the same helper the interpreter's `OpFreeRefIfDistinct`
+                    // reaches, so the distinctness test and the caller's
+                    // protected-from-free refusal (loft#1287) cannot drift between the
+                    // backends.  Inlining the comparison here is what let the native
+                    // side keep freeing a store the caller had marked as not its own.
+                    write!(w, "; OpFreeRefIfDistinct(cell, _old_disp, *var_{name}); }}")?;
                 } else if needs_text_coerce {
                     write!(w, ").to_string()")?;
                 } else if needs_bool_coerce {

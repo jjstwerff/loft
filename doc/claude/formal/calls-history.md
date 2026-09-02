@@ -6,7 +6,41 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0**. Five deviations have been carried and closed (D-call-1 … D-call-5); otherwise
+OPEN: **1** — `D-call-7` below (loft#1287, opened 2026-09-01). `D-call-6` was opened and
+closed the same day by the reference review of chapter 31.
+
+### D-call-6 — OPENED AND CLOSED (2026-09-01, loft#1286): the `&` lint could not see a forward
+
+`advice[slow-reference-parameter]` asks whether the body REASSIGNS the parameter, because
+`(F-ParamRef)` makes replacement the one thing `&` buys. A FORWARDER never reassigns — its
+callee does — so `fn f(b: &B) { g(b); }` looked redundant while it was the only thing
+carrying `g`'s write-back out to `f`'s caller. Taking the advice answered `[0]` where the
+program had answered `[9,9]`, with nothing reporting the change, and the lint fired **only
+on the correct spelling**.
+
+`(F-ParamRef)` is transitive and the rule now says so; the lint asks the transitive question
+too. Two implementations of that question were written independently in the two checkouts,
+and the one that ships is `callee_param_reassigns` (memoised, per callee parameter): it asks
+whether the callee REASSIGNS the argument, where the first version asked only whether the
+callee's parameter was declared `&`. The difference is not cosmetic — a `&` parameter the
+callee only writes a FIELD through is precisely the case this advice exists to flag, and the
+declaration-shaped question suppressed it. Guard `tests/ref_forward_lint.rs` holds either
+way: it counts notices on stderr, because `make falsify` has no channel for a diagnostic
+that must NOT fire, and carries two true-positive controls so a deleted lint cannot pass it.
+The corpus firing counts recorded here earlier are dropped rather than restated: they were
+measured on a build that no longer exists, and a count is only comparable against its own
+before-half.
+
+### D-call-7 — OPEN (2026-09-01, loft#1287): a forwarded plain parameter leaks the replaced store
+
+`fn forward_plain(b: B) { replace_ref(b); }` where `replace_ref` takes `&B` and reassigns
+leaks one store per call (`kt=79 B×50` over fifty iterations), on both backends. The
+ANSWER is correct and is `(F-ParamRebind)` working as written — the replacement rebinds
+`forward_plain`'s local and `main` keeps its value. What is missing is the free: the record
+the callee allocated lands in a frame about to be dropped and nothing owns it. Neither
+neighbour leaks — a `&` forwarder does not, and calling `replace_ref` directly does not.
+
+Five deviations have been carried and closed (D-call-1 … D-call-5); otherwise
 this is a *rules* doc — it shrinks operational.md's D-op-1 and adds no code deviation of its
 own.
 

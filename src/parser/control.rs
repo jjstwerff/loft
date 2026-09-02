@@ -3968,6 +3968,27 @@ impl Parser {
                 if !has_wildcard {
                     continue;
                 }
+                // A total `_` matches everything, so an arm written after it can never be
+                // selected.  Say that here: leaving it to the closing-brace expectation at the
+                // end of the loop reported "Expect token }" — the right caret with the wrong
+                // reason, on the rule the Match chapter states as "put it last".
+                //
+                // `continue` rather than `break`, so the unreachable arms are parsed as the
+                // arms they are and the `}` is consumed normally; breaking here produced a
+                // second, spurious error about the brace.  A GUARDED `_ if cond` never reaches
+                // this point — it is not total, so it took the `continue` above, and arms are
+                // expected to follow it.
+                if !self.lexer.peek_token("}") {
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "a `_` arm matches everything, so this arm can never be selected \
+                             — move `_` to the end"
+                        );
+                    }
+                    continue;
+                }
                 break;
             }
 
@@ -5401,7 +5422,7 @@ impl Parser {
             self.lexer.peek().has,
             LexItem::Integer(..)
                 | LexItem::Long(_)
-                | LexItem::Float(_)
+                | LexItem::Float(..)
                 | LexItem::Single(_)
                 | LexItem::CString(_)
                 | LexItem::Character(_)
@@ -7411,6 +7432,21 @@ impl Parser {
             arms.push((pattern_val, arm_code, arm_type, guard_opt));
             if has_wildcard {
                 self.lexer.has_token(","); // optional trailing comma
+                // The enum path's twin — a total `_` matches everything, so an arm after it can
+                // never be selected.  Breaking straight to the closing-brace expectation
+                // reported "Expect token }" and then cascaded into four more errors about the
+                // rest of the line, none of which named the wildcard.
+                if !self.lexer.peek_token("}") {
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "a `_` arm matches everything, so this arm can never be selected \
+                             — move `_` to the end"
+                        );
+                    }
+                    continue;
+                }
                 break;
             }
             if self.lexer.peek_token("}") {
@@ -13753,10 +13789,36 @@ impl Parser {
             // there would let a bare variant become a stray placeholder var that
             // shadows the real variant on pass 2.
             if !in_named {
+                // The parameter type this argument is checked against, from whichever
+                // spelling of the callee is in scope: a NAMED function's attribute, or a
+                // fn-ref VARIABLE's parameter list.  Both answer "the callee's parameter at
+                // this position", and reading only the named one is why the whole chain
+                // below was unreachable through a lambda — `axis(North)` resolved the bare
+                // variant against `fn axis(d: D)` while `lam(North)` was refused for the
+                // IDENTICAL declared parameter type, with a message whose cure ("give the
+                // target an enum type") the target already satisfied (loft#1280).  It is
+                // the fn-ref call-site position of loft#1122's family.
                 let hint_d_nr = self.data.def_nr(&format!("n_{name}"));
-                if hint_d_nr != u32::MAX && arg_idx < self.data.attributes(hint_d_nr) {
-                    let expected = self.data.attr_type(hint_d_nr, arg_idx);
-                    if self.enum_context(&expected) {
+                let hinted = if hint_d_nr != u32::MAX && arg_idx < self.data.attributes(hint_d_nr) {
+                    Some(self.data.attr_type(hint_d_nr, arg_idx))
+                } else {
+                    self.fnref_param_hint(name, arg_idx)
+                };
+                if let Some(expected) = hinted {
+                    if Self::seeds_lambda_hint(&expected) {
+                        // A `fn(…)` parameter, so a SHORT-form lambda argument can infer its
+                        // parameter types — the fn-ref position of the push the `fn_def_nr`
+                        // block above makes for a named callee.
+                        //
+                        // This arm was held CLOSED when loft#1280 landed, because seeding it
+                        // made the short form parse and land in a dispatch that could not
+                        // carry a fn-ref argument at all (loft#1285: no output and exit 0 on
+                        // `--interpret`, E0308 on `--native`).  With that dispatch fixed —
+                        // the 20-byte pair at the interpreter's call site, the `fn_ref_context`
+                        // binding in the native emitter, and the `CallRef` arm in the
+                        // reachability walk — the refusal has nothing left to protect.
+                        self.expected = expected;
+                    } else if self.enum_context(&expected) {
                         self.expected = expected;
                     } else if Self::seeds_collection_hint(&expected) {
                         // #432 — seed a bare vector-literal argument's element width
@@ -14215,6 +14277,31 @@ impl Parser {
         self.call(
             val, source, name, list, types, named_args, arg_pos, name_pos,
         )
+    }
+
+    /// The parameter type at `arg_idx` when `name` is a fn-ref in scope — a local of
+    /// `Type::Function`, or one this lambda can capture from the enclosing scope.
+    ///
+    /// The `⇐` expected-type channel's argument push reads a NAMED function's attribute, and
+    /// a lambda has no `n_<name>` definition to read.  Its declared parameter list says the
+    /// same thing, so this is the second spelling of one question rather than a second
+    /// question (loft#1280).
+    fn fnref_param_hint(&self, name: &str, arg_idx: usize) -> Option<Type> {
+        let v_nr = self.vars.var(name);
+        let tp = if v_nr == u16::MAX {
+            // A fn-ref reached only through the capture context — the same lookup
+            // `try_fn_ref_call` makes before the variable exists in this scope.
+            self.capture_context
+                .iter()
+                .find(|(n, t)| n == name && matches!(t, Type::Function(_, _, _)))
+                .map(|(_, t)| t.clone())?
+        } else {
+            self.vars.tp(v_nr).clone()
+        };
+        match tp.base() {
+            Type::Function(params, _, _) => params.get(arg_idx).cloned(),
+            _ => None,
+        }
     }
 
     /// Try to dispatch as a call through a function-reference variable.

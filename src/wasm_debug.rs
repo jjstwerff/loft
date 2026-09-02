@@ -222,9 +222,11 @@ fn apply(sess: &mut Session, cmd: &str) -> Vec<String> {
 /// referenced live local as a typed arg of a synthetic fn and evaluates it via
 /// [`State::eval_frame_reenter`](crate::state::State::eval_frame_reenter), reading
 /// each local where it lives.  Handles arbitrary expressions (`2 + 2`, `n + 2`,
-/// `h["a"].v`, `len(v)`, `s.field`).  A bare heap ident is read live in place; an
-/// expression that can't be bound/compiled (a `text` local, a parse error) yields
-/// `<unavailable>` rather than a wrong value.
+/// `h["a"].v`, `len(v)`, `s.field`).  A bare heap ident is read live in place; every value
+/// shape answers, text and vector included, because a non-scalar result is boxed in a
+/// generated one-field record and serialised inside the callee (loft#1187).
+/// `<unavailable>` is left for an expression that cannot be BOUND OR COMPILED at all — a
+/// parse error, a name not in scope at the frame — and is never a wrong value.
 fn eval_expr(sess: &mut Session, expr: &str) -> String {
     let expr = expr.trim();
     if is_bare_ident(expr) {
@@ -616,9 +618,9 @@ mod tests {
     // counter, so the next eval built the same name over the wreck and every eval after
     // the first failure answered `<unavailable>` — including ones that had just worked.
     //
-    // A text-valued expression is the failing input here because that is the shape a
-    // reader hits first (loft#1187 tracks making it evaluate); any non-evaluating
-    // expression exercises the same path.
+    // The failing input is an unknown FUNCTION, because that is what `<unavailable>` means
+    // now that every value shape evaluates (loft#1187); any non-evaluating expression
+    // exercises the same path.
     #[test]
     fn a_failed_eval_does_not_end_the_session() {
         assert!(start(
@@ -691,7 +693,7 @@ mod tests {
     #[test]
     fn a_text_or_vector_valued_eval_answers_its_value() {
         assert!(start(
-            "fn shout(s: text) -> text { s.to_uppercase() }\n             fn evens(n: integer) -> vector<integer> { [for i in 0..n { i * 2 }] }\n             struct Stats { lo: integer, hi: integer }\n             fn stats(a: integer, b: integer) -> Stats { Stats { lo: a, hi: b } }\n             fn compute(n: integer) -> integer {\n  m = n + 2;\n  m\n}\n             fn main() { compute(40); }\n"
+            "fn shout(s: text) -> text { s.to_uppercase() }\n             fn evens(n: integer) -> vector<integer> { [for i in 0..n { i * 2 }] }\n             struct Stats { lo: integer, hi: integer }\n             fn stats(a: integer, b: integer) -> Stats { Stats { lo: a, hi: b } }\n             fn compute(n: integer, t: text) -> integer {\n  m = n + 2;\n  m + len(t) - 3\n}\n             fn main() { compute(40, \"abc\"); }\n"
         ));
         SESSION.with(|s| {
             let mut g = s.borrow_mut();
@@ -701,6 +703,10 @@ mod tests {
             assert!(hit[0].starts_with("D:hit compute"), "paused: {hit:?}");
             for (expr, want) in [
                 ("n + 2", "42"),
+                // A bare `text` local, read off the frame rather than re-entered: the
+                // other half of the same question, and the one `eval_expr`'s own doc
+                // comment used to name as unavailable.
+                ("t", r#""abc""#),
                 ("stats(1, 9)", r#"{"lo":1,"hi":9}"#),
                 ("shout(\"hi\")", "\"HI\""),
                 ("\"a\" + \"b\"", "\"ab\""),

@@ -1,0 +1,6 @@
+// want: REFUSED
+fn main() {
+  s = "nope";
+  x: u8 = (s as integer) as u8;
+  println("c03 = {x}");
+}

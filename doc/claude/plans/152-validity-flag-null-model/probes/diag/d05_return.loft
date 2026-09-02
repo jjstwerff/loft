@@ -1,0 +1,7 @@
+// want: WARN
+fn make(q: integer?) -> integer { q }
+fn main() {
+  q: integer? = 9223372036854775807;
+  q += 1;
+  println("{make(q)}");
+}

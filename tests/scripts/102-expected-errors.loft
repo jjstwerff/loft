@@ -115,7 +115,7 @@ fn test_guard_non_bool() {
 
 // ── From 38-parse-warnings.loft ─────────────────────────────────
 
-// @EXPECT_ERROR: Format specifier has no effect on text
+// @EXPECT_ERROR: `x` has no effect on text
 fn test_hex_on_text() {
   t = "hello";
   assert("{t:x}" == "hello", "text with hex");
