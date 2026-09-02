@@ -178,6 +178,21 @@ fake non-null on an op that can miss.
 > overflow: `(N-Store)` never fires because the op is typed non-null. This is a **deliberate,
 > bounded soundness edge** (parallel to a non-null `float` holding a `NaN`), not a deviation to
 > close — the reachable-fault ops (`/`, `%`, `v[i]`, parse) stay `τ?` as above.
+>
+> **A sentinel has to EXIST for that to be writable, and for the width aliases it sometimes
+> does not.** The rule reaches exactly the specs that keep a code back for null and put it at
+> the BOTTOM, which is the code a non-null read already reports as null:
+>
+> | spec | spare code? | overflow answers |
+> |---|---|---|
+> | `integer` (i64), `i32` | yes, and it is the bottom (`i32` is `i32::MIN + 1 ..= i32::MAX`, which is why `i32 = -2147483648` is refused) | `null` |
+> | `u32` | yes, but at the TOP — no non-null read tests for it, and writing it renders `4294967295`, outside the type's own range | the type's default |
+> | `u8`, `i8`, `u16`, `i16` | no: the range FILLS the width, so all 256 / 65 536 codes are values | the type's default |
+>
+> The default is `(E-Uncomp-NN)`'s and is at least a legal value of the type, so nothing holds
+> a non-`τ` value — but it is indistinguishable from a computed one, which is the price of a
+> width with no code to spare. `τ?` is the spelling that always answers `null`, because a
+> nullable narrow alias sacrifices an edge value to reserve one (`(N-Reserve)`). loft#1296.
 
 Nullability is **range-driven**, so the discharge burden is proportional to *real* risk,
 not theoretical: `a op b` and `e as τ` are **non-null when the result provably fits** the

@@ -131,8 +131,13 @@ fn test_a_non_nullable_narrow_slot_takes_its_default() {
   // here while the u8 cells above would still pass.
   i: i8 = 127;    i += 1;    assert(i == 0, "an i8 past 127 takes its default 0, got {i}");
   j: i16 = 32767; j += 1;    assert(j == 0, "an i16 past 32767 takes its default 0, got {j}");
-  k: i32 = 2147483647; k += 1; assert(k == 0, "an i32 past its max takes 0, got {k}");
   n: u8 = 250;    n += 10;   assert(n == 0, "a u8 past 255 takes its default 0, got {n}");
+  // ⚠ `i32` was here and MOVED on 2026-09-02 (loft#1296).  It is not a slot that cannot hold
+  // null: `i32` is `i32::MIN + 1 ..= i32::MAX` in either spelling, so it reserves a code and
+  // C85's *"write the reserved sentinel, which then reads as null"* applies to it.  The three
+  // above fill their width and have none, which is what this cell is really about — and the
+  // separation is sharper now that one of the four has left it.
+  k: i32 = 2147483647; k += 1; assert(k == null, "an i32 past its max reads as null, got {k}");
 
   // …and where zero is OUTSIDE the range, the nearest bound is the default.  Only the
   // ABOVE-zero side can be written: `limit(-30, -10)` does not parse (a negative HIGH
