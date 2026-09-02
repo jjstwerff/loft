@@ -2325,10 +2325,10 @@ fn print(s: &mut State) {
     crate::loft_host_print(v_v1.str().as_ptr(), v_v1.str().len());
     #[cfg(all(not(feature = "wasm"), not(target_arch = "wasm32")))]
     if !crate::rpc::print_or_capture(v_v1.str()) {
-        print!("{}", v_v1.str());
+        crate::codegen_runtime::host_print(v_v1.str());
     }
     #[cfg(all(not(feature = "wasm"), target_arch = "wasm32", target_os = "wasi"))]
-    print!("{}", v_v1.str());
+    crate::codegen_runtime::host_print(v_v1.str());
     #[cfg(feature = "wasm")]
     crate::wasm::output_push(v_v1.str());
 }

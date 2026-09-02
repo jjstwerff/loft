@@ -1603,7 +1603,7 @@ fn n_store_load_untrusted(stores: &mut Stores, stack: &mut DbRef) {
 /// in the file while still showing the summary on screen.
 fn n_eprint(stores: &mut Stores, stack: &mut DbRef) {
     let v = *stores.get::<Str>(stack);
-    eprint!("{}", v.str());
+    crate::codegen_runtime::host_eprint(v.str());
 }
 
 fn n_directory(stores: &mut Stores, stack: &mut DbRef) {

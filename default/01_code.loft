@@ -1331,7 +1331,7 @@ pub fn log_error(message: text, file: text, line: integer);
 pub fn log_fatal(message: text, file: text, line: integer);
 #impure(host_io)
 fn OpPrint(v1: text);
-#rust"#[cfg(all(target_arch = \"wasm32\", not(target_os = \"wasi\"), not(feature = \"wasm\")))]\ncrate::loft_host_print(@v1.as_ptr(), @v1.len());\n#[cfg(all(not(feature = \"wasm\"), not(target_arch = \"wasm32\")))]\nif !crate::rpc::print_or_capture(@v1) {{ print!(\"{{}}\", @v1); }}\n#[cfg(all(not(feature = \"wasm\"), target_arch = \"wasm32\", target_os = \"wasi\"))]\nprint!(\"{{}}\", @v1);\n#[cfg(feature = \"wasm\")]\ncrate::wasm::output_push(@v1);"
+#rust"#[cfg(all(target_arch = \"wasm32\", not(target_os = \"wasi\"), not(feature = \"wasm\")))]\ncrate::loft_host_print(@v1.as_ptr(), @v1.len());\n#[cfg(all(not(feature = \"wasm\"), not(target_arch = \"wasm32\")))]\nif !crate::rpc::print_or_capture(@v1) {{ crate::codegen_runtime::host_print(@v1); }}\n#[cfg(all(not(feature = \"wasm\"), target_arch = \"wasm32\", target_os = \"wasi\"))]\ncrate::codegen_runtime::host_print(@v1);\n#[cfg(feature = \"wasm\")]\ncrate::wasm::output_push(@v1);"
 // Writes v to standard output without a newline.
 // Use for progress output and building up a line incrementally.
 pub fn print(v1: text) {
@@ -1350,7 +1350,7 @@ pub fn println(v1: text) {
 // / progress / summary lines from machine-readable stdout
 // (JSON, structured data piped to downstream consumers).
 pub fn eprint(v1: text);
-#rust"eprint!(\"{{}}\", @v1)"
+#rust"crate::codegen_runtime::host_eprint(@v1)"
 #impure(host_io)
 
 // Writes v followed by a newline to standard ERROR.
