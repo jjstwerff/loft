@@ -6147,11 +6147,7 @@ use a separate collection or add after the loop"
     ///
     /// Returns true when it claimed the store, so the caller skips both the narrowing
     /// refusal and the ordinary outside-the-expression guard.
-    pub(crate) fn range_guard_inside_discharge(
-        &mut self,
-        code: &mut Value,
-        target: &Type,
-    ) -> bool {
+    pub(crate) fn range_guard_inside_discharge(&mut self, code: &mut Value, target: &Type) -> bool {
         // A nullable target already answers null for a value that does not fit, and its own
         // `??` reads that today — there is nothing here to add and claiming it would move a
         // shape that works.

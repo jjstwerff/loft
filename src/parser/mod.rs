@@ -4235,8 +4235,9 @@ impl Parser {
         // so a discharged store is not an unanswered narrowing.  The guard goes inside the
         // discharge and this seam then leaves the store alone: no refusal, and no second
         // guard around the outside.
-        let discharged =
-            !self.first_pass && !self.in_explicit_cast && self.range_guard_inside_discharge(code, should);
+        let discharged = !self.first_pass
+            && !self.in_explicit_cast
+            && self.range_guard_inside_discharge(code, should);
         let narrows = if self.in_explicit_cast {
             Self::is_narrowing_int(is_type, should)
         } else {
