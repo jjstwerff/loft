@@ -7653,13 +7653,13 @@ Types that support the `+` addition operator, returning the same type. Satisfied
 pub interface Numeric
 ```
 
-Types that support `\*` and `-` (unary negation). Separate from `Addable` to allow fine-grained bounds without stub-name collisions. Satisfied by integer, single, float, and user types defining OpMul and OpMin.
+Types that support `\*` and `-` (unary negation). Separate from `Addable` so a generic can ask for the fewest operators it needs. Satisfied by integer, single, float, and user types defining OpMul and OpMin.
 
 ```rust
 pub interface Scalable
 ```
 
-Types that support integer scaling via a `scale` method. Uses a method (not `op \*`) to avoid stub-name collision with `Numeric`. User types satisfy Scalable by defining `fn scale(self: T, factor: integer) -\> integer`.
+Types that support integer scaling via a `scale` method. Uses a method (not `op \*`) because a `\<T: Numeric + Scalable\>` would then need two signatures of one name from ONE bound set, which is still refused (loft\#1275). Two SEPARATE generics may each bound their own `T` by an interface declaring the same method differently — a header binds its own type variable. User types satisfy Scalable by defining `fn scale(self: T, factor: integer) -\> integer`.
 
 ```rust
 pub interface Printable
