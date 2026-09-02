@@ -96,6 +96,10 @@ canonical; these pages are its generated shadow. Regenerate with
 | [@F113](F113.md) | Associated types — an interface names a companion type |
 | [@F114](F114.md) | `x[i]` on a library type — `OpIndex` dispatch |
 | [@F115](F115.md) | `OpDrop` — a type runs code when its scope lets it die |
+| [@F118](F118.md) | Time (now / ticks) |
+| [@F119](F119.md) | Store locks (#lock) |
+| [@F120](F120.md) | Lexer library (lib/lexer) |
+| [@F121](F121.md) | Parser library (lib/parser) |
 
 ## Infrastructure (`@I`)
 

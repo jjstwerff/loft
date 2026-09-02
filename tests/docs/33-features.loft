@@ -104,6 +104,10 @@
 // - **@F113** — Associated types — an interface names a companion type
 // - **@F114** — `x[i]` on a library type — `OpIndex` dispatch
 // - **@F115** — `OpDrop` — a type runs code when its scope lets it die
+// - **@F118** — Time (now / ticks)
+// - **@F119** — Store locks (#lock)
+// - **@F120** — Lexer library (lib/lexer)
+// - **@F121** — Parser library (lib/parser)
 //
 // ## Tooling and infrastructure
 //
