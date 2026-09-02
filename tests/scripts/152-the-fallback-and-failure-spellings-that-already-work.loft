@@ -1,0 +1,75 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN152 step 1 — pin the three behaviours this plan builds on, which ship today and
+// are guarded by nothing.  Each is a thing an author can rely on right now, and each
+// could regress unnoticed before the plan's own work starts.
+//
+// 1. `??` on a NON-NULL-typed operation supplies the author's fallback.  C85 types
+//    `a + b` non-null, and it yields the reserved sentinel on overflow; `??` reads that
+//    at RUNTIME, with no static knowledge of the operands — `bump` below is compiled
+//    once and answers the fallback only on the call that overflows.
+//
+// 2. `!` reads a failure on a NULLABLE narrow.  `u8?` sacrifices an edge value to
+//    reserve a null (@FR-N-Reserve), so the fault is representable and testable.
+//
+// 3. `redundant-null-negation` FIRES on `!` over a non-null narrow.  That warning is
+//    the guard rail @PLN152 step 5 turns into an adjacency gate: it must keep firing
+//    everywhere the fused form does not apply, or a moved line silently stops testing
+//    anything.  Pinned with @EXPECT_WARNING so that a change which silences it broadly
+//    fails here rather than in review.
+//
+// ⚠ The `bump(2, 3)` cell is the control that matters most: a `??` that fired on every
+// call would satisfy both overflow cells and be completely wrong.
+//
+// @EXPECT_WARNING: Warning[redundant-null-negation]
+//
+// ⚠ @falsified-at: none — `make falsify` reports this file INERT against `origin/main`
+//   (e9643ff6) and that is CORRECT rather than a defect in it.  This is a LOCK, not a
+//   regression guard: every row passes on every build back to whenever these behaviours
+//   landed, because the point is that they must not START failing.  What would move it is
+//   a change made BY @PLN152 — silencing `redundant-null-negation` too broadly, or letting
+//   `??` fire on an ordinary result — which is exactly what it exists to catch, and which
+//   no past commit can demonstrate.
+
+struct F152 { i: u8 }
+
+fn bump(v: integer, d: integer) -> integer { (v + d) ?? 42 }
+fn plain(v: integer, d: integer) -> integer { v + d }
+
+fn a_coalesce_supplies_the_authors_value_on_a_non_null_overflow() {
+  big: integer = 9223372036854775807;
+  assert(bump(big, 1) == 42, "?? answers the author's fallback on a runtime overflow");
+  assert(plain(big, 1) == null, "…and without it C85's sentinel reads as null");
+  assert(bump(2, 3) == 5, "CONTROL: ?? does not fire on an ordinary result");
+}
+
+fn b_a_nullable_narrow_failure_is_testable() {
+  z: u8? = 250;
+  z += 10;
+  assert(z == null, "a u8? holds the failure");
+  assert(!z, "…and `!` reads it");
+  w: u8? = 200;
+  w += 10;
+  assert(!(!w), "CONTROL: `!` is false on a real value");
+  assert(w == 210, "…which is the value itself");
+}
+
+fn c_the_non_null_narrow_warning_is_the_adjacency_gate() {
+  f = F152 { i: 200 };
+  f.i += 100;
+  // Draws `redundant-null-negation` today, and must keep drawing it wherever the
+  // @PLN152 fused form does not apply.  The value cell records what the language
+  // currently answers, so a change here is visible rather than silent.
+  if !f.i {
+    assert(false, "not reachable today: a non-null u8 cannot hold the failure");
+  }
+  assert(f.i == 0, "the fit-failure took the type's default");
+}
+
+fn main() {
+  a_coalesce_supplies_the_authors_value_on_a_non_null_overflow();
+  b_a_nullable_narrow_failure_is_testable();
+  c_the_non_null_narrow_warning_is_the_adjacency_gate();
+  print("152 step 1 ok\n");
+}
