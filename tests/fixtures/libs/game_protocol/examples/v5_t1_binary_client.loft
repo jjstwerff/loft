@@ -19,7 +19,7 @@
 use web;
 
 fn main() {
-  port_raw = env_variable("LOFT_TICTACTOE_PORT");
+  port_raw = env_variable("LOFT_TICTACTOE_PORT") ?? "";
   port = if port_raw == "" { 18091 } else { port_raw as integer };
   url = "ws://127.0.0.1:{port}";
 

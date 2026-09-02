@@ -800,7 +800,7 @@ fn server_port(url: text, fallback: integer) -> integer {
 fn main() {
   // LOFT_PROJ_FULLSCREEN=1 opens borderless fullscreen at the monitor's
   // native resolution; otherwise a 1280x800 window.
-  fullscreen = env_variable("LOFT_PROJ_FULLSCREEN") != "";
+  fullscreen = (env_variable("LOFT_PROJ_FULLSCREEN") ?? "") != "";
   ok = if fullscreen {
     graphics::gl_create_fullscreen_window("Audience Projector — @PLN6")
   } else {
@@ -838,7 +838,7 @@ fn main() {
   // Optional "scan to join" QR overlay in the top-right corner.  Pass a
   // pre-rendered QR PNG path via LOFT_PROJ_QR (e.g. of the audience page
   // URL); it's loaded as a texture and drawn screen-space each frame.
-  qr_path = env_variable("LOFT_PROJ_QR");
+  qr_path = env_variable("LOFT_PROJ_QR") ?? "";
   qr_tex: integer = 0;
   qr_painter = graphics::create_painter_2d(win_w as float, win_h as float);
   if qr_path != "" {

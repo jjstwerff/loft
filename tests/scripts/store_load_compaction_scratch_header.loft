@@ -57,7 +57,7 @@ fn bytes(n: integer, salt: integer) -> vector<u8> {
 }
 
 fn main() {
-  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  path = env_variable("LOFT_PERSIST_TEST_PATH") ?? "";
   if path == "" { return } // argless run (loft_suite) → no-op
 
   p = empty();

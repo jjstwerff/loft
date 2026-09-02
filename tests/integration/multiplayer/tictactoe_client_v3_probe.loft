@@ -68,7 +68,7 @@ fn click_and_expect(h: web::WsHandler, r: integer, c: integer, want_prefix: text
 }
 
 fn main() {
-  port_raw = env_variable("LOFT_TICTACTOE_PORT");
+  port_raw = env_variable("LOFT_TICTACTOE_PORT") ?? "";
   port = if port_raw == "" { 7878 } else { port_raw as integer? ?? 7878 };
   url = "ws://127.0.0.1:{port}/ws";
 
