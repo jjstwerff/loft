@@ -220,13 +220,10 @@ can get back is an explicit `&T` return, which binding.md governs.
 
 ## Deviations
 
-**OPEN: 1.**
-- **D-call-7** (loft#1287) — a plain heap parameter forwarded into a reassigning `&`
-  parameter leaks the replaced store, one per call. The ANSWER is `(F-ParamRebind)`
-  working as written; the missing half is the free.
+**OPEN: 0.**
 
-The full register — this entry plus every closed one with its dates and issue numbers —
-is the companion [calls-history.md](calls-history.md).
+The full register — every closed deviation with its dates and issue numbers, and the
+measurement that closed it — is the companion [calls-history.md](calls-history.md).
 
 ## Conformance
 
