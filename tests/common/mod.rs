@@ -528,3 +528,61 @@ pub fn declares_expect_fail(source: &str) -> bool {
         .lines()
         .any(|l| expect_tag(l, "@EXPECT_FAIL").is_some())
 }
+
+/// Split a source's `@EXPECT_FAIL` declarations into the two kinds the annotation has:
+/// the function names a FN-LEVEL tag names, and whether a FILE-LEVEL tag is present.
+///
+/// The tag is defined by POSITION, not by words on the line — a file-level one sits in the
+/// header above the first declaration, a fn-level one is the comment block immediately
+/// above its `fn`.  That is the rule the documentation states, so it is the rule both
+/// runners read; a second parser keyed on something else is how the two drifted.  The
+/// native runner hand-rolled `split_whitespace().skip_while(|w| *w != "@EXPECT_FAIL")`,
+/// which cannot see the documented `// @EXPECT_FAIL: <reason>` form at all — the token
+/// carries the colon — so its skip-set came back empty for every file written the
+/// documented way, and the file-level drop above it silently cost each of those files its
+/// whole native coverage (loft#1311).
+///
+/// A trailing `pending` tag — a comment declaring the tag with no declaration under it —
+/// counts as file-level, because it governs nothing narrower.
+#[allow(dead_code)]
+pub fn expect_fail_fns(source: &str) -> (std::collections::HashSet<String>, bool) {
+    let mut fns = std::collections::HashSet::new();
+    let mut file_level = false;
+    let mut pending = false;
+    let mut in_header = true;
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("fn ") {
+            in_header = false;
+            if pending
+                && let Some(name) = trimmed
+                    .strip_prefix("fn ")
+                    .and_then(|s| s.split(&['(', ' ', '{'][..]).next())
+            {
+                fns.insert(name.to_string());
+            }
+            pending = false;
+            continue;
+        }
+        if trimmed.starts_with("struct ") || trimmed.starts_with("enum ") {
+            in_header = false;
+            pending = false;
+            continue;
+        }
+        if trimmed.starts_with("//") {
+            if expect_tag(trimmed, "@EXPECT_FAIL").is_some() {
+                if in_header {
+                    file_level = true;
+                } else {
+                    pending = true;
+                }
+            }
+        } else {
+            pending = false;
+        }
+    }
+    if pending {
+        file_level = true;
+    }
+    (fns, file_level)
+}

@@ -9,6 +9,31 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A fn-level `@EXPECT_FAIL` no longer costs its file the whole native suite (2026-09-03)
+
+loft#1311.  The documented contract is that a fn-level tag excuses one function and *"sibling
+fns still must pass"*.  `tests/native.rs` dropped the FILE for any declaration, and the finer
+per-function mechanism under it — which emits `// skipped (EXPECT_FAIL): {name}` in place of a
+call — hand-rolled its own parser:
+
+```rust
+.filter(|l| l.contains("@EXPECT_FAIL"))
+.flat_map(|l| l.split_whitespace().skip_while(|w| *w != "@EXPECT_FAIL").skip(1) …)
+```
+
+The documented form `// @EXPECT_FAIL: <reason>` tokenizes with the colon attached, so the skip
+set came back empty for every file written that way — the fn-level mechanism was inert, and the
+drop above it was the only thing that ran.
+
+One parser now: `common::expect_fail_fns`, positional as the documentation defines the
+annotation, shared with `tests/wrap.rs`, returning the fn names and whether a file-level tag is
+present.  Only the file-level one drops the file.
+
+`75-native-stub.loft` must still be dropped, and now is for its real reason rather than its
+annotation: it declares a `#native` fn with no registered implementation, so the generator emits
+`compile_error!` into the Rust and the macro fails the build wherever it is expanded.  The gate
+reads that refusal, which also covers a file carrying no annotation at all.
+
 ### A custom iterator's loop: a missing return buffer, and a break test that asked the wrong question (2026-09-03)
 
 loft#1310 was filed as an ICE on a non-nullable STRUCT item.  The matrix said the filed scope
