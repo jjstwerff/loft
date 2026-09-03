@@ -43,6 +43,7 @@ A skip that is not printed is indistinguishable from a package that passed.
 
 import json
 import re
+import subprocess
 import sys
 
 # A published lib a language change ALREADY retro-broke (pre-freeze migration debt), skipped
@@ -136,6 +137,13 @@ def _self_test() -> int:
             failures.append(what)
         print(f"  {'ok  ' if cond else 'FAIL'}  {what}")
 
+    names = json.loads(
+        subprocess.run(
+            [sys.executable, __file__, "--not-a-library"], capture_output=True, text=True, check=True
+        ).stdout
+    )
+    check(names == sorted(NOT_A_LIBRARY), "--not-a-library prints the policy set")
+    check("loft" in names, "--not-a-library names the compiler's own package")
     rows, said = run({"ok": ok, "loft": {"versions": {"1.0.0": {"url": url}}}})
     check("ok" in rows, "an ordinary package is checked")
     check("loft" not in rows, "the compiler's own package is not checked")
@@ -177,6 +185,16 @@ def _self_test() -> int:
 def main(argv: list[str]) -> int:
     if "--self-test" in argv[1:]:
         return _self_test()
+    if "--not-a-library" in argv[1:]:
+        # The exclusion set as DATA, for a consumer that builds its own matrix and needs the
+        # policy rather than the rows — `registry-validation.yml` installs from the registry
+        # and needs no repo or tag.  It restated the set in `jq` and therefore did not have
+        # it: the nightly tried `loft install loft@2026.8.0` every night, the installer
+        # answered "`loft` is the toolchain, not a library", and the sweep was red from
+        # 2026-08-31 on.  That is loft#1315's finding — one policy written twice — in the
+        # workflow the fix did not reach.
+        print(json.dumps(sorted(NOT_A_LIBRARY)))
+        return 0
     args = [a for a in argv[1:] if not a.startswith("--")]
     fmt = "tsv"
     for a in argv[1:]:
