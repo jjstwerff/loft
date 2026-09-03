@@ -463,6 +463,33 @@ analysis directly (the certifier sidesteps it).
   table is what turns that watermark into an accept/reject split — the channel a guard can
   actually score, and the reason these cells count past it.
 
+- **The vector destination, at both spellings and both nullabilities (`O-NoDiverge`,
+  loft#1329)** — loft#1328's sibling, and it reached the store ceiling three separate ways,
+  each a different reader of ONE fact. `--native`'s displaced-free gate listed
+  `Reference | Enum | keyed` and not `Vector`, where the interpreter's twin has carried the
+  bare `Vector` arm all along. Then BOTH backends declined for a FORWARDING fn-ref, so they
+  agreed and the shared fact was short: a capturing lambda's assignment is a block that mints
+  the closure record, writes each capture into it and yields the `FnRef`, and a capture that
+  is itself a fn-ref is an `FnRefDnr` argument of that write — so `fnref_target_in`'s tree
+  walk saw two definition numbers and returned "names TWO targets", the answer reserved for a
+  slot two lambdas were assigned to. A capture is a payload, not a candidate; the target is
+  what the right-hand side YIELDS. Guard
+  `tests/scripts/1329-a-fn-ref-vector-rebind-frees-the-store-it-displaces.loft`, 8 cells, 5 of
+  which fail on `a8c0b74d`; the other 3 are its controls.
+  ⚠ The NULLABLE spelling could not be measured at all until a third reader was fixed: a
+  lambda declaring `-> vector<τ>?` aborted the compiler on the H5 two-pass contract, because
+  the between-passes buffer sweep asked *"does this deliver a collection?"* through
+  `ret_promo_base` (which peels `Optional(Vector)`) and then rejected the same definition on
+  the RAW type, so pass 2 GREW the attribute. Its native twin — the fn-ref dispatch deciding
+  whether to MINT that buffer — read the raw type too, and handed the callee `DbRef::NULL`
+  to deliver through.
+  ⚠ And `owned_ref`'s bare `Vector` arm carried a claim that this closed by measuring:
+  *"a nullable vector already releases through its own path, and widening would free twice."*
+  It does not. `x: vector<τ>? = null` grew the peak 1:1 with the iteration count on both
+  backends, and the peel is safe because an `Optional` destination routes to the
+  runtime-GUARDED post-free, which `free_displaced` no-ops on a same-store, free-protected or
+  stack-record ref. A carve-out's own safety claim is a measurement, not a premise.
+
 - **A closure record's suppression names the store it holds (`O-Latest`, loft#1324)** — a
   capture REASSIGNED after the build keeps the build-time store inside the closure (42 while
   the variable reads 52) and leaves no store unfreed: straight-line, twice over, in a 200-turn

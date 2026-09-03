@@ -9,6 +9,77 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A vector local rebound from a fn-ref call frees the store it displaces (2026-09-04)
+
+loft#1329, and it is loft#1328's sibling: the same question asked of a VECTOR destination
+instead of a reference, an enum or a keyed collection.  `x = m(i)` in a loop over a fn-ref
+held one store per ITERATION and aborted at the 65 535-store table.  Four readers of one
+fact were short, and each had to be closed before the next was measurable.
+
+**1 — the native gate had no `Vector` arm (`@FR-O-NoDiverge`).**  `generation/dispatch.rs`'s
+displaced-free gate tested `Reference | Enum | keyed`, while the interpreter's twin
+(`state/codegen.rs`'s `owned_ref`) has carried `Vector` all along.  One kind, present on one
+side and absent on the other — the asymmetry the rule exists to forbid.
+
+**2 — a capture is a payload, not a candidate.**  With that closed, a fn-ref FORWARDING to
+another fn-ref still grew the peak on BOTH backends, which is the rule holding: they read the
+same fact and it was short.  A capturing lambda's assignment is a block that mints the closure
+record, WRITES each capture into it and then yields the `FnRef`; a capture that is itself a
+fn-ref is written as an `FnRefDnr` argument of that write.  `use_analysis::fnref_target_in`
+walked the whole tree, saw two definition numbers and answered `Some(u32::MAX)` — *"this
+variable names TWO targets"*, the answer reserved for a slot two different lambdas were
+assigned to.  The callee was then unresolvable, `callref_delivers_collection` returned false,
+the dep survived, and nothing freed anything.  It now reads the marker the right-hand side
+YIELDS, which is what the function's own doc comment already described; every branch of a
+value branch is still yielded, so `f = if c { a } else { b }` reports the ambiguity that
+reading is for.
+
+**3 — one question asked with two spellings, so the sweep contradicted itself.**  The nullable
+destination could not be measured at all: a lambda declaring `-> vector<τ>?` aborted the
+compiler on the H5 two-pass contract.  The between-passes buffer sweep (`parser/mod.rs`) asks
+*"does this deliver a collection?"* through `ret_promo_base`, which peels `Optional(Vector)` —
+and then rejected the same definition on the RAW return type.  So the peel admitted the lambda
+to the promotion pass while the raw read denied it a buffer, and pass 2 GREW the attribute.
+Both reads are now `ret_promo_base`, and the buffer's type is the BASE, matching the
+signature-time reservation in `definitions.rs`: the buffer is storage, and storage is never
+absent — the `?` belongs to the value the caller reads.
+
+**4 — and its native twin.**  Reserving the buffer is half; the fn-ref dispatch decides whether
+to MINT one, and `generation/emit.rs` read the raw return type there too.  A nullable-collection
+candidate was handed `DbRef::NULL` and its delivery wrote through it — `vector_add` carries no
+`.rec != 0` test, so the arm that returned a collection faulted with *"a NULL DbRef reached a
+store accessor"* while the arm that returned `null` was quietly fine.
+
+**A carve-out's own safety claim is a measurement, not a premise.**  `owned_ref`'s bare
+`Vector` arm said a nullable vector *"already releases through its own path"*, so widening it
+*"would free twice"*.  Re-measured, that is false: `x: vector<τ>? = null` grew the peak 1:1
+with the iteration count on both backends while its dense twin stayed flat.  The peel is safe
+because an `Optional` destination routes to the runtime-GUARDED post-free, which
+`free_displaced` no-ops on a same-store, free-protected or stack-record ref — the double free
+the bare spelling was avoiding is not reachable from there.
+
+⚠ **The exit-leak gate cannot see any of this.**  The frame frees everything, so at 200
+iterations every shape reports no leak on both backends and answers correctly; what grows is
+the PEAK.  `LOFT_STORES=timeline`'s `peak` is the cheap instrument (203 → 5 at 200 iterations
+for the nullable cell), and the store table is what turns the watermark into an accept/reject
+split a guard can score.
+
+**A second cure moved an existing A/B onto a different channel.**
+`nullable_ret_buffer::default_path_is_unchanged` pinned that `LOFT_NO_NULLABLE_RETBUF=1`
+restores the pre-fix path, measured as *"the filed leak returns"* — and it stopped holding,
+because the work-ref that program leaks through is an `Optional(Vector)` local re-Set every
+turn, so `owned_ref`'s new peel releases it whatever the switch says. Its own failure message
+named the two explanations (*"either the opt-out broke or the leak has another cure"*) and the
+second is the true one. The control now measures the switch on `MIXED` and on the VALUE
+channel: with the buffer off, `pick`'s aliasing arm hands back the caller's `base`, the result
+reads as owned, and the program prints `base=2 base0=39`. That is measured identically on
+`a8c0b74d` — the switch's own effect, not something the peel introduced — and a value channel
+is the stronger one, since a leak gate is monotone and cannot score an over-free.
+
+Guard `tests/scripts/1329-a-fn-ref-vector-rebind-frees-the-store-it-displaces.loft`, 8 cells,
+5 of which fail on `a8c0b74d` across 10 of the 16 cell x backend runs; the other 3 are its
+controls, and they pass on the control build.  `make ci` green.
+
 ### A `??` default-arm mint is released once (2026-09-03)
 
 loft#1322.  `_vec_N` and `__vdb_N` name ONE store — the view is `OpGetField(__vdb_N, 0)` — and

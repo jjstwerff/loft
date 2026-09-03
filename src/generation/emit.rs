@@ -1187,7 +1187,15 @@ impl Output<'_> {
         // for vector-returning user fns.  Reference/struct-enum returns
         // chain-allocate via the body's struct literal / nested call so
         // they still get the sentinel.
-        let vec_hbuf_tp: Option<u16> = if let Type::Vector(elm_tp, _) = &ret_type {
+        //
+        // Read through `ret_promo_base`, because that is what decides whether the CALLEE
+        // has a buffer to be handed.  A nullable collection return (`-> vector<τ>?`) is
+        // reserved a hidden `__retbuf` exactly like the bare spelling — the `?` belongs to
+        // the value the caller reads, not to the storage — so asking the RAW type here
+        // handed such a candidate `DbRef::NULL` and its delivery wrote through it.  The
+        // `.rec != 0` guard in front of the clear is not the whole delivery: `vector_add`
+        // has no such test, so the crash was a NULL `DbRef` reaching a store accessor.
+        let vec_hbuf_tp: Option<u16> = if let Type::Vector(elm_tp, _) = ret_type.ret_promo_base() {
             let elm_name = elm_tp.name(self.data);
             let tp = self.data.name_type(&format!("main_vector<{elm_name}>"), 0);
             (tp != u16::MAX).then_some(tp)

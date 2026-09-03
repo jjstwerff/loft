@@ -201,9 +201,17 @@ impl Output<'_> {
                 // `base()`, because a dense keyed local cannot be assigned the sentinel at all.
                 // Both backends leaked identically here, which is @FR-O-NoDiverge holding: they
                 // read the same fact and it was short by the same kinds.
+                // A VECTOR destination belongs here for the same reason, and was the one kind
+                // this side never carried: `x: vector<T> = []; for i in 0..N { x = m(i) }` over
+                // a fn-ref held one store per iteration, released only at frame exit, while the
+                // interpreter's twin stayed flat.  @FR-O-NoDiverge is what settles it — the two
+                // backends read the SAME deps facts, so a shape test present on one side and
+                // absent on the other is the divergence the rule forbids, not a judgement call
+                // this side gets to make.  The list is now the interpreter's verbatim, `base()`
+                // and all, so the peel covers the nullable destination too.
                 && (matches!(
                     variables.tp(var).base(),
-                    Type::Reference(_, _) | Type::Enum(_, true, _)
+                    Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
                 ) || crate::parser::vectors::is_keyed(variables.tp(var).base()))
                 && !variables.is_captured(var)
                 // D-own-16 residual, the native twin of `state/codegen.rs`'s

@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 375 | 351 | **24** |
+| 377 | 353 | **24** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -501,6 +501,14 @@ loft#1186 moved it to 336 · 318 with the two predicates the join reading needed
 before they match, so they land on the peeling side and leave the opaque column where it was;
 loft#1185 to 337 · 319 with `parser::tail_calls_a_fnref_parameter`, which unspans for the same
 reason.
+
+loft#1329 moved it to 377 · 353 · 24 with `use_analysis::collect_yielded`, the new reading of
+which sub-values a right-hand side can evaluate to; it discriminates five variants and unspans
+at every level, so it lands on the peeling side. `use_analysis::fnref_target_in` entered the
+table in the same change by gaining an `Int` arm beside its two marker arms — and it entered
+the OPAQUE column, because it matched nodes `collect_yielded` had already unspanned. That is
+the shape this audit is worth having for: a site correct only because of what its one caller
+does. It peels for itself now, so the opaque column is where it was.
 
 loft#1200 moved it to 339 · 322 · 17 with `scopes::nullable_locals_that_displace`, the
 pre-scan that decides whether a nullable heap-record local is worth an ownership witness; it

@@ -2215,9 +2215,17 @@ impl State {
             // to `OpNullRefSentinel`, NOT to the @P302 in-place clear above) displaced its store
             // with nothing naming it — one orphan per evaluation on BOTH backends, values right
             // throughout.  Read through `base()`, because the shape that reaches this is the
-            // NULLABLE one: a dense keyed local cannot be assigned the sentinel at all.  The
-            // `is_keyed` half only; `Vector` keeps its bare spelling, since a nullable vector
-            // already releases through its own path and widening that one would free twice.
+            // NULLABLE one: a dense keyed local cannot be assigned the sentinel at all.
+            //
+            // `Vector` is read through `base()` for the same reason, and once did not be:
+            // the bare spelling carried the claim that a nullable vector *"already releases
+            // through its own path"*, so widening it *"would free twice"*.  Re-measured, that
+            // is false — `x: vector<τ>? = null; for i in 0..N { x = m(i) }` over a fn-ref held
+            // one store per iteration on BOTH backends, and the peak grew 1:1 with N while the
+            // dense twin beside it stayed flat.  What makes the peel safe is `nullable_local`
+            // below: an `Optional` destination routes to the runtime-GUARDED post-free, which
+            // `free_displaced` no-ops on a same-store, free-protected or stack-record ref —
+            // so the double free the bare spelling was avoiding cannot be reached from here.
             // Enforces @FR-O-Proxy, and is a SECOND home for the question
             // `Scopes::owns_freeable_store` already answers — *may this function free the
             // store this binding names?*  The last three conjuncts are that predicate
@@ -2262,9 +2270,8 @@ impl State {
             // @FR-O-Proxy asks free — the pre-Set free of the store `v` is displacing.
             let owned_ref = (matches!(
                 stack.function.tp(v).base(),
-                Type::Reference(_, _) | Type::Enum(_, true, _)
-            ) || matches!(stack.function.tp(v), Type::Vector(_, _))
-                || crate::parser::vectors::is_keyed(stack.function.tp(v).base()))
+                Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
+            ) || crate::parser::vectors::is_keyed(stack.function.tp(v).base()))
                 && (stack.function.tp(v).depend().is_empty() || borrows_one_argument)
                 && !stack.function.is_skip_free(v)
                 && !stack.function.is_captured(v)

@@ -1780,13 +1780,16 @@ fn fn_body_tail(code: &Value) -> Option<&Value> {
 /// right-hand sides?
 ///
 /// A fn-ref reaches its variable three ways and only one of them is a bare marker: an
-/// explicit `FnRef` / `FnRefDnr` names the target wherever it sits — a CAPTURING lambda
-/// assigns a BLOCK (build the closure record, then the ref), so the marker is nested —
-/// while a NON-capturing lambda is stored as the bare definition number.
+/// explicit `FnRef` / `FnRefDnr` names the target — a CAPTURING lambda assigns a BLOCK
+/// (build the closure record, then the ref), so the marker is the block's TAIL — while a
+/// NON-capturing lambda is stored as the bare definition number.
 ///
-/// Only a DIRECT integer counts for that last case: the capturing block is full of
-/// unrelated ints (a type id, a field offset), and treating those as candidates makes
-/// every capturing case read as ambiguous.
+/// The marker is read from what the right-hand side YIELDS ([`collect_yielded`]), never
+/// from the whole tree: the capturing block WRITES each capture into the record before it
+/// yields the ref, so a capture that is itself a fn-ref appears there as a second
+/// definition number and made every such variable read as naming TWO targets (loft#1329).
+/// The same reading covers the bare-integer case, where a capturing block is full of
+/// unrelated ints (a type id, a field offset) that are not candidates either.
 ///
 /// `None` = this right-hand side names no target at all.  `Some(u32::MAX)` = it names
 /// TWO, which is a different answer and must stay one: a var whose FIRST definition
@@ -1799,10 +1802,16 @@ fn fn_body_tail(code: &Value) -> Option<&Value> {
 /// built) — and a fn-ref they disagreed about would be lifted by one and adopted by the
 /// other.
 pub(crate) fn fnref_target_in(rhs: &Value) -> Option<u32> {
+    let mut yielded: Vec<&Value> = Vec::new();
+    collect_yielded(rhs, &mut yielded);
     let mut found: Option<u32> = None;
     let mut ambiguous = false;
-    rhs.walk(&mut |inner| {
-        let d = match inner {
+    for inner in &yielded {
+        // `collect_yielded` already hands back unspanned nodes, and this peels anyway:
+        // `Value::unspan`'s contract is that a site discriminating on specific variants
+        // calls it, and a site that is correct only because of what its one caller does
+        // is one refactor away from being wrong.
+        let d = match inner.unspan() {
             Value::FnRef(d, _, _) => u32::try_from(*d).ok(),
             Value::FnRefDnr(d) => Some(u32::from(*d)),
             _ => None,
@@ -1813,13 +1822,54 @@ pub(crate) fn fnref_target_in(rhs: &Value) -> Option<u32> {
                 _ => found = Some(d),
             }
         }
-    });
-    if found.is_none()
-        && let Value::Int(d) = rhs.unspan()
-    {
-        found = u32::try_from(*d).ok();
+    }
+    if found.is_none() {
+        for inner in &yielded {
+            if let Value::Int(d) = inner.unspan() {
+                found = u32::try_from(*d).ok();
+                break;
+            }
+        }
     }
     if ambiguous { Some(u32::MAX) } else { found }
+}
+
+/// The sub-values a right-hand side can EVALUATE TO — one per path it may take.
+///
+/// [`fnref_target_in`] reads its markers from here rather than from the whole tree, and the
+/// difference is the whole of what a capturing lambda's assignment looks like: it is a BLOCK
+/// that mints the closure record, WRITES each capture into it, and then yields the `FnRef`.
+/// A capture that is itself a fn-ref is written as an `FnRefDnr` argument of that write, so a
+/// tree walk sees a second definition number and reports the variable as naming TWO targets —
+/// the answer reserved for a slot two different lambdas were assigned to.  A capture is a
+/// payload, not a candidate: only what the right-hand side yields names the target.
+///
+/// Every branch is yielded, so a fn-ref genuinely chosen between two lambdas
+/// (`f = if c { a } else { b }`) still reports the ambiguity that reading is for.
+fn collect_yielded<'a>(rhs: &'a Value, out: &mut Vec<&'a Value>) {
+    let tail = |ops: &'a [Value]| {
+        ops.iter()
+            .rev()
+            .find(|o| !matches!(o.unspan(), Value::Line(_)))
+    };
+    match rhs.unspan() {
+        Value::Block(bl) => {
+            if let Some(last) = tail(&bl.operators) {
+                collect_yielded(last, out);
+            }
+        }
+        Value::Insert(ops) => {
+            if let Some(last) = tail(ops) {
+                collect_yielded(last, out);
+            }
+        }
+        Value::If(_, then, alt) => {
+            collect_yielded(then, out);
+            collect_yielded(alt, out);
+        }
+        Value::Return(inner) | Value::Drop(inner) => collect_yielded(inner, out),
+        other => out.push(other),
+    }
 }
 
 /// The target every one of a fn-ref variable's definitions agrees on, or `None`.

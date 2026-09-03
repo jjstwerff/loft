@@ -2611,7 +2611,18 @@ impl Parser {
             {
                 continue;
             }
-            let ret = def.returned().clone();
+            // Through `ret_promo_base`, which is the same read the two `delivers_a_*`
+            // questions above are asked with.  Asking this one on the RAW type made the
+            // sweep contradict itself on a nullable collection: `-> vector<τ>?` answered
+            // "delivers a collection" and was then rejected here, so no buffer was
+            // reserved — while the peel had already admitted it to the promotion pass,
+            // which then GREW the attribute in pass 2 and aborted the compiler on the H5
+            // two-pass contract.  One question, one spelling.
+            //
+            // The buffer's own type is the BASE, matching the signature-time reservation
+            // in `definitions.rs`: the buffer is storage, and storage is never absent —
+            // the `?` belongs to the RETURN, which is a value the caller reads.
+            let ret = def.returned().ret_promo_base().clone();
             if !matches!(
                 ret,
                 Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
