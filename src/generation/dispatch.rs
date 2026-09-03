@@ -228,14 +228,24 @@ impl Output<'_> {
                 // reproduced a fault, including under LOFT_POISON / LOFT_STRICT_STORES),
                 // and closed because the rule is what says which fact a free may read.
                 && !variables.is_skip_free(var)
-                // A fresh-store-producing rhs: a call, an inline object `Insert`,
-                // or a `Block` that builds a new store (the `nullable_unwrap_copy`
-                // / `ncc` materialisers — `chosen = v[i] ?? d`).  A bare `Var` rhs
-                // (a borrow / move) is excluded — `depend().is_empty()` above
-                // already gates out borrowed locals.
+                // A fresh-store-producing rhs: a call in EITHER spelling, an inline
+                // object `Insert`, or a `Block` that builds a new store (the
+                // `nullable_unwrap_copy` / `ncc` materialisers — `chosen = v[i] ?? d`).
+                // A bare `Var` rhs (a borrow / move) is excluded — `depend().is_empty()`
+                // above already gates out borrowed locals.
+                //
+                // loft#1328 — `CallRef` is the second spelling and it was missing, so a local
+                // rebound from a CLOSURE call displaced its store with nothing freeing it:
+                // `x: P? = null; for i in 0..N { x = m(i) }` held one store per iteration to
+                // frame exit.  Not a leak the exit gate can see — everything is freed when the
+                // frame ends — but the PEAK grows with N, and at 70 000 iterations `--native`
+                // aborts with `store table exhausted` where the interpreter completes. That is
+                // an accept/reject split, which @FR-O-NoDiverge forbids: the interpreter's twin
+                // reaches this through `state/codegen.rs`'s `owned_ref`, which keys on the
+                // DESTINATION and so never had a spelling to miss.
                 && matches!(
                     to.unspan(),
-                    Value::Call(_, _) | Value::Insert(_) | Value::Block(_)
+                    Value::Call(_, _) | Value::CallRef(_, _) | Value::Insert(_) | Value::Block(_)
                 )
                 && (!is_retbuf_attr || self.retbuf_witness.contains(&var));
             if owned_ref_reassign {

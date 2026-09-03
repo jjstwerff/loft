@@ -9,6 +9,34 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A rebind from a fn-ref call frees the store it displaces (2026-09-03)
+
+loft#1328.  `x: P? = null; for i in 0..N { x = m(i) }` over a fn-ref `m` held one store per
+iteration on `--native`, released only at frame exit.  The native gate that emits the displaced
+free listed its fresh-store right-hand sides as `Call | Insert | Block` — `CallRef` was missing,
+so a rebind from a CLOSURE call escaped it entirely.  The interpreter's twin
+(`state/codegen.rs`'s `owned_ref`) keys on the DESTINATION and so never had a spelling to miss,
+which is the asymmetry `@FR-O-NoDiverge` exists to forbid.  One `Value::CallRef` arm closes it.
+
+⚠ **The exit-leak gate cannot see this class.**  The frame frees everything, so at 1000
+iterations both backends report no leak and answer correctly; what grows is the PEAK.  The
+65 535-store table is what turns that into something scorable: at 70 000 iterations `--native`
+aborts with `store table exhausted` where the interpreter completes and answers 69 999.  So the
+guard counts past the ceiling and `make falsify` reports the move on the PANIC channel, not the
+assert channel — no assertion is reached on the broken build at all.
+
+Found by loft-b9 while measuring a lift over a branch arm; the sharper channel (accept/reject at
+the ceiling rather than a peak watermark) is what made it a guardable defect.
+
+Guard `tests/scripts/1328-a-fn-ref-rebind-frees-the-store-it-displaces.loft`, 6 cells over the
+nullable, dense and keyed destinations with the direct-call spelling and a destination-reading
+callee as controls; falsified at `05302d39`.
+
+⚠ **A sibling this does NOT close, measured while checking the kinds:** a VECTOR local rebound
+from a fn-ref call aborts at the same ceiling on BOTH backends — the gate's type test names
+`Reference`, `Enum` and the keyed kinds, and the interpreter's `owned_ref` does include
+`Type::Vector`, so the vector shape fails for a different reason and is its own item.
+
 ### A whole-tuple bind COPIES on `--native` too (2026-09-03)
 
 loft#1325.  `u = a` over a local `(text, text)` emitted `let mut var_u: (String, String) =

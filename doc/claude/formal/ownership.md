@@ -401,6 +401,16 @@ analysis directly (the certifier sidesteps it).
 
 ## Conformance
 
+- **A rebind from a call frees what it displaces, in BOTH call spellings (`O-NoDiverge`,
+  loft#1328)** — `x = m(i)` in a loop over a fn-ref `m` completes at 70 000 iterations on both
+  backends, at a nullable reference, a dense one and a keyed collection, with the direct-call
+  spelling and a destination-reading callee as controls. Guard
+  `tests/scripts/1328-a-fn-ref-rebind-frees-the-store-it-displaces.loft`, 6 cells.
+  ⚠ The exit-leak gate cannot see this class: the frame frees everything, so a 1000-iteration
+  cell reports no leak on either backend and the defect is entirely in the PEAK. The 65 535-store
+  table is what turns that watermark into an accept/reject split — the channel a guard can
+  actually score, and the reason these cells count past it.
+
 - **A closure record's suppression names the store it holds (`O-Latest`, loft#1324)** — a
   capture REASSIGNED after the build keeps the build-time store inside the closure (42 while
   the variable reads 52) and leaves no store unfreed: straight-line, twice over, in a 200-turn
