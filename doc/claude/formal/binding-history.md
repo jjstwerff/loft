@@ -6,7 +6,7 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **1** (D-bind-11); D-bind-12, D-bind-13, D-bind-14, D-bind-15 and D-bind-16 each
+OPEN: **2** (D-bind-11, D-bind-16); D-bind-12, D-bind-13, D-bind-14 and D-bind-15 each
 opened and CLOSED the same day.
 D-const-2 opened and CLOSED the same day (2026-09-01), found by the Store Locks
 reference review.
@@ -14,8 +14,8 @@ B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
 opened and closed 2026-08-05); B-Ref-AnnotationOnly is enforced in every position, not
 only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
 
-> **D-bind-16 — CLOSED (2026-09-03, loft#1321) — `(B-Copy)` did not hold when the
-> right-hand side was a branch JOIN.**
+> **D-bind-16 — OPEN (2026-09-03, loft#1321) — `(B-Copy)` does not hold when the
+> right-hand side is a branch JOIN.**
 >
 > `b = if c { a } else { [0, 0] }` ALIASES `a`, and so does the struct spelling, while the
 > plain bind of the identical value one line away copies. Present on the shipped 2026.8.0,
@@ -30,39 +30,10 @@ only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
 >
 > The destination ends up DEPENDING on the source (`b: vec<int> deps=[a]`) rather than
 > owning: `classify_vec_bind` recognises a bare `Var` and an owned field read and nothing
-> else, and the record side keys on `Value::Var` in both backends. The dep is what closes
-> every copy path downstream — `owned_ref` in `generate_set` requires `depend().is_empty()`,
-> so the `OpBindOrCopy` arm written for this shape is never reached. The ownership ORACLE
-> reported the joined binding `Owned` throughout, so the analysis had the right answer and
-> the shipped fact did not.
->
-> **Status — CLOSED.** `(B-Join)` is the rule: a join is read ARM BY ARM, copying where every
-> arm would have copied on its own. The vector side gains a `VecBind::CopyJoin` verdict and
-> the record side a first-bind arm in each backend; all three ask one predicate,
-> `Value::is_branch_join`, because `??`, `if`/`else` and `match` reach a bind as an `If` under
-> different wrappers and a site that peels one fewer answers `false` for one spelling.
->
-> ⚠ **Reading the JOIN rather than its arms was tried first and is wrong**, which is worth
-> recording because it is the reading two agents reached independently. `v[i]` is `τ?`, so the
-> ordinary element read is `c = vv[0] ?? [0]` — a branch. Copying it made `(B-View-Depth)`
-> unreachable for its own documented spelling, and
-> `bind-copies-or-views-the-whole-boundary.loft` went red on the cell that exists to say so.
-> The arms are asked now, and the `??` lowering HOISTS its subject into a temp
-> (`__ncc_N = vv[0]`), so the walk resolves a temp against what its block bound rather than
-> reading the bare `Var` the arm has become.
->
-> A second thing that walk needs: `use_analysis::is_projection_op` does not name
-> `OpGetVectorNullable`, while `generation::hoist::ELEMENT_ADDRESS_OPS` pairs it with
-> `OpGetVector` for the same question. The arm test reads BOTH one-homes rather than spelling
-> a third list; widening `is_projection_op` would move the ownership analysis at eight other
-> sites and is its own change with its own matrix.
->
-> **RESIDUAL, deliberately not taken:** `b = if c { vv[0] } else { [0, 0] }` still views on
-> the taken arm, so the binding is a view on one path and an owner on the other — the shape
-> D-own-8 calls a defect. Making it a copy means deciding that a branch produces a VALUE,
-> which changes what `(B-View-Depth)` reaches for a shipped spelling: a compatibility
-> decision with its own gate, not a bug fix. The guard pins today's answer so that decision
-> is a visible diff.
+> else, and the record side keys on `Value::Var` in both backends. `OpBindOrCopy` is the
+> runtime adopt-vs-copy guard built for exactly this shape and already carries the CALL-return
+> case, which is why that row is green; widening it to a direct join is a real ownership
+> question — which arm may adopt — rather than the peel D-bind-15 was.
 
 > **D-bind-15 — CLOSED (2026-09-03, loft#1319) — `(B-Copy)` did not hold for a NULLABLE
 > heap local: a whole-value bind ALIASED its source.**

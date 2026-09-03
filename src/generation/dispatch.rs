@@ -148,26 +148,6 @@ impl Output<'_> {
     /// `output_set_witnessed` asks it to decide whether the owned-store tracker must be
     /// pointed at what the arm allocated; two spellings of the condition would drift, and a
     /// tracker that disagreed with the emitter is exactly how the store leaked (loft#823).
-    /// Does some arm of this join name a place the VIEW rules exempt?
-    ///
-    /// The interpreter's twin, and the same answer: `@FR-B-View` makes every struct-typed
-    /// projection a view, so a projection arm keeps its view and only a non-projection arm
-    /// may be copied.  Without it the ordinary element read `v[i] ?? d` — which is a branch,
-    /// because `v[i]` is `τ?` — would stop being a view.
-    fn join_arm_keeps_its_view(&self, node: &Value) -> bool {
-        match node.unspan() {
-            Value::If(_, t, f) => {
-                self.join_arm_keeps_its_view(t) || self.join_arm_keeps_its_view(f)
-            }
-            Value::Block(bl) if !matches!(bl.result, Type::Void | Type::Null) => bl
-                .operators
-                .last()
-                .is_some_and(|l| self.join_arm_keeps_its_view(l)),
-            Value::Insert(ops) => ops.last().is_some_and(|l| self.join_arm_keeps_its_view(l)),
-            arm => crate::generation::container_element_base(self.data, arm).is_some(),
-        }
-    }
-
     fn materialises_element(&self, var: u16, to: &Value) -> bool {
         let variables = self.data.def(self.def_nr).variables();
         variables.tp(var).heap_def_nr().is_some()
@@ -886,14 +866,8 @@ impl Output<'_> {
         // not for an element read, so the F2 strip alone left `--native` still reading the
         // wrong element (probe 05: `c.n 44 want 33`) while the interpreter was already
         // correct.  One fact, and until this both backends did not act on it.
-        // A branch JOIN reaches the same emission for the same reason: `@FR-B-Copy` gives the
-        // binding its own record whichever arm ran, and the raw path adopted the arm's store
-        // and so aliased a source the other arm never touched (loft#1321).  The shape below —
-        // evaluate once into `_src`, then allocate and deep-copy, with the absent case asked
-        // first — is what both cases need, so they share it rather than growing a second one.
-        if let Some(d_nr) = variables.tp(var).base().heap_def_nr()
-            && (self.materialises_element(var, to)
-                || (to.is_branch_join() && !self.join_arm_keeps_its_view(to)))
+        if let Some(d_nr) = variables.tp(var).heap_def_nr()
+            && self.materialises_element(var, to)
         {
             let tp_nr = self.data.def(d_nr).known_type();
             let first_bind = !self.declared.contains(&var);

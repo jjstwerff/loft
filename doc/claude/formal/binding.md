@@ -91,17 +91,6 @@ perform on a value. There is no `&` operator.
                      annotation lives at a binding, not on an lvalue being written.
 ```
 
-⚠ **`(B-Join)` leaves one edge undecided, and it is written down rather than settled here.**
-Read arm by arm, `b = if c { vv[0] } else { [0, 0] }` is a view on the first path and an owner
-on the second — which is the shape [ownership.md](ownership.md) D-own-8 calls a defect rather
-than a semantics.  The alternative reading is that a branch produces a VALUE, so `(B-Copy)`
-governs the whole binding and that cell becomes a copy; two agents independently reached it,
-on the grounds that a view's alias *"lasts as long as the PLACE"* (B-Disturb) and a join names
-no single place.  It is not taken because it changes what `(B-View-Depth)` reaches for a
-shipped, guarded spelling, which is a compatibility decision with its own gate
-([COMPATIBILITY.md](../COMPATIBILITY.md)) rather than a fix.  The measurement that makes it
-decidable is in loft#1321.
-
 **In words.** You make a reference by writing `&` at a binding — `b = &a`, or a
 `&integer` parameter — which gives `b` a link to `a`; it does *not* read a value out of
 `a`. Because `&` is a type annotation and not an operator, it is allowed *only* there:
@@ -166,15 +155,6 @@ rule `C-Ref` in [types.md](types.md): a `&τ` is accepted wherever a `τ` is.)
                   source, in-place mutation writes through, and the view survives a source
                   realloc.  Guarded by `85-store-lifetime-reference-default-views.loft` and
                   `294-vector-element-view-semantics.loft`.
-  (B-Join)        a bind whose right-hand side is a branch JOIN — `if`/`match`, and the
-                  `??` discharge, which lowers to one — is read ARM BY ARM: it COPIES when
-                  every arm would have copied on its own, and keeps the view when some arm
-                  NAMES a place a view rule exempts.  So `b = if c { a } else { d }` copies
-                  (`B-Copy` on both arms) while `c = vv[0] ?? [0]` stays a view
-                  (`B-View-Depth` on its subject).  A join is not itself a projection, so
-                  the arms are what carry a place — and a `τ?` element read cannot be used
-                  without a discharge, so reading the JOIN rather than its arms would make
-                  `B-View-Depth` unreachable for its own documented spelling.
   (B-Disturb)     three events END the place a reference names, and they are the same
                   three for every rule below: REMOVING from the container (`v.remove(i)`
                   renumbers every later position — collections.md Col-Remove),
@@ -350,8 +330,10 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 
 ## Deviations
 
-**OPEN: 1.**
+**OPEN: 2.**
 - **D-bind-11** — `&(τ, …)` admits only SCALAR elements, against
+- **D-bind-16** — `(B-Copy)` does not hold when the right-hand side is a branch JOIN:
+  `b = if c { a } else { d }` aliases `a` (loft#1321, both backends, present on 2026.8.0)
 
 The full register — these entries in full, plus every closed one with its dates and
 issue numbers — is the companion [binding-history.md](binding-history.md).

@@ -9,57 +9,6 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
-### A join bound into a local copies what its arms would (2026-09-03)
-
-loft#1321.  `@FR-B-Copy` makes a plain heap whole-value bind INDEPENDENT, and it did not hold
-when the right-hand side was a branch: `b = if c { a } else { [0, 0] }` ALIASED `a`, on both
-backends and on the shipped 2026.8.0.  `match` arms and `x ?? d` lower to the same shape.
-
-The destination inherited a dep on the arm it was bound from, and that dep closes every copy
-path downstream — `owned_ref` in `generate_set` requires `depend().is_empty()`, so the
-`OpBindOrCopy` arm written for exactly this shape was never reached.  The ownership ORACLE
-reported the joined binding `Owned` throughout:
-
-```console
-$ loft introspect --show-ownership sj.loft      # bs = if c { s } else { S{…} }
-  2         bs                     Owned
-$ LOFT_VAR_TABLE=main loft --interpret sj.loft
-[vartable]   2   bs   ref(726)   deps=[s(1)]
-```
-
-So the analysis had the right answer and the shipped fact did not.
-
-`(B-Join)` is the rule: a join is read ARM BY ARM — it copies where every arm would have
-copied on its own, and keeps the view where some arm NAMES a place a view rule exempts.  The
-vector side gains `VecBind::CopyJoin`, the record side a first-bind arm in each backend, and
-all three ask one predicate — `Value::is_branch_join` — because `??`, `if`/`else` and `match`
-reach a bind as an `If` under different wrappers and a site that peels one fewer answers
-`false` for one spelling.
-
-⚠ **Reading the JOIN rather than its arms was tried first and is wrong.**  `v[i]` is `τ?`, so
-the ordinary element read is `c = vv[0] ?? [0]` — a branch.  Copying it made
-`@FR-B-View-Depth` unreachable for its own documented spelling, and
-`bind-copies-or-views-the-whole-boundary.loft` went red on the cell that exists to say so.
-The arms are asked now, and because the `??` lowering HOISTS its subject into a temp
-(`__ncc_N = vv[0]`), the walk resolves a temp against what its block bound rather than reading
-the bare `Var` the arm has become.
-
-That walk also needs a fact two one-homes disagree about: `use_analysis::is_projection_op`
-does not name `OpGetVectorNullable`, while `generation::hoist::ELEMENT_ADDRESS_OPS` pairs it
-with `OpGetVector` for the same question.  The arm test reads BOTH rather than spelling a
-third list — widening `is_projection_op` moves the ownership analysis at eight other sites and
-is its own change with its own matrix.
-
-**RESIDUAL, deliberately not taken.**  `b = if c { vv[0] } else { [0, 0] }` still views on the
-taken arm, so the binding is a view on one path and an owner on the other — the shape D-own-8
-calls a defect.  Making it a copy means deciding that a branch produces a VALUE, which changes
-what `@FR-B-View-Depth` reaches for a shipped spelling: a COMPATIBILITY decision with its own
-gate rather than a bug fix.  The guard pins today's answer so that decision shows as a diff.
-
-Guard: `tests/scripts/1321-a-join-bound-into-a-local-copies-what-its-arms-would.loft`,
-falsified at `ad38c1bd` on both backends; controls are the call-tail arm (already correct via
-loft#1320), the literal arms, every keyed kind, and the place-naming arm that must still view.
-
 ### A nullable whole-value bind COPIES, like its dense twin (2026-09-03)
 
 loft#1319.  `@FR-B-Copy` says a plain bind — scalar or heap whole-value — leaves the bound

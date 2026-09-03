@@ -61,24 +61,6 @@ function could hand back a value whose type promised it was there, and the null 
 with nothing to read. It is the same notice the scalars get, and like theirs it is a warning:
 your program still runs, and the fix is the `?` the message names.
 
-### A value chosen by `if` is copied into the variable you bind it to
-
-```loft
-a: vector<integer> = [41, 42];
-b = if c { a } else { [0, 0] };   // b is its own vector
-a[1] = 99;                        // b[1] is still 42
-```
-
-Binding a value COPIES it, and that did not hold when the value came from a branch: `b` was
-the *same* vector as `a`, so every later write to either showed up in the other. The plain
-bind one line away — `b = a` — copied, which is what made it hard to believe. `match` arms and
-`x ?? default` are branches too, and behaved the same way.
-
-Reading an ELEMENT is still a view, as it always was: `c = vv[0] ?? [0]` gives you a window
-onto `vv[0]`, and writing through it reaches the container. That is the one place aliasing is
-the default, and it is unchanged — a branch is copied when its arms are values, and keeps the
-view when an arm names a place.
-
 ### Copying a value no longer depends on whether it can be empty
 
 ```loft
