@@ -1207,6 +1207,26 @@ pub fn const_effect_lint_enabled() -> bool {
 /// `LOFT_NO_JOIN_OWN` opts out (the escape hatch while consumers settle).
 /// Evidence at the flip: the 54-cell over-free map 6/54 opt-out -> 0/54
 /// default; full suite green both ways (tests/use_analysis.rs pins both legs).
+/// A closure's COLLECTION `??` return is LIFTED when its `Own::Join` base is nameable, and the
+/// lifted temp's frees are decided by store IDENTITY against that base — @FR-O-Oracle's own
+/// sentence for a `Join` (*"adopt iff the value's store ≠ base's store"*) applied to a free
+/// (`doc/claude/formal/closures.md` D-clo-14).
+///
+/// **DEFAULT ON.**  The decline it replaces was correct but cost the mint arm one store per
+/// call — 389 live stores at N=400, a store-table abort at scale.  The base the dep NAMES is
+/// the witness, so no witness slot, no IR temp and no deps strip are needed; this is
+/// `ownership.md` D-own-16's route, one shape over.
+///
+/// `LOFT_NO_LIFT_JOIN_WITNESS` emits the pre-lift form.  It is kept for the same reason
+/// `LOFT_NO_JOIN_OWN` is: it is the before-half of an A/B on ONE binary, and the first bisect
+/// step for a wrong answer or a leak in a loop that calls a collection-returning closure.
+/// One cached env read; mirrors `join_own_enabled`.
+#[must_use]
+pub fn lift_join_witness_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| !env_set("LOFT_NO_LIFT_JOIN_WITNESS"))
+}
+
 #[must_use]
 pub fn join_own_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();

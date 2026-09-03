@@ -103,11 +103,15 @@ with the closure's environment in scope.
 
 **OPEN: 2.**
 - **D-clo-7** — a lambda's `??`-default store leaks one store per call where the borrow arm's witness cannot be NAMED and the call has nothing to witness either: TWO store-bearing captures, whose return dep names `__closure` and not which slot; that entry's value half, its BOUND-return leak half, its ARGUMENT-witness half, its single-CAPTURE witness and its literal-`null` argument are all closed (loft#1248, loft#1245)
-- **D-clo-14** — a closure's `??` at a COLLECTION return leaks its mint arm; the over-free half (the lift emptied the caller's own vector) is closed, and declining the unguarded lift was the only cure correct on both backends (loft#1257)
+- **D-clo-14** — RESIDUAL: a closure's COLLECTION `??` return leaks its mint arm only where the call is an `if`/`match` ARM feeding a bind (`r = if c { g(some) } else { g(none) }`), which the lift is never consulted for. Every other spelling — inline, bound, as an argument, at every collection kind — is closed by store IDENTITY against the `Join` base (loft#1257)
 
-Both are the SAME missing mechanism, and so is [ownership.md](ownership.md)'s `D-own-16` — a
-per-execution ownership witness; read them as one piece of work
-([QUALITY.md](../QUALITY.md)'s cluster register).
+**The cluster's premise is now measured false, and D-clo-14 is what measured it.** Both rows were
+recorded as *"the same missing mechanism — a per-execution ownership witness"* together with
+[ownership.md](ownership.md)'s `D-own-16` ([QUALITY.md](../QUALITY.md)'s cluster register). All
+three closed or narrowed WITHOUT one: a `Join`'s owner is decidable at run time by store
+IDENTITY against the variable the dep already NAMES, which costs no witness slot, no IR temp and
+no deps strip. The sharper question the cluster should have asked is whether a row has a NAMEABLE
+base — and D-clo-7's remaining half is exactly the case where it does not.
 
 **D-clo-18 is no longer here.** A `&` SCALAR parameter written from inside a closure is REFUSED,
 and refusing is deliberate: `(L-CapScalar)` gives the closure a COPY of the caller's value, so

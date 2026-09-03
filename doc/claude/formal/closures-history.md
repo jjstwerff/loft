@@ -650,6 +650,45 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > @PLN93 shapes the tuple row fell outside of, and a fix that took one of them down would be
 > worse than the defect.
 
+> **D-clo-14 — the traded leak CLOSED, one spelling residual (2026-09-03, loft#1257).** The
+> decline above cost the mint arm one store per call — 389 live at N=400, a store-table abort
+> at scale. It no longer does, on both backends, with every borrow-arm value unchanged.
+>
+> **The cure needed no witness, and the entry below is where that was got wrong.** It reads
+> *"a cure has to carry the Join base as a witness to BOTH sites"*, and both halves of that
+> sentence were measured — but `(O-Oracle)` already says what a `Join` means at run time
+> (*"adopt iff the value's store ≠ `base`'s store"*), and the dep NAMES that base. So the
+> owner is decidable by store IDENTITY, which is `ownership.md` D-own-16's route one shape
+> over, at no witness slot and no IR temp.
+>
+> **What answers for BOTH frees is one thing, not two: the base rides on the temp's TYPE.**
+> `callref_owned_return` types `__lift_N` with `Deps::frame1(base)` instead of `Deps::none()`,
+> and a non-empty dep stops `state/codegen.rs` emitting the unconditional pre-Set free at all —
+> the RE-SET that left the interpreter wrong when only the scope-exit free was guarded.
+> `get_free_vars` then emits `OpFreeRefIfDistinct(__lift_N, base)` for the one that remains.
+> One guarded free per evaluation.
+>
+> ⚠ **The container KIND broke it once, and only on one backend.** The keyed arms were written
+> blind and kept `Deps::none()`, so the pre-Set free survived for them alone: the hash cell
+> emptied its caller's collection on the INTERPRETER while `--native` stayed green. Found by
+> moving the axis, not by reading the code — `matrix_axes.py` reported `A1 container kind 2/6`
+> for the probe set that had already passed.
+>
+> **RESIDUAL, and it is a statement CONTEXT rather than a shape:** `r = if c { g(some) } else
+> { g(none) }` still leaks the mint arm — 246 stores at N=500, attributed to the closure's own
+> mint line — because the lift is not consulted for a call in an `if`/`match` arm at all. Not
+> a regression: it leaks identically under `LOFT_NO_LIFT_JOIN_WITNESS`.
+>
+> **Not reached, and measured so:** the CAPTURE witness (`c ?? [7,8]` over a captured `c`)
+> aborts at the ceiling with the route on exactly as with it off — the return's dep names
+> `__closure` and not which slot, so there is no base. That is D-clo-7's open half, and this
+> is the measurement the ROADMAP asked for when it said whether the identity route reaches the
+> two closure rows was untested.
+>
+> Guard: `tests/scripts/1257b-a-lifted-collection-return-is-freed-by-identity.loft`, eight
+> cells, falsified at d9a2ec21 (interpret exit 101 -> 0, native exit 1 -> 0, both panicked ->
+> clean). Opt-out `LOFT_NO_LIFT_JOIN_WITNESS` keeps the pre-lift form as the A/B leg.
+
 > **D-clo-14 — the OVER-FREE closed, the leak it traded for OPEN (2026-09-01, loft#1257).**
 > `g = fn(q: vector<integer>?) -> vector<integer> { q ?? [7, 8] }` used INLINE inside a LOOP
 > answered `null` and left the caller's own vector EMPTY — `len(some)` reached 0 with nothing

@@ -90,6 +90,15 @@ struct Scopes {
     /// RETURNED.  Where it is not, the buffer's plain free is the store's only release and
     /// has to stay plain.
     literal_buffer: HashMap<u16, u16>,
+    /// loft#1257 — a `__lift_N` holding a COLLECTION `??` return whose `Own::Join` base the
+    /// oracle can NAME.  The temp may hold the caller's own store (the discharge arm ran) or
+    /// one the closure minted, and which of the two is decidable at run time by store IDENTITY
+    /// against that base — `ownership.md` D-own-16's route, no witness slot.  Read by
+    /// `get_free_vars`, which frees the temp only where it is NOT the caller's store.
+    lift_join_witness: HashMap<u16, u16>,
+    /// Set by `callref_owned_return` on that path, consumed by the next `new_lift_var`.
+    /// `u16::MAX` = none.
+    pending_join_witness: std::cell::Cell<u16>,
     /// @P378(a) — INVERSE of `paired_witness` for the case where the
     /// witness `v` is INNER-scoped relative to the `__ref_N` buffer
     /// `av` (e.g. `bs = alloc_bag(ci, __ref_1)` inside a `for` loop,
@@ -1475,6 +1484,8 @@ fn run_scan_phase(
         ret_temp_counter: 0,
         paired_witness: HashMap::new(),
         literal_buffer: HashMap::new(),
+        lift_join_witness: HashMap::new(),
+        pending_join_witness: std::cell::Cell::new(u16::MAX),
         witness_buffer: HashMap::new(),
         owned_refs: HashMap::new(),
         rbuf_witness: None,
@@ -6840,6 +6851,7 @@ impl Scopes {
                     None
                 };
                 let owns = dep.is_empty()
+                    || self.lift_join_witness.contains_key(&v)
                     || borrow_witness.is_some()
                     || (dep.len() == 1
                         && dep[0] == v
@@ -6924,7 +6936,19 @@ impl Scopes {
                     // a transaction on every pass.
                     let is_buffer = is_work_ref && self.paired_witness.contains_key(&v)
                         || self.witness_buffer.values().any(|&b| b == v);
-                    if is_work_ref && let Some(&witness) = self.paired_witness.get(&v) {
+                    if let Some(&jw) = self.lift_join_witness.get(&v) {
+                        // loft#1257 — free the lifted collection return only where it is NOT
+                        // the caller's own store.  A `Join` is owned on one arm and a borrow
+                        // on the other and they are the SAME call, so nothing static separates
+                        // them; the store number does.
+                        if let Some(hook) = self.scope_end_drop(function, v, data) {
+                            ls.push(hook);
+                        }
+                        ls.push(Value::Call(
+                            data.def_nr("OpFreeRefIfDistinct"),
+                            vec![Value::Var(v), Value::Var(jw)],
+                        ));
+                    } else if is_work_ref && let Some(&witness) = self.paired_witness.get(&v) {
                         ls.push(Value::Call(
                             data.def_nr("OpFreeRefIfDistinct"),
                             vec![Value::Var(v), Value::Var(witness)],
@@ -7925,6 +7949,17 @@ impl Scopes {
         Some((preamble, arg, postamble))
     }
 
+    /// EXPERIMENT (D-clo-14) — the dep list a lifted collection `Join` return carries: it
+    /// NAMES the caller variable the return may still be aliasing, which is what makes the
+    /// owner decidable at run time by store identity.  `Deps::none()` (owned) otherwise.
+    fn lift_deps(base_witness: u16) -> Deps {
+        if base_witness == u16::MAX {
+            Deps::none()
+        } else {
+            Deps::frame1(base_witness)
+        }
+    }
+
     /// Create a `__lift_N` temporary that OWNS an inline call result, so
     /// `get_free_vars` emits its `OpFreeRef` at scope exit.  Registers the
     /// var in the current scope and in `lift_vars` (which drives the
@@ -7936,6 +7971,10 @@ impl Scopes {
         let name = format!("__lift_{}", self.lift_counter);
         let tmp = function.add_temp_var(&name, tp);
         function.mark_inline_ref(tmp);
+        let witness = self.pending_join_witness.replace(u16::MAX);
+        if witness != u16::MAX {
+            self.lift_join_witness.insert(tmp, witness);
+        }
         self.var_scope.insert(tmp, self.scope);
         self.var_order.push(tmp);
         self.lift_vars.push(tmp);
@@ -8205,16 +8244,34 @@ impl Scopes {
         // The fn-ref variable's own type is the declared shape; the definition is
         // the authority on what it returns.
         let _ = function;
+        let mut base_witness = u16::MAX;
         let (returned, opt) = def.returned().peel_optional();
         if !matches!(returned, Type::Reference(_, _) | Type::Enum(_, true, _))
-            && matches!(
-                crate::use_analysis::ownership_of(data, self.d_nr, val),
-                crate::use_analysis::Own::Join { base } if base != u16::MAX
-            )
+            && let crate::use_analysis::Own::Join { base } =
+                crate::use_analysis::ownership_of(data, self.d_nr, val)
+            && base != u16::MAX
         {
-            return None;
+            // loft#1257 — the IDENTITY route, and the reason this is no longer a decline.
+            // Declining cost the mint arm one store per call (389 live at N=400, a
+            // store-table abort at scale).  @FR-O-Oracle already says what a `Join` means at
+            // run time — *"adopt iff the value's store ≠ base's store"* — and the dep NAMES
+            // that base, so the owner is decidable by store IDENTITY with no witness slot.
+            // `ownership.md` D-own-16 closed the same sentence one shape over.
+            //
+            // The base rides on the temp's TYPE (`lift_deps` below), which does both halves at
+            // once: a non-empty dep keeps `state/codegen.rs`'s unconditional pre-Set free from
+            // being emitted at all — the RE-SET that left the interpreter wrong when an earlier
+            // attempt guarded only the scope-exit free — and `get_free_vars` then emits
+            // `OpFreeRefIfDistinct(__lift_N, base)` there.  One guarded free per evaluation.
+            if !crate::keys::lift_join_witness_enabled() {
+                return None;
+            }
+            base_witness = base;
         }
-        match returned {
+        // The witness is handed to the next `new_lift_var` — and ONLY where an arm below
+        // actually answers with a type, so a return that lifts nothing cannot leave it
+        // standing for an unrelated temp.
+        let lifted = match returned {
             Type::Reference(d, _) => Some(Self::reopt(opt, Type::Reference(*d, Deps::none()))),
             Type::Enum(d, true, _) => Some(Self::reopt(opt, Type::Enum(*d, true, Deps::none()))),
             // loft#1177 — a COLLECTION return is the same question with the same answer, and
@@ -8226,24 +8283,40 @@ impl Scopes {
             // The dep list is rebuilt empty for the same reason the two arms above rebuild
             // theirs: `returns_borrowed_view` has already refused a callee that hands back a
             // view, so what reaches here is a store the caller must own.
-            Type::Vector(inner, _) => {
-                Some(Self::reopt(opt, Type::Vector(inner.clone(), Deps::none())))
-            }
-            Type::Hash(d, k, _) => Some(Self::reopt(opt, Type::Hash(*d, k.clone(), Deps::none()))),
-            Type::Sorted(d, k, _) => {
-                Some(Self::reopt(opt, Type::Sorted(*d, k.clone(), Deps::none())))
-            }
-            Type::Index(d, k, _) => {
-                Some(Self::reopt(opt, Type::Index(*d, k.clone(), Deps::none())))
-            }
-            Type::Radix(d, k, _) => {
-                Some(Self::reopt(opt, Type::Radix(*d, k.clone(), Deps::none())))
-            }
-            Type::Trie(d, k, _) => Some(Self::reopt(opt, Type::Trie(*d, k.clone(), Deps::none()))),
+            Type::Vector(inner, _) => Some(Self::reopt(
+                opt,
+                Type::Vector(inner.clone(), Self::lift_deps(base_witness)),
+            )),
+            Type::Hash(d, k, _) => Some(Self::reopt(
+                opt,
+                Type::Hash(*d, k.clone(), Self::lift_deps(base_witness)),
+            )),
+            Type::Sorted(d, k, _) => Some(Self::reopt(
+                opt,
+                Type::Sorted(*d, k.clone(), Self::lift_deps(base_witness)),
+            )),
+            Type::Index(d, k, _) => Some(Self::reopt(
+                opt,
+                Type::Index(*d, k.clone(), Self::lift_deps(base_witness)),
+            )),
+            Type::Radix(d, k, _) => Some(Self::reopt(
+                opt,
+                Type::Radix(*d, k.clone(), Self::lift_deps(base_witness)),
+            )),
+            Type::Trie(d, k, _) => Some(Self::reopt(
+                opt,
+                Type::Trie(*d, k.clone(), Self::lift_deps(base_witness)),
+            )),
             // Everything else is a value the caller does not own a store for — a scalar
             // lives in the slot, and a `text` is freed by its own delivery path.
             _ => None,
-        }
+        };
+        self.pending_join_witness.set(if lifted.is_some() {
+            base_witness
+        } else {
+            u16::MAX
+        });
+        lifted
     }
 
     /// loft#879 — the shape question `inline_struct_return` asks ("does this call
