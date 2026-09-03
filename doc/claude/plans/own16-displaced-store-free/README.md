@@ -5,8 +5,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # D-own-16 — a binding releases what it displaces, when the displacing value is known
 
-> **STATUS (2026-09-03): steps 0, 0.5, 1 DONE; step 4a LANDED for three of five cells.**
-> `MintOnly` 9 → 0, `JoinSelf` 9 → 0, `MaybeBorrow` 4 → 0, both backends, values unchanged.
+> **STATUS (2026-09-03): COMPLETE — D-own-16 is CLOSED.**
+> `MintOnly` 9 → 0, `JoinSelf` 9 → 0, `MaybeBorrow` 4 → 0, `ParamBorrow` 10 → 0, both backends,
+> every value unchanged.  `Captured` still retains a store and that is `(L-CapHeap)` holding,
+> not a leak: declining the free is correct there, so its correct behaviour keeps a store.
 > Guard: `tests/scripts/1085b-a-nullable-local-frees-what-it-displaces.loft`.
 > **The route is NOT step 4a as designed.** No IR stash temp was added and no witness was
 > widened — a variable reaches either backend only through a `Value::Set` (`intervals.rs`
@@ -14,9 +16,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > only from `Set` paths), which is why both `OpPutRef` attempts produced an unslotted temp.
 > The working stash needs no IR variable at all: it is the operand stack on the interpreter
 > and a Rust `let _old_<name>` on native.  So the fix is the peel + `!is_captured` + routing
-> nullable locals to the GUARDED post-free.  Steps 2, 3 and 5 are moot for these cells;
-> step 6's register update is done.  RESIDUAL: the `ParamBorrow` row (deps name `p`), which
-> is the only row the per-run witness is still for.
+> nullable locals to the GUARDED post-free.  Steps 2, 3 and 5 are moot; step 6 is done.
+> **No per-run witness was needed anywhere** — the `ParamBorrow` row, which this plan and the
+> deviation register both reserved for one, closed by comparing the local against the DEP IT
+> ALREADY NAMES at runtime.  A static strip there really is unsound (the conditional-mint
+> control proves it); a witness is simply not the only alternative.
 >
 > Superseded below: step 4a's premise that the ordering had to be rebuilt, and step 0's
 > `3 → 0` exit criterion for the `ParamBorrow` cell.

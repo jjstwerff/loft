@@ -457,7 +457,7 @@ what produced the numbers above. Until such a check exists, each new free site r
 obligation or silently skips it, which is how the count went from the 24 written into
 `ownership.md` to 38.
 
-### D-own-16 — OPEN, NARROWED 2026-08-30 (2026-08-27): a value that READS the local it assigns never frees the store it displaces
+### D-own-16 — CLOSED 2026-09-03 (opened 2026-08-27, narrowed 2026-08-30): a value that READS the local it assigns never frees the store it displaces
 
 `(O-Deps)` places a free from the deps a value carries.  A local reassigned from a join over
 ITSELF gets none placed: `c = mk(i) ?? c` retains every displaced store, nine of ten over ten
@@ -621,15 +621,41 @@ routing and `1085` refuses at `op=OpFreeRef`; drop `free_displaced`'s stack-ref 
 same file refuses at `op=OpFreeRefIfDistinct`.  The opcode MOVING between those last two is
 what says they are two sites rather than one defect seen twice.
 
-**STILL OPEN, and narrower than the entry has ever been — two rows:**
+**CLOSED the same day — the last row went with a THIRD option this entry never considered.**
+`d: S? = p; d = mint(d, i)` — a local that first BORROWS a parameter — leaked ten stores in ten
+rounds, because its dep list names `p` for the whole frame and the empty-deps clause therefore
+declines forever.  The entry above concludes a per-RUN boolean witness is the cure, on the
+grounds that a STATIC dep-strip is unsound.  The second half is true and is measured: with
+`d: S? = p; if take { d = mint(d) }`, the not-taken branch still holds the CALLER's store, and
+freeing it there is a use-after-free two frames up.
 
-- `d: S? = p; d = mint(d, i)` — a local that first BORROWS a parameter.  Its dep list names
-  `p` forever, so the empty-deps clause declines; @FR-O-Latest is a per-RUN fact a
-  flow-insensitive dep list cannot carry.  This row is what the per-run witness above is
-  actually for, and it is the only one left that wants it.
-- a local a lambda CAPTURES retains what it displaces — correct, not a leak to close: @FR-L-CapHeap
-  makes the value SHARED, so declining is the right answer and its right answer keeps a store.
-  It therefore cannot live in the script corpus at all, whose leak gate is absolute.
+But witness and strip are not the only two options.  The dep list is not merely an obstacle —
+it NAMES the variable the local might still be aliasing, so ownership is decidable at RUNTIME
+by store IDENTITY, with no witness slot, no IR temp and no strip:
+
+| the local's state | vs its dep | outcome |
+|---|---|---|
+| still borrowing (never minted, or the not-taken branch) | one store | declines — correct |
+| minted its own | distinct | freed — correct |
+
+Two halves, both reusing machinery that already existed.  **Scope exit** emits
+`OpFreeRefIfDistinct(v, dep)` — against the @PLN87 entry stash (`rebind_orig`) where the
+parameter is REBINDABLE, since a rebound param's slot stops naming the caller's store.
+**The transition free** routes through the same guarded post-free the other cells use, and its
+safety on the FIRST round — where the displaced store IS the caller's — is @FR-H-Free's
+free-protection side condition: `free_displaced` declines a protected store.  Measured rather
+than reasoned: `LOFT_POISON=1` answers identically to `LOFT_POISON=0`.
+
+⚠ Restricted to an ARGUMENT dep on purpose.  A parameter's slot is stable for the frame (or has
+that entry stash); an arbitrary LOCAL dep can itself be freed before the scope ends, and the
+comparison would then name a store that is already gone.  This is also why the `p462` warning
+recorded in `displaced_owned_slots` does not apply: that one is about stripping deps on a PARAM
+SLOT, and this predicate excludes `is_argument(v)` and strips nothing.
+
+**What remains is not a leak.**  A lambda-CAPTURED local retains what it displaces, and that is
+`(L-CapHeap)` holding: a captured heap value is SHARED, so declining is the right answer and its
+right answer keeps a store.  It can never enter the script corpus, whose leak gate is absolute —
+it lives in the plan's matrix probe, whose cell 6 asserts `g() == 1`.
 
 ### D-own-15 — CLOSED (2026-08-27, loft#1119): the ORACLE answered differently depending on who asked
 

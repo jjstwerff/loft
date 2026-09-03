@@ -203,7 +203,20 @@ impl Output<'_> {
                     Type::Reference(_, _) | Type::Enum(_, true, _)
                 ) || crate::parser::vectors::is_keyed(variables.tp(var).base()))
                 && !variables.is_captured(var)
-                && variables.tp(var).depend().is_empty()
+                // D-own-16 residual, the native twin of `state/codegen.rs`'s
+                // `borrows_one_argument`.  Both backends must read the SAME fact
+                // (@FR-O-NoDiverge); leaving this side short is how the two came to disagree
+                // about the keyed kinds.  The displaced free is guarded by `_old != place`
+                // and released through `free_displaced`, which declines a free-protected
+                // store, so the caller's argument survives the first round.
+                && (variables.tp(var).depend().is_empty() || {
+                    let d = variables.tp(var).depend().clone();
+                    d.len() == 1
+                        && d[0] != var
+                        && matches!(variables.tp(var), Type::Optional(_))
+                        && variables.is_argument(d[0])
+                        && !variables.is_argument(var)
+                })
                 // @FR-O-Proxy — the empty dep list is only a PROXY for ownership, so a
                 // free taken on it must consult @FR-O-Override.  The interpreter's twin
                 // (`state/codegen.rs`'s `owned_ref`) already does; this one did not, which

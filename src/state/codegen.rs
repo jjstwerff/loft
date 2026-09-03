@@ -2238,12 +2238,33 @@ impl State {
             // `OWNS` for a local a lambda has CAPTURED, and freeing there is a use-after-free
             // against the closure's capture-time DbRef.  The licence has to come from a
             // per-run witness.
+            // D-own-16 residual — a nullable heap local BOUND FROM A PARAMETER.  Its dep list
+            // names that parameter for the whole frame, so the local reads as a permanent
+            // borrow and every store a later minting call hands it leaks.  @FR-O-Latest is a
+            // per-RUN fact, and the dep list is flow-INsensitive; but the dep NAMES the
+            // variable the local might still be aliasing, so the question is decidable at
+            // runtime by store IDENTITY, with no witness slot.
+            //
+            // The displaced free this licenses is the GUARDED one (`nullable_local` routes it
+            // there), and its two side conditions are exactly what makes this safe on the
+            // FIRST round, where the displaced store is still the caller's: `free_displaced`
+            // declines a free-protected store — @FR-H-Free's other side condition — so the
+            // caller's argument is never released here.  Measured: `LOFT_POISON=1` answers
+            // identically to `LOFT_POISON=0`, which is what says no use-after-free survives.
+            let borrows_one_argument = {
+                let d = stack.function.tp(v).depend().clone();
+                d.len() == 1
+                    && d[0] != v
+                    && matches!(stack.function.tp(v), Type::Optional(_))
+                    && stack.function.is_argument(d[0])
+                    && !stack.function.is_argument(v)
+            };
             let owned_ref = (matches!(
                 stack.function.tp(v).base(),
                 Type::Reference(_, _) | Type::Enum(_, true, _)
             ) || matches!(stack.function.tp(v), Type::Vector(_, _))
                 || crate::parser::vectors::is_keyed(stack.function.tp(v).base()))
-                && stack.function.tp(v).depend().is_empty()
+                && (stack.function.tp(v).depend().is_empty() || borrows_one_argument)
                 && !stack.function.is_skip_free(v)
                 && !stack.function.is_captured(v)
                 && !is_hidden_buf_arg;

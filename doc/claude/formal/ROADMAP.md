@@ -34,17 +34,23 @@ Closing a row means the implementation obeys the rule (then the deviation entry 
 | [capabilities.md](capabilities.md) | 0 | the `deps` borrow checker's sibling — **✓ CLOSED (2026-07-04)**: sandbox admission enforces all six rules, each with a RED/GREEN pair. **D-cap-1** the parameter `#default` lock (`param_lock_violations`); **D-cap-2** the closure descent (`mark_lambda_sandboxed` — a script-only lambda is usable, a host-reaching one is rejected naming the reach); **D-cap-3** the owned-vs-host write split (`raw_write_is_host_owned` gained a `Type::Vector` owned arm — a probe proved a local vector never aliases host, every whole-value bind incl. `&` COPIES, so only a PARAMETER-root write is a host effect and the `arguments()` check already IS that boundary; the feared `ownership_of` consultation was NOT needed) |
 | [layout.md](layout.md) | 1 | **D-layout-1** — no version guard on persisted bytes (#477: same types, different bytes, silently misread; `L-Sound`). **Mechanism shipped (@PLN97):** the golden byte-layout test catches a change at commit; the `.dschema` sidecar (`CorruptReason::SchemaMismatch`) detects a stale store at load → the `on_corruption` rebuild. **Residual:** the durable store ([plans/43](../plans/43-loft-store-durable/)) isn't loft-driven yet, so nothing auto-invokes the load-time gate — closes when a persistence consumer wires `check_beside` into its open path |
 
-**Nine open, in five chapters** (re-measured 2026-09-03), and they are not nine problems:
+**Eight open, in five chapters** (re-measured 2026-09-03, after `D-own-16` closed), and they are
+not eight problems:
 
 - **2 meta** — `D-op-1`/`D-op-2`. There is no shared operational semantics, so the interpreter IS
   the spec and a backend divergence is caught by test rather than by definition. An open-ended
   coverage instrument (@PLN89), not a row that closes.
 - **1 residual** — `D-layout-1`. The mechanism shipped with @PLN97; it closes when a persistence
   consumer wires `check_beside` into its open path.
-- **3 in one cluster** — `D-clo-7`, `D-clo-14`, `D-own-16`: each is a store whose owner is
-  decidable only at RUN time, and each is stuck at the same wall, because nothing static separates
-  the arm that MINTS from the arm that hands back a caller's store — they are the same call. One
-  piece of work, and [QUALITY.md](../QUALITY.md) carries it as one row.
+- **2 in one cluster** — `D-clo-7`, `D-clo-14`: each is a store whose owner is decidable only at
+  RUN time, and each is stuck at the same wall, because nothing static separates the arm that
+  MINTS from the arm that hands back a caller's store — they are the same call.
+  [QUALITY.md](../QUALITY.md) carries them as one row.  ⚠ `D-own-16` was the cluster's third
+  member and closed 2026-09-03 WITHOUT the per-execution witness the cluster is named for: a
+  store's owner can also be decided at run time by IDENTITY against a variable the type already
+  names, which costs no witness slot.  Whether that route reaches the two closure rows is
+  untested, but the cluster's premise — that a runtime WITNESS is the only mechanism — is now
+  known to be too strong.
 - **3 alone** — `D-bind-11` (`&(τ,…)` scalar-only), `D-own-26` (eleven free-deciding proxy sites
   never consult `O-Override`), `D-own-8` (a Join's ownership fact true on one path only).
 

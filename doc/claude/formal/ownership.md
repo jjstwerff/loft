@@ -192,10 +192,19 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-**OPEN: 3.**
+**OPEN: 2.**
 - **D-own-26** — eleven free-deciding proxy sites never consult `O-Override` (measured; three folded onto `Scopes::owns_freeable_store` the day it opened)
-- **D-own-16** — a value that READS the local it assigns never frees the store it displaces
 - **D-own-8** — a Join's ownership fact is true on one path only
+
+**D-own-16 CLOSED 2026-09-03.** Every cell that should reach zero does, on both backends, with
+every value unchanged: a minting call that reads the local, the self-referential join
+`c = mk(i) ?? c`, a conditional borrow, and a local bound from a PARAMETER and then minted.
+The one shape that still retains a store is a lambda-CAPTURED local, and that is
+`(L-CapHeap)` holding rather than a leak — a captured heap value is SHARED, so declining the
+free is the right answer and its right answer keeps a store.  Guard:
+`tests/scripts/1085b-a-nullable-local-frees-what-it-displaces.loft`; the full record, including
+the two mechanisms that were tried and reverted, is in
+[ownership-history.md](ownership-history.md).
 
 The full register — these entries in full, plus every closed one with its dates and
 issue numbers — is the companion [ownership-history.md](ownership-history.md).

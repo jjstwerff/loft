@@ -28,10 +28,12 @@
 // deliberately empty) cannot host it.  It is covered by the matrix probe recorded in
 // `doc/claude/plans/own16-displaced-store-free/`, whose cell 6 asserts `g() == 1`.
 //
-// ⚠ `ParamBorrow` (`d: S? = p; d = mint(d, i)`) is also absent, and still leaks.  Its dep
-// list names `p` forever, so the empty-deps clause declines — @FR-O-Latest is a per-RUN fact
-// that a flow-insensitive dep list cannot carry.  That row is D-own-16's residual and wants
-// the runtime witness; a cell asserting 0 here would be asserting a fix nobody wrote.
+// The `ParamBorrow` row (`d: S? = p; d = mint(d, i)`) is the last three cells.  Its dep list
+// names `p` for the whole frame, so the local reads as a permanent borrow and every store a
+// minting call hands it leaked.  @FR-O-Latest is a per-RUN fact and the dep list is
+// flow-INsensitive — but the dep NAMES the variable the local might still alias, so the
+// question is settled at runtime by store IDENTITY, needing no witness slot.  A STATIC strip
+// cannot do it: cell `e` below is the proof.
 //
 // @falsified-at: bae36ea1 — every cell below leaks on that build (MintOnly 9, JoinSelf 9,
 //   MaybeBorrow 4 per ten rounds, interpreter; native drops MaybeBorrow, which is why the
@@ -99,4 +101,35 @@ fn test_the_dense_twin_is_unchanged() {
   c: Dense = Dense { x: 0 };
   for i in 0..10 { c = mint_d(c, i); }
   assert(c.x == 45, "the dense local still accumulates: got {c.x}, want 45");
+}
+
+struct PB { x: integer }
+
+fn mint_pb(s: PB, i: integer) -> PB { PB { x: s.x + i } }
+
+// The residual row: `d` BORROWS the parameter, then every round mints.  Ten stores leaked
+// before the dep-named runtime comparison licensed the frees.
+fn param_borrow_then_mint(p: PB) -> integer {
+  d: PB? = p;
+  for i in 0..10 { d = mint_pb(d ?? PB { x: 0 }, i); }
+  (d ?? PB { x: -1 }).x
+}
+
+// THE CONTROL that makes a static dep-strip unsound, and the reason this is decided at
+// RUNTIME.  On the false branch `d` still holds the CALLER's store: freeing it there is a
+// use-after-free two frames up, and the value below is what witnesses it survived.
+fn param_borrow_minted_only_if(p: PB, take: boolean) -> integer {
+  d: PB? = p;
+  if take { d = mint_pb(d ?? PB { x: 0 }, 5); }
+  (d ?? PB { x: -1 }).x
+}
+
+fn test_the_parameter_borrow_rows() {
+  a = param_borrow_then_mint(PB { x: 100 });
+  assert(a == 145, "accumulated through a local that first borrowed p: got {a}, want 145");
+  t = param_borrow_minted_only_if(PB { x: 7 }, true);
+  assert(t == 12, "the minting branch owns its store: got {t}, want 12");
+  // The load-bearing assertion: the caller's store is intact on the branch that never minted.
+  n = param_borrow_minted_only_if(PB { x: 7 }, false);
+  assert(n == 7, "a never-minted local still names the caller's store: got {n}, want 7");
 }

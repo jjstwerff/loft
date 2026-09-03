@@ -145,10 +145,11 @@ not duplicate: a deviation entry links to the lens analysis instead of re-explai
 
 ## Areas
 
-**Nine deviations are open, in five chapters** (re-measured 2026-09-03): ownership.md 3,
-closures.md 2, operational.md 2, binding.md 1, layout.md 1. Every other chapter is at 0.
+**Eight deviations are open, in five chapters** (re-measured 2026-09-03, after `D-own-16`
+closed): ownership.md 2, closures.md 2, operational.md 2, binding.md 1, layout.md 1. Every
+other chapter is at 0.
 
-Two of the nine are the **meta** entry — `D-op-1`/`D-op-2`, there being no shared operational
+Two of the eight are the **meta** entry — `D-op-1`/`D-op-2`, there being no shared operational
 semantics, so the interpreter is the spec and a backend divergence is test-caught rather than
 definition-caught (@PLN89's differential oracle, an open-ended instrument and not a one-shot
 close). One is a **residual**: `D-layout-1`'s mechanism is shipped and opt-in, waiting on a
