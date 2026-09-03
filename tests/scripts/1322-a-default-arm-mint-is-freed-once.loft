@@ -1,0 +1,76 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A collection minted in a `??` DEFAULT ARM is released once (loft#1322,
+// `formal/ownership.md` @FR-O-Borrow — *"the single owner frees once"*).
+//
+// `_vec_N` and `__vdb_N` name ONE store: the view is `OpGetField(__vdb_N, 0)`.  The arm this
+// shape takes leaves the view's free in place — the return-delivery materializer owns it — while
+// the record kept a scope-exit free of its own, so the same store was released twice.
+//
+// ⚠ THE VALUE CHANNEL CANNOT SEE THIS, which is why the cells here are the SHAPES and the
+// verdict is in `tests/redundant_free.rs`.  A second free of an already-freed store is a no-op
+// (`free_named` returns), so every assert below passes before the fix as well.  What moves is
+// `LOFT_TRACE_DB`'s `already_free=true` count, and that Rust guard is what reads it.  These
+// cells are here so the shapes live beside every other store-lifetime shape and so the value
+// half is pinned: a fix that stopped the double free by dropping the WRONG free would answer
+// wrong here.
+//
+// @falsified-at: none — this file's channel is a VALUE channel and the defect does not move it.
+//   A redundant free of an already-freed store is a no-op, so every cell below passes on
+//   `origin/main` (b1ccf0e9) exactly as it does here, and `make falsify` can only report INERT.
+//   The verdict is in `tests/redundant_free.rs`, which counts `LOFT_TRACE_DB`'s
+//   `already_free=true` lines: the first shape below reports **1** on b1ccf0e9 and **0** here,
+//   measured on both. That file also carries `the_harness_can_see_a_redundant_free`, a cell
+//   that must report a NON-zero count, so a trace which stopped reporting cannot read as a
+//   clean tree — which is the falsification obligation this row would otherwise carry.
+
+struct Rw1322 { k: integer, v: integer }
+
+fn test_a_default_arm_mint_answers_and_is_freed_once() {
+  g = fn(q: vector<integer>?) -> vector<integer> { q ?? [7, 8] };
+  none: vector<integer>? = null;
+  assert(g(none)[1] == 8, "the default arm's value: got {g(none)[1]}");
+}
+
+fn test_the_borrow_arm_is_unmoved() {
+  g = fn(q: vector<integer>?) -> vector<integer> { q ?? [7, 8] };
+  some: vector<integer>? = [41, 42];
+  assert(g(some)[1] == 42, "the borrow arm's value: got {g(some)[1]}");
+  assert(len(some ?? []) == 2, "the caller's collection: got {len(some ?? [])}");
+}
+
+fn test_an_empty_default_answers_empty() {
+  g = fn(q: vector<integer>?) -> integer { len(q ?? []) };
+  none: vector<integer>? = null;
+  assert(g(none) == 0, "the empty default: got {g(none)}");
+}
+
+fn test_a_keyed_default_arm() {
+  g = fn(q: hash<Rw1322[k]>?) -> integer { len(q ?? [Rw1322 { k: 1, v: 1 }]) };
+  none: hash<Rw1322[k]>? = null;
+  assert(g(none) == 1, "the keyed default: got {g(none)}");
+}
+
+fn test_a_nested_default_arm() {
+  g = fn(q: vector<vector<integer>>?) -> integer { len(q ?? [[1, 2], [3, 4]]) };
+  none: vector<vector<integer>>? = null;
+  assert(g(none) == 2, "the nested default: got {g(none)}");
+}
+
+fn test_the_default_arm_at_the_store_ceiling() {
+  // 70 000 > the 65 535-store table.  A redundant free is a no-op, so this cell is not about the
+  // double free — it is what says the fix did not stop the double free by dropping the free that
+  // actually releases the store.
+  g = fn(q: vector<integer>?) -> vector<integer> { q ?? [7, 8] };
+  none: vector<integer>? = null;
+  s = 0;
+  for _ in 0..70000 { s += g(none)[1]; }
+  assert(s == 560000, "the mint arm at the ceiling: got {s}");
+}
+
+fn test_a_bound_default_arm_outside_a_closure() {
+  none: vector<integer>? = null;
+  r = none ?? [7, 8];
+  assert(r[1] == 8, "a bound default arm: got {r[1]}");
+}

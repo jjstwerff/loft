@@ -421,6 +421,25 @@ analysis directly (the certifier sidesteps it).
 
 ## Conformance
 
+- **A `??` default-arm mint is released once (`O-Borrow`, loft#1322)** — `_vec_N` and
+  `__vdb_N` name one store, and exactly one of them frees it: at the vector and keyed kinds,
+  empty and non-empty defaults, nested, bound outside a closure, and at the store ceiling.
+  ⚠ **No value can carry this verdict**, which is why the guard is split: a second free of an
+  already-freed store is a no-op (`free_named` returns) and `LOFT_STRICT_STORES` does not flag
+  it either, so `tests/scripts/1322-…` pins the SHAPES and `tests/redundant_free.rs` reads the
+  only channel there is — `LOFT_TRACE_DB`'s `already_free=true` count. That file carries a
+  `the_harness_can_see_a_redundant_free` cell for the same reason: without one, a trace that
+  stopped reporting would read exactly like a clean tree.
+  ⚠ **The flags this decision sets are CUMULATIVE ACROSS PASSES**, and that is what makes
+  "does the view's free run?" a real question. A capture subject reads empty deps on pass 1 and
+  takes the view model (`skip_free`), then reads non-empty deps on pass 2 and arrives at the
+  other arm; silencing the record there too leaves the store with no owner at all. Asked as
+  `is_skip_free`, which is which arm the variable ENDED in rather than which one a pass took.
+  ⚠ **A residual with the same rule and a different pair of names:** a closure record is
+  released through BOTH the fn-ref value and its `___clos_N` local, so its cascade runs twice
+  and the second pass finds the capture's store gone. Pre-existing, and it is the cell that
+  proves the instrument above works.
+
 - **An opaque fn-ref return borrows its arguments (`O-Opaque`, loft#1327)** — a closure called
   through a fn-typed PARAMETER leaves the caller's vector intact over 300 calls with a filler
   allocation between them, at the nullable and dense parameter spellings and across a branch

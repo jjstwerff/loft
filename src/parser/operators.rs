@@ -2562,6 +2562,12 @@ impl Parser {
                 matches!(op.unspan(), Value::Set(sv, val)
                     if *sv == w && self.inline_slot_word(val).is_some())
             });
+            // The backing record this view reads out of, read BEFORE the strip below removes
+            // the only place it is written down.
+            let backing: Option<u16> = match self.vars.tp(w).clone() {
+                Type::Vector(_, dep) => dep.as_slice().first().copied(),
+                _ => None,
+            };
             if let Type::Vector(elm, dep) = self.vars.tp(w).clone()
                 && !dep.is_empty()
             {
@@ -2608,6 +2614,30 @@ impl Parser {
                 // — and taking its preamble allocation away leaves the default arm building
                 // into a null sentinel, which answers length 0 for every literal default.
                 self.vars.mark_inline_ref(w);
+                // loft#1322 — and then exactly one of the pair may free the store.
+                //
+                // `_vec_N` and `__vdb_N` name ONE store: the view is `OpGetField(__vdb_N, 0)`.
+                // This arm leaves the view's free in place (the return-delivery materializer
+                // owns it) while the record keeps a scope-exit free of its own, so the same
+                // store was released twice — `free #N already_free=false` then `=true`, both
+                // backends.  `(O-Borrow)`: one owner, one free.  Here the view's free is the
+                // one that runs, so the record is the one that goes quiet.
+                //
+                // ⚠ ONLY WHERE THE VIEW'S FREE ACTUALLY RUNS, and the flags are CUMULATIVE
+                // ACROSS PASSES, which is what makes that a real question rather than a
+                // rhetorical one.  A capture subject reads `deps=[]` on pass 1 and takes the
+                // OWNED arm above — `skip_free(_vec_N)`, the view model — and reads `deps=[…]`
+                // on pass 2 and arrives here.  Such a `_vec_N` is already never-freed, so
+                // silencing the record too leaves the store with no owner at all: measured, it
+                // exhausts the 65535-store table in
+                // `1248b-a-capture-witness-is-the-slot-the-return-reads`.  Asking
+                // `is_skip_free(w)` is asking which of the two arms this variable ENDED in,
+                // not which one this pass took.
+                if !self.vars.is_skip_free(w)
+                    && let Some(db) = backing
+                {
+                    self.vars.set_skip_free(db);
+                }
             }
         }
 

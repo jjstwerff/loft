@@ -9,6 +9,43 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A `??` default-arm mint is released once (2026-09-03)
+
+loft#1322.  `_vec_N` and `__vdb_N` name ONE store — the view is `OpGetField(__vdb_N, 0)` — and
+both were freed: the return-delivery materializer through the view after the append, the record
+at scope exit.  `@FR-O-Borrow` allows one owner and one free.
+
+The site was behaving as designed, which is why the obvious readings do not close it.
+`parser/operators.rs` picks the view model for an OWNED subject (`skip_free(_vec_N)`, the record
+releasing the store) and `mark_inline_ref` only for a BORROWED one — *"do not allocate"* without
+*"never free"* — because a borrowed subject's `??` in return-tail position hands the view to the
+materializer.  The filed shape takes the second arm honestly: probed, its subject type reads
+`Deps { items: [0] }`, naming the parameter.  So neither name was silenced.
+
+**Two cures were measured before the third, and both are recorded on the issue.**  Peeling the
+`Optional` on the first gate is INERT — the subject's type is already an unwrapped `Vector`.
+Silencing the record unconditionally closes every shape and then exhausts the store table in
+`1248b-a-capture-witness-is-the-slot-the-return-reads`.
+
+⚠ **The flags are CUMULATIVE ACROSS PASSES, and that is the whole of the third cure.**  A
+capture subject reads empty deps on pass 1 and takes the view model, then reads non-empty deps on
+pass 2 and arrives at the other arm — so its `_vec_N` is ALREADY never-freed, and silencing the
+record too leaves the store with no owner.  The record goes quiet only where the view's free
+actually runs, asked as `is_skip_free(w)`: which arm the variable ENDED in, not which one this
+pass took.
+
+⚠ **No value can carry the verdict**, so the guard is in two halves.  A second free of an
+already-freed store is a no-op and `LOFT_STRICT_STORES` does not flag it, so
+`tests/scripts/1322-a-default-arm-mint-is-freed-once.loft` pins the shapes and their values
+while `tests/redundant_free.rs` counts `LOFT_TRACE_DB`'s `already_free=true` lines — the only
+channel there is.  It carries a `the_harness_can_see_a_redundant_free` cell, because without one
+a trace that stopped reporting would read exactly like a clean tree.
+
+⚠ **A residual under the same rule, one pair of names over:** a closure record is released
+through BOTH the fn-ref value and its `___clos_N` local, so its cascade runs twice and the second
+finds the capture's store gone.  Pre-existing (measured on `origin/main`), unchanged here, and it
+is the shape that cell uses.
+
 ### An opaque fn-ref return borrows its arguments (2026-09-03)
 
 loft#1327.  A closure called through a fn-TYPED PARAMETER may hand back its argument, and the
