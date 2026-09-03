@@ -74,6 +74,18 @@ Anything that just borrows is tracked but never frees. Crucially, *where* to fre
 **computed** from these facts, not guessed per code-site — and it's computed for **every**
 binding on **every** branch, not just the easy ones.
 
+**`O-Detach` is about ORDER, and it is the one rule here that a correct ownership FACT cannot
+save you from.** Every other rule answers *who owns this store*; this one answers *when may the
+lowering act on that answer*. A binding whose ownership is computed perfectly is still read as
+`null` if the sentinel that detaches it is emitted before the expression that reads it — which is
+what `p = mk(p.a + 1)` did on a heap parameter, on both backends, with nothing reported
+(loft#1312). The same order appears three more times: the `--native` adopt-vs-copy guard cleared
+the destination while the source still named that store; the reassignment path in `codegen.rs`
+avoids it by asking `Value::reads_var` and deferring the free; and the @PLN87 P2.1 literal
+lowering avoids it by hoisting the field reads into temporaries. Declining the detach is NOT a
+third option — that is what D-own-16's open half does, and it trades a wrong answer for a
+retained store rather than resolving the order.
+
 **This is an INTERNAL system — it never rejects a program it can compile.** loft has no
 user-facing borrow checker; the user writes naively and the compiler always finds a valid
 lowering, copying when it cannot prove an alias is safe
@@ -134,6 +146,13 @@ and a decision that reads the wrong one is wrong in the silent direction:
                 O-Oracle plus that depth).  A type-level `deps` list can express neither,
                 so the ownership-TRANSITION free — freeing the store a binding is about to
                 stop pointing at — reads THIS and not `deps`.
+  (O-Detach)    DETACH AFTER THE READS.  A binding's DETACH — the free, sentinel or
+                re-allocation that stops it naming its current store — is sequenced AFTER
+                every read of that binding by the value being assigned to it.  A lowering
+                that must detach early hoists those reads into temporaries first; one that
+                cannot hoist defers the detach past the assignment.  Detaching before the
+                reads is never admissible, and DECLINING the detach to avoid the hazard
+                trades the wrong answer for a retained store rather than resolving it.
 ```
 
 **In words.** There is a real oracle, and it is not the dep list. `deps` is a cheap

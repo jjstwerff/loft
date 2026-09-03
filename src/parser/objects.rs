@@ -3629,6 +3629,12 @@ impl Parser {
                         &[Value::Var(*v_nr), Value::Var(orig)],
                     ));
                     list.push(self.cl("OpInitRefSentinel", &[Value::Var(*v_nr)]));
+                    // Enforces @FR-O-Detach: the detach lands AFTER the field initialisers
+                    // have been hoisted into temporaries, so a field that reads the parameter
+                    // (`p = S{x: p.x + 1}`) reads it while it is still intact.  Its twin for
+                    // every other right-hand side is `expressions.rs::rebind_local_heap_param`,
+                    // which lost that ordering and answered null (loft#1312).
+                    //
                     // The literal builds IN PLACE, so the detach has to sit here, between
                     // the construction's own ops.  Tell `parse_assign_op` — which carries
                     // the same lowering for every OTHER right-hand side — that this

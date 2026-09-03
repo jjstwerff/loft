@@ -2311,6 +2311,29 @@ use a separate collection or add after the loop"
         );
         let detach = self.cl("OpInitRefSentinel", &[Value::Var(var_nr)]);
         let assign = std::mem::replace(code, Value::Null);
+        // Enforces @FR-O-Detach — the detach is sequenced AFTER every read of the binding by
+        // the value being assigned to it.  `free, detach, assign` is only correct while the
+        // RHS does not read `var_nr`: the detach sentinels the slot, so a RHS that reads it
+        // reads `null`.  Measured on `p = mk(p.a + 1)`, which answered `null` on BOTH backends
+        // with no diagnostic while `p = Big{a: p.a + 1, …}` answered correctly — the literal
+        // lowering in `objects.rs` is this same rule's other copy and hoists its field reads
+        // into temporaries before detaching (loft#1312).
+        //
+        // The hoist is what that copy does, spelled for an arbitrary RHS: evaluate into a temp
+        // while the binding is still intact, then detach, then adopt.  It is the compiler
+        // applying the workaround a user would write by hand (`t = mk(p.a + 1); p = t`), which
+        // is what makes the target shape a proven artifact rather than a guess.
+        if let Value::Set(dst, rhs) = &assign
+            && *dst == var_nr
+            && rhs.reads_var(var_nr)
+        {
+            let tp = self.vars.tp(var_nr).clone();
+            let hoisted = self.vars.work_refs(&tp, &mut self.lexer);
+            let eval = Value::Set(hoisted, rhs.clone());
+            let adopt = Value::Set(var_nr, Box::new(Value::Var(hoisted)));
+            *code = Value::Insert(vec![eval, free, detach, adopt]);
+            return;
+        }
         *code = Value::Insert(vec![free, detach, assign]);
     }
 

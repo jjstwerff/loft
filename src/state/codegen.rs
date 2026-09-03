@@ -2163,6 +2163,10 @@ impl State {
                     .iter()
                     .any(|a| a.hidden && stack.function.var(&a.name) == v)
             };
+            // Enforces @FR-O-Detach — this is the site that gets the order right, and the
+            // one the other three are measured against: the free is DEFERRED past the
+            // assignment when the RHS reads `v`, rather than the slot being prepared first.
+            //
             // #330 — ONE recursive "does the RHS read v?" predicate decides
             // the free strategy (shared with scopes' #316 transition logic).
             // The old top-level-arg S1 scan missed struct-literal field

@@ -698,6 +698,10 @@ impl Output<'_> {
             // a same-store NRVO alias, else deep-copy. JOIN (witnessed): adopt a
             // null/fresh `_src` that does NOT alias the borrowed arg `witness`, else
             // (it aliases the witness) materialise — the join's owned/borrow split.
+            // Enforces @FR-O-Detach: the COPY arm clears `_dst` in place, so it may not run
+            // where `_src` still names that store — the destination would be prepared before
+            // the value it is copying from is read.
+            //
             // The passthrough both arms share: a NULL return has no store to copy, and a
             // return already living in the destination's own store IS the destination's
             // store.  Spelled once because the witnessed arm is a REFINEMENT of the default

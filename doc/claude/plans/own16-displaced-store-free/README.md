@@ -553,7 +553,25 @@ assignment, so where the RHS reads the binding the free must be DECLINED, and th
 is retained. Fix the ordering and the decline is unnecessary — which is why the plan predicted
 step 4 collapses if the belief is fixed at its source rather than guarded at each site.
 
-**Proposed:** state `(O-Detach)` in [ownership.md](../../formal/ownership.md) as a rule with an
-`@FR-` tag, and cite it at all four sites. Two of them already obey it and would gain a citation
-naming what they obey; the drift between sites 1 and 2 becomes a fold rather than a bug hunt.
-Not yet landed — a new formal rule is a design act, recorded here for the decision.
+**LANDED 2026-09-03.** `(O-Detach)` is a rule in [ownership.md](../../formal/ownership.md) and
+`@FR-O-Detach` resolves to **4** citation sites — the three that obey it now name what they obey,
+and the fourth is the fix.
+
+`expressions.rs::rebind_local_heap_param` now hoists: when `rhs.reads_var(var_nr)` it emits
+`Insert([eval_into_temp, free, detach, adopt])` instead of `Insert([free, detach, assign])`. That
+is the compiler applying by itself the workaround a user would write by hand
+(`t = mk(p.a + 1); p = t`), which is why the target shape was a proven runnable artifact rather
+than a guess.
+
+⚠ **D-own-16 did NOT move: still 9/9/4/3/3.** The speculation that fixing the belief at its
+source would collapse it was wrong, and the rule text says why — `codegen.rs` already OBEYS
+`(O-Detach)`, by *declining* the free when the RHS reads the binding, and the rule calls that
+trade non-resolving rather than compliant. So D-own-16 keeps its own step, and the open question
+it now faces is sharper than "does it need a runtime witness": **does the same hoist close it?**
+That is a measurement, not an inference, and it has not been taken.
+
+⚠ **The guard is red on the builds either side of the defect, for opposite reasons**, which is
+the pair that makes it a guard rather than a snapshot. On `2026.8.0` the LOCALITY cell fails —
+the caller reads 20 after twenty rebinds, so the rebind was reaching past the callee; @PLN87 P2.1
+fixed that and broke the order; both pass now. So the P2.1 work was a real fix that carried a
+real regression, and the guard pins both halves.
