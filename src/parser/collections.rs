@@ -3310,8 +3310,8 @@ use #count instead"
                 // diagnostic, no crash (loft#1310).
                 //
                 // `None` is the answer for the types that have no dedicated test — an
-                // `integer`, a `text`, a bare `Reference` — and those keep the conversion
-                // path, which is correct for them and is what already worked.
+                // `integer`, a `text`, a bare `Reference` — and those take `null_test`'s
+                // own documented fallthrough, the comparison against the TYPED null.
                 let test_for =
                     if let Some(is_null) = self.null_test(Value::Var(for_var), &var_tp, false) {
                         is_null
