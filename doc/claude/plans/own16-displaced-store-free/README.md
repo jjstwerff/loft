@@ -501,3 +501,59 @@ and re-read rather than threading it. That is the divergence this section exists
   them.
 - [QUALITY.md](../../QUALITY.md) — the per-execution ownership witness cluster.
 - [OWNERSHIP_MODEL.md](../../OWNERSHIP_MODEL.md), [CODEGEN_METHOD.md](../../CODEGEN_METHOD.md).
+
+---
+
+## The shared belief, named — and the four sites that hold or violate it
+
+Hunted 2026-09-03, after the third instance turned up. The belief, as the code held it:
+
+> *A binding may be detached — freed, sentinel'd, reallocated — before the value being assigned
+> to it is computed.*
+
+It is false whenever that value READS the binding. The correct rule, which the two working sites
+already obey and which nothing in `formal/` currently states:
+
+> **(O-Detach)** — a binding's detach (free / sentinel / re-allocation) is sequenced AFTER every
+> read of that binding by the value being assigned to it.
+
+### The sites
+
+| # | site | what it does | verdict |
+|---|---|---|---|
+| 1 | `parser/expressions.rs::rebind_local_heap_param` | `Insert([free, detach, assign])` — the detach precedes the whole RHS | **VIOLATES** — loft#1312 |
+| 2 | `parser/objects.rs` @PLN87 P2.1 literal path | hoists the field initialisers into temps, THEN detaches | obeys |
+| 3 | `state/codegen.rs` reassign path | asks `rhs_reads_v`, stashes, frees AFTER via `OpFreeRefIfDistinct` | obeys |
+| 4 | `generation/dispatch.rs` adopt-vs-copy | cleared `_dst` while `_src` named the same store | violated; fixed in `a3f12cd5` |
+
+Sites 1 and 2 are **the same lowering written twice** — `objects.rs` says so in its own comment
+(*"tell `parse_assign_op` … which carries the same lowering for every OTHER right-hand side"*)
+and passes `rebind_lowered` between them so the pair is not applied twice. One copy hoists and
+one does not, which is precisely the drift the two-spellings hazard predicts.
+
+### The construction to recover, read off the working sibling
+
+```
+BROKEN (call RHS)                          WORKING (literal RHS)
+  OpFreeRefIfDistinct(p, w)                  __t = OpAddInt(OpGetInt(p,0), 1)   <- read hoisted
+  OpInitRefSentinel(p)          <- p null    OpFreeRefIfDistinct(p, w)
+  p = n_mk(OpGetInt(p,0)+1, …)  <- reads     OpInitRefSentinel(p)
+                                             OpDatabase(p, …); OpSetInt(p, 0, __t)
+```
+
+So the cure for site 1 is not a new predicate but the ordering site 3 already computes:
+`Insert([hoist_rhs_to_temp, free, detach, assign_from_temp])`, taken only when
+`rhs.reads_var(var_nr)` — `Value::reads_var` (`data.rs:1011`) is the shared question, already
+unified once and already consulted by ~20 callers.
+
+### Why this is the unit of work, not loft#1312 alone
+
+D-own-16's open half is the SAME ordering seen from the leak side: the free is emitted before the
+assignment, so where the RHS reads the binding the free must be DECLINED, and the displaced store
+is retained. Fix the ordering and the decline is unnecessary — which is why the plan predicted
+step 4 collapses if the belief is fixed at its source rather than guarded at each site.
+
+**Proposed:** state `(O-Detach)` in [ownership.md](../../formal/ownership.md) as a rule with an
+`@FR-` tag, and cite it at all four sites. Two of them already obey it and would gain a citation
+naming what they obey; the drift between sites 1 and 2 becomes a fold rather than a bug hunt.
+Not yet landed — a new formal rule is a design act, recorded here for the decision.
