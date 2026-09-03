@@ -1139,7 +1139,15 @@ impl Parser {
         // also produce OpGetDbRef but on the hidden `__closure` param —
         // excluded so captured-Reference reassignment keeps its existing
         // copy semantics.
-        if matches!(f_type, Type::Reference(_, _))
+        //
+        // `base()`, because a nullable pointer field arrives as
+        // `Optional(Reference(…))` — the same peel the sibling arms below take.
+        // `@FR-L-Null` gives `reference<T>?` the same 12-byte pointer bytes as
+        // `reference<T>`, so a repoint is the same OpSetDbRef; unpeeled, the arm
+        // fell through to `copy_ref` and deep-copied the source through the
+        // field's CURRENT value, which for a terminator is the null sentinel —
+        // an out-of-bounds store index on both backends (loft#1316).
+        if matches!(f_type.base(), Type::Reference(_, _))
             && op == "="
             && let Value::Call(d, args) = to.unspan()
             && self.data.def(*d).name() == "OpGetDbRef"

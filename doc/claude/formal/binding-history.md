@@ -6,12 +6,40 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **1** (D-bind-11); D-bind-12 and D-bind-13 each opened and CLOSED the same day.
+OPEN: **1** (D-bind-11); D-bind-12, D-bind-13 and D-bind-14 each opened and CLOSED the
+same day.
 D-const-2 opened and CLOSED the same day (2026-09-01), found by the Store Locks
 reference review.
 B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
 opened and closed 2026-08-05); B-Ref-AnnotationOnly is enforced in every position, not
 only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
+
+> **D-bind-14 — CLOSED (2026-09-03, loft#1316) — `(B-Ref-StoredRef)` admitted its one
+> position only when the field came LAST, and not at all once the field was nullable.**
+>
+> The rule names exactly one place a prefix `&` is legal outside a `&τ` binding — a
+> struct-literal field whose declared type is `reference<τ>` — and it conditions that on the
+> FIELD'S TYPE and on nothing else. Two things were read instead.
+>
+> **The terminator.** The gate accepted the `&` only when the next token was `;` or `}`, which
+> is what ends an ASSIGNMENT right-hand side. A field value also ends at the `,` before the
+> next field, so `Trail { l: &pool[0], n: 4 }` was refused while the identical literal with
+> the fields swapped compiled. Field ORDER is not in the rule, and a reader hitting this reads
+> it as "`&` does not work here" rather than "`&` does not work last-but-one".
+>
+> **The type.** The same gate matched `Type::Reference` unpeeled, so a field declared
+> `reference<τ>?` — whose bytes `L-Null` makes identical to `reference<τ>`'s — was not a
+> `reference<τ>` field as far as the gate was concerned, and the `&` the pointer field exists
+> for had no spelling once the `?` was written. That is D-layout-4's mechanism reaching this
+> doc: one IR spelling, two source notions, and a site that reads neither the share marker nor
+> `base()`.
+>
+> **Status — CLOSED.** The position is named rather than inferred: `AmpHead` is `No`,
+> `AssignRhs` or `StoredRefField`, and the terminator set is read off it, so "which tokens end
+> this operand" is answered once per position instead of once per gate. The type test peels.
+> Guard: `tests/scripts/1316-a-nullable-reference-field-is-still-a-pointer.loft` (the nullable
+> half, both backends) and `tests/scripts/150-amp-head-position.loft` (the position family,
+> which already owned the `&`-in-a-field cell and gains the not-last one).
 
 > **D-const-2 — CLOSED (2026-09-01) — `(Const-Value)` went unenforced on two
 > append routes, and both mutated the CALLER while the parameter said `const`.**

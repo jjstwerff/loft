@@ -61,6 +61,31 @@ function could hand back a value whose type promised it was there, and the null 
 with nothing to read. It is the same notice the scalars get, and like theirs it is a warning:
 your program still runs, and the fix is the `?` the message names.
 
+### A linked list can say its last link is empty
+
+```loft
+struct Node { value: integer, next: reference<Node>? }   // now compiles
+```
+
+`reference<T>` is loft's shared pointer between records, and until now it could not be
+written `reference<T>?`. On a type that points back at itself — a list, a tree, anything with
+a terminator — that spelling did not compile at all, so the last link had to be a `null` in a
+field whose type said it could not be one. Every linked structure in the language was written
+that way because there was nothing else to write.
+
+The `?` had been quietly turning the pointer into a *copy*. `reference<Leaf>?` and `Leaf?`
+were laid out identically, so on a type where it did compile, writing the `?` gave you a
+private copy of the record instead of a link to it — the same program printed `11` where a
+pointer prints `22`, and nothing said the sharing was gone. A `?` on a pointer now means only
+what it says: the pointer may be absent. It keeps its own bytes, `&pool[i]` still binds it, and
+a write through the record is still seen through the field.
+
+Two smaller things fell out. `&` in a struct literal works wherever the field's type asks for
+it, not only when that field is written last — `Trail { link: &pool[0], id: 7 }` was rejected
+for the comma. And the null-into-a-record warning above now reaches the linked-list terminator
+too, naming `reference<Node>?` — the field's own type, where it used to name `Node?`, which is a
+different type and, on a self-referencing struct, not one you can write.
+
 ### A `for` loop over your own iterator yields every kind of item
 
 ```loft

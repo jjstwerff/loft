@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{
-    Level, LexItem, Parser, Parts, Type, Value, diagnostic_format, v_block, v_if, v_loop, v_set,
+    AmpHead, Level, LexItem, Parser, Parts, Type, Value, diagnostic_format, v_block, v_if, v_loop,
+    v_set,
 };
 use crate::data::Deps;
 
@@ -2611,7 +2612,11 @@ use a separate collection or add after the loop"
         // where a leading `&` binds a reference, so open the head there.  A COMPOUND
         // assignment (`b += &a`) is excluded on purpose: it mutates `b`, it does not
         // give `b` a reference type, so it is not a bind site.
-        self.amp_head = op == "=";
+        self.amp_head = if op == "=" {
+            AmpHead::AssignRhs
+        } else {
+            AmpHead::No
+        };
         // Name the destination this assignment writes, for this RHS only, along with
         // whether it REPLACES it.  A comprehension that reads its own destination needs
         // both: `=` repoints the target at a fresh store, `+=` appends into what it already
@@ -2622,7 +2627,7 @@ use a separate collection or add after the loop"
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
         self.assign_target = prev_target;
         self.assign_replaces = prev_replaces;
-        self.amp_head = false;
+        self.amp_head = AmpHead::No;
         self.expected = prev_read_target;
         // A `& vector` bind (`d = &v` / `d = &self.data`): the source is a vector lvalue
         // and the `&` opts INTO aliasing (B-Ref-Write — the write-through "north star" —
@@ -5238,12 +5243,16 @@ use a separate collection or add after the loop"
         // `parse_assign_op`.  Open the head here too so a bare `&a;` / block-final
         // `{ &a }` still reaches the D-bind-7 guard below with its own message,
         // instead of being reported here as a sub-expression use.
-        self.amp_head = started_with_amp;
+        self.amp_head = if started_with_amp {
+            AmpHead::AssignRhs
+        } else {
+            AmpHead::No
+        };
         // loft#1205 — only a discharge built by THIS left-hand side may be peeled below,
         // so the flag starts clear rather than carrying an earlier statement's answer.
         self.last_place_discharge = false;
         let mut f_type = self.parse_operators(&Type::Unknown(0), code, &mut parent_tp, 0);
-        self.amp_head = false;
+        self.amp_head = AmpHead::No;
         self.in_tuple_lhs = saved_tuple_lhs;
         if let (Type::RefVar(_), Value::Var(v_nr)) = (&f_type, &code) {
             self.vars.in_use(*v_nr, true);

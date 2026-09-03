@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{
-    Data, IntegerSpec, Level, OPERATORS, Parser, Position, Type, Value, diagnostic_format, rename,
-    to_default, v_block, v_if, v_set,
+    AmpHead, Data, IntegerSpec, Level, OPERATORS, Parser, Position, Type, Value, diagnostic_format,
+    rename, to_default, v_block, v_if, v_set,
 };
 
 // Operator parsing and type dispatch.
@@ -1053,7 +1053,17 @@ impl Parser {
                         || self.lexer.peek_token("*=")
                         || self.lexer.peek_token("%=")
                         || self.lexer.peek_token("/=");
-                    let next_terminates = self.lexer.peek_token(";") || self.lexer.peek_token("}");
+                    // What ENDS the operand depends on the position the head opened in.
+                    // A statement ends at `;` (a block-final one at `}`); a struct-literal
+                    // field value ends at the `,` before the next field just as well.
+                    // `@FR-B-Ref-StoredRef` admits the `&` on the strength of the FIELD'S
+                    // TYPE and conditions it on nothing else, so a `reference<τ>` field
+                    // that is not the LAST field in the literal is the same legal position
+                    // — `TrailNN { l: &pool[0], n: 4 }`.  Reading only `;`/`}` refused it,
+                    // which made the rule's one admitted position depend on field order.
+                    let next_terminates = self.lexer.peek_token(";")
+                        || self.lexer.peek_token("}")
+                        || (at_head == AmpHead::StoredRefField && self.lexer.peek_token(","));
                     // An invalid `&` must not stay "pending": clear the flag in each
                     // error branch so it cannot leak into `parse_assign_op`'s
                     // reference-lowering (1160) or the D-bind-7 bare-statement guard
@@ -1069,7 +1079,7 @@ impl Parser {
                              not an assignment target; drop the `&` (the binding is already linked)"
                         );
                         self.amp_pending = false;
-                    } else if !next_terminates || !at_head {
+                    } else if !next_terminates || at_head == AmpHead::No {
                         // `next_terminates` alone accepts the LAST operand of any
                         // expression (`b = 1 + &a;`, `b += &a;`, `S { x: &a }`, a
                         // block-final `{ 1 + &a }`) — it only proves nothing FOLLOWS

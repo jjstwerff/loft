@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 365 | 341 | **24** |
+| 366 | 342 | **24** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -2419,7 +2419,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 684 | 328 | 5 | **351** |
+| 683 | 328 | 5 | **350** |
 
 The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.
 
@@ -2455,21 +2455,39 @@ Two callers now share it — `mark_borrowed_captures`, deciding which captures g
 `capture_is_adopted`, deciding whether a frame-exit free may be suppressed — and a capture the
 first skips must not be one the second adopts, or the store is freed twice.
 
-loft#1313 adds two to the total and both to the OPAQUE column, and here that is the right
-answer rather than a debt.  `Parser::field_has_no_nullable_spelling` asks whether a field is the
-`reference<T>` back-pointer of a cycle, and `Data::reference_cycle_back_to` walks those edges;
-both read `Type::Reference` bare.  Peeling would be WRONG in both.  The first exists to separate
-a slot whose nullability is merely undeclared from one that HAS no nullable spelling, so the
-absence of the wrapper is the whole question — an `Optional(Reference)` field is already the
-declaration the screen would be telling the author to write.  The second cannot meet a peeled
-edge at all: a cycle containing an `Optional` reference edge is unconstructible, because that is
-exactly the field loft#1316 reports a layout error for, so `.base()` would widen the walk to
-edges no program can build.
+loft#1313 added two to the total and both to the OPAQUE column, with the argument for it
+written at each site — and loft#1316 then DELETED both, which is worth keeping rather than
+quietly editing out.  `Parser::field_has_no_nullable_spelling` asked whether a field was the
+`reference<T>` back-pointer of a cycle and `Data::reference_cycle_back_to` walked those edges;
+both read `Type::Reference` bare, and the case for not peeling was that the absence of the
+wrapper WAS the question.  The second half of that case was: *a cycle containing an `Optional`
+reference edge is unconstructible, because that is exactly the field loft#1316 reports a layout
+error for.*
 
-So this is the screen answering rather than accusing: two new discriminating functions, both
-opaque, both with the argument for it written at the site.  The column counts sites that decide a
-shape without peeling; it is not a defect list, and a site whose question IS the wrapper belongs
-there.
+That premise was a defect, not a fact about the language.  `reference<T>?` failed layout because
+the `?` was routed to `@FR-L-Null-Tag`'s inline tagged form when `@FR-L-Null` governs a pointer;
+with that fixed the edge is perfectly constructible, the field HAS a nullable spelling, and both
+functions lose their subject.  So the screen's verdict was sound and its INPUT was not — an
+argument for opacity that leans on "no program can build that shape" is only as good as the
+reason the shape cannot be built, and here the reason was a bug one layer down.  That is the
+transferable part: when a site justifies reading a type bare by saying the wrapped form is
+impossible, the claim to check is the impossibility, not the reading.
+
+So the column counts sites that decide a shape without peeling; it is not a defect list, and a
+site whose question IS the wrapper belongs there — but a site whose question is *"can this
+wrapper exist?"* is making a claim the register can falsify.
+
+The row moves to `683 | 328 | 5 | 350` on that change, and the arithmetic is worth reading
+because it is not "one fixed". Two opaque functions LEFT (both deleted), and one arrived:
+`Parser::cure_spelling`, which reads `Type::Reference` bare and must, because the whole
+question it answers is *which spelling is this field declared in* — the marker, not the peel,
+is what it tests. Net −2 opaque, +1 opaque, and a total down by one because `cure_spelling`
+replaces two functions with one. The three sites the fix actually corrected — the field
+rewrite, the `&` head gate, the pointer repoint — do not appear in either column: none of
+them is a whole FUNCTION discriminating on a `Type`, they are arms inside larger bodies. That
+is the B7i masking this screen already warns about, seen from the other side: the unit is the
+function, so a defective arm inside a body that peels somewhere else is invisible here. The
+count is a queue of predicates, not a census of the shapes a `τ?` can reach.
 
 loft#1291 moved one site OFF the opaque column — the first entry here that does.
 `Type::is_amp_rebindable_heap` is the one home for *"is this a `&` parameter whose whole-value

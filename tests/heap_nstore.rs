@@ -264,64 +264,88 @@ fn a_nullable_target_is_silent() {
     }
 }
 
-/// A `reference<T>` field on a reference CYCLE back to its own struct has no nullable spelling
-/// — `struct Node { next: reference<Node>? }` fails layout validation (loft#1316) — so the
-/// linked-list terminator has to be a bare `null` in a non-null slot and there is nothing the
-/// author can write instead.  Reporting it would name `Node?` as the cure, and that does not
-/// compile; a diagnostic whose cure is rejected is worse than silence.
+/// A `reference<T>` field on a reference CYCLE back to its own struct warns like any other
+/// field, and the cure it names is one the author can actually write.
 ///
-/// ⚠ These cells FLIP when loft#1316 closes: the suppression goes, and each of them starts
-/// warning like any other field.  That is the intended outcome, not a regression.
+/// It was SILENT while `struct Node { next: reference<Node>? }` failed layout validation: the
+/// linked-list terminator had to be a bare `null` in a non-null slot, so the notice would have
+/// named a cure that does not compile, and a diagnostic whose cure is rejected is worse than
+/// silence.  loft#1316 gave the field its nullable spelling — `@FR-L-Null` keeps a pointer's own
+/// bytes and spends `nullref` on absence — so the suppression went with it.
+///
+/// The cure is checked as TEXT, not just for presence.  `Type::name` renders a pointer field as
+/// the bare struct name, which would print `Node?` — and `next: Node?` is the INLINE tagged form
+/// (`@FR-L-Null-Tag`), which on a self-referencing struct has no finite size and does not
+/// compile.  Naming `reference<Node>?` is the whole point of the flip.
 #[test]
-fn a_field_with_no_nullable_spelling_is_silent() {
-    let cells: [(&str, &str); 2] = [
+fn a_cyclic_reference_field_warns_and_names_a_cure_that_compiles() {
+    let cells: [(&str, &str, &str); 2] = [
         (
             "direct self-reference",
+            "Node",
             "struct Node { value: integer, next: reference<Node> }
              fn main() { c = Node { value: 4, next: null }; print(\"{c.value}\\n\"); }
 ",
         ),
         (
             "mutual reference",
+            "B",
             "struct A { v: integer, b: reference<B> }
              struct B { v: integer, a: reference<A> }
              fn main() { x = A { v: 1, b: null }; print(\"{x.v}\\n\"); }
 ",
         ),
     ];
-    for (cell, src) in cells {
+    for (cell, cure, src) in cells {
         for backend in BACKENDS {
             let tag = format!("cyc_{}_{}", cell.replace([' ', '-'], "_"), &backend[2..]);
             let (ok, _out, err) = run(src, backend, true, &tag);
             assert_eq!(
                 heap_notices(&err),
-                0,
-                "a {cell} field cannot be declared `τ?` (loft#1316), so the notice would name a \
-                 cure that does not compile ({backend})\n{err}"
+                1,
+                "a {cell} field now has a nullable spelling, so it warns like any other \
+                 ({backend})\n{err}"
+            );
+            assert!(
+                err.contains(&format!("declare it `reference<{cure}>?`")),
+                "the cure must name the FIELD's own type, not the bare struct — a `{cure}?` \
+                 field is the inline tagged form and does not compile here ({backend})\n{err}"
             );
             assert!(ok, "the {cell} cell must still run on {backend}\n{err}");
         }
     }
 }
 
-/// The discrimination that keeps the exclusion above from swallowing the rule: it is the CYCLE
-/// that decides, not the `reference<…>` spelling and not the type being recursive.
+/// Every position warns, and each one names its own type back.
+///
+/// The cyclic field above used to be the exception; now that it is not, what is left to keep
+/// straight is which SPELLING the cure is given in.  A POINTER field and an EMBEDDED one are
+/// one `Type::Reference` apart only by the `u16::MAX` share marker, and their cures are not
+/// interchangeable: `reference<Leaf>?` keeps the pointer (`@FR-L-Null`), `Leaf?` is the inline
+/// tagged record (`@FR-L-Null-Tag`).  Handing a pointer field the second compiles and silently
+/// swaps sharing for a copy, which is the defect loft#1316 closed — so the message naming the
+/// wrong one would re-open it in prose.
 #[test]
-fn the_cycle_is_what_excuses_the_field_nothing_else() {
-    // An ACYCLIC `reference<T>` field: `reference<Leaf>?` is a type that exists, so it warns.
+fn each_position_names_its_own_type_as_the_cure() {
+    // An ACYCLIC `reference<T>` field: a pointer, so its cure carries the former.
     let acyclic = "struct Leaf { v: integer }
                    struct Holder { l: reference<Leaf> }
                    fn main() { h = Holder { l: null }; print(\"{h.l == null}\\n\"); }
 ";
-    // A RETURN of the cyclic type: `-> Node?` compiles fine, so this one warns too — the
-    // exclusion is about the field position on a cycle, not about the type.
+    // An EMBEDDED struct field: no marker, no former — the bare name IS its type.
+    let embedded = "struct Leaf { v: integer }
+                    struct Emb { l: Leaf }
+                    fn main() { e = Emb { l: null }; print(\"{e.l == null}\\n\"); }
+";
+    // A RETURN of a cyclic type, which was never in the exclusion: `-> Node?` always compiled.
     let cyclic_return = "struct Node { value: integer, next: reference<Node> }
                          fn f() -> Node { return null; }
                          fn main() { print(\"{f() == null}\\n\"); }
 ";
-    for (cell, src) in [
-        ("acyclic field", acyclic),
-        ("cyclic type's return", cyclic_return),
+    for (cell, cure, src) in [
+        ("acyclic pointer field", "reference<Leaf>?", acyclic),
+        ("embedded struct field", "Leaf?", embedded),
+        ("cyclic type's return", "Node?", cyclic_return),
     ] {
         for backend in BACKENDS {
             let tag = format!("disc_{}_{}", cell.replace([' ', '\''], "_"), &backend[2..]);
@@ -330,6 +354,10 @@ fn the_cycle_is_what_excuses_the_field_nothing_else() {
                 heap_notices(&err),
                 1,
                 "the {cell} has a nullable spelling and must still warn ({backend})\n{err}"
+            );
+            assert!(
+                err.contains(&format!("declare it `{cure}`")),
+                "the {cell} must be cured in its OWN spelling, `{cure}` ({backend})\n{err}"
             );
             assert!(ok, "the {cell} cell must still run on {backend}\n{err}");
         }

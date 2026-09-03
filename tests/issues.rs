@@ -16083,15 +16083,20 @@ fn run() -> integer {
 
 #[test]
 fn issue_328_reference_self_recursive_walk() {
+    // The terminator is a `null`, so the field is declared `reference<Node>?` and the walker
+    // `Node?` — the shapes the language gained in loft#1316.  Both were unwritable before
+    // (`reference<Node>?` failed layout), which is why this walk used to carry an undeclared
+    // null in a non-null slot.  The subject is unchanged: the recursive walk over a
+    // self-referencing pointer field, which is #328's codegen path.
     code!(
-        "struct Node { value: integer, next: reference<Node> }
+        "struct Node { value: integer, next: reference<Node>? }
 fn run() -> integer {
     c = Node { value: 4, next: null };
     b = Node { value: 2, next: c };
     a = Node { value: 1, next: b };
     m = a.next;
     m.value = 20;
-    cur = a;
+    cur: Node? = a;
     total = 0;
     while cur != null {
         total = total + cur.value;
@@ -16110,10 +16115,10 @@ fn run() -> integer {
 #[test]
 fn issue_328_self_reassign_through_reference_field() {
     code!(
-        "struct Node { value: integer, next: reference<Node> }
+        "struct Node { value: integer, next: reference<Node>? }
 fn run() -> integer {
     b = Node { value: 2, next: null };
-    x = Node { value: 1, next: b };
+    x: Node? = Node { value: 1, next: b };
     x = x.next;
     x.value
 }"

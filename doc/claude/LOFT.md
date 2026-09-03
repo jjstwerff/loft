@@ -223,6 +223,7 @@ internal utility should one become necessary.
 | `spatial<T[x,y]>` / `spatial<T[x,y,z]>` | Spatial keyed collection, 1–3 coordinate axes, Morton/Z-order radix tree |
 | `trie<T[field]>`                   | Text-keyed collection on ONE field — exact lookup, key order, and prefix |
 | `reference<T>`                     | Reference (pointer) to a stored `T` record            |
+| `reference<T>?`                    | The same pointer, allowed to be absent — a list terminator |
 | `iterator<T, I>`                   | Iterator yielding `T` using internal state `I`        |
 | `fn(T1, T2) -> R`                  | First-class function type                             |
 
@@ -1881,6 +1882,15 @@ changes what `e` reads) — see the swap warning under § Vectors.  Other
 explicit aliasing: `reference<T>` struct fields share by pointer (#328),
 and closure captures of struct references share the live record (capture
 rules above).
+
+**A `reference<T>` field may be nullable, and the `?` costs it nothing.**
+`next: reference<Node>?` is the linked-list terminator: the field keeps the
+pointer's own bytes and spells absence inside them, so it is the same size
+and still shares.  This works on a type that points back at ITSELF — a list,
+a tree, a mutual pair — where a plain `Node?` field cannot, because that one
+stores the record INLINE and a record cannot contain itself.  The two are
+different types, not two spellings of one: `reference<Leaf>?` links, `Leaf?`
+copies.
 ```
 x = 42
 name = "hello"

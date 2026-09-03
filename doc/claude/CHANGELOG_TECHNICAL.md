@@ -9,6 +9,62 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A `reference<T>` field may be nullable, and `?` no longer turns a pointer into a copy (2026-09-03)
+
+loft#1316.  `@FR-L-Null` and `@FR-L-Null-Tag` split on a property of the type: a τ that reserves
+a null VALUE keeps its own bytes and spends the reserved pattern on absence; only a struct stored
+INLINE needs a discriminant.  A stored reference reserves `nullref`, so `reference<T>?` is the
+first case.  `synth_nullable_struct_fields` gave it the second.
+
+Both notions are `Type::Reference` in the IR, told apart by the FIELD's `u16::MAX` share marker
+(#328) — the same bit `Data::has_value_cycle` reads to skip pointer edges — and the rewrite
+discarded the deps with `_`.  Measured with `LOFT_DUMP_TYPES=1`:
+
+```
+HolderN { l: reference<Leaf>  }   ->  HolderN[12/4]  l:dbref[0]
+HolderQ { l: reference<Leaf>? }   ->  HolderQ[16/8]  l:__nullable<Leaf>[0]   <- was
+HolderS { l: Leaf             }   ->  HolderS[8/8]   l:Leaf[0]
+HolderSQ{ l: Leaf?            }   ->  HolderSQ[16/8] l:__nullable<Leaf>[0]
+```
+
+`reference<Leaf>?` and `Leaf?` were byte-identical, so the `?` erased the pointer.  Three sites
+read the field type without peeling and each produced a different face of it:
+
+* **`typedef.rs::synth_nullable_struct_fields`** tagged the field.  A struct stored inline cannot
+  contain itself, so on a reference graph returning to its own struct the field had no finite
+  size: `struct Node { next: reference<Node>? }` failed with *"field 'next' has no position
+  (u16::MAX)"*.  That is why loft#1313 had to suppress `(N-Store)` for the shape — the cure it
+  would have named did not compile.
+* **`objects.rs`'s `&` head gate** matched `Type::Reference` unpeeled, so `&pool[i]` in a literal
+  — the one position `@FR-B-Ref-StoredRef` admits — was refused once the `?` was written.
+* **`collections.rs`'s #328 repoint arm** matched unpeeled too, so `h.l = &pool[i]` fell through
+  to `copy_ref`: an `OpCopyRecord` through the field's CURRENT value.  Against the pre-fix build
+  that compiles and answers plausibly — the same program prints `11` where a pointer prints `22`
+  — so declaring `?` replaced sharing with a copy in silence.
+
+All three read the marker or peel with `base()`.  `@FR-L-Null-Which` is added to the contract:
+the split is decidable from the field, and `synth_nullable_struct_fields` is its one home.
+
+Consequences.  loft#1313's suppression (`field_has_no_nullable_spelling` +
+`Data::reference_cycle_back_to`) is deleted, and its guard cells in `tests/heap_nstore.rs` flip
+from silent to warning.  The notice they now emit had the same defect one layer up: `Type::name`
+renders a pointer field as the bare struct name, so the cure read `Node?` — the inline form,
+which on a self-referencing struct does not compile at all and on an acyclic one compiles while
+swapping the pointer for a copy.  `Parser::cure_spelling` names the field's own type.  Two
+`issue_328` corpus tests adopt the spelling they always wanted (`next: reference<Node>?`, walker
+`cur: Node?`); both were carrying an undeclared null because nothing else was writable.
+
+Alongside, `@FR-B-Ref-StoredRef` gains the half its gate was missing (D-bind-14): the rule admits
+the `&` on the FIELD'S TYPE and says nothing about field order, but the gate accepted only `;`/`}`
+as the terminator — the tokens that end an ASSIGNMENT — so `Trail { link: &pool[0], id: 7 }` was
+refused for its comma while the same literal with the fields swapped compiled.  `AmpHead` names
+the position (`No` / `AssignRhs` / `StoredRefField`) and the terminator set is read off it.
+
+Guard: `tests/scripts/1316-a-nullable-reference-field-is-still-a-pointer.loft`, falsified at
+`3bae617b` (interpret exit 1 -> 0, native exit 1 -> 0), controls being the `?`-less pointer field
+(still shares) and the embedded `T?` (still copies).  `tests/scripts/150-amp-head-position.loft`
+gains the not-last cell.  All 42 published libraries pass unchanged.
+
 ### A fn-level `@EXPECT_FAIL` no longer costs its file the whole native suite (2026-09-03)
 
 loft#1311.  The documented contract is that a fn-level tag excuses one function and *"sibling

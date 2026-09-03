@@ -145,6 +145,30 @@ struct DeferredPar {
     count: u16,
 }
 
+/// Which binding position a leading `&` may occupy at the point the operand parser
+/// reaches it, and therefore which token ENDS the operand the `&` annotates.
+///
+/// `@FR-B-Ref-AnnotationOnly` makes `&` a type annotation rather than an operator, so it
+/// is legal only at a bind site; `@FR-B-Ref-StoredRef` names the one other position, a
+/// struct-literal field whose declared type is `reference<τ>`.  The two positions END
+/// differently — a statement at `;`, a field value at `,` as well — and peeking the next
+/// token alone cannot tell the whole right-hand side from the LAST operand of one.  Naming
+/// the position is what lets the guard ask both halves of that question from one value.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub(crate) enum AmpHead {
+    /// Not a bind site.  A leading `&` here is the parse error the rule names — an
+    /// operand, a call argument, a collection element, a condition.
+    #[default]
+    No,
+    /// A plain `=` right-hand side (`a = &b`).  A compound assignment is deliberately not
+    /// one: it mutates the target rather than giving it a reference type.
+    AssignRhs,
+    /// A struct-literal field declared `reference<τ>` (`@FR-B-Ref-StoredRef`).  The rule
+    /// admits the `&` on the strength of the FIELD'S TYPE and says nothing about where the
+    /// field sits in the literal, so a field followed by another field ends at its `,`.
+    StoredRefField,
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct Parser {
     pub todo_files: Vec<(String, u16)>,
@@ -346,7 +370,7 @@ pub struct Parser {
     /// element, a parenthesis), sees `false` and is rejected.  Without it the guard
     /// could only peek the NEXT token, which cannot tell the whole RHS from the LAST
     /// operand of one — the hole that let `b = 1 + &a;` compile.
-    pub(crate) amp_head: bool,
+    pub(crate) amp_head: AmpHead,
     /// The local an assignment is writing, for the duration of that assignment's right-hand
     /// side; `u16::MAX` outside one.  Paired with [`Parser::assign_replaces`], which says
     /// whether the write REPLACES the target (`=`, which repoints it at a fresh store) or
@@ -1226,7 +1250,7 @@ impl Parser {
             pending_param_locks: Vec::new(),
             pending_param_positions: Vec::new(),
             amp_pending: false,
-            amp_head: false,
+            amp_head: AmpHead::default(),
             assign_target: u16::MAX,
             assign_replaces: false,
             rebind_lowered: u16::MAX,
@@ -3976,6 +4000,28 @@ impl Parser {
     /// Reporting where there was silence is a strict gain; refusing what a shipped package
     /// already relies on is a break the freeze forbids, and raising the tier later is
     /// COMPATIBILITY.md's process rather than this function's call.
+    /// The spelling a `τ?` cure has to be written in for this target.
+    ///
+    /// [`Type::name`] renders `Type::Reference(d, …)` as the bare struct name, which is what an
+    /// EMBEDDED field is called (`item: Row` really is a `Row`) and not what a POINTER field is
+    /// (`link: reference<Row>`).  One IR spelling carries both notions and the `u16::MAX` share
+    /// marker (#328) is what tells them apart — the same bit `Data::has_value_cycle` reads to
+    /// skip pointer edges.
+    ///
+    /// Naming the wrong one hands the reader a cure that does not do what the message says.
+    /// `@FR-L-Null` gives `reference<Row>?` the pointer's own bytes with `nullref` for absence,
+    /// while `@FR-L-Null-Tag` makes `Row?` an INLINE tagged record: applying `Row?` to a pointer
+    /// field compiles and silently replaces sharing with a copy, and on a struct whose reference
+    /// graph returns to itself it does not compile at all.
+    fn cure_spelling(&self, target_tp: &Type) -> String {
+        match target_tp {
+            Type::Reference(d, deps) if deps.is_pointer_marker() => {
+                format!("reference<{}>", self.data.def(*d).name())
+            }
+            other => other.name(&self.data),
+        }
+    }
+
     fn n_store_violation(
         &mut self,
         value_tp: &Type,
@@ -4112,7 +4158,7 @@ impl Parser {
             && matches!(value_tp, Type::Null)
             && (Self::is_non_null_scalar(target_tp) || heap_target)
         {
-            let nm = target_tp.name(&self.data);
+            let nm = self.cure_spelling(target_tp);
             // @PLN102 (N-Store) Phase 1 — same warn/error split as the DN3 branch: a bare `null`
             // into a NON-narrow scalar target warns (the slot reserves its null distinctly, so it
             // holds null and reads back null); a NARROW width keeps the hard error (no room).
