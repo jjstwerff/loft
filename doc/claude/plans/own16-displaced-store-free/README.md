@@ -5,14 +5,30 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # D-own-16 — a binding releases what it displaces, when the displacing value is known
 
-> **STATUS (2026-09-03): step 0 RUN, step 0.5 FIXED; steps 1-6 not started.** Takes its `@PLN` number when filed as a
+> **STATUS (2026-09-03): steps 0, 0.5, 1 DONE; step 4a LANDED for three of five cells.**
+> `MintOnly` 9 → 0, `JoinSelf` 9 → 0, `MaybeBorrow` 4 → 0, both backends, values unchanged.
+> Guard: `tests/scripts/1085b-a-nullable-local-frees-what-it-displaces.loft`.
+> **The route is NOT step 4a as designed.** No IR stash temp was added and no witness was
+> widened — a variable reaches either backend only through a `Value::Set` (`intervals.rs`
+> sets `first_def` there alone; `slots_v2.rs:127` skips `u32::MAX`; native's `declared` comes
+> only from `Set` paths), which is why both `OpPutRef` attempts produced an unslotted temp.
+> The working stash needs no IR variable at all: it is the operand stack on the interpreter
+> and a Rust `let _old_<name>` on native.  So the fix is the peel + `!is_captured` + routing
+> nullable locals to the GUARDED post-free.  Steps 2, 3 and 5 are moot for these cells;
+> step 6's register update is done.  RESIDUAL: the `ParamBorrow` row (deps name `p`), which
+> is the only row the per-run witness is still for.
+>
+> Superseded below: step 4a's premise that the ordering had to be rebuilt, and step 0's
+> `3 → 0` exit criterion for the `ParamBorrow` cell.
+>
+> Takes its `@PLN` number when filed as a
 > `loft-lang/plans` issue. Closes the two open shapes of
 > [`formal/ownership.md`](../../formal/ownership.md) `D-own-16`, and with them two thirds of the
 > per-execution-witness cluster ([QUALITY.md](../../QUALITY.md)); `D-clo-7` and `D-clo-14` are the
 > third and are **out of scope here** — see § What is not in this family.
 >
-> Every number below was measured on `9528ddc4` before the design was written. No step in
-> § Steps has been run.
+> Every number below was measured on `9528ddc4` before the design was written, i.e. BEFORE the
+> steps above ran; where a later measurement contradicts one, the § Steps result section says so.
 
 ## What is broken, in one line
 

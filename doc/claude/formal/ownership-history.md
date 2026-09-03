@@ -588,6 +588,49 @@ values are correct throughout on both backends.  What it got wrong is the bounda
 repro shows the shape someone happened to write, never the shape the defect covers, so the
 first probe of a filed leak should be the same program with the interesting feature REMOVED.
 
+**NARROWED AGAIN 2026-09-03: three of the five cells CLOSED, and the route is not the witness
+this entry proposed.**  `MintOnly` (a minting call that reads the local) 9 → 0, the
+self-referential join `c = mk(i) ?? c` 9 → 0, and the conditional borrow 4 → 0 — on BOTH
+backends, every value unchanged.  Guard:
+`tests/scripts/1085b-a-nullable-local-frees-what-it-displaces.loft`.
+
+The cure is REACHABILITY plus LICENCE, and the release-after-the-value-is-known machinery was
+already correct — the entry above says the reassignment "does not reach" `OpBindOrCopy`, but
+the machinery it actually never reached is `stash_old_for_post_free` → `OpFreeRefIfDistinct`,
+gated shut by `owned_ref`'s UNPEELED shape test.  Three things had to hold together:
+
+1. the peel (`Reference` / record `Enum` only — `Vector` stays out, as recorded above);
+2. `!is_captured` — @FR-L-CapHeap;
+3. a nullable local takes the GUARDED post-free rather than the unconditional pre-`Set`
+   `OpFreeRef`, whose whole-store release is sound only for a local that ALWAYS holds a store.
+
+**That third point answers the table above, and answers it differently than the table
+predicted.**  *"Excluding the first two still left the third"* assumed each borrow kind needs
+excluding BY SHAPE.  It does not: routing the nullable local to the guarded free means
+`free_displaced` consults distinctness, free-protection AND @FR-H-Free's `store(r) ≠ 0` side
+condition, so the `__lift_N` row and the reflection row both DECLINE at runtime with no shape
+test at all (`pln127-reflect-consumer.loft` and `1085-ret-buffer-passthrough-free.loft` clean
+under `LOFT_STRICT_STORES=1`).  ⚠ Which of those guards declines the reflection handle was not
+instrumented — only that it declines.  The CAPTURE row is the one that genuinely needs the
+static test, because there the displaced store IS distinct and IS unprotected while still
+being shared; that is why `!is_captured` is load-bearing and why the bare peel answers 2 where
+cell 6 must answer 1.
+
+Each of the three is falsified: drop the capture test and cell 6 breaks; drop the post-free
+routing and `1085` refuses at `op=OpFreeRef`; drop `free_displaced`'s stack-ref guard and the
+same file refuses at `op=OpFreeRefIfDistinct`.  The opcode MOVING between those last two is
+what says they are two sites rather than one defect seen twice.
+
+**STILL OPEN, and narrower than the entry has ever been — two rows:**
+
+- `d: S? = p; d = mint(d, i)` — a local that first BORROWS a parameter.  Its dep list names
+  `p` forever, so the empty-deps clause declines; @FR-O-Latest is a per-RUN fact a
+  flow-insensitive dep list cannot carry.  This row is what the per-run witness above is
+  actually for, and it is the only one left that wants it.
+- a local a lambda CAPTURES retains what it displaces — correct, not a leak to close: @FR-L-CapHeap
+  makes the value SHARED, so declining is the right answer and its right answer keeps a store.
+  It therefore cannot live in the script corpus at all, whose leak gate is absolute.
+
 ### D-own-15 — CLOSED (2026-08-27, loft#1119): the ORACLE answered differently depending on who asked
 
 `@FR-O-Oracle` is the claim that there is ONE own-vs-borrow derivation. That claim needs the

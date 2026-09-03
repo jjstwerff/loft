@@ -2239,11 +2239,13 @@ impl State {
             // against the closure's capture-time DbRef.  The licence has to come from a
             // per-run witness.
             let owned_ref = (matches!(
-                stack.function.tp(v),
-                Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
-            ) || crate::parser::vectors::is_keyed(stack.function.tp(v).base()))
+                stack.function.tp(v).base(),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            ) || matches!(stack.function.tp(v), Type::Vector(_, _))
+                || crate::parser::vectors::is_keyed(stack.function.tp(v).base()))
                 && stack.function.tp(v).depend().is_empty()
                 && !stack.function.is_skip_free(v)
+                && !stack.function.is_captured(v)
                 && !is_hidden_buf_arg;
             // An `OpNewRecord` RHS returns an INTERIOR ref into an existing
             // container's backing store (a vector element / nested field), so
@@ -2261,8 +2263,19 @@ impl State {
                 value.unspan(),
                 Value::Call(fn_nr, _) if stack.data.def(*fn_nr).name() == "OpNewRecord"
             );
+            // A NULLABLE heap local's slot does not always hold an owned heap store: on the
+            // paths where it never took one it holds the null sentinel, and where its record
+            // was stack-allocated it holds a stack-record ref.  The pre-Set free below is
+            // UNCONDITIONAL and whole-store, which is sound only for a local that always
+            // holds a store of its own — a dense `Reference` does, an `Optional` one does
+            // not.  Route it to the runtime-GUARDED post-free instead, which is the same
+            // answer `rhs_is_new_record` above takes for the same reason: `free_displaced`
+            // no-ops on a same-store, free-protected or stack-record displaced ref, where
+            // `OpFreeRef` can only refuse it loudly (`#306`).  @FR-H-Free's `store(r) ≠ 0`
+            // side condition is what separates the two frees; see `Stores::free_displaced`.
+            let nullable_local = matches!(stack.function.tp(v), Type::Optional(_));
             let mut stash_old_for_post_free = false;
-            if owned_ref && (rhs_reads_v || rhs_is_new_record) {
+            if owned_ref && (rhs_reads_v || rhs_is_new_record || nullable_local) {
                 let free_pos = stack.var_pos(v);
                 stack.add_op("OpVarRef", self);
                 self.code_add(free_pos);

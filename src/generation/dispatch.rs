@@ -199,9 +199,10 @@ impl Output<'_> {
                 // Both backends leaked identically here, which is @FR-O-NoDiverge holding: they
                 // read the same fact and it was short by the same kinds.
                 && (matches!(
-                    variables.tp(var),
+                    variables.tp(var).base(),
                     Type::Reference(_, _) | Type::Enum(_, true, _)
                 ) || crate::parser::vectors::is_keyed(variables.tp(var).base()))
+                && !variables.is_captured(var)
                 && variables.tp(var).depend().is_empty()
                 // @FR-O-Proxy — the empty dep list is only a PROXY for ownership, so a
                 // free taken on it must consult @FR-O-Override.  The interpreter's twin

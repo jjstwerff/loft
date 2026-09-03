@@ -876,13 +876,10 @@ impl Stores {
     /// the side condition simply does not license — the same shape [`Self::free_named`]'s
     /// `u16::MAX` sentinel check treats as nothing-to-do.
     ///
-    /// ⚠ No shape reaches this guard today: it is the transition free's half of a condition
-    /// only [`Self::free_named`] can currently meet, because the type-shape gate upstream
-    /// (`state/codegen.rs`'s `owned_ref`) does not admit a nullable heap local, so such a
-    /// local never reaches the transition free at all.  Measured, not assumed — the whole
-    /// script suite is byte-identical with the guard removed.  It is stated here because a
-    /// side condition the rule names belongs beside the two that are enforced, not because
-    /// a defect was closed.
+    /// A nullable heap local reaches here holding a stack record on the paths where it never
+    /// took a store of its own — an ordinary state for it, not a wrong free.  Removing this
+    /// guard turns `1085-ret-buffer-passthrough-free` red with a `#306` refusal at
+    /// `OpFreeRefIfDistinct`, which is the falsification record for it.
     ///
     /// The third guard is @FR-H-Free's other side condition: a store a CALLER marked
     /// protected-from-free for the duration of a call is not this frame's to release.  A `&`
