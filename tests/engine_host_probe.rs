@@ -47,7 +47,7 @@ fn on_call(args: vector<text>) {{
     let mut parser = Parser::new();
     parser.parse_dir("default", true, false).expect("stdlib");
     parser.parse(&tmp.to_string_lossy(), false);
-    loft::scopes::check(&mut parser.data);
+    loft::scopes::check(&mut parser.data, &mut parser.database);
     let mut data = parser.data;
     let mut state = State::new(parser.database);
     compile::byte_code(&mut state, &mut data);

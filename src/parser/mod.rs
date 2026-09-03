@@ -3285,7 +3285,7 @@ impl Parser {
                     ));
                 }
             }
-            scopes::check(&mut self.data);
+            scopes::check(&mut self.data, &mut self.database);
             if debug {
                 self.output(&f, types, from)?;
             }

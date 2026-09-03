@@ -330,9 +330,23 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 
 ## Deviations
 
-**OPEN: 1.**
-- **D-bind-16** — `(B-Copy)` does not hold when the right-hand side is a branch JOIN:
-  `b = if c { a } else { d }` aliases `a` (loft#1321, both backends, present on 2026.8.0)
+**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
+[binding-history.md](binding-history.md).
+
+**D-bind-16 CLOSED 2026-09-03** (loft#1321): `(B-Copy)` is read ARM BY ARM at a branch join.
+Every arm tail a plain bind would copy — a variable, a parameter, a loop element, a call whose
+record return the caller must copy — is rewritten into the bound spelling on a temp
+(`scopes.rs::lift_join_arm_tails`), bound by that plain bind's own lowering, and the join
+borrows the temps; an arm a plain bind would view stays a view (`(B-View-Depth)`'s `vv[0] ??
+[0]` is the control).  It is the copy face of ownership.md's D-own-8, closed by the same
+change; the reverted attempt's three facts (a `??` hoists its subject; the join is not to be
+read whole; a call arm may return a borrow) are all honoured by binding each arm through the
+lowering that already knows them.  Guard:
+`tests/scripts/1321-a-joined-binding-copies-what-a-plain-bind-copies.loft`, falsified at
+26d17f4b on both backends.  ⚠ A branch consumed as a call ARGUMENT is NOT copied: an argument
+aliases (calls.md F-ParamHeap).  ⚠ And a binding the join is not the one assignment of keeps
+the runtime join bind it had (`r = x; for … { r = v[i] ?? x }` copies through
+`OpBindOrCopy`): one variable carries one type-level fact for all its Sets.
 
 > **A zero here is a claim to re-measure, and this is what the oracle covers.** The `&`
 > ladder (`pln87_link_l*`), the const quadrants (`40-const-fields`), the copy-vs-view boundary

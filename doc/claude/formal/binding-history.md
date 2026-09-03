@@ -6,16 +6,16 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **1** (D-bind-16); D-bind-11 CLOSED 2026-09-03 (below); D-bind-12, D-bind-13, D-bind-14
-and D-bind-15 each opened and CLOSED the same day.
+OPEN: **0** — D-bind-11 and D-bind-16 CLOSED 2026-09-03 (below); D-bind-12, D-bind-13,
+D-bind-14 and D-bind-15 each opened and CLOSED the same day.
 D-const-2 opened and CLOSED the same day (2026-09-01), found by the Store Locks
 reference review.
 B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
 opened and closed 2026-08-05); B-Ref-AnnotationOnly is enforced in every position, not
 only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
 
-> **D-bind-16 — OPEN (2026-09-03, loft#1321) — `(B-Copy)` does not hold when the
-> right-hand side is a branch JOIN.**
+> **D-bind-16 — CLOSED 2026-09-03 (opened the same day, loft#1321) — `(B-Copy)` did not hold
+> when the right-hand side is a branch JOIN.**
 >
 > `b = if c { a } else { [0, 0] }` ALIASES `a`, and so does the struct spelling, while the
 > plain bind of the identical value one line away copies. Present on the shipped 2026.8.0,
@@ -58,6 +58,26 @@ only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
 > walk said "copy" and the caller then freed at scope exit what it had borrowed — loft#974's
 > guarded behaviour, caught by `accessor_borrow::an_accessors_returned_view_names_its_parameter`.
 > Trading a silent alias for a wrong free is not an improvement.
+>
+> **CLOSED 2026-09-03, with the copy face and the free face as one change.**  The rule the
+> attempt implemented stands; what changed is WHERE it is applied.  Instead of deciding the
+> join's copy and then re-deriving each arm's copy in both backends, each qualifying arm tail
+> is rewritten into the bound spelling on a temp — `{ __lift_N = a; __lift_N }` — and the temp
+> is bound by the SINGLE bind's own lowering (`scopes.rs::lift_join_arm_tails`, ownership.md's
+> D-own-8 record has the whole arm-kind table).  The three facts above are then honoured for
+> free: a `??` hoist is a variable the join hands back and is left alone unless its subject
+> was a call the caller must copy; the join is never read whole; and a call arm that returns a
+> borrow is bound by the same codegen arm that copies `it = get(b)` — no syntactic walk decides
+> anything.  A record arm copies at the bind on its first and every later execution; a vector
+> arm is refilled into a function-scoped buffer by `OpReplaceVector`, whose element type the
+> scope pass now reads from the store registry it was handed for the purpose.
+>
+> Measured on both backends: the filed matrix (vector and struct, `if` and `match`, the `??`
+> spelling), a parameter arm and a loop-element arm against their plain binds, the accessor and
+> closure view arms (which also closes an interpreter/native split: the interpreter viewed and
+> native copied), a null nullable subject binding its default, and the return position.
+> `(B-View-Depth)`'s `c = vv[0] ?? [0]` stays a view.  Guard
+> `1321-a-joined-binding-copies-what-a-plain-bind-copies.loft`, falsified at 26d17f4b.
 >
 > So the predicate the next attempt wants is not the syntactic walk but *"does this arm's
 > VALUE borrow?"*, which the return TYPE already answers — loft#974 is the change that put

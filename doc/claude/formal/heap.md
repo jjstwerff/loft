@@ -262,9 +262,10 @@ contract (this file). What remains is the SAME meta-deviation, not a heap-specif
   supplies the contract the oracle's heap-touching cases are read against.
 - **The lifetime side has the strongest standing proof, and it is not complete.** The free
   discipline's soundness (`H-Sound`) rests on [ownership.md](ownership.md), whose register was
-  at 0 when this line was written (2026-07-04) and is at **`OPEN: 1`** today, of which
-  `D-own-8` — a Join's ownership fact holding on one path only — is a path-completeness gap,
-  and path-completeness is what `H-Sound` consumes — so the discharge is real but qualified.
+  at 0 when this line was written (2026-07-04), re-opened, and back at **`OPEN: 0`** on
+  2026-09-03: the last entry, `D-own-8` — a Join's ownership fact holding on one path only —
+  was a path-completeness gap, which is what `H-Sound` consumes, and it closed by giving every
+  path of a value branch its own binding — so the discharge is real again.
   ⚠ A claim about another doc's register goes stale silently; re-read the register rather
   than this sentence.
 

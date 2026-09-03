@@ -323,7 +323,7 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
     if p.diagnostics.level() >= loft::diagnostics::Level::Error {
         return Err(Error::from(std::io::ErrorKind::InvalidData));
     }
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let end_def = p.data.definitions();
@@ -3414,7 +3414,7 @@ fn a_c_binding_is_refused_by_name_on_a_wasm_target() {
         "the declaration itself must stay legal on every target: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let main_nr = p.data.def_nr("n_main");

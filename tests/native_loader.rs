@@ -151,7 +151,7 @@ fn main() {
         "diagnostics: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
 
@@ -214,7 +214,7 @@ fn main() {
         "diagnostics: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
 
@@ -387,7 +387,7 @@ fn main() {
         "diagnostics: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
 
@@ -469,7 +469,7 @@ fn main() {
     p.database = db;
     p.parse_str(native_decl, "native_decl", false);
     p.parse_str(source, "test", false);
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
 
@@ -507,7 +507,7 @@ fn run_native_test(native_decl: &str, source: &str) {
     p.parse_str(source, "test", false);
     let has_errors = p.diagnostics.lines().iter().any(|l| l.starts_with("Error"));
     assert!(!has_errors, "diagnostics: {:?}", p.diagnostics.lines());
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     extensions::load_all(&mut state, vec![lib_path]);
@@ -815,7 +815,7 @@ fn a_sibling_compile_does_not_take_over_this_program_s_stub_set() {
         false,
     );
     assert!(pb.diagnostics.is_empty(), "B: {:?}", pb.diagnostics.lines());
-    scopes::check(&mut pb.data);
+    scopes::check(&mut pb.data, &mut pb.database);
     let mut state_b = State::new(pb.database.clone());
     byte_code(&mut state_b, &mut pb.data);
 
@@ -832,7 +832,7 @@ fn a_sibling_compile_does_not_take_over_this_program_s_stub_set() {
         false,
     );
     pa.parse_str("fn main() {\n    x = 1;\n}\n", "a_main", false);
-    scopes::check(&mut pa.data);
+    scopes::check(&mut pa.data, &mut pa.database);
     let mut state_a = State::new(pa.database.clone());
     byte_code(&mut state_a, &mut pa.data);
 

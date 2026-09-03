@@ -2781,15 +2781,28 @@ impl Parser {
             // `Definition::returns_borrowed_view` — a hidden attr is not a borrow.
             let owned_vector = matches!(lhs_type, Type::Vector(_, dep)
                 if dep.iter().all(|&d| self.vars.is_caller_hidden_buf(d)));
+            // A RECORD subject that is a CALL is what a plain bind would leave the local
+            // OWNING — a fresh mint is adopted, a borrowed or `Join` return is deep-copied by
+            // codegen (`Definition::return_adopts_fresh_store` is the split), and a fn-ref
+            // call's is the store minted for that call or `OpBindOrCopy`'s answer — so the
+            // temp that binds it owns a store on every arm too (`@FR-O-Complete`: the fact
+            // per binding, per path).  Marked never-free, the arm that minted was owned by
+            // nobody: `r = g(none) ?? d` held one record per call to frame exit, and
+            // `r = mk(i) ?? d` was clean only while `r` freed on the mint arm a store it
+            // merely borrowed on the other.  A projection subject (`o.inner ?? d`) stays the
+            // view it is (`@FR-B-View`), and a bare variable is never hoisted at all.
+            let owned_record = matches!(lhs_type, Type::Reference(_, _) | Type::Enum(_, true, _))
+                && match code.unspan() {
+                    Value::Call(d, _) => self.data.def(*d).is_loft_defined(),
+                    Value::CallRef(_, _) => true,
+                    _ => false,
+                };
             if matches!(
                 lhs_type,
-                Type::Text(_)
-                    | Type::Reference(_, _)
-                    | Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Enum(_, true, _),
-            ) || (matches!(lhs_type, Type::Vector(_, _)) && !owned_vector)
+                Type::Text(_) | Type::Sorted(_, _, _) | Type::Hash(_, _, _) | Type::Index(_, _, _)
+            ) || (matches!(lhs_type, Type::Reference(_, _) | Type::Enum(_, true, _))
+                && !owned_record)
+                || (matches!(lhs_type, Type::Vector(_, _)) && !owned_vector)
             {
                 self.vars.set_skip_free(tmp);
             }

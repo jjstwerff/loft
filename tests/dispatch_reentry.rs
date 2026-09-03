@@ -116,7 +116,7 @@ fn reentry_is_a_dispatch_not_a_rewrite() {
         "probe source must parse clean: {:?}",
         p.diagnostics.lines()
     );
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database.clone());
     state.static_fn("n_probe_stash", n_probe_stash);
     state.static_fn("n_probe_stash_vec", n_probe_stash_vec);

@@ -373,7 +373,7 @@ fn run_loft(src: &str) {
         "the program did not compile: {:?}",
         p.diagnostics.lines()
     );
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
     let mut state = loft::state::State::new(p.database);
     loft::compile::byte_code(&mut state, &mut p.data);
     state.execute("test", &p.data);

@@ -2820,10 +2820,17 @@ impl State {
         if matches!(stack.function.tp(v).base(), Type::Text(_)) {
             self.gen_set_first_text(stack, v, value);
         } else if matches!(
-            stack.function.tp(v),
+            stack.function.tp(v).base(),
             Type::Reference(_, _) | Type::Enum(_, true, _)
         ) && *value == Value::Null
         {
+            // `.base()`: a `τ?` local's null-init is the same sentinel write as `τ`'s.  Asked
+            // bare, an `Optional(Reference)` temp fell to the generic fallthrough, which lands
+            // the shared null store (`Stores::null()`, a real slot with `rec == 0`) in the
+            // slot instead of the sentinel — and the scope-exit `OpFreeRef` of that temp then
+            // trips the stack-store net (BUG #306).  User code never reaches this arm with a
+            // `τ?` (a `P? = null` is parsed to `OpNullRefSentinel`); a compiler temp's
+            // preamble does.
             self.gen_set_first_ref_null(stack, v);
         } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
             && let Value::Call(op_nr, _) = value.unspan()

@@ -6,12 +6,12 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **1** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a
-single cell — an inline-minting
-`match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
-known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098).  D-own-26 CLOSED
-2026-09-03: its gate existed all along and was measuring nothing, and every proxy site now
-declares which of the four facts it reads — the "eleven of seventeen" was a hand count.
+OPEN: **0** — D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
+single cell, its Face B CLOSED the same day, that cell's one known SYMPTOM closed 2026-08-26
+with the FACT still wrong, loft#1098, and the fact itself closed by giving every path of a
+value branch its own binding — below).  D-own-26 CLOSED 2026-09-03: its gate existed all
+along and was measuring nothing, and every proxy site now declares which of the four facts it
+reads — the "eleven of seventeen" was a hand count.
 D-own-16 CLOSED
 2026-09-03, its BOUNDARY corrected and its wider half closed 2026-08-30, with three cures
 measured and ruled out along the way, loft#1200 —
@@ -1337,6 +1337,101 @@ follows the precedent already in the tree and is the recommendation; it is also 
 changes call-site arity for a resolved fn-ref target, which `parser/mod.rs`'s
 `h5_has_lowered_caller` deliberately avoids today, so it wants a design pass rather than a
 patch.
+
+**CLOSED 2026-09-03 — neither cure above; the structural one, widened to every arm KIND.**
+loft#1320's own principle closes the rest: *"give each path a binding"* was written for a
+fn-ref `??` arm, and the residual was every other arm whose SINGLE bind would leave the
+binding owning a store while the join read the arm as a borrow.  `scopes.rs::arm_bind` now
+answers for the whole table, and the temp is always bound by the single bind's own lowering —
+nothing re-derives a copy or an adoption:
+
+| arm tail | before (both backends) | now |
+|---|---|---|
+| fn-ref call, `Join` | lifted (loft#1320) | unchanged; a multi-assigned base no longer declines it |
+| fn-ref call, `Owned` (`m(0)` beside `cp`, or beside `g(some)`) | store table exhausted at 140 000 | owned temp, freed |
+| fn-ref call, `Borrowed` record (`h(bag) ?? d`) | interpreter VIEWED, native COPIED and leaked | owned temp; codegen's `callee_of` arm copies on both |
+| fn-ref call, `Borrowed` collection delivered into the call's buffer (`{ q.items }`) | leaked one store per call, even at a plain bind | owned temp / the plain bind's deps stripped (`callref_delivers_collection`) |
+| fn-ref call, raw keyed or index VIEW (`{ q.m }`, `{ w[0] }`) | — | never lifted, never freed (see the witnessed-lift regression below) |
+| named call, record `Borrowed` / `Join` (`get(bag) ?? d`, loft#1323's `d(some)`) | interpreter viewed / 250 records accumulated in one store | owned temp; codegen copies |
+| named call, record `Owned`, or any named collection | clean — the caller's `__ref_N` buffer is the owner | unchanged |
+| a plain VARIABLE (loft#1321), local / parameter / loop element — for a binding the join is the ONE assignment of | ALIASED the arm | record: `{ __lift_N = x; __lift_N }`, copied at the bind; vector: refilled into a function-scoped buffer by `OpReplaceVector` |
+| a plain VARIABLE where the binding is ALSO assigned elsewhere as an owner (`r = x; for … { r = v[i] ?? x }`) | the runtime join bind (`OpBindOrCopy`) copies for a record; a vector's arms are materialised into the local's own store | unchanged — lifting there turned one binding's fact into a borrow at every Set and orphaned the plain copy (`85-runtime-join-loop-copy-view` said so, one store per call) |
+| a `??` hoist of a projection (`vv[0] ?? [0]`) | view | unchanged — `(B-View-Depth)`'s own spelling |
+| a literal / comprehension | owned by its per-site `__vdb_N` / `__ref_p2_N` | unchanged |
+
+**The joined binding's dep list now names the temps** — for a binding the join is the one
+assignment of.  The variables the arms copied are removed from it where no other arm still
+reads them, and a `??` hoist an arm hands back is added — so `LOFT_VAR_TABLE` reads
+`line def deps=[__lift_1, __vdb_2]` for the shape this entry opened with, which is true on
+both paths.  A binding assigned elsewhere keeps the parser's fact, because a type-level list
+carries ONE fact for every Set of the variable (`(O-Latest)` is the rule that says why), and
+the runtime join bind already answers for it.  The `match` spelling of the literal-mint
+arm still drops the `__vdb_N` dep (`arm_join_type`'s loft#978 strip) and that is the one cell
+where the two spellings' FACTS still differ; its consequence was measured absent a fourth time
+(the buffer is function-scoped and reused in place) and it stays as a note, not a deviation.
+
+**The two declined shapes close by a witness SNAPSHOT, not a witness slot per binding.**  A
+collection local bound from a fn-ref `Join` is freed by identity against the store its base
+named AT THE BIND.  Where the base variable still names that store at every later free —
+assigned once, one base per local — it is the witness, as before.  Where it does not — the
+base is reassigned in the function, or the local is bound at two sites from two bases — a
+`__wit_N` slot (one per local, a never-freed borrow of the base's type) is written beside each
+bind from that bind's base, after the transition free and before the value is computed, and
+both frees compare against it.  Two stale numbers still agree and decline, which is what makes
+a base RE-MINTED while the borrower is live safe (measured with a fresh allocation between
+passes so a wrong free would be reused and read back).  This is `(O-Latest)` — the fact
+belongs to the assignment — carried the way @PLN87's entry stash already carries a
+rebindable PARAMETER's, which is also why loft#1320's parameter-base cells were clean all
+along.
+
+**The `??` hoist temp owns a CALL subject.**  `parser/operators.rs` marked every record
+`__ncc_N` never-free, on the reading that the join's binding would own what the block handed
+it.  It never did: `r = g(none) ?? d` held one record per call to frame exit on the
+interpreter, and `r = mk(i) ?? d` was clean ONLY because `r` freed on the mint arm a store it
+merely borrowed on the other — the same one-path fact this entry is about.  A call subject's
+hoist now owns what a plain bind of that call would (a fresh mint adopted, a borrowed or
+`Join` return deep-copied by codegen, a fn-ref's answered by `OpBindOrCopy`), and releases its
+previous store in the IR before the re-bind, so `--native` — which does not release a
+displaced store on a fn-ref re-bind of a user local (loft#1328, pre-existing) — stays flat
+too.  A projection subject stays the view it is.
+
+**Two regressions the first cut introduced, and what each taught.**
+* *A variable arm in a call ARGUMENT was copied.*  `c = maybe_b(c ?? M {}, i)` (D-own-16's
+  own guard) then handed the callee a temp that died at the statement while `c` still named
+  it — a refused free on the interpreter, `0` for `8` on native.  An argument ALIASES the
+  caller's variable (calls.md F-ParamHeap); the rewrite in argument position now lifts calls
+  only.  The lesson is the peer session's from loft#1318 the same afternoon: statement
+  CONTEXT is a live axis, and a cell written in the wrong one is vacuous.
+* *The named-owned `??` subject leaked once `r` stopped owning it.*  The buffer's exit free
+  was CONDITIONAL on the hoist no longer naming it (loft#1317's pairing), which is sound only
+  where someone else releases the store — the hoist itself, or the caller when the hoist or a
+  binding that borrows it is what a return hands out.  A never-free hoist that is not handed
+  out leaves that free as the store's sole release, so it is plain there.
+* *A lifted nullable record temp tripped the stack-store net at exit.*  Its preamble
+  `Set(tmp, Null)` reached `gen_set_first_at_tos`'s Reference/Enum arm asked BARE, fell to the
+  generic fallthrough, and held `Stores::null()` (a real slot, `rec == 0`) instead of the
+  sentinel.  Peeled — the same class as the D-layout rows; user code never reaches it because
+  a `P? = null` is parsed to `OpNullRefSentinel`.
+
+**Found beside it, filed, not fixed here.**  loft#1327: a fn-ref whose target cannot be
+RESOLVED — a fn-typed parameter — reads `Owned` at the oracle's fallback and is typed owned by
+the parser (the fn TYPE's return carries no deps), so `u = g(a)` inside `fn plain(a, g)` frees
+the caller's collection on the borrow arm; present on 2026.8.0, `silent-wrong`.  loft#1328:
+the native re-bind release gap above.  And a regression closed on the way (guard
+`1245b-a-witnessed-lift-does-not-free-a-keyed-view`): the witnessed lift loft#1245 opened
+licensed a free for every fn-ref return whose argument set was witnessable, and a collection
+answered as a raw keyed VIEW has no guarded release — `t = h(bag)` with `h = fn(q) { q.m }`
+emptied `bag.m` after one call on both backends, every answer still right.  The witnessed
+route now reaches a record (the bracket refuses the source-free) or a collection `Join` (freed
+by identity) and nothing else.
+
+Guards: `1323-every-arm-of-a-value-branch-has-its-own-binding.loft` (every arm kind, the two
+declined shapes, the hoist, the controls one axis away; falsified at 26d17f4b — both backends
+exit 101/1 → 0, `store table exhausted` → clean), `1321-a-joined-binding-copies-what-a-plain-
+bind-copies.loft` (the copy face; falsified at 26d17f4b, one assertion each backend) and
+`1245b-…` (falsified at 26d17f4b).  The corpus: the scopes subject suite and the full suite
+green; `1085b-…` (D-own-16) red under the first cut and green under the second, which is the
+measurement that named the argument-position axis.
 
 
 

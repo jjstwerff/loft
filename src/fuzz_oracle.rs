@@ -153,8 +153,8 @@ pub fn classify_source_with(src: &[u8], poison: bool) -> Outcome {
 
     // Compile. Still no panic gate: an ICE here is a finding.
     let mut data = p.data;
-    let database = p.database;
-    scopes::check(&mut data);
+    let mut database = p.database;
+    scopes::check(&mut data, &mut database);
     let mut state = State::new(database);
     byte_code(&mut state, &mut data);
     if !has_main {

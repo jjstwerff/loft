@@ -55,7 +55,7 @@ fn main() {
         "diagnostics: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     state.register_native("n_double_it", n_double_it);
     byte_code(&mut state, &mut p.data);
@@ -87,7 +87,7 @@ fn main() {
         "diagnostics: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     state.register_native("n_add_two", n_add_two);
     byte_code(&mut state, &mut p.data);

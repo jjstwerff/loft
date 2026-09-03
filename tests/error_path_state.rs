@@ -36,7 +36,7 @@ fn run_interp(src: &str, name: &str) -> Option<String> {
         "program must parse: {:?}",
         p.diagnostics.lines()
     );
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
     let mut data = p.data;
     let mut state = State::new(p.database);
     compile::byte_code(&mut state, &mut data);

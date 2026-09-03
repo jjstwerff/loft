@@ -18,6 +18,16 @@ The **say-what-you-do** release. Two threads, and they turned out to be one: eve
 the language reference was read against the compiler that ships, and most of what came back
 was not a wrong sentence but a promise nothing was keeping.
 
+**A value chosen by `if`, `match` or `??` now binds like any other value.**
+`b = if c { a } else { [0, 0] }` used to alias `a` — a later write to `a` showed through
+`b` — and a branch mixing a fresh value with an existing one could leak the fresh one on
+every pass of a loop, or copy on one backend and alias on the other.  Every arm now binds
+the way a plain `b = a` or `b = f(x)` would, on both backends: a variable copies, a call's
+result is owned, a view stays a view.  The same rule reaches `x = f(v) ?? d`, a local
+re-bound inside a loop from a closure that may hand its argument back, and a local bound at
+two places from two sources.  A closure answering a view of a keyed field is no longer freed
+under its caller — a regression this cycle had introduced.
+
 **The reference is now read end to end — 40 chapters of 40.** The Standard Library section
 was the last and the worst: its generator read three of the seven `default/*.loft` files, so
 the entire JSON and reflection API — `json_parse`, `to_json`, `json_errors`, `reflect_type`,

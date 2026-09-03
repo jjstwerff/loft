@@ -1902,7 +1902,7 @@ impl ReplSession {
             return None;
         }
         self.counter = next;
-        crate::scopes::check(&mut self.parser.data);
+        crate::scopes::check(&mut self.parser.data, &mut self.parser.database);
         let mut state = State::new(self.parser.database.clone());
         compile::byte_code(&mut state, &mut self.parser.data);
         state.execute_argv(&name, &self.parser.data, &[]);
@@ -2101,7 +2101,7 @@ impl ReplSession {
                 line,
             }]);
         }
-        crate::scopes::check(&mut parser.data);
+        crate::scopes::check(&mut parser.data, &mut parser.database);
         // Discover the file's zero-parameter user test functions (defs whose `position.file`
         // is the canonical path we parsed).
         let in_file = |pf: &str| pf == abs;
@@ -2442,7 +2442,7 @@ impl ReplSession {
     /// hint.
     #[must_use]
     pub fn breakable_lines_in_file(&mut self, file: &str) -> Vec<u32> {
-        crate::scopes::check(&mut self.parser.data);
+        crate::scopes::check(&mut self.parser.data, &mut self.parser.database);
         let mut state = State::new(self.parser.database.clone());
         compile::byte_code(&mut state, &mut self.parser.data);
         state.breakable_lines_in_file(file, &self.parser.data)
@@ -2697,7 +2697,7 @@ impl ReplSession {
             return None;
         }
         self.counter = next;
-        crate::scopes::check(&mut self.parser.data);
+        crate::scopes::check(&mut self.parser.data, &mut self.parser.database);
         let mut build = State::new(self.parser.database.clone());
         compile::byte_code(&mut build, &mut self.parser.data);
         // Force the value above BOTH stores' high-water → its slots are free in live.
@@ -3129,7 +3129,7 @@ impl ReplSession {
             return None;
         }
         self.counter = next;
-        crate::scopes::check(&mut self.parser.data);
+        crate::scopes::check(&mut self.parser.data, &mut self.parser.database);
         let d = self.parser.data.def_nr(&format!("n_{name}"));
         if d == u32::MAX {
             return None;
@@ -3544,7 +3544,7 @@ impl ReplSession {
             // no slot and execution underflows).  A fresh State per input
             // sidesteps the @P381 CONST_STORE re-lock and isolates a runtime
             // panic to the throwaway clone.
-            crate::scopes::check(&mut self.parser.data);
+            crate::scopes::check(&mut self.parser.data, &mut self.parser.database);
             let mut state = State::new(self.parser.database.clone());
             compile::byte_code(&mut state, &mut self.parser.data);
             self.wire_natives(&mut state);
@@ -3690,7 +3690,7 @@ impl ReplSession {
         // *string* above is only for the fn signature + the schema lookup).
         let cap_d = self.parser.data.def_nr(&format!("n_{name}"));
         let ret_ty = self.parser.data.def(cap_d).returned.clone();
-        crate::scopes::check(&mut self.parser.data);
+        crate::scopes::check(&mut self.parser.data, &mut self.parser.database);
         let mut state = State::new(self.parser.database.clone());
         compile::byte_code(&mut state, &mut self.parser.data);
         state.keep_entry_return();
@@ -4551,7 +4551,7 @@ impl ReplSession {
     /// named functions — the engine behind the REPL's `:bytecode` / `:rust` /
     /// `:slots` commands (reuses phase 01's `introspect`).
     pub fn introspect(&mut self, section: Section, fn_filter: Vec<String>) {
-        crate::scopes::check(&mut self.parser.data);
+        crate::scopes::check(&mut self.parser.data, &mut self.parser.database);
         let mut state = State::new(self.parser.database.clone());
         compile::byte_code(&mut state, &mut self.parser.data);
         let end_def = self.parser.data.definitions();

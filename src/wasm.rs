@@ -1010,7 +1010,7 @@ pub fn compile_and_start(files_json: &str) -> String {
         if p.diagnostics.level() >= Level::Error {
             return Err(p.diagnostics.to_string());
         }
-        scopes::check(&mut p.data);
+        scopes::check(&mut p.data, &mut p.database);
         if p.diagnostics.level() >= Level::Error {
             return Err(p.diagnostics.to_string());
         }
@@ -1287,7 +1287,7 @@ fn run_pipeline() -> (String, bool, Vec<AssertResult>) {
     if lvl == Level::Error || lvl == Level::Fatal {
         return (p.diagnostics.to_string(), true, Vec::new());
     }
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let lvl = p.diagnostics.level();
     if lvl == Level::Error || lvl == Level::Fatal {
         return (p.diagnostics.to_string(), true, Vec::new());

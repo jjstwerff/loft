@@ -966,7 +966,7 @@ pub(crate) fn run_tests(
             // puts a diagnostic in front of the reader. It used to sit after the test
             // discovery further down, which is why nothing it produced could ever be seen.
             let scopes_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                scopes::check(&mut p.data);
+                scopes::check(&mut p.data, &mut p.database);
             }));
             if let Err(payload) = scopes_ok {
                 let msg = panic_message(&*payload);

@@ -176,6 +176,33 @@ falsified at `392694cd`.  Six of its shapes leaked on that build and none do now
 channel moves only on the escaping cell, because `make falsify` runs a guard through `--tests`,
 which does not leak-check.
 
+### Every path of a bound value branch has its own binding — D-own-8 and D-bind-16 closed (2026-09-03)
+
+loft#1320 (residual), loft#1321, loft#1323.  `@FR-O-Complete` asks for the ownership fact per
+binding, per path; a binding joined from arms that disagree carried both arms' deps and so
+had ONE fact for two paths — a borrow, which left the arm that minted with no owner (leak) or,
+read the other way, let the join alias the arm a plain bind would have copied (`@FR-B-Copy`).
+The close widens loft#1320's principle to the whole arm-kind table: `Scopes::arm_bind`
+rewrites every arm tail a SINGLE bind would leave owning into `{ __lift_N = <tail>;
+__lift_N }` — a fn-ref call of any ownership, a named call answering a record the caller must
+copy, a plain variable (record: copied at the bind; vector: refilled into a function-scoped
+buffer by `OpReplaceVector`, whose element type the scope pass now reads from the `Stores`
+registry it is handed — `scopes::check(data, database)`) — and the joined binding's dep list
+is rewritten to name the temps.  A view arm stays a view; a branch in call-ARGUMENT position
+lifts calls only (an argument aliases).  The two shapes loft#1320 declined take a witness
+SNAPSHOT (`__wit_N`, written beside each bind from that bind's base — `@FR-O-Latest`); the
+`??` hoist of a call subject owns what a plain bind of it would and releases its previous
+store in the IR (so `--native`, which does not release a displaced store on a fn-ref re-bind
+of a user local — loft#1328 — stays flat); `gen_set_first_at_tos`'s Reference/Enum null-init
+arm is asked through `.base()`; and the loft#1245 witnessed lift no longer frees a fn-ref
+return that is a raw keyed or index VIEW (it emptied the caller's hash — a regression since
+PR #1268).  Two more proxy sites declare `@FR-O-Proxy asks free` and consult the override.
+Guards: `1323-every-arm-of-a-value-branch-has-its-own-binding`,
+`1321-a-joined-binding-copies-what-a-plain-bind-copies`,
+`1245b-a-witnessed-lift-does-not-free-a-keyed-view`, each falsified at 26d17f4b on both
+backends.  Filed beside it: loft#1327 (a fn-ref through a fn-typed PARAMETER reads owned and
+frees the caller's collection — present on 2026.8.0) and loft#1328.
+
 ### A call-shaped argument names the store a fn-ref may hand back (2026-09-03)
 
 loft#1318.  `@FR-O-Oracle` says a call resolves through the callee's return summary, and a

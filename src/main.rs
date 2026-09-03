@@ -8350,7 +8350,7 @@ fn main() {
                     // Slot/scope analysis the cdylib codegen depends on — the run
                     // path runs this before its auto-native build (main.rs), and
                     // without it codegen emits undeclared locals (e.g. `var_me`).
-                    scopes::check(&mut p.data);
+                    scopes::check(&mut p.data, &mut p.database);
                     let export = loft::native_lib::library_export_set(&p.data, &pkg_str);
                     if export.is_empty() {
                         eprintln!(
@@ -9046,7 +9046,7 @@ fn main() {
             std::process::exit(1);
         }
     }
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     // @PLN90 Step 5 — the user-facing copy report, emitted ONCE here (the whole program is now
     // loaded + checked) rather than per file-load. Gated on `--report-copies`; a no-op otherwise.
     loft::use_analysis::report_copies(&p.data);

@@ -187,7 +187,7 @@ impl Program {
         p.parse_dir(stdlib_dir, true, false)
             .map_err(|e| LoftError::Parse(format!("cannot read stdlib at {stdlib_dir}: {e}")))?;
         p.parse_str(source, "<host>", false);
-        scopes::check(&mut p.data);
+        scopes::check(&mut p.data, &mut p.database);
         let mut data = p.data;
         let mut state = State::new(p.database);
         compile::byte_code(&mut state, &mut data);
@@ -227,7 +227,7 @@ impl Program {
             .map_err(|e| {
                 LoftError::Parse(format!("cannot read library at {}: {e}", dir.display()))
             })?;
-        scopes::check(&mut p.data);
+        scopes::check(&mut p.data, &mut p.database);
         let mut data = p.data;
         let mut state = State::new(p.database);
         compile::byte_code(&mut state, &mut data);

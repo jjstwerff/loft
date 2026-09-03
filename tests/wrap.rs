@@ -119,7 +119,7 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
             true,
         )?;
     }
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let end_def = p.data.definitions();
@@ -1002,7 +1002,7 @@ fn main(args: vector<text>) {
         println!("{l}");
     }
     assert!(p.diagnostics.is_empty(), "parse errors");
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let args = ["hello", "world", "foo"]
@@ -1661,7 +1661,7 @@ fn run_test_inner(
     // Scope check and bytecode generation can panic on compiler bugs.
     // When the file has @EXPECT_FAIL annotations, tolerate the panic.
     let compile_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        scopes::check(&mut p.data);
+        scopes::check(&mut p.data, &mut p.database);
         let mut state = State::new(p.database);
         byte_code(&mut state, &mut p.data);
         (state, p.data)

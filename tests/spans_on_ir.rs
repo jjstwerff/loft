@@ -194,7 +194,7 @@ fn main() {
 }
 "#,
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database.clone());
     byte_code(&mut state, &mut p.data);
     // The `/` operator wraps in step 1.B.1 — codegen should record at

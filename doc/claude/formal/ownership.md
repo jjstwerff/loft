@@ -254,21 +254,33 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-**OPEN: 1.**
-- **D-own-8** — a Join's ownership fact is true on one path only.  Its Face A's SYMPTOM —
-  a binding joined from TWO arms carries both arms' deps, reads as a borrow, and the MINTING
-  arm's store is owned by nobody — is CLOSED 2026-09-03 (loft#1320): each qualifying arm tail
-  is given its own binding, so `(O-Complete)`'s *per binding, per path* holds structurally
-  for that shape.  ⚠ Not the dep COLLAPSE — that was fixed 2026-08-26 (`depend_on_all`, six
-  sites and three siblings, asserted on the predicate in `variables/mod.rs`), and a line here
-  said otherwise for an afternoon.  What stays open is narrower: the fact for a value branch
-  whose arm MINTS A LITERAL beside an arm that borrows (loft#1098 closed its symptom, not the
-  fact — the arm rewrite lifts a CALL tail, not a literal), a named local bound at two sites
-  from two different bases and a base reassigned in the function are DECLINED rather than
-  answered, and a NAMED call's record arm still accumulates records in its `__ref_N` buffer
-  (loft#1323).  loft#1321 (the join binding's COPY face) is the same binding from the other
-  side; whichever lands first narrows the other.
-  [ownership-history.md](ownership-history.md) has the matrix
+**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
+[ownership-history.md](ownership-history.md).
+
+> **A zero here is a claim to re-measure, and this is what its oracle covers.**  The join
+> family is pinned by three files: `1323-every-arm-of-a-value-branch-has-its-own-binding`
+> (every arm KIND of a bound value branch, the two shapes loft#1320 declined, the `??` hoist
+> of a call, each on the 65535-store ceiling with a borrow-direction cell beside it),
+> `1321-a-joined-binding-copies-what-a-plain-bind-copies` (the copy face, both spellings,
+> the return position) and `1320-…` (the fn-ref arm that opened it).  Held FIXED, and
+> therefore NOT measured by them: a fn-ref whose TARGET cannot be resolved — a fn-typed
+> parameter or field — which is loft#1327 and reads `Owned` at every site that frees on the
+> oracle; a `&` binding or a struct-`Enum` variable as an arm (they keep the alias they had);
+> and the `--native` release of a displaced store on a fn-ref re-bind of a USER local, which
+> is loft#1328 and which the `??` hoist sidesteps by releasing in the IR.
+
+**D-own-8 CLOSED 2026-09-03** (loft#1320, loft#1321, loft#1323): a Join's ownership fact was
+true on one path only because ONE binding carried two paths.  The close is structural, not
+N-ary: every arm tail of a bound value branch that a single bind would leave OWNING — a fn-ref
+call of any ownership, a named call answering a record the caller must copy, a plain variable
+(`(B-Copy)`) — is given a binding of its own, bound by that single bind's own lowering, and
+the joined binding borrows the temps.  The two shapes loft#1320 declined take the witness the
+base itself could not be: a SNAPSHOT of the store the base named at the bind (`(O-Latest)`,
+the way a rebindable parameter's entry stash already witnesses).  And the `??` hoist that
+binds a CALL subject now owns what a plain bind of that call would.  Measured on both backends
+at the ceiling and in the over-free direction; the full record, including the two regressions
+the first cut introduced and what each taught, is in
+[ownership-history.md](ownership-history.md).
 
 **D-own-26 CLOSED 2026-09-03**, against the bar its own entry set: *"the honest cure is a way
 to fail a build in which a free-deciding site reads the proxy without the veto."* That gate
