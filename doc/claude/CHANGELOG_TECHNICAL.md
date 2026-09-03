@@ -9,6 +9,46 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A closure record suppresses the free of the store it actually holds (2026-09-03)
+
+loft#1324.  A closure record takes over the frame-exit free of its capture's store, and
+`get_free_vars` decided WHICH local that is by walking `function.tp(v).depend()`.  That list is
+one LATEST fact, and `@FR-O-Latest` says so: ownership belongs to the latest assignment *at a
+point*, which a type cannot express.  For a capture reassigned after the closure was built the
+two name different stores, and the suppression landed on the wrong one — in both directions at
+once:
+
+* the store the record ADOPTED kept its frame-exit free, so a closure that ESCAPES its defining
+  frame read a released store — `null(oob)`, both backends, nothing said;
+* the store the local now names had its free suppressed although nobody adopted it, so it leaked
+  one store per reassigned capture — the filed symptom.
+
+The issue asked which of the two stores leaks.  It is the REASSIGNED one; the closure keeps the
+build-time store, which the guard pins by value (`h(0)` reads 42 while `e` reads 52).
+
+`Scopes::capture_build_backing` answers positionally: one pre-order walk of the raw body records
+each local's most recent backing root, and `OpSetDbRef(___clos_N, off, capture)` — the build —
+reads it off.  Computed once per consumer rather than per variable, and all three consumers take
+the same map, because the free emitter, `check_ref_leaks` and `ownership_cfg`'s oracle must
+answer identically or a suppression one of them does not know about reads as a leak (loft#1308's
+lesson, restated here rather than re-derived).
+
+⚠ **Declining the suppression for a reassigned capture also stops the leak and leaves the
+use-after-free exactly where it was.**  That is why the cure names the store instead, and why
+the escaping cell is in the guard: it is the one a decline cannot pass.
+
+⚠ **The keyed kinds diverge on a question this fix does not settle.**  `e = [Row { k: 1, v: 51 }]`
+over a captured `hash` / `sorted` / `index` REFILLS the existing store instead of minting one, so
+the closure reads the reassigned value where the vector and struct spellings read the build-time
+one.  The store-lifetime half is correct either way — no leak, no premature free, both backends —
+so this is a contract question, recorded in `formal/closures.md` under `(L-CapHeap)` and filed.
+
+Guard `tests/scripts/1324-a-reassigned-capture-suppresses-the-store-the-record-holds.loft`,
+12 cells over reassignment count, build order, capture kind, spelling, loop depth and escape;
+falsified at `392694cd`.  Six of its shapes leaked on that build and none do now; the ASSERT
+channel moves only on the escaping cell, because `make falsify` runs a guard through `--tests`,
+which does not leak-check.
+
 ### A call-shaped argument names the store a fn-ref may hand back (2026-09-03)
 
 loft#1318.  `@FR-O-Oracle` says a call resolves through the callee's return summary, and a

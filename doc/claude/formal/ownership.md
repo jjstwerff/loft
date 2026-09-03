@@ -145,7 +145,10 @@ and a decision that reads the wrong one is wrong in the silent direction:
                 DEPTH at which that assignment was taken (`Scopes::owned_refs`, a memo of
                 O-Oracle plus that depth).  A type-level `deps` list can express neither,
                 so the ownership-TRANSITION free — freeing the store a binding is about to
-                stop pointing at — reads THIS and not `deps`.
+                stop pointing at — reads THIS and not `deps`.  The same sentence decides
+                which store a CLOSURE RECORD takes over the free of: the one its capture
+                named AT THE BUILD (`Scopes::capture_build_backing`), not the one the
+                local's dep names at scope exit (loft#1324).
   (O-Detach)    DETACH AFTER THE READS.  A binding's DETACH — the free, sentinel or
                 re-allocation that stops it naming its current store — is sequenced AFTER
                 every read of that binding by the value being assigned to it.  A lowering
@@ -397,6 +400,19 @@ runtime-witness discharge (a separate `OpFreeRefIfDistinct` lemma); proving the 
 analysis directly (the certifier sidesteps it).
 
 ## Conformance
+
+- **A closure record's suppression names the store it holds (`O-Latest`, loft#1324)** — a
+  capture REASSIGNED after the build keeps the build-time store inside the closure (42 while
+  the variable reads 52) and leaves no store unfreed: straight-line, twice over, in a 200-turn
+  loop, at the `|x|` spelling, beside an untouched second capture, and for a closure that
+  ESCAPES its defining frame. Both backends. Guard
+  `tests/scripts/1324-a-reassigned-capture-suppresses-the-store-the-record-holds.loft`,
+  12 cells.
+  ⚠ It closed a use-after-free as well as the filed leak, and that is what says the cure had
+  to NAME the right store rather than decline: the suppression was reading
+  `function.tp(v).depend()`, which for a reassigned capture names the store the local holds
+  NOW, so the store the record ADOPTED kept its frame-exit free and an escaping closure read
+  it released. Declining to suppress stops the leak and leaves that half exactly where it was.
 
 - **A call-shaped argument names its base (`O-Oracle`, loft#1318)** — a fn-ref `??` whose
   argument is `pick(vs, 0)`, `m[k].v` at the hash / sorted / index kinds, `vs[0]`, or a value

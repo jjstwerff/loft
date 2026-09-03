@@ -75,6 +75,21 @@ available). A bare `f` (a function's name used as a value) is a first-class func
                  (L-CapScalar) requires, so no code change closes it).
 ```
 
+⚠ **A REASSIGNMENT of the captured variable is not a mutation-through, and the two are worth
+keeping apart.** `(L-CapHeap)` shares the store, so `b.v = 9` after the capture reads through;
+`b = other` does not, because it rebinds the variable while the closure keeps the `DbRef` it was
+built with. That is what a captured vector and a captured struct do — the closure answers the
+build-time value. It is also the fact that decides which store the record takes over the free of
+([ownership.md](ownership.md) `O-Latest`, loft#1324).
+
+⚠ **The keyed kinds answer differently, and the rule does not yet say which is right.** `e =
+[Row { k: 1, v: 51 }]` over a captured `hash` / `sorted` / `index` REFILLS the existing store
+rather than minting one, so the closure reads the reassigned value where the vector and struct
+spellings read the build-time one. Both are "the closure kept its `DbRef`"; what differs is
+whether a rebind mints. Measured on all three keyed kinds, both backends, and unchanged by
+loft#1324's fix — the store-lifetime half is correct either way, so this is a contract question
+rather than a leak, and it is open.
+
 **In words.** A closure that captures an `integer x` freezes `x`'s value at the moment the closure
 is built (verified: capture, then `x = 20`, still yields `10`). A closure that captures a struct or
 vector shares it — mutating a field of the captured value afterwards shows up when the closure runs

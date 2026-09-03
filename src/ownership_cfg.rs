@@ -1067,6 +1067,7 @@ fn run_leak_scan(name: &str, body: &Value, data: &Data, d_nr: u32) -> usize {
     }
     closed.extend(consumes); // consumes/captures transfer only the element itself
     let mut reds = 0;
+    let built_with = crate::scopes::capture_build_backings(data, func, body);
     for (_, v) in func.snapshot_names() {
         // @FR-O-Proxy asks oracle — the leak scan, which reports UNDER-free and emits nothing.
         if minted.contains(&v)
@@ -1088,7 +1089,7 @@ fn run_leak_scan(name: &str, body: &Value, data: &Data, d_nr: u32) -> usize {
             // longhand they have drifted — which is the whole of loft#1308.  The shape test
             // the shared predicate adds is already implied here: `heap_dep().is_some()` above
             // admits exactly the kinds `is_dbref` does.
-            && !crate::scopes::capture_adoption_owns_free(data, func, v)
+            && !crate::scopes::capture_adoption_owns_free(data, func, &built_with, v)
         {
             eprintln!(
                 "RED {name}: leak {} (v{v}) Owned heap, unfreed/untransferred",

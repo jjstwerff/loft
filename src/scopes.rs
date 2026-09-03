@@ -105,6 +105,10 @@ struct Scopes {
     /// is already gone, so such a base is not offered as a witness.  Conservative in the safe
     /// direction: declining keeps today's leak, never frees a store twice.
     multi_assigned: HashSet<u16>,
+    /// The backing local each CAPTURE named at the closure build — see
+    /// [`capture_build_backings`].  Computed once off the raw body, because the answer is
+    /// positional (@FR-O-Latest) and the variable table carries only the LAST assignment.
+    capture_build_backing: HashMap<u16, u16>,
     /// The loop depth at which each `__lift_N` temp was created.  A temp created INSIDE the
     /// innermost loop that re-runs its Set has its scope exited — and its slot freed — every
     /// iteration, so a transition free there would free twice; one created OUTSIDE that loop
@@ -1504,6 +1508,7 @@ fn run_scan_phase(
         lift_join_witness: HashMap::new(),
         pending_join_witness: std::cell::Cell::new(u16::MAX),
         multi_assigned: multi_assigned_in(orig_code),
+        capture_build_backing: capture_build_backings(data, orig_vars, orig_code),
         lift_decl_depth: HashMap::new(),
         callref_join_bases: callref_join_bases_in(orig_code, data, d_nr),
         witness_buffer: HashMap::new(),
@@ -4053,9 +4058,67 @@ fn inline_literal_work_ref(rhs: &Value, function: &Function, data: &Data) -> Opt
 /// disagreeing on the shape test; the mirror then kept the `is_captured` half alone and a
 /// capturing closure over a local vector false-positived the leak assert. Three consumers
 /// now share it — those two and `ownership_cfg`'s leak oracle.
-pub(crate) fn capture_adoption_owns_free(data: &Data, function: &Function, v: u16) -> bool {
-    (function.is_captured(v) || backs_an_adopted_capture(data, function, v))
+pub(crate) fn capture_adoption_owns_free(
+    data: &Data,
+    function: &Function,
+    built_with: &HashMap<u16, u16>,
+    v: u16,
+) -> bool {
+    (function.is_captured(v) || backs_an_adopted_capture(data, function, built_with, v))
         && crate::data::is_dbref(function.tp(v).base())
+}
+
+/// The backing local a capture named AT THE CLOSURE BUILD — the store the record actually
+/// holds — or `None` when the code does not settle it.
+///
+/// A capture's store is decided by @FR-O-Latest: ownership belongs to the LATEST assignment
+/// *at that point*, and a type-level `deps` list cannot express a point.  For a local assigned
+/// once the two coincide and the type is enough; for one REASSIGNED after the build they name
+/// different stores, and reading the type then aims the frame-exit suppression at the store the
+/// closure does NOT hold.  Both directions are wrong at once: the store the record adopted is
+/// freed by the frame as well (an escaping closure reads a released store), and the store the
+/// local now names is suppressed although nobody adopted it (it leaks) — loft#1324.
+///
+/// The build is `OpSetDbRef(___clos_N, <offset>, <capture>)`, so walking the body in order and
+/// remembering each local's most recent backing root answers it directly.  [`Value::walk`] is
+/// pre-order over the children in source order, which is the ordering this needs; a hand-rolled
+/// descent here would be the fourth copy of one that has drifted before.
+///
+/// A capture that owns its store outright — a struct — has no backing root and is not in the
+/// map, and neither is one whose build this body does not contain.  Both fall back to the type
+/// dep, which is the only fact available for them and is right whenever the local is assigned
+/// once.
+pub(crate) fn capture_build_backings(
+    data: &Data,
+    function: &Function,
+    code: &Value,
+) -> HashMap<u16, u16> {
+    let set_dbref = data.def_nr("OpSetDbRef");
+    let mut latest: HashMap<u16, u16> = HashMap::new();
+    let mut out: HashMap<u16, u16> = HashMap::new();
+    code.walk(&mut |node: &Value| match node.unspan() {
+        Value::Set(v, rhs) => {
+            match crate::use_analysis::view_root_slots(data, rhs).as_deref() {
+                Some([root]) if *root != *v && !function.is_argument(*root) => {
+                    latest.insert(*v, *root);
+                }
+                // A right-hand side that names no single root leaves no backing to remember,
+                // and the stale one would be worse than none: drop it.
+                _ => {
+                    latest.remove(v);
+                }
+            }
+        }
+        Value::Call(d, args) if *d == set_dbref => {
+            if let Some(Value::Var(c)) = args.get(2).map(Value::unspan)
+                && let Some(&backing) = latest.get(c)
+            {
+                out.insert(*c, backing);
+            }
+        }
+        _ => {}
+    });
+    out
 }
 
 /// Is `v` the store behind a capture whose closure record ADOPTS it?
@@ -4073,12 +4136,30 @@ pub(crate) fn capture_adoption_owns_free(data: &Data, function: &Function, v: u1
 /// had already had its backing free suppressed, so it leaked
 /// (`1248-a-capture-that-cannot-be-borrowed-from`). Asking one function keeps them from
 /// disagreeing by construction.
-pub(crate) fn backs_an_adopted_capture(data: &Data, function: &Function, v: u16) -> bool {
+pub(crate) fn backs_an_adopted_capture(
+    data: &Data,
+    function: &Function,
+    built_with: &HashMap<u16, u16>,
+    v: u16,
+) -> bool {
     (0..function.next_var()).any(|c| {
         c != v
             && function.is_captured(c)
-            && backing_chain(function, c).contains(&v)
             && capture_is_adopted(data, function, c)
+            && match built_with.get(&c) {
+                // @FR-O-Latest — the record holds the store this capture named AT THE BUILD, so
+                // that is the one local whose free it takes over.  Reading the type dep instead
+                // aims the suppression at whatever the local names LAST, which for a capture
+                // reassigned after the build is a different store: the adopted one is then freed
+                // by the frame as well and an escaping closure reads a released store, while the
+                // one the local now names is suppressed although nobody adopted it and leaks
+                // (loft#1324).
+                Some(&backing) => backing == v,
+                // No build point in this body, or a right-hand side naming no single root: the
+                // type dep is the only fact there is, and it is right whenever the local is
+                // assigned once.
+                None => backing_chain(function, c).contains(&v),
+            }
     })
 }
 
@@ -7015,7 +7096,8 @@ impl Scopes {
                 // drifted-list family the loft#1150 note above enumerates (`is_dbref` here
                 // and at D-own-13, `deps_mut`, `is_keyed`, `depend`), which is why it is a
                 // call and not a `matches!` written out again.
-                let captured_ref = capture_adoption_owns_free(data, function, v);
+                let captured_ref =
+                    capture_adoption_owns_free(data, function, &self.capture_build_backing, v);
                 // @PLN94 TEST-ONLY over-free injection (never set in production): force the scope-exit
                 // free of a NAMED borrowed var (owns=false) so the over-free check has a firing
                 // true-positive. Subject to the same !in_ret/!skip_free/!captured guards as a real free.
@@ -10710,6 +10792,7 @@ fn check_ref_leaks(
         }
     }
 
+    let built_with = capture_build_backings(data, function, ir);
     for (&v, &scope) in var_scope {
         if scope == 0 {
             continue; // function parameter — caller frees
@@ -10729,7 +10812,7 @@ fn check_ref_leaks(
         // going out of step with it is exactly how loft#1308 stayed hidden, and a mirror
         // that knows only the `is_captured` half calls the BACKING local of a collection
         // capture a leak — which no closure captured by name.
-        if capture_adoption_owns_free(data, function, v) {
+        if capture_adoption_owns_free(data, function, &built_with, v) {
             continue;
         }
         if v == direct_ret_var {
