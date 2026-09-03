@@ -65,6 +65,36 @@ Guard: `tests/scripts/1316-a-nullable-reference-field-is-still-a-pointer.loft`, 
 (still shares) and the embedded `T?` (still copies).  `tests/scripts/150-amp-head-position.loft`
 gains the not-last cell.  All 42 published libraries pass unchanged.
 
+### The revalidate-libs gate can be green (2026-09-03)
+
+loft#1315.  `scripts/revalidate_libs_local.sh` printed `1 COMPILE-BREAK` and exited 1 on a tree
+with no language break in it, and did so against the binary the offending package was published
+with — so nothing downstream could gate on its status, a real break read `2 COMPILE-BREAK`, and
+the closing sentence about the freeze printed on every green run.
+
+The cause was not a design gap.  The matrix policy was written TWICE — inline in
+`.github/workflows/revalidate-libs.yml` and again in the local script that documents itself as
+re-classifying *"exactly as the workflow does"* — and the two had drifted on four questions:
+
+| question | workflow | local script |
+|---|---|---|
+| the `loft` package | skipped: it is the compiler, not a library | checked, and its test corpus is not standalone-compilable |
+| known-broken map | present, entries cite a tracking issue | absent |
+| `subpath` default | `"."` (the repo IS the package) | the package NAME, a directory that does not exist |
+| yanked versions | validated | excluded |
+
+Only the first showed, because the compiler's `tests/` holds `--lib` fixtures and files that are
+*supposed* not to compile: 26 of 400 failed the `--dump` re-classification, on any binary.  The
+fourth is the one worth noting anyway — the shipped gate could have reported on a version the
+registry has withdrawn.
+
+`scripts/revalidate_matrix.py` is now the single source both read, with a `--self-test` that gives
+each rule an input it must act on (an exclusion that is never exercised is indistinguishable from
+a pass-through) and is wired into `make ci`.  The discover job checks the repo out to reach it.
+A clean run now reads `42 pass, 0 runtime/env, 0 skipped, 0 COMPILE-BREAK` and exits 0; the
+240-second hang the `loft` leg contributed goes with it.
+
+
 ### A fn-level `@EXPECT_FAIL` no longer costs its file the whole native suite (2026-09-03)
 
 loft#1311.  The documented contract is that a fn-level tag excuses one function and *"sibling
