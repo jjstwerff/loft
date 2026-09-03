@@ -9,6 +9,58 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A nullable whole-value bind COPIES, like its dense twin (2026-09-03)
+
+loft#1319.  `@FR-B-Copy` says a plain bind — scalar or heap whole-value — leaves the bound
+variable INDEPENDENT.  It did not hold when the source was nullable: `b = a` with
+`a: vector<integer>?` aliased `a`, and so did a nullable struct, while the keyed kinds copied.
+None of the rule's three exceptions reaches the shape — `B-View` is a struct PROJECTION,
+`B-View-Base` a BORROWED base, `B-View-Depth` an INDEX or nested read — and this is a whole
+value off an owned local.
+
+One cause, four sites, and it is the spelling again: `τ?` is `Optional(τ)`, the same storage
+behind a nullability marker (`@FR-L-Null`), and each site decided the lowering by matching the
+`Type` variant BARE, so the wrapped shape reached none of the copy paths and the default stood.
+
+| site | what it decides |
+|---|---|
+| `Parser::classify_vec_bind` + its consumer | whether a vector bind is a copy at all |
+| `codegen::gen_set_first_at_tos` | the interpreter's first-set dispatch |
+| `generation::dispatch` whole-record bind (`heap_def_nr`) | native's copy |
+
+The second half is that a copy must not turn ABSENCE into EMPTINESS — a null source has to
+leave the destination null, not holding the store the copy allocated for it.  Both mechanisms
+already existed:
+
+* `Stores::vector_replace` gains the guard `replace_keyed` has carried since loft#1150 — *an
+  absent source copies nothing and marks the destination absent* — and the nullable vector
+  bind emits `OpReplaceVector` rather than `OpAppendVector` to reach it.  A dense destination
+  cannot be absent and keeps the append, so its IR is unchanged.
+* the record bind routes through `OpBindOrCopy` with the SOURCE as its own witness: a present
+  source aliases the witness, so the borrow arm materialises a fresh store and deep-copies;
+  an absent one fails the `store_nr != u16::MAX` half and is ADOPTED, which lands the true
+  sentinel.  Native emits the same decision as a guarded `if var_src.rec == 0`.
+
+⚠ `OpCopyRefOrNull` was tried first and is wrong here.  It binds `Stores::null()`, whose
+`store_nr` is a REAL slot with `rec == 0`, while `x == null` on a record lowers to
+`OpRefIsNull`, which tests `store_nr == u16::MAX`.  The two spellings of absence agree for the
+element read it was written for and not for a bound local.
+
+**The `??` column of the filed matrix is a DIFFERENT defect** — measured, not assumed.  It was
+filed as "the same defect discharged"; a JOIN with no nullability anywhere in it
+(`b = if c { a } else { [0, 0] }`) aliases identically on both backends and on the shipped
+2026.8.0, and this fix leaves those cells where they were.  `a ?? d` lowers to
+`if !isnull(a) { a } else { d }`, so the `??` cells were reaching the join lowering.  Filed as
+loft#1321, registered as the OPEN deviation D-bind-16.
+
+Guard: `tests/scripts/1319-a-nullable-whole-value-bind-copies-like-its-dense-twin.loft`,
+falsified at `dad9b359` on both backends; controls are `&` (must still alias), the struct
+projection and index read (must still view), the collection projection off an owned base (must
+still copy), and every keyed kind (must not move).
+`tests/scripts/bind-copies-or-views-the-whole-boundary.loft` — the one place the copy-vs-view
+boundary is pinned — gains the nullable-subject axis it never had: all eleven of its subjects
+were declared non-null, which is why eleven cells and both backends read green over this.
+
 ### A `reference<T>` field may be nullable, and `?` no longer turns a pointer into a copy (2026-09-03)
 
 loft#1316.  `@FR-L-Null` and `@FR-L-Null-Tag` split on a property of the type: a τ that reserves

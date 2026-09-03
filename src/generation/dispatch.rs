@@ -927,11 +927,18 @@ impl Output<'_> {
         // For a first declaration, we also need to allocate a fresh store via
         // OpDatabase(null_named(…)) so the destination has its own record to copy into.
         // For reassignment, the existing destination record is reused in-place.
-        if let (Some(d_nr), Value::Var(src)) = (variables.tp(var).heap_def_nr(), to_unspanned)
-            && variables.tp(*src).heap_def_nr().is_some()
+        // `base()`, because `S?` is `Optional(Reference(S))` — the same storage behind a
+        // nullability marker — and `heap_def_nr` reads the bare spelling only.  Unpeeled,
+        // a nullable whole-value bind reached neither this arm nor any other and fell
+        // through to `let mut var_d = var_s;`, a pointer copy: an ALIAS, where `@FR-B-Copy`
+        // says the bound variable is INDEPENDENT (loft#1319).
+        if let (Some(d_nr), Value::Var(src)) =
+            (variables.tp(var).base().heap_def_nr(), to_unspanned)
+            && variables.tp(*src).base().heap_def_nr().is_some()
         {
             let src_name = sanitize(variables.name(*src));
             let tp_nr = self.data.def(d_nr).known_type();
+            let first_bind = !self.declared.contains(&var);
             if self.declared.contains(&var) {
                 // Reassignment: the variable was pre-declared via null_named
                 // (Set(var, Null)) at function entry.  OpDatabase below
@@ -946,6 +953,40 @@ impl Output<'_> {
                     "let mut var_{name}: {tp_str} = stores.null_named(\"var_{name}\");"
                 )?;
                 self.indent(w)?;
+            }
+            // A source that may be ABSENT is asked before it is dereferenced: a copy of an
+            // absent value is absent, and `OpCopyRecord` would read `allocations[u16::MAX]`.
+            // Allocating first and copying second would be worse than the panic — it leaves
+            // the destination holding the record allocated for it, PRESENT where its source
+            // was absent.  Same shape and same predicate as the element-read arm above
+            // (loft#823): `rec == 0` is the absence test every store accessor uses, and it
+            // covers both spellings — the true sentinel and an index past a live container.
+            if matches!(variables.tp(*src), Type::Optional(_)) {
+                // On the absent arm the placeholder must go back: at a FIRST bind that is
+                // the `null_named` store allocated just above, while a REASSIGNMENT is
+                // already wrapped by `output_set`'s `_old_*` stash, which frees the
+                // displaced store itself — freeing here too would free it twice.
+                let release = if first_bind {
+                    format!(
+                        "if var_{name}.store_nr != u16::MAX \
+                         {{ OpFreeRef(cell, var_{name}, \"{name}(absent)\"); }} "
+                    )
+                } else {
+                    String::new()
+                };
+                write!(
+                    w,
+                    "if var_{src_name}.rec == 0 {{ {release}var_{name} = DbRef::NULL; }} \
+                     else {{ var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32); \
+                     OpCopyRecord(cell,var_{src_name}, var_{name}, {tp_nr}_i32); }}"
+                )?;
+                crate::copy_manifest::record(
+                    self.def_nr,
+                    var,
+                    tp_nr,
+                    crate::copy_manifest::Origin::NativeRecordBind,
+                );
+                return Ok(());
             }
             writeln!(w, "var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32);")?;
             self.indent(w)?;

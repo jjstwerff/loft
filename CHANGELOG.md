@@ -61,6 +61,27 @@ function could hand back a value whose type promised it was there, and the null 
 with nothing to read. It is the same notice the scalars get, and like theirs it is a warning:
 your program still runs, and the fix is the `?` the message names.
 
+### Copying a value no longer depends on whether it can be empty
+
+```loft
+a: vector<integer>? = [41, 42];
+b = a;          // b is its own vector
+a[1] = 99;      // b[1] is still 42
+```
+
+Giving one variable the value of another COPIES it — that is what `b = a` has always meant,
+and writing to `a` afterwards does not reach `b`. Unless `a` could be `null`: then `b` was
+the *same* vector, and every later write to either one showed up in the other. The same for a
+record. Keyed collections (`hash`, `sorted`, `index`) were unaffected, which is what made it
+hard to see — the rule held everywhere you were likely to check it.
+
+Absence survives the copy too, which is the other half: if `a` is `null`, `b` is `null`, not
+an empty vector. Those are different values, and a copy that quietly turned one into the
+other would have been its own bug.
+
+If you relied on the old behaviour to share a value, `&` is how you say so — `b = &a` links
+the two, and always did.
+
 ### A linked list can say its last link is empty
 
 ```loft

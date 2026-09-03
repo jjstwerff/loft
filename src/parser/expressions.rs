@@ -1601,10 +1601,19 @@ use a separate collection or add after the loop"
         f_type: &Type,
         s_type: &Type,
     ) -> VecBind {
+        // Read both sides through `base()`.  `vector<τ>?` is `Optional(Vector(τ))` — the
+        // same storage behind a nullability marker (`@FR-L-Null`) — and matching the bare
+        // spelling alone answered `NotABind` for it, so the whole-value copy this selector
+        // exists to pick never ran and the bind stayed an ALIAS: `b = a; a[1] = 99` then
+        // read 99 through `b`, against `@FR-B-Copy` (loft#1319).  Nullability is not one of
+        // that rule's three exceptions — a struct PROJECTION, a BORROWED base, an INDEX or
+        // nested read — and this selector already distinguishes all three.  The keyed kinds
+        // took the same peel in loft#1143 and have been copying correctly since; this is
+        // their sibling, and `@FR-L-Null` is the reason both are the same question.
         if op != "="
             || var_nr == u16::MAX
-            || !matches!(f_type, Type::Unknown(_) | Type::Vector(_, _))
-            || !matches!(s_type, Type::Vector(_, _))
+            || !matches!(f_type.base(), Type::Unknown(_) | Type::Vector(_, _))
+            || !matches!(s_type.base(), Type::Vector(_, _))
         {
             return VecBind::NotABind;
         }
@@ -4121,7 +4130,7 @@ use a separate collection or add after the loop"
             self.classify_vec_bind(code, op, var_nr, f_type, &s_type)
         };
         if !matches!(vec_bind, VecBind::NotABind)
-            && let Type::Vector(elm_tp, _) = &s_type
+            && let Type::Vector(elm_tp, _) = s_type.base()
         {
             // `v = v` self-assign — emit nothing rather than clear+reappend
             // off the same storage.
@@ -4130,7 +4139,15 @@ use a separate collection or add after the loop"
                 return Type::Void;
             }
             let elm_tp_clone = (**elm_tp).clone();
-            let vec_tp = Type::Vector(Box::new(elm_tp_clone.clone()), Deps::none());
+            let dense = Type::Vector(Box::new(elm_tp_clone.clone()), Deps::none());
+            // The COPY is what the selector decided; whether the value may be ABSENT is the
+            // source's own fact and survives it.  Dropping the marker here would make the
+            // destination non-null and lose the null arm.
+            let vec_tp = if matches!(s_type, Type::Optional(_)) {
+                Type::Optional(Box::new(dense))
+            } else {
+                dense
+            };
             self.change_var(to, &vec_tp);
             let field_read = matches!(vec_bind, VecBind::CopyOwnedField);
             // #426 — a struct vector-FIELD read (`af = bx.v`, `field_read`) must
@@ -4197,7 +4214,20 @@ use a separate collection or add after the loop"
                     // Reassignment: v already owns a store — clear, then refill.
                     stmts.push(self.cl("OpClearVector", std::slice::from_ref(to)));
                 }
-                stmts.push(self.cl("OpAppendVector", &[to.clone(), code.clone(), rec_tp]));
+                // A NULLABLE destination takes the whole-value REPLACE rather than the
+                // append, for the one thing the append cannot express: an ABSENT source
+                // must leave the destination absent, not holding the empty store the alloc
+                // above just gave it.  `Stores::vector_replace` carries that rule, the same
+                // one `replace_keyed` carries for the keyed kinds — which is why the keyed
+                // sibling of this bind has been answering `b == null` correctly all along.
+                // A dense destination cannot be absent, so it keeps the append and its IR is
+                // unchanged.
+                let op = if matches!(self.vars.tp(var_nr), Type::Optional(_)) {
+                    "OpReplaceVector"
+                } else {
+                    "OpAppendVector"
+                };
+                stmts.push(self.cl(op, &[to.clone(), code.clone(), rec_tp]));
                 *code = Value::Insert(stmts);
             }
             return Type::Void;

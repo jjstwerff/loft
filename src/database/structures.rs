@@ -642,6 +642,19 @@ impl Stores {
     /// silently returned an empty vector.  Same vector → no-op.  Distinct vectors
     /// → clear dest and append src (`vector_add` snapshots a same-store source).
     pub fn vector_replace(&mut self, db: &DbRef, o_db: &DbRef, known: u16) {
+        // An ABSENT source copies NOTHING, and leaves the destination ABSENT — the same
+        // rule `Stores::replace_keyed` carries for the keyed kinds (loft#1150), in the same
+        // words, because it is the same question one collection kind over.  `vector_add`
+        // alone reads an absent source as a zero LENGTH and returns, which leaves the
+        // destination holding the empty store the bind allocated for it: `b = a` with `a`
+        // absent then answered an empty vector where `a == null` (loft#1319).  Emptiness and
+        // absence are different values, and only the whole-value replace may turn one into
+        // the other — an `a += b` must leave `a` alone.
+        if o_db.store_nr == u16::MAX {
+            vector::clear_vector(db, &mut self.allocations);
+            self.mark_collection_absent(db);
+            return;
+        }
         let dest_rec = keys::store(db, &self.allocations).get_u32_raw(db.rec, db.pos);
         let src_rec = keys::store(o_db, &self.allocations).get_u32_raw(o_db.rec, o_db.pos);
         if db.store_nr == o_db.store_nr && dest_rec != 0 && dest_rec == src_rec {

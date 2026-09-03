@@ -330,8 +330,10 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 
 ## Deviations
 
-**OPEN: 1.**
+**OPEN: 2.**
 - **D-bind-11** — `&(τ, …)` admits only SCALAR elements, against
+- **D-bind-16** — `(B-Copy)` does not hold when the right-hand side is a branch JOIN:
+  `b = if c { a } else { d }` aliases `a` (loft#1321, both backends, present on 2026.8.0)
 
 The full register — these entries in full, plus every closed one with its dates and
 issue numbers — is the companion [binding-history.md](binding-history.md).

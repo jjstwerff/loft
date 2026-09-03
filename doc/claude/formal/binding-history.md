@@ -6,13 +6,74 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **1** (D-bind-11); D-bind-12, D-bind-13 and D-bind-14 each opened and CLOSED the
-same day.
+OPEN: **2** (D-bind-11, D-bind-16); D-bind-12, D-bind-13, D-bind-14 and D-bind-15 each
+opened and CLOSED the same day.
 D-const-2 opened and CLOSED the same day (2026-09-01), found by the Store Locks
 reference review.
 B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
 opened and closed 2026-08-05); B-Ref-AnnotationOnly is enforced in every position, not
 only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
+
+> **D-bind-16 — OPEN (2026-09-03, loft#1321) — `(B-Copy)` does not hold when the
+> right-hand side is a branch JOIN.**
+>
+> `b = if c { a } else { [0, 0] }` ALIASES `a`, and so does the struct spelling, while the
+> plain bind of the identical value one line away copies. Present on the shipped 2026.8.0,
+> so long-standing rather than a regression, and identical on both backends.
+>
+> **It was filed as part of D-bind-15 and is not.** loft#1319's matrix carried a `??` column
+> described as *"the same defect discharged"*; the control above has no nullability in it at
+> all and aliases the same way, because `a ?? d` lowers to `if !isnull(a) { a } else { d }`.
+> So the axis is the JOIN and the `?` was a passenger — and D-bind-15's fix leaves these
+> cells exactly where they were, which is the other half of that measurement. Two defects
+> sharing a symptom read as one until a cell moves only one of them.
+>
+> The destination ends up DEPENDING on the source (`b: vec<int> deps=[a]`) rather than
+> owning: `classify_vec_bind` recognises a bare `Var` and an owned field read and nothing
+> else, and the record side keys on `Value::Var` in both backends. `OpBindOrCopy` is the
+> runtime adopt-vs-copy guard built for exactly this shape and already carries the CALL-return
+> case, which is why that row is green; widening it to a direct join is a real ownership
+> question — which arm may adopt — rather than the peel D-bind-15 was.
+
+> **D-bind-15 — CLOSED (2026-09-03, loft#1319) — `(B-Copy)` did not hold for a NULLABLE
+> heap local: a whole-value bind ALIASED its source.**
+>
+> `b = a` with `a: vector<integer>?` aliased `a`, and so did a nullable struct, while the
+> keyed kinds copied — which is what said the axis was the `?` and not "heap". None of the
+> rule's three exceptions reaches it: this is a whole value off an OWNED local, not a struct
+> projection (B-View), not a borrowed base (B-View-Base), not an index or nested read
+> (B-View-Depth).
+>
+> **One cause, and it is the spelling again.** `τ?` is `Optional(τ)` — the same storage
+> behind a nullability marker (`@FR-L-Null`) — and FOUR sites decided the lowering by
+> matching the `Type` variant BARE, so the wrapped shape reached none of them and the
+> default (alias) stood: the vector-bind selector and its consumer, the interpreter's
+> first-set dispatch, and the native generator's whole-record bind. D-bind-13 is the same
+> sentence one construct over, and the keyed kinds took this peel in loft#1143 — so this is
+> the third time the register records it, and the sites were siblings of ones already fixed.
+>
+> **The second half is that a copy must not turn ABSENCE into EMPTINESS.** A null source has
+> to leave the destination null, not holding the store the copy allocated for it. Both
+> mechanisms already existed and are reused rather than restated: `Stores::vector_replace`
+> gains the guard `replace_keyed` has carried since loft#1150, and the record bind routes
+> through `OpBindOrCopy`, whose borrow arm materialises and whose other arm adopts — which
+> for the null sentinel is exactly "stay null". `OpCopyRefOrNull` was tried first and is
+> wrong here: it binds `Stores::null()`, whose `store_nr` is a REAL slot with `rec == 0`,
+> while `x == null` on a record lowers to `OpRefIsNull` and tests `store_nr == u16::MAX`.
+> The two spellings of absence agree for the element read it was written for and not for a
+> bound local.
+>
+> **Why eleven cells and both backends read green over it.**
+> `tests/scripts/bind-copies-or-views-the-whole-boundary.loft` is the one place the
+> copy-vs-view boundary is pinned, and every one of its eleven subjects was declared
+> non-null — `??` appeared in it only inside element-read assertions. The axis it never
+> moved is the one that broke. It has the nullable-subject axis now, and the four added
+> cells fail on the pre-fix build.
+>
+> Guard: `tests/scripts/1319-a-nullable-whole-value-bind-copies-like-its-dense-twin.loft`,
+> whose controls are `&` (must still alias), the struct projection and index read (must still
+> view), the collection projection off an owned base (must still copy) and every keyed kind
+> (must not move).
 
 > **D-bind-14 — CLOSED (2026-09-03, loft#1316) — `(B-Ref-StoredRef)` admitted its one
 > position only when the field came LAST, and not at all once the field was nullable.**

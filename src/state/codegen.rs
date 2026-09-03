@@ -2832,13 +2832,20 @@ impl State {
             // The first assignment of a Reference variable being copied from another:
             // allocate a fresh store, initialize the struct record, then copy the data.
             self.gen_set_first_ref_copy(stack, v, d_nr, value);
-        } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+        } else if let Type::Reference(d_nr, _) = stack.function.tp(v).base().clone()
             && let Value::Var(src) = value
-            && let Type::Reference(src_d_nr, _) = stack.function.tp(*src)
+            && let Type::Reference(src_d_nr, _) = stack.function.tp(*src).base()
             && d_nr == *src_d_nr
         {
             // First assignment `d = c` where both are owned References to the same struct:
             // give d its own independent record by allocating storage and copying c's data.
+            //
+            // Read through `base()`, the peel the `Text` arm at the top of this function
+            // already takes and for the same reason: `S?` is `Optional(Reference(S))`, the
+            // same storage behind a nullability marker, and matching the bare spelling left
+            // a nullable bind on the plain-adopt fallthrough — an ALIAS, where `@FR-B-Copy`
+            // says a whole-value bind is INDEPENDENT (`c2 = ns; ns.v = 99` then read 99
+            // through `c2`, loft#1319).
             self.gen_set_first_ref_var_copy(stack, v, *src, d_nr);
         } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
             // @FR-O-Proxy asks copy — whether to MATERIALISE an element read into a store `v`
@@ -3252,15 +3259,47 @@ impl State {
         let slot_offset = stack.var_pos(v);
         stack.add_op("OpInitRef", self);
         self.code_add(slot_offset);
-        stack.add_op("OpDatabase", self);
-        self.code_add(slot_offset);
-        self.code_add(tp_nr);
-        let copy_nr = stack.data.def_nr("OpCopyRecord");
-        let copy_val = Value::Call(
-            copy_nr,
-            vec![Value::Var(src), Value::Var(v), Value::Int(i32::from(tp_nr))],
-        );
-        self.generate(&copy_val, stack, false);
+        // A source that may be ABSENT cannot take the plain allocate-then-copy: the copy
+        // dereferences the source store, so a `null` one indexes `allocations[u16::MAX]`,
+        // and copying NOTHING instead would be worse than the panic — the destination would
+        // keep the record allocated for it and read PRESENT where its source was absent,
+        // which is emptiness standing in for absence (the trade `Stores::vector_replace`
+        // records for the collections).
+        //
+        // `OpBindOrCopy` decides that at runtime, and with the source as its OWN witness it
+        // says exactly what `@FR-B-Copy` wants here: a present source aliases the witness,
+        // so the borrow arm materialises a fresh store and deep-copies into it; an absent
+        // one fails the `store_nr != u16::MAX` half and is ADOPTED, which lands the true
+        // sentinel and leaves the destination null.  It allocates on the arm that needs it,
+        // so no `OpDatabase` is emitted ahead of it.
+        //
+        // Not `OpCopyRefOrNull`, which is built for the same shape one read kind over: it
+        // binds `Stores::null()`, whose `store_nr` is a REAL slot with `rec == 0`, while a
+        // `x == null` on a record lowers to `OpRefIsNull` and tests `store_nr == u16::MAX`.
+        // The two spellings of absence agree for the element read it was written for and
+        // not for a bound local.
+        if matches!(stack.function.tp(src), Type::Optional(_)) {
+            self.generate(&Value::Var(src), stack, false);
+            // A PUSH op reads at the PRE-push position, so the witness offset is taken
+            // BEFORE `add_op`; the slot the opcode POPS into is taken after, at the
+            // post-pop position.  Same order as the `Join` emission in `generate_set`.
+            let witness_pos = stack.var_pos(src);
+            stack.add_op("OpVarRef", self);
+            self.code_add(witness_pos);
+            stack.add_op("OpBindOrCopy", self);
+            self.code_add(stack.var_pos(v));
+            self.code_add(tp_nr);
+        } else {
+            stack.add_op("OpDatabase", self);
+            self.code_add(slot_offset);
+            self.code_add(tp_nr);
+            let copy_nr = stack.data.def_nr("OpCopyRecord");
+            let copy_val = Value::Call(
+                copy_nr,
+                vec![Value::Var(src), Value::Var(v), Value::Int(i32::from(tp_nr))],
+            );
+            self.generate(&copy_val, stack, false);
+        }
         // @PLN130 — recorded HERE, past the last-use-move return above, so the manifest
         // claims a copy only where one is actually written.
         crate::copy_manifest::record(

@@ -698,7 +698,6 @@ a-join-records-every-source-it-borrows.loft
 anon-loop-counters.loft
 a-tuple-element-of-every-dbref-kind.loft
 a-tuple-member-is-not-the-assignment-destination.loft
-bind-copies-or-views-the-whole-boundary.loft
 borrowed-text-return-in-interpolation.loft
 caller-retbuf-alias-671.loft
 character-across-the-json-surface.loft

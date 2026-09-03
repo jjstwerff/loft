@@ -544,8 +544,18 @@ impl Parser {
                     t = t.base().clone();
                 }
                 self.var_usages(v_nr, true);
-                if let Type::Reference(d_nr, _) = self.vars.tp(*into)
-                    && let Type::Reference(vd_nr, _) = self.vars.tp(v_nr)
+                // `@FR-B-Copy`: a plain whole-value bind COPIES, so the destination is
+                // made INDEPENDENT of the source and ends up owning its own store.  Read
+                // through `base()`, because `S?` is `Optional(Reference(S))` — the same
+                // storage behind a nullability marker — and matching the wrapper-free
+                // spelling alone left the destination DEPENDING on the source, which is an
+                // alias: `bns = ns; ns.v = 99` then read 99 through `bns`, and the same for
+                // a nullable `vector` (loft#1319).  Nullability is not one of `(B-Copy)`'s
+                // three exceptions — `(B-View)` is a struct PROJECTION, `(B-View-Base)` a
+                // borrowed base, `(B-View-Depth)` an index or nested read — and this is a
+                // whole value off an owned local.
+                if let Type::Reference(d_nr, _) = self.vars.tp(*into).base()
+                    && let Type::Reference(vd_nr, _) = self.vars.tp(v_nr).base()
                     && d_nr == vd_nr
                 {
                     // Don't create OpCopyRecord here: generate_set handles the copy when
@@ -556,7 +566,17 @@ impl Parser {
                     let into_var = *into;
                     self.vars.make_independent(into_var, v_nr);
                     *code = Value::Var(v_nr);
-                    return Type::Reference(d_nr, crate::data::Deps::none());
+                    // The COPY is what this arm decides; whether the value may be ABSENT is
+                    // the source's own fact and survives it.  `t` already carries that,
+                    // including the flow-narrowing peel above, so a source proven non-null
+                    // in this branch answers the bare type and a `τ?` stays `τ?` — dropping
+                    // the marker here would make `bns` non-null and lose the null arm.
+                    let bare = Type::Reference(d_nr, crate::data::Deps::none());
+                    return if matches!(t, Type::Optional(_)) {
+                        Type::Optional(Box::new(bare))
+                    } else {
+                        bare
+                    };
                 }
                 *code = Value::Var(v_nr);
             } else {

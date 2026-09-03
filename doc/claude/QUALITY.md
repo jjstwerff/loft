@@ -2419,7 +2419,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 683 | 328 | 5 | **350** |
+| 684 | 330 | 5 | **349** |
 
 The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.
 
@@ -2488,6 +2488,21 @@ them is a whole FUNCTION discriminating on a `Type`, they are arms inside larger
 is the B7i masking this screen already warns about, seen from the other side: the unit is the
 function, so a defective arm inside a body that peels somewhere else is invisible here. The
 count is a queue of predicates, not a census of the shapes a `τ?` can reach.
+
+loft#1319 moves it again, to `684 | 330 | 5 | 349`, and every step is in the good direction:
+two more functions see through the wrapper and one fewer is opaque. The CALLER half of the
+screen is where that change is legible rather than inferred — `heap_def_nr`'s row goes from
+`2 peeled / 10 bare` to `4 / 8`, which is exactly the two call sites in the native generator's
+whole-record bind that now read `variables.tp(..).base().heap_def_nr()`. Unpeeled they
+answered `None` for `vector<τ>?` and `S?`, the bind reached no copy lowering, and the default
+(alias) stood — against `@FR-B-Copy`. `Parser::classify_vec_bind` took the same peel on the
+parser side.
+
+That is the same sentence D-bind-13 and loft#1143 already wrote for two other constructs, and
+it is what makes this column a queue rather than a scoreboard: the sites it names keep turning
+out to be siblings of ones already fixed. The interpreter's half of the same fix is again
+invisible here — it is an arm inside `gen_set_first_at_tos`, not a function of its own — which
+is the B7i masking from the other side, and the reason the guard for that half is behavioural.
 
 loft#1291 moved one site OFF the opaque column — the first entry here that does.
 `Type::is_amp_rebindable_heap` is the one home for *"is this a `&` parameter whose whole-value
