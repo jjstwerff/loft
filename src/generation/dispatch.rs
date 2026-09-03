@@ -1367,6 +1367,24 @@ impl Output<'_> {
                         let vars = self.data.def(self.def_nr).variables();
                         !vars.is_argument(*v) && matches!(vars.tp(*v), Type::Tuple(_))
                     });
+                // loft#1325 — the WHOLE tuple, one level out from the arm above.  `u = a` over
+                // a local `(text, text)` emitted `let mut var_u: (String, String) = var_a;`,
+                // which MOVES it, so every later read of `var_a` is rustc E0382 and the
+                // program does not build — while the interpreter runs it and answers what
+                // `@FR-B-Copy` promises, an INDEPENDENT copy.  A backend that refuses what the
+                // other computes is the divergence `formal/operational.md` D-op-1 forbids, and
+                // the refusing side is the one that is wrong here: `B-Copy` says the bind is a
+                // copy, so `.clone()` is the emission that keeps the promise.
+                //
+                // Only a non-Copy leaf needs it — an all-scalar tuple is `Copy` and the move is
+                // a copy already — and only a LOCAL source: a tuple PARAMETER arrives borrowed
+                // and is re-spelled by `tuple_arg_owned_elems` below, which owns that pair.
+                let whole_tuple_clone = matches!(variables.tp(var), Type::Tuple(elems)
+                    if tuple_has_non_copy_leaf(elems))
+                    && matches!(to_inner, Value::Var(v) if {
+                        let vars = self.data.def(self.def_nr).variables();
+                        !vars.is_argument(*v) && matches!(vars.tp(*v), Type::Tuple(_))
+                    });
                 // loft#840 — the destination is an owned tuple slot holding text
                 // (`(i64, String, u8)`) and the source is a tuple PARAMETER, which
                 // the native backend passes borrowed (`(i64, &str, u8)`).  Nothing
@@ -1437,6 +1455,11 @@ impl Output<'_> {
                         let src_name = sanitize(self.data.def(self.def_nr).variables().name(*v));
                         write!(w, "var_{src_name}.{idx}.clone()")?;
                     }
+                } else if whole_tuple_clone {
+                    if let Value::Var(v) = to.unspan() {
+                        let src_name = sanitize(self.data.def(self.def_nr).variables().name(*v));
+                        write!(w, "var_{src_name}.clone()")?;
+                    }
                 } else {
                     self.output_code_inner(w, to)?;
                 }
@@ -1448,6 +1471,7 @@ impl Output<'_> {
                     && !refvar_text_clone
                     && !tuple_text_elem_clone
                     && !nested_tuple_clone
+                    && !whole_tuple_clone
                 {
                     write!(w, ".to_string()")?;
                 } else if wrap_fn_ref {

@@ -9,6 +9,32 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A whole-tuple bind COPIES on `--native` too (2026-09-03)
+
+loft#1325.  `u = a` over a local `(text, text)` emitted `let mut var_u: (String, String) =
+var_a;`, which MOVES it — so every later read of `var_a` was rustc E0382 and the program did not
+build at all, while the interpreter ran it and answered what `@FR-B-Copy` promises: an
+INDEPENDENT copy.  An accept/reject split between the backends is the divergence
+`formal/operational.md` D-op-1 forbids, and the refusing side was the wrong one — `(B-Copy)`
+says the bind is a copy, so `.clone()` is the emission that keeps the promise.
+
+The arm is the sibling of P247's, one level out: that one clones a `TupleGet` source
+(`__ref_N = var_t.0`), this one the whole `Var`.  Both share `tuple_has_non_copy_leaf`, so
+neither can drift about what a non-Copy leaf is, and both fire only on a LOCAL source — a tuple
+PARAMETER arrives borrowed and is re-spelled by `tuple_arg_owned_elems` (loft#840, loft#1005),
+which keeps that pair to itself.
+
+Four shapes were refused and each named a different rustc message: the plain bind, a mixed
+`(integer, text)` pair and a nested `((integer, text), integer)` as *borrow of moved value*, and
+the issue's second shape — append into a vector, then keep writing the source — as *assign to
+part of moved value*.  An all-scalar tuple is `Copy` in generated Rust, compiled before the
+change and is the control for the axis.
+
+Guard `tests/scripts/1325-a-whole-tuple-bind-copies-on-native-too.loft`, 8 cells; falsified at
+`61e6fc62` with native exit 1 -> 0 and the interpreter INERT.  That asymmetry is structural: a
+guard for an accept/reject divergence has one movable side, and on the broken build `--native`
+produces no program to run, so the exit code is the only channel an assert could never reach.
+
 ### `=` on a captured KEYED collection replaces it, like its vector twin (2026-09-03)
 
 loft#1326.  A whole-value rebind of a captured keyed collection EMPTIED it — `m = [Row { k: 9,
