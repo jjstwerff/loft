@@ -161,6 +161,24 @@ for; `is_skip_free` is the patch that makes the stand-in safe at a free site; an
 `owned_refs` carries the two things a type cannot — *which* assignment, and *how deep in
 loops* it happened.
 
+⚠ **`(O-Oracle)`'s interprocedural half has a failure mode of its own: it can lose the
+callee's answer on the way back to the caller.** The summary is stated in the CALLEE's
+parameter space, and delivering it means naming the caller value the returned store may lie
+in. Where that translation gives up, the honest answer is *"a borrow whose base I cannot
+name"* — but a `CallRef` answered `Owned`, the one verdict that licenses a free, so the
+caller released a container it still held and the next read came back `null` with nothing
+said (loft#1318). Three shapes reached it: an argument that is itself a CALL (the structural
+walk stops at one, on the ground that the caller lifts it into a temp first — which a
+BORROW-returning callee is not), a keyed lookup (`m[k].v`, missing from the oracle's own
+projection set, so a view read as a mint), and a hidden `__retbuf` (refused as "not a
+parameter the author wrote", though the caller allocates that buffer and passes it).
+
+**The rule that decides all three is one sentence: a translation that cannot name a base must
+not upgrade the verdict.** Naming the base is always preferable to declining — the base is
+what `(O-Oracle)`'s run-time test compares against, so a named one keeps the mint arm's free
+as well — but between an unnameable base and `Owned` there is no trade: `Owned` is the
+over-free direction, and a leak is recoverable where a premature free is not.
+
 ⚠ **The reason to write this down is that the choice is currently invisible.** 38 functions
 test `depend().is_empty()`; some legitimately want the proxy (they are asking "is this a
 view?", not "may I free it?"), some memo the oracle, and some free. Nothing in the source
@@ -379,6 +397,17 @@ runtime-witness discharge (a separate `OpFreeRefIfDistinct` lemma); proving the 
 analysis directly (the certifier sidesteps it).
 
 ## Conformance
+
+- **A call-shaped argument names its base (`O-Oracle`, loft#1318)** — a fn-ref `??` whose
+  argument is `pick(vs, 0)`, `m[k].v` at the hash / sorted / index kinds, `vs[0]`, or a value
+  delivered through the caller's own `__ref_N` buffer keeps the caller's container intact over
+  five borrows, while the mint arm of the same closure still costs no store per call at 70 000
+  iterations and a MINTING argument (`g(mk())`) is still adopted. Both backends. Guard
+  `tests/scripts/1318-a-call-shaped-argument-names-the-store-a-fn-ref-may-hand-back.loft`,
+  14 cells, 8 of which fail on `b1bd3212`; the other 6 are its controls.
+  ⚠ Its two interpolated cells are interpolated deliberately: `s += g(vs[0])[1]` and
+  `c = g(pick(vs, 0))[1]` are CORRECT on the broken build, so the accumulate and bind
+  spellings of the same read score nothing. Statement context is an axis here.
 
 This area's "falsifying programs" are the store-lifetime bugs themselves — each is a
 program where the derived-free invariant (O-Derived) or completeness (O-Complete) fails

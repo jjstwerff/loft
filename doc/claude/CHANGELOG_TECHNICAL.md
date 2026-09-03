@@ -9,6 +9,60 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A call-shaped argument names the store a fn-ref may hand back (2026-09-03)
+
+loft#1318.  `@FR-O-Oracle` says a call resolves through the callee's return summary, and a
+`Join` is settled at run time by store identity against the base the dep names.  The summary
+is written in the CALLEE's parameter space, so delivering it means naming the caller value the
+returned store may lie in — and where that translation gave up, a `CallRef` answered `Owned`,
+the one verdict that licenses a free.  A fn-ref `??` handing back its argument then released a
+container the caller still held: `g(pick(vs, 0))` in a loop answered 42, then `null(oob)` with
+`len(vs)` at 0, then the `??` default, with nothing said.  Present on both backends.
+
+Three translations were losing the base, all in `use_analysis::caller_arg_base`:
+
+* an argument that is itself a CALL.  The structural walk stops at one deliberately — a
+  callee's returned store may be its argument's or one it minted — on the stated ground that
+  the caller lifts it into a temp first.  A BORROW-returning callee is not lifted, so the
+  premise did not hold and the walk simply answered "unnameable".  It now asks the oracle,
+  which is the thing that decides that split: `g(pick(vs, 0))` roots at `vs` one frame further
+  out, and `g(mk())` stays unnameable because a minted store belongs to no caller variable.
+* a keyed lookup.  `projection_ops`, the set the oracle roots a borrow through, carried four
+  ops and was short of `OpGetRecord`, `OpVectorRef` and `OpVectorRefNullable` — every one
+  declared `-> reference[arg0]`.  `m[k].v` therefore read as a MINT, and the caller emptied
+  its own collection: quietly at `hash`, with `Store access out of bounds` at `sorted` and
+  `index`.
+* a hidden `__retbuf`.  Hidden parameters were refused wholesale as return mechanism rather
+  than something the author wrote.  The delivery BUFFER is the exception — the caller
+  allocates its own `__ref_N` and passes it at that position — so a callee handing back its
+  `__retbuf` hands back a store the caller already holds.  `__closure` stays refused, since
+  nothing is passed at its position and `closure_capture_base` reads that one out of the
+  closure build.
+
+Naming the base rather than declining is what keeps the other half: the mint arm of the same
+closure is still freed per call, measured at 70 000 iterations against the 65 535-store
+ceiling.
+
+⚠ **Statement context is an axis in this family, and it retires guard cells silently.**
+`s += g(vs[0])[1]` and `c = g(pick(vs, 0))[1]` are CORRECT on the broken build while the same
+reads inside an interpolation are wrong — the accumulate and bind paths reach a different lift
+decision.  Two cells of the guard were vacuous until each was measured against the pre-fix
+build.  The filed axis table also had one row backwards: two straight-line calls fail too, and
+the loop only makes it easy to see.
+
+⚠ **`is_projection_op` is still short by the two nullable element reads by its own criterion,
+and correcting it is blocked.** Adding `OpGetVectorNullable` / `OpVectorRefNullable` strands
+three `Cell` records in `tests/scripts/1040-generic-par-worker-in-generic-fn.loft`:
+`state/codegen.rs`'s @PLN130 F1 materialise arm fires on the deps PROXY while the free sweep
+reads the ORACLE, and a `par` body's element bind sits in the gap — `@FR-O-Proxy`'s named
+hazard in the allocate direction.  It does not reproduce on `main`, so it stays a measurement
+rather than an issue; the doc comment on `projection_ops` carries it.
+
+Guard `tests/scripts/1318-a-call-shaped-argument-names-the-store-a-fn-ref-may-hand-back.loft`,
+14 cells over container kind, argument shape, call spelling, statement context and which arm
+runs; falsified at `b1bd3212` (interpret exit 1 -> 0, 6 assertion failures -> 0; native exit
+1 -> 0).  Eight cells fail on that build and six are its controls.
+
 ### A nullable whole-value bind COPIES, like its dense twin (2026-09-03)
 
 loft#1319.  `@FR-B-Copy` says a plain bind — scalar or heap whole-value — leaves the bound

@@ -108,6 +108,24 @@ fn def_nrs(data: &Data, names: &[&str]) -> HashSet<u32> {
 /// inside a write (`OpSetInt(OpGetVector(t,…), …)`) writes `t`; inside a read
 /// (`OpGetInt(OpGetVectorNullable(t,…), …)`) reads `t`. They therefore PROPAGATE the
 /// incoming context to arg 0 (the remaining args — an index — are pure reads).
+///
+/// **The membership test is the op's own declaration: `-> reference[arg0]`.** Every
+/// element read carries it in both spellings (`OpGetVector` / `OpVectorRef` and their
+/// nullable twins), as does the keyed lookup `OpGetRecord` and the field read
+/// `OpGetField`. `OpGetDbRef` is the one member without it and is deliberate: it reads a
+/// STORED `DbRef` out of a record, which may name any store, and it is here because a
+/// closure's `__closure` read must still resolve to the record the caller holds.
+///
+/// [`Ownership::borrow_base_guarded`] roots a borrow through this set, so a
+/// store-preserving read MISSING from it makes the oracle call a view of somebody
+/// else's container `Owned` — the over-free direction (loft#1318, where `h[k].v` handed
+/// to a fn-ref emptied the caller's hash, and the `sorted` and `index` kinds faulted).
+///
+/// [`is_projection_op`] asks the narrower ROOT-NAMING question over an overlapping list,
+/// and the two are not the same set: this one carries `OpGetDbRef` and both nullable
+/// element reads, that one carries neither. Where they differ, say which fact the site
+/// wants — `@FR-O-Oracle` for own-vs-borrow, root-naming for which container a view came
+/// out of.
 fn projection_ops(data: &Data) -> HashSet<u32> {
     def_nrs(
         data,
@@ -115,6 +133,9 @@ fn projection_ops(data: &Data) -> HashSet<u32> {
             "OpGetVector",
             "OpGetVectorNullable",
             "OpGetField",
+            "OpVectorRef",
+            "OpVectorRefNullable",
+            "OpGetRecord",
             "OpGetDbRef",
         ],
     )
@@ -2089,7 +2110,7 @@ impl<'a> Ownership<'a> {
                         None => Own::Owned,
                     }
                 } else {
-                    self.call_ownership(*d, args)
+                    self.call_ownership(*d, args, func, defs)
                 }
             }
             // `??` / `if-else` lowers to `If`: the join of its two arms.
@@ -2144,7 +2165,7 @@ impl<'a> Ownership<'a> {
                     Own::Owned => return Own::Owned,
                     Own::Borrowed { base } | Own::Join { base } => base,
                 };
-                let mut base = self.caller_arg_base(d, callee_base, args);
+                let mut base = self.caller_arg_base(d, callee_base, args, func, defs);
                 if base == u16::MAX {
                     base = self.closure_capture_base(d, callee_base, *fn_var, defs);
                 }
@@ -2171,13 +2192,19 @@ impl<'a> Ownership<'a> {
     /// the callee's parameter space into the CALLER's argument (the interprocedural
     /// piece): the callee's return borrows one of its visible params; map that param
     /// position to the caller's argument so the `base` is a var the caller can witness.
-    fn call_ownership(&mut self, callee_d: u32, caller_args: &[Value]) -> Own {
+    fn call_ownership(
+        &mut self,
+        callee_d: u32,
+        caller_args: &[Value],
+        func: &Function,
+        defs: &Defs,
+    ) -> Own {
         let callee_own = self.return_ownership(callee_d);
         let callee_base = match callee_own {
             Own::Owned => return Own::Owned,
             Own::Borrowed { base } | Own::Join { base } => base,
         };
-        let base = self.caller_arg_base(callee_d, callee_base, caller_args);
+        let base = self.caller_arg_base(callee_d, callee_base, caller_args, func, defs);
         match callee_own {
             Own::Join { .. } => Own::Join { base },
             _ => Own::Borrowed { base },
@@ -2192,11 +2219,36 @@ impl<'a> Ownership<'a> {
     /// the same walk the @P290 bracket protects through, so the store the guard witnesses
     /// against is the store the bracket marks.  `u16::MAX` when the argument is not a view
     /// of one nameable container: a mint, or a join reaching two different roots.
-    fn caller_arg_base(&self, callee_d: u32, callee_base: u16, caller_args: &[Value]) -> u16 {
+    ///
+    /// **An argument that is itself a CALL is resolved by the oracle rather than by that
+    /// walk.**  `view_root_slots` is structural and stops at a loft-defined call, whose
+    /// returned store may be its own argument's or one it minted — the split only
+    /// [`Ownership::classify`] decides.  So ask it: `g(pick(vs, 0))` roots at `vs` exactly
+    /// as `g(vs[0])` does, one frame further out, and `g(mk())` stays unnameable because
+    /// the store `mk` minted belongs to no caller variable.  Without this the witness is
+    /// missing for every call-shaped argument, and a missing witness is the OVER-FREE
+    /// direction at a `CallRef` (loft#1318).
+    fn caller_arg_base(
+        &mut self,
+        callee_d: u32,
+        callee_base: u16,
+        caller_args: &[Value],
+        func: &Function,
+        defs: &Defs,
+    ) -> u16 {
         let attrs = self.data.def(callee_d).attributes();
-        if callee_base == u16::MAX
-            || (callee_base as usize) >= attrs.len()
-            || attrs[callee_base as usize].hidden
+        if callee_base == u16::MAX || (callee_base as usize) >= attrs.len() {
+            return u16::MAX;
+        }
+        // A hidden parameter is a return MECHANISM rather than something the author
+        // wrote, and most of them name nothing on the caller's side.  The delivery
+        // BUFFER is the exception: the caller allocates its own `__ref_N` and passes it
+        // at that position like any other argument, so a callee handing back its
+        // `__retbuf` is handing back a store the caller already holds — nameable, and
+        // the one answer that stops the caller adopting its own buffer (loft#1318).
+        // `__closure` stays refused here: nothing is passed at its position, and
+        // `closure_capture_base` reads the capture out of the closure build instead.
+        if attrs[callee_base as usize].hidden && !is_synth_buffer(&attrs[callee_base as usize].name)
         {
             return u16::MAX;
         }
@@ -2219,7 +2271,19 @@ impl<'a> Ownership<'a> {
         // never-free answer rather than guessing one of them.
         match view_root_slots(self.data, arg).as_deref() {
             Some([root]) => *root,
-            _ => u16::MAX,
+            // A walk reaching MORE than one root has no single store to compare against.
+            Some(_) => u16::MAX,
+            // A structural walk names a variable and what projects out of one; an argument
+            // that is itself a CALL is not one of those shapes, and the oracle is what
+            // answers for a call (@FR-O-Oracle).  Ask it: a callee handing back a view of
+            // its own argument roots this argument in the caller's variable just as a
+            // projection does, one frame further out.  `Owned` — the callee minted the
+            // store — leaves the base unnameable, which is the right answer there, because
+            // then no caller variable holds it.
+            None => match self.classify(arg, func, defs) {
+                Own::Borrowed { base } | Own::Join { base } => base,
+                Own::Owned => u16::MAX,
+            },
         }
     }
 
@@ -2729,6 +2793,27 @@ pub fn bracket_can_name(data: &Data, arg: &Value) -> bool {
 /// `OpGetRecord` looks a key up in a keyed collection.  For all four the root variable's
 /// store IS the result's store, which is what makes a projection chain nameable by its root
 /// and lets the @P290 bracket protect `pick(b.s, …)`, `pick(w[0], …)` and `pick(h[k], …)`.
+///
+/// ⚠ **The two NULLABLE element reads meet the criterion above and are deliberately NOT on
+/// the list, because adding them strands a store.** `OpGetVectorNullable` and
+/// `OpVectorRefNullable` are `v[i]` where an out-of-range index answers the null element
+/// instead of raising, and both are declared `-> reference[r]`, so the store they answer in
+/// is the receiver's exactly as their dense twins' is.
+///
+/// What blocks them is a disagreement one layer down, and it is `@FR-O-Proxy`'s named
+/// hazard in the ALLOCATE direction: the interpreter's materialise arm
+/// (`state/codegen.rs`, @PLN130 F1) fires on the deps PROXY — empty deps plus
+/// [`crate::generation::container_element_base`] — while the free sweep reads the ORACLE.
+/// A `par` body's element bind is typed without a dep and classifies `Borrowed`, so it sits
+/// in the gap: adding the spellings makes the arm allocate a store the sweep then declines
+/// to free. Measured on `tests/scripts/1040-generic-par-worker-in-generic-fn.loft` — three
+/// leaked `Cell` records, both backends. The arm's own premise says why: it assumes empty
+/// deps mean `scopes.rs` STRIPPED them and a free therefore exists, which holds for the
+/// reassigned-container case it was written for and not for a dep that was never set.
+///
+/// Nothing today reads the wrong answer through the gap — `caller_arg_base` resolves a
+/// nullable element read by asking the oracle instead, which is why loft#1318 closed
+/// without this. Correcting the list needs the two sites to ask ONE question first.
 ///
 /// **The criterion is not "the return deps on parameter 0"**, which several more ops also
 /// satisfy: `OpNewRecord` and `OpInsertVector` both answer a `DbRef` in argument 0's store
