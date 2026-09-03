@@ -3037,6 +3037,46 @@ pub fn callref_join_first_bind(
 /// Narrow for the same reasons: a `Join` with a NAMEABLE base only, and never through a
 /// fn-ref that captures a store — a capture reaches the return through `__closure`, which
 /// no caller variable names, so the identity test would have nothing true to compare with.
+/// The caller variable a fn-ref call's DECLARED return borrows, or `None` where the type
+/// names none.
+///
+/// The oracle's `CallRef` arm answers `Own::Owned` for a base it cannot NAME, and that
+/// fallback is not a verdict: a forwarding lambda (`fwd = fn(q) { inner(q) }`) reaches its
+/// own return through `__closure`, so its summary reads `Owned` while the type it declares
+/// says `vector<T>["q"]` — the return borrows a visible parameter.  A site that frees on the
+/// oracle alone therefore releases the caller's store.
+///
+/// The DECLARED dep is the fact the summary lost, and this maps it the same way
+/// [`Ownership::caller_arg_base`] maps a resolved one, so the base a guarded free witnesses
+/// against and the base the bracket protects cannot disagree.  Answers `None` for a hidden
+/// attribute (a delivery buffer is not a borrow) and for an argument no caller variable
+/// names, which is the conservative direction: no witness, no free.
+#[must_use]
+pub fn callref_declared_borrow_base(data: &Data, d_nr: u32, call: &Value) -> Option<u16> {
+    let Value::CallRef(v_nr, args) = call.unspan() else {
+        return None;
+    };
+    let defs = function_defs(data, d_nr);
+    let callee = defs
+        .fnref_targets
+        .get(v_nr)
+        .copied()
+        .filter(|d| *d != u32::MAX)?;
+    let def = data.def(callee);
+    if !def.returns_borrowed_view() {
+        return None;
+    }
+    let attrs = def.attributes();
+    let dep = *def
+        .returned()
+        .depend()
+        .iter()
+        .find(|&&d| attrs.get(d as usize).is_some_and(|a| !a.hidden))?;
+    let func = &data.def(d_nr).variables;
+    let base = Ownership::new(data).caller_arg_base(callee, dep, args, func, &defs);
+    (base != u16::MAX).then_some(base)
+}
+
 #[must_use]
 pub fn callref_collection_join_base(
     data: &Data,
@@ -3057,10 +3097,16 @@ pub fn callref_collection_join_base(
     if callref_capture_blocks(data, d_nr, value) {
         return None;
     }
-    let Own::Join { base } = ownership_of(data, d_nr, value) else {
-        return None;
-    };
-    (base != u16::MAX).then_some(base)
+    match ownership_of(data, d_nr, value) {
+        Own::Join { base } if base != u16::MAX => Some(base),
+        // `Own::Owned` is also this arm's FALLBACK for a base the summary could not name —
+        // a forwarding lambda reaches its own return through `__closure` — so the DECLARED
+        // dep is asked next.  It names the same kind of witness (a visible parameter mapped
+        // to the caller's argument), which is why both answers feed one identity free rather
+        // than two mechanisms.
+        Own::Owned => callref_declared_borrow_base(data, d_nr, value),
+        _ => None,
+    }
 }
 
 /// The closure-record offsets a callee's return may hand back — every `OpGetDbRef(__closure,

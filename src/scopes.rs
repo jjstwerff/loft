@@ -8712,7 +8712,37 @@ impl Scopes<'_> {
                     Deps::frame1(base)
                 }
             }
-            crate::use_analysis::Own::Owned => Deps::none(),
+            crate::use_analysis::Own::Owned => {
+                // ⚠ `Own::Owned` is ALSO the `CallRef` arm's fallback for a base it cannot
+                // name — its own doc says so — so at a site that frees it is not a verdict.
+                // A second hop reaches it: `fwd = fn(q) { inner(q) }` resolves (loft#1329
+                // made a fn-ref capture resolvable) and answers `Owned` because the base
+                // arrives through the capture, while the callee's own type says the return
+                // borrows `q`.  Taking that at face value gave the temp an unwitnessed free
+                // of the CALLER's collection, one per evaluation.
+                //
+                // So ask the CALLEE, which is where the fact is: a return that borrows a
+                // visible parameter is not owned, whatever the caller-side walk resolved.
+                // Its DECLARED dep still names WHICH parameter, so the arm keeps a binding
+                // and the store is decided per execution by identity against the argument —
+                // the borrow arm hands back that store and declines, the mint arm is
+                // distinct and frees.  With no nameable argument there is no witness, and
+                // the arm keeps the leak it had rather than freeing blind.
+                if def.returns_borrowed_view() {
+                    let base =
+                        crate::use_analysis::callref_declared_borrow_base(data, self.d_nr, val)?;
+                    if self.multi_assigned.contains(&base) {
+                        return None;
+                    }
+                    if record {
+                        Deps::none()
+                    } else {
+                        Deps::frame1(base)
+                    }
+                } else {
+                    Deps::none()
+                }
+            }
             crate::use_analysis::Own::Borrowed { .. } => {
                 if !record && def.returns_borrowed_view() {
                     return None;

@@ -35,6 +35,11 @@
 // gate instead.
 //
 // @falsified-at: 26d17f4b — interpret exit 101 -> 0, interpret panicked -> clean, native exit 1 -> 0, native panicked -> clean
+// …and the forwarding-closure cell against the build that first made its shape REACHABLE:
+// @falsified-at: 1bee39aa — interpret exit 1 -> 0, interpret 1 assertion failures -> 0, native
+//   exit 1 -> 0, native 1 assertion failures -> 0.  Two controls because the file grew a cell
+//   for a defect the first control cannot express: at 26d17f4b a captured fn-ref did not
+//   resolve, so the arm was never lifted and the cell passes there for the wrong reason.
 
 struct P1323 { n: integer }
 struct K1323 { k: integer, v: integer }
@@ -215,6 +220,44 @@ fn test_the_shapes_one_axis_away_are_unmoved() {
   assert(u == 600 && len(vv[0]) == 2 && vv[0][1] == 42, "an index-read view: {u} {len(vv[0])}");
 }
 
+fn test_a_forwarding_closure_arm_is_witnessed_by_the_declared_dep() {
+  // A lambda that FORWARDS to another (`fwd = fn(q) { inner(q) }`) reaches its own return
+  // through `__closure`, so the oracle's summary cannot name the base and answers `Owned` —
+  // which is its FALLBACK, not a verdict (`use_analysis`'s own doc says so).  Read at face
+  // value the arm took an unwitnessed free of the CALLER's collection, one per evaluation,
+  // and declining instead leaked worse than the release did.  The callee's DECLARED return
+  // dep still names WHICH parameter it borrows, so that is the witness and the identity free
+  // answers both arms.  Unreachable until loft#1329 made a captured fn-ref resolvable.
+  inner = fn(q: vector<integer>?) -> vector<integer> { q ?? [7, 8] };
+  fwd = fn(q: vector<integer>?) -> vector<integer> { inner(q) };
+  none: vector<integer>? = null;
+  s = 0;
+  for i in 0..70000 { r = if i % 2 == 0 { fwd(none) } else { fwd(none) }; s += r[1]; }
+  assert(s == 70000 * 8, "forwarding mint arms: got {s}");
+  // The over-free direction, which the ceiling above cannot see: two iterations already
+  // empty the source while the value still reads right, so this asserts the SOURCE.
+  c: vector<integer>? = [41, 42];
+  t = 0;
+  for _ in 0..4 { r2 = if true { fwd(c) } else { fwd(none) }; t += r2[1]; }
+  assert(t == 4 * 42, "forwarding borrow arm sum: got {t}");
+  assert(len(c ?? []) == 2 && (c ?? [])[0] == 41, "the forwarded source: got {len(c ?? [])}");
+  a: vector<integer>? = [41, 42];
+  u = 0;
+  for i in 0..1000 { r3 = if i % 2 == 0 { fwd(a) } else { fwd(none) }; u += r3[1]; }
+  assert(u == 500 * 42 + 500 * 8, "forwarding alternating: got {u}");
+  assert(len(a ?? []) == 2, "the alternating source: got {len(a ?? [])}");
+  // A forwarding RECORD twin, and the no-branch rebind the same commit closed.
+  mkr = fn(k: integer) -> P1323 { P1323 { n: k } };
+  fwdr = fn(k: integer) -> P1323 { mkr(k) };
+  w = 0;
+  for i in 0..70000 { r4 = if i % 2 == 0 { fwdr(1) } else { fwdr(2) }; w += r4.n; }
+  assert(w == 35000 * 3, "forwarding record arms: got {w}");
+  x: vector<integer> = [];
+  y = 0;
+  for _ in 0..70000 { x = fwd(none); y += x[1]; }
+  assert(y == 70000 * 8, "forwarding rebind, no branch: got {y}");
+}
+
 fn main() {
   test_a_closure_mint_arm_beside_a_variable_arm_is_freed();
   test_a_closure_mint_arm_beside_a_join_arm_is_freed();
@@ -226,5 +269,6 @@ fn main() {
   test_a_declared_local_re_bound_from_a_join_in_a_loop();
   test_a_coalesce_hoist_owns_a_call_subject();
   test_the_shapes_one_axis_away_are_unmoved();
+  test_a_forwarding_closure_arm_is_witnessed_by_the_declared_dep();
   print("1323-every-arm-of-a-value-branch-has-its-own-binding ok\n");
 }
