@@ -236,7 +236,10 @@ fn a_source_dependency_in_neither_place_is_refused() {
         r#"["game"]"#,
         Some("[publish] deps-incomplete: hex_field, hex_grid\n"),
     );
-    assert!(!ok, "the fold accepted an entry with unresolvable deps:\n{out}");
+    assert!(
+        !ok,
+        "the fold accepted an entry with unresolvable deps:\n{out}"
+    );
     assert!(
         out.contains("hex_field") && out.contains("hex_grid"),
         "the refusal must name what the source uses:\n{out}"
