@@ -184,7 +184,7 @@ fn bootstrap_core(
     fn_names: &'static [&'static str],
     reload: Option<(&str, &str)>,
 ) -> Stores {
-    crate::scopes::check(&mut p.data);
+    crate::scopes::check(&mut p.data, &mut p.database);
     let mut state = Box::new(State::new(p.database.clone()));
     crate::compile::byte_code(&mut state, &mut p.data);
 
@@ -369,7 +369,7 @@ pub fn wasm_debug_selftest() -> String {
     if p.diagnostics.level() >= crate::diagnostics::Level::Error {
         return "FAIL parse-prog".to_string();
     }
-    crate::scopes::check(&mut p.data);
+    crate::scopes::check(&mut p.data, &mut p.database);
     let mut state = Box::new(State::new(p.database.clone()));
     crate::compile::byte_code(&mut state, &mut p.data);
     let d = p.data.def_nr("n_compute");
@@ -969,7 +969,7 @@ mod tests {
         let mut p = Parser::new();
         p.parse_dir("default", true, false).expect("parse default/");
         assert!(p.parse(program_path, false), "fs program parses");
-        crate::scopes::check(&mut p.data);
+        crate::scopes::check(&mut p.data, &mut p.database);
         (p.data.definitions(), p.data.def_nr("n_main") != u32::MAX)
     }
 
@@ -988,7 +988,7 @@ mod tests {
             p.parse_source(program_src, "program.loft", false),
             "embedded program parses"
         );
-        crate::scopes::check(&mut p.data);
+        crate::scopes::check(&mut p.data, &mut p.database);
         (p.data.definitions(), p.data.def_nr("n_main") != u32::MAX)
     }
 

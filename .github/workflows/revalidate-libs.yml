@@ -43,72 +43,22 @@ jobs:
       matrix: ${{ steps.m.outputs.matrix }}
       count: ${{ steps.m.outputs.count }}
     steps:
+      # The matrix policy — which packages are checked, at which version, and which are
+      # deliberately skipped — lives in `scripts/revalidate_matrix.py` and is read from
+      # there by BOTH this job and `scripts/revalidate_libs_local.sh`, the same gate on a
+      # work branch.  It used to be inlined here and re-implemented there, and the two
+      # drifted on four questions: the compiler's own package (skipped here, checked
+      # there, which made the local gate permanently red — loft#1315), the known-broken
+      # map, the `subpath` default, and whether a YANKED version may be validated (it may
+      # not; this copy had no such filter and could have reported on a version nobody can
+      # install).  A policy with two readers gets one home.
+      - name: Checkout loft (for the matrix policy)
+        uses: actions/checkout@v4
       - id: m
         run: |
           set -euo pipefail
           curl -fsSL https://raw.githubusercontent.com/loft-lang/registry/main/index.json -o index.json
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, re, sys
-          idx = json.load(open("index.json"))["packages"]
-          key = lambda v: [int(x) for x in re.findall(r'\d+', v)][:3]
-          # KNOWN_BROKEN — a published lib a language change ALREADY retro-broke
-          # (pre-freeze migration debt), skipped so the gate reflects NEW breaks and
-          # future reds are real signals.  Every entry MUST cite a tracking issue and
-          # be removed the moment the lib republishes migrated.  (Logged to stderr so
-          # it is visible in the job log without corrupting the matrix on stdout.)
-          KNOWN_BROKEN = {
-              # (empty) — hex_terrain 0.1.1 republished migrated (loft-lang/loft#579).
-              # Add an entry ONLY with a tracking issue + a remove-on-republish note.
-          }
-          legs = []
-          for name, pkg in idx.items():
-              # `loft` is published, and it is the COMPILER rather than a library — the
-              # question this workflow asks ("does a language change retro-break a shipped
-              # lib?") is not one the compiler can answer about itself.  Its `tests/` is the
-              # repo's own suite, which `make ci` and the CI workflow already run, and it
-              # holds FIXTURES that are deliberately not standalone programs:
-              # `tests/data/script_hello.loft` says so in its own header — "runs only under
-              # `--script` … it is NOT accepted by the plain compiler".  The re-classifying
-              # `loft --dump` loop compiles every `tests/**/*.loft`, so it read those
-              # fixtures as COMPILE-BREAKs and reported the compiler as retro-breaking
-              # itself.  (Not a regression this leg caught late: until the `subpath` fix it
-              # died on a missing directory and never ran at all.)
-              if name == "loft":
-                  print("::notice::revalidate-libs SKIP 'loft': the compiler is not a library; its suite is CI's job", file=sys.stderr)
-                  continue
-              if name in KNOWN_BROKEN:
-                  print(f"::warning::revalidate-libs SKIP known-broken '{name}': {KNOWN_BROKEN[name]}", file=sys.stderr)
-                  continue
-              vers = pkg.get("versions", {})
-              if not vers:
-                  continue
-              latest = max(vers, key=key)
-              url = vers[latest].get("url", "")
-              m = re.match(r"https://github\.com/([^/]+/[^/]+)/releases/download/([^/]+)/", url)
-              if not m:                       # non-GitHub / malformed URL — can't check out; skip
-                  continue
-              repo, tag = m.group(1), m.group(2)
-              legs.append({
-                  "name": name,
-                  "version": latest,
-                  "repo": repo,
-                  "tag": tag,
-                  # A package that declares no `subpath` lives at its repo ROOT, not in a
-                  # directory named after itself.  Defaulting to `name` produced
-                  # `working-directory: lib/loft` for the one package where the repo IS the
-                  # package, and the leg died before running a single test with "No such file
-                  # or directory" — which the roll-up then reported as *"a PUBLISHED library
-                  # FAILS against this loft — a language change is retro-breaking a shipped
-                  # lib"*, naming a language regression that had not happened.
-                  #
-                  # Measured against the live index: 42 of the 43 legs declare `subpath`
-                  # explicitly and are unaffected either way; `loft` was the only leg taking
-                  # this default, so the old one had no correct users at all.
-                  "sub": vers[latest].get("subpath", "."),
-              })
-          print("matrix=" + json.dumps({"include": legs}))
-          print("count=" + str(len(legs)))
-          PY
+          python3 scripts/revalidate_matrix.py index.json --format github >> "$GITHUB_OUTPUT"
           echo "discovered $(grep -oP 'count=\K\d+' "$GITHUB_OUTPUT" | tail -1) published libraries"
 
   revalidate:

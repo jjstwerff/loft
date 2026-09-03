@@ -9,6 +9,664 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A fn-ref that FORWARDS is witnessed by the dep its callee declares (2026-09-04)
+
+Branch-internal, never on `main`: loft#1329 made a captured fn-ref resolvable, which first
+made this shape reachable.  A forwarding lambda (`fwd = fn(q) { inner(q) }`) reaches its own
+return through `__closure`, so `use_analysis`'s summary cannot name the base and answers
+`Own::Owned` — the arm's FALLBACK, which its own doc says is not a verdict.  D-own-8's arm
+lift read it as one and freed the caller's collection, one per evaluation, with the value
+still right for the first iterations.
+
+Declining the lift there was measured and rejected: it closes the over-free and leaks worse
+than 2026.8.0 (70 000 forwarding mint arms exhaust the store table where the release is
+flat).  The fact the summary lost is the one the callee DECLARES — `-> vector<T>["q"]` names
+the parameter the return borrows — so `callref_declared_borrow_base` maps it to the caller's
+argument through the same `caller_arg_base` a resolved base uses, and
+`callref_collection_join_base` consults it exactly where the oracle answered the fallback.
+One identity free serves both answers.  Guard: the forwarding cells in
+`1323-every-arm-of-a-value-branch-has-its-own-binding`, falsified at `1bee39aa` on both
+backends — a second control, because at the first the target does not resolve and the cell
+would pass for the wrong reason.
+
+### A `-> text?` lambda called through a fn-ref compiles on `--native` (2026-09-04)
+
+Found while sweeping the nullable-return spellings beside loft#1329, and it is the same
+mistake on the TEXT axis: one question read with two spellings, one of which forgot the
+wrapper.
+
+`Parser::text_return` peels `Optional` before it converts a body, so a `-> text?` call site
+appends exactly the same hidden `&text` work buffers a `-> text` one does.  The native fn-ref
+dispatch's candidate filter asked whether this was a text return of the RAW type, so for
+`Optional(Text)` it counted those buffers as user-visible arguments.  No candidate matched the
+arity, the dispatch collapsed to `_ => unreachable!()`, and a `match` with no value-producing
+arm has no type — so rustc answered `error[E0282]: type annotations needed` pointing at
+generated Rust.  A whole class of loft program did not compile, reported as a rustc diagnostic
+naming nothing about loft.
+
+The filter's own doc comment already records this exact failure for the arity it fixed
+earlier (loft#1116, where a call appending two buffers matched nothing).  This is the same one
+a wrapper out, which is why both reads are now the single `is_text_return` and peel together
+rather than being two `matches!` that agree by habit.
+
+⚠ **The interpreter is not a control for it** — it answered correctly on every cell
+throughout, so the whole defect is in what `--native` emits and a cell scored on the
+interpreter reads green on the broken build.  What scores it is the native run's EXIT.
+
+⚠ **And `null` was the cell that could have been traded away.**  Treating a `text?` return as
+a text return also wraps each dispatch arm in `.to_string()`, which is the shape that turns an
+absent text into `""`.  Measured: it does not — a null arm still reads `== null` and an EMPTY
+string still reads `!= null`, identically to the named-function twin on both backends.
+
+Guard `tests/scripts/fnref-text-optional-return-dispatches.loft`, 5 cells; falsified at
+`f437c1f2` (native exit 1 → 0, interpret INERT).
+
+### A vector local rebound from a fn-ref call frees the store it displaces (2026-09-04)
+
+loft#1329, and it is loft#1328's sibling: the same question asked of a VECTOR destination
+instead of a reference, an enum or a keyed collection.  `x = m(i)` in a loop over a fn-ref
+held one store per ITERATION and aborted at the 65 535-store table.  Four readers of one
+fact were short, and each had to be closed before the next was measurable.
+
+**1 — the native gate had no `Vector` arm (`@FR-O-NoDiverge`).**  `generation/dispatch.rs`'s
+displaced-free gate tested `Reference | Enum | keyed`, while the interpreter's twin
+(`state/codegen.rs`'s `owned_ref`) has carried `Vector` all along.  One kind, present on one
+side and absent on the other — the asymmetry the rule exists to forbid.
+
+**2 — a capture is a payload, not a candidate.**  With that closed, a fn-ref FORWARDING to
+another fn-ref still grew the peak on BOTH backends, which is the rule holding: they read the
+same fact and it was short.  A capturing lambda's assignment is a block that mints the closure
+record, WRITES each capture into it and then yields the `FnRef`; a capture that is itself a
+fn-ref is written as an `FnRefDnr` argument of that write.  `use_analysis::fnref_target_in`
+walked the whole tree, saw two definition numbers and answered `Some(u32::MAX)` — *"this
+variable names TWO targets"*, the answer reserved for a slot two different lambdas were
+assigned to.  The callee was then unresolvable, `callref_delivers_collection` returned false,
+the dep survived, and nothing freed anything.  It now reads the marker the right-hand side
+YIELDS, which is what the function's own doc comment already described; every branch of a
+value branch is still yielded, so `f = if c { a } else { b }` reports the ambiguity that
+reading is for.
+
+**3 — one question asked with two spellings, so the sweep contradicted itself.**  The nullable
+destination could not be measured at all: a lambda declaring `-> vector<τ>?` aborted the
+compiler on the H5 two-pass contract.  The between-passes buffer sweep (`parser/mod.rs`) asks
+*"does this deliver a collection?"* through `ret_promo_base`, which peels `Optional(Vector)` —
+and then rejected the same definition on the RAW return type.  So the peel admitted the lambda
+to the promotion pass while the raw read denied it a buffer, and pass 2 GREW the attribute.
+Both reads are now `ret_promo_base`, and the buffer's type is the BASE, matching the
+signature-time reservation in `definitions.rs`: the buffer is storage, and storage is never
+absent — the `?` belongs to the value the caller reads.
+
+**4 — and its native twin.**  Reserving the buffer is half; the fn-ref dispatch decides whether
+to MINT one, and `generation/emit.rs` read the raw return type there too.  A nullable-collection
+candidate was handed `DbRef::NULL` and its delivery wrote through it — `vector_add` carries no
+`.rec != 0` test, so the arm that returned a collection faulted with *"a NULL DbRef reached a
+store accessor"* while the arm that returned `null` was quietly fine.
+
+**A carve-out's own safety claim is a measurement, not a premise.**  `owned_ref`'s bare
+`Vector` arm said a nullable vector *"already releases through its own path"*, so widening it
+*"would free twice"*.  Re-measured, that is false: `x: vector<τ>? = null` grew the peak 1:1
+with the iteration count on both backends while its dense twin stayed flat.  The peel is safe
+because an `Optional` destination routes to the runtime-GUARDED post-free, which
+`free_displaced` no-ops on a same-store, free-protected or stack-record ref — the double free
+the bare spelling was avoiding is not reachable from there.
+
+⚠ **The exit-leak gate cannot see any of this.**  The frame frees everything, so at 200
+iterations every shape reports no leak on both backends and answers correctly; what grows is
+the PEAK.  `LOFT_STORES=timeline`'s `peak` is the cheap instrument (203 → 5 at 200 iterations
+for the nullable cell), and the store table is what turns the watermark into an accept/reject
+split a guard can score.
+
+**A second cure moved an existing A/B onto a different channel.**
+`nullable_ret_buffer::default_path_is_unchanged` pinned that `LOFT_NO_NULLABLE_RETBUF=1`
+restores the pre-fix path, measured as *"the filed leak returns"* — and it stopped holding,
+because the work-ref that program leaks through is an `Optional(Vector)` local re-Set every
+turn, so `owned_ref`'s new peel releases it whatever the switch says. Its own failure message
+named the two explanations (*"either the opt-out broke or the leak has another cure"*) and the
+second is the true one. The control now measures the switch on `MIXED` and on the VALUE
+channel: with the buffer off, `pick`'s aliasing arm hands back the caller's `base`, the result
+reads as owned, and the program prints `base=2 base0=39`. That is measured identically on
+`a8c0b74d` — the switch's own effect, not something the peel introduced — and a value channel
+is the stronger one, since a leak gate is monotone and cannot score an over-free.
+
+Guard `tests/scripts/1329-a-fn-ref-vector-rebind-frees-the-store-it-displaces.loft`, 8 cells,
+5 of which fail on `a8c0b74d` across 10 of the 16 cell x backend runs; the other 3 are its
+controls, and they pass on the control build.  `make ci` green.
+
+### A `??` default-arm mint is released once (2026-09-03)
+
+loft#1322.  `_vec_N` and `__vdb_N` name ONE store — the view is `OpGetField(__vdb_N, 0)` — and
+both were freed: the return-delivery materializer through the view after the append, the record
+at scope exit.  `@FR-O-Borrow` allows one owner and one free.
+
+The site was behaving as designed, which is why the obvious readings do not close it.
+`parser/operators.rs` picks the view model for an OWNED subject (`skip_free(_vec_N)`, the record
+releasing the store) and `mark_inline_ref` only for a BORROWED one — *"do not allocate"* without
+*"never free"* — because a borrowed subject's `??` in return-tail position hands the view to the
+materializer.  The filed shape takes the second arm honestly: probed, its subject type reads
+`Deps { items: [0] }`, naming the parameter.  So neither name was silenced.
+
+**Two cures were measured before the third, and both are recorded on the issue.**  Peeling the
+`Optional` on the first gate is INERT — the subject's type is already an unwrapped `Vector`.
+Silencing the record unconditionally closes every shape and then exhausts the store table in
+`1248b-a-capture-witness-is-the-slot-the-return-reads`.
+
+⚠ **The flags are CUMULATIVE ACROSS PASSES, and that is the whole of the third cure.**  A
+capture subject reads empty deps on pass 1 and takes the view model, then reads non-empty deps on
+pass 2 and arrives at the other arm — so its `_vec_N` is ALREADY never-freed, and silencing the
+record too leaves the store with no owner.  The record goes quiet only where the view's free
+actually runs, asked as `is_skip_free(w)`: which arm the variable ENDED in, not which one this
+pass took.
+
+⚠ **No value can carry the verdict**, so the guard is in two halves.  A second free of an
+already-freed store is a no-op and `LOFT_STRICT_STORES` does not flag it, so
+`tests/scripts/1322-a-default-arm-mint-is-freed-once.loft` pins the shapes and their values
+while `tests/redundant_free.rs` counts `LOFT_TRACE_DB`'s `already_free=true` lines — the only
+channel there is.  It carries a `the_harness_can_see_a_redundant_free` cell, because without one
+a trace that stopped reporting would read exactly like a clean tree.
+
+⚠ **A residual under the same rule, one pair of names over:** a closure record is released
+through BOTH the fn-ref value and its `___clos_N` local, so its cascade runs twice and the second
+finds the capture's store gone.  Pre-existing (measured on `origin/main`), unchanged here, and it
+is the shape that cell uses.
+
+### An opaque fn-ref return borrows its arguments (2026-09-03)
+
+loft#1327.  A closure called through a fn-TYPED PARAMETER may hand back its argument, and the
+caller freed it anyway: `fn plain(a, g) { u = g(a); u[1] }` released the CALLER's vector on the
+borrow arm, on both backends, silently — the next allocation reused the slot and the caller's
+vector then read that allocation's contents (`some[1]` answered 299 where 42 was written).
+Present on released 2026.8.0.
+
+`@FR-O-Move` puts the obligation on the return TYPE — *"if the return borrows a parameter, the
+return type records it"* — and that presumes a type able to carry it.  A DEFINITION carries it,
+which is what `fnref_result_type` maps into the caller's space.  A fn TYPE has nowhere to write
+it: `fn(vector<integer>?) -> vector<integer>` is the whole of what an author may spell.  So the
+deps arrived empty whatever the target did, `u` was typed an owner, and scope exit freed it.
+
+A fn-typed PARAMETER is the case where the target is unknowable from the body being compiled: no
+assignment in it resolves one.  So the return now borrows what it MIGHT borrow — every heap
+argument, rooted through `view_root_slots`, the same walk the @P290 bracket uses — and a
+non-empty dep is what stops the free.  The rule gains a clause for it, `(O-Opaque)`.
+
+⚠ **The mint arm costs nothing, and that was measured rather than assumed.**  Declining a free
+normally trades the over-free for a leak; here the fn-ref call's own runtime buffer already owns
+what the closure minted, so 70 000 default-arm calls past the 65 535-store table complete on both
+backends.
+
+⚠ **A fn-ref LOCAL is untouched.**  A local is resolved from its assignment
+(`Scopes::fnref_target`), and the lift and identity-free routes built on that read the empty deps
+this leaves alone — the same-frame cell is the control.  A local assigned two DIFFERENT lambdas
+is opaque in the same way and is NOT covered: the parser cannot see that, and the same free
+reaches it.  That fact lives one pass later.
+
+Guard `tests/scripts/1327-an-opaque-fn-ref-return-may-be-its-argument.loft`, 6 cells; falsified
+at `c3da7fce` (interpret 3 assertion failures -> 0, native 1 -> 0).  The VALUE channel is what
+moves: a freed-then-reused slot answers wrong rather than faulting, so neither the leak nor the
+panic channel sees it.
+
+Found by loft-b9 while measuring D-own-8's parameter-base cells.
+
+### A rebind from a fn-ref call frees the store it displaces (2026-09-03)
+
+loft#1328.  `x: P? = null; for i in 0..N { x = m(i) }` over a fn-ref `m` held one store per
+iteration on `--native`, released only at frame exit.  The native gate that emits the displaced
+free listed its fresh-store right-hand sides as `Call | Insert | Block` — `CallRef` was missing,
+so a rebind from a CLOSURE call escaped it entirely.  The interpreter's twin
+(`state/codegen.rs`'s `owned_ref`) keys on the DESTINATION and so never had a spelling to miss,
+which is the asymmetry `@FR-O-NoDiverge` exists to forbid.  One `Value::CallRef` arm closes it.
+
+⚠ **The exit-leak gate cannot see this class.**  The frame frees everything, so at 1000
+iterations both backends report no leak and answer correctly; what grows is the PEAK.  The
+65 535-store table is what turns that into something scorable: at 70 000 iterations `--native`
+aborts with `store table exhausted` where the interpreter completes and answers 69 999.  So the
+guard counts past the ceiling and `make falsify` reports the move on the PANIC channel, not the
+assert channel — no assertion is reached on the broken build at all.
+
+Found by loft-b9 while measuring a lift over a branch arm; the sharper channel (accept/reject at
+the ceiling rather than a peak watermark) is what made it a guardable defect.
+
+Guard `tests/scripts/1328-a-fn-ref-rebind-frees-the-store-it-displaces.loft`, 6 cells over the
+nullable, dense and keyed destinations with the direct-call spelling and a destination-reading
+callee as controls; falsified at `05302d39`.
+
+⚠ **A sibling this does NOT close, measured while checking the kinds:** a VECTOR local rebound
+from a fn-ref call aborts at the same ceiling on BOTH backends — the gate's type test names
+`Reference`, `Enum` and the keyed kinds, and the interpreter's `owned_ref` does include
+`Type::Vector`, so the vector shape fails for a different reason and is its own item.
+
+### A whole-tuple bind COPIES on `--native` too (2026-09-03)
+
+loft#1325.  `u = a` over a local `(text, text)` emitted `let mut var_u: (String, String) =
+var_a;`, which MOVES it — so every later read of `var_a` was rustc E0382 and the program did not
+build at all, while the interpreter ran it and answered what `@FR-B-Copy` promises: an
+INDEPENDENT copy.  An accept/reject split between the backends is the divergence
+`formal/operational.md` D-op-1 forbids, and the refusing side was the wrong one — `(B-Copy)`
+says the bind is a copy, so `.clone()` is the emission that keeps the promise.
+
+The arm is the sibling of P247's, one level out: that one clones a `TupleGet` source
+(`__ref_N = var_t.0`), this one the whole `Var`.  Both share `tuple_has_non_copy_leaf`, so
+neither can drift about what a non-Copy leaf is, and both fire only on a LOCAL source — a tuple
+PARAMETER arrives borrowed and is re-spelled by `tuple_arg_owned_elems` (loft#840, loft#1005),
+which keeps that pair to itself.
+
+Four shapes were refused and each named a different rustc message: the plain bind, a mixed
+`(integer, text)` pair and a nested `((integer, text), integer)` as *borrow of moved value*, and
+the issue's second shape — append into a vector, then keep writing the source — as *assign to
+part of moved value*.  An all-scalar tuple is `Copy` in generated Rust, compiled before the
+change and is the control for the axis.
+
+Guard `tests/scripts/1325-a-whole-tuple-bind-copies-on-native-too.loft`, 8 cells; falsified at
+`61e6fc62` with native exit 1 -> 0 and the interpreter INERT.  That asymmetry is structural: a
+guard for an accept/reject divergence has one movable side, and on the broken build `--native`
+produces no program to run, so the exit code is the only channel an assert could never reach.
+
+### `=` on a captured KEYED collection replaces it, like its vector twin (2026-09-03)
+
+loft#1326.  A whole-value rebind of a captured keyed collection EMPTIED it — `m = [Row { k: 9,
+v: 9 }]` inside a closure read back `len 0`, both backends, nothing said.  Both axes were
+required: the same rebind of a captured VECTOR was correct (loft#1279 taught that branch this
+lesson), the same keyed collection reached through a captured STRUCT FIELD was correct, and the
+same statement written without a closure was correct.
+
+The cause is the one loft#1279's own commit predicted — *"That selector has now been too narrow
+three times, and the lowering was right every time"* (P261, loft#917, loft#1279).  This is the
+fourth.  A capture resolves to `OpGetDbRef` of the closure-record field rather than to the
+`OpGetField` a struct field gives, so the keyed replace's `self.is_field(to)` answered no and the
+whole clear-then-build branch was skipped.
+
+Two halves, because the literal ARRIVES differently through a capture: it is a `Block` whose ops
+build straight into the destination (@PLN93's build-into-target) where a struct field gets a
+`Value::Insert` of the same ops.  So the gate admits a captured destination, and the clear goes
+in FRONT of that block rather than inside it — putting it inside erases what the block just
+built, which is the mistake loft#1279's first attempt made in the vector arm.
+
+⚠ **Naming the destination is not writing into it.**  A comprehension over the captured
+collection itself (`s = [for x in s { … }]`) names `s` and builds a fresh value; clearing before
+it reads its source is what made seven of loft#1195's cells answer empty.  The gate asks
+`value_writes_into`, the mutating-op question, which is the same one the vector arm asks — and
+the comprehension is a cell in the guard rather than a hope.
+
+Guard `tests/scripts/1326-a-captured-keyed-collection-rebind-replaces.loft`, 10 cells over the
+four right-hand-side sources, all four keyed kinds and five controls (the plain local, the
+captured struct field, the captured vector, `+=`, and the comprehension); falsified at
+`24381205`.  Eight of the thirteen probe-matrix shapes answer wrong on that build.
+
+`formal/closures.md` records what this does NOT settle: a rebind OUTSIDE the closure lets the
+closure read the reassigned value at the keyed kinds and the build-time value at vector and
+struct, because a keyed rebind refills the existing store.  Store lifetime is correct either
+way; which value the closure should see is an open contract question.
+
+### A closure record suppresses the free of the store it actually holds (2026-09-03)
+
+loft#1324.  A closure record takes over the frame-exit free of its capture's store, and
+`get_free_vars` decided WHICH local that is by walking `function.tp(v).depend()`.  That list is
+one LATEST fact, and `@FR-O-Latest` says so: ownership belongs to the latest assignment *at a
+point*, which a type cannot express.  For a capture reassigned after the closure was built the
+two name different stores, and the suppression landed on the wrong one — in both directions at
+once:
+
+* the store the record ADOPTED kept its frame-exit free, so a closure that ESCAPES its defining
+  frame read a released store — `null(oob)`, both backends, nothing said;
+* the store the local now names had its free suppressed although nobody adopted it, so it leaked
+  one store per reassigned capture — the filed symptom.
+
+The issue asked which of the two stores leaks.  It is the REASSIGNED one; the closure keeps the
+build-time store, which the guard pins by value (`h(0)` reads 42 while `e` reads 52).
+
+`Scopes::capture_build_backing` answers positionally: one pre-order walk of the raw body records
+each local's most recent backing root, and `OpSetDbRef(___clos_N, off, capture)` — the build —
+reads it off.  Computed once per consumer rather than per variable, and all three consumers take
+the same map, because the free emitter, `check_ref_leaks` and `ownership_cfg`'s oracle must
+answer identically or a suppression one of them does not know about reads as a leak (loft#1308's
+lesson, restated here rather than re-derived).
+
+⚠ **Declining the suppression for a reassigned capture also stops the leak and leaves the
+use-after-free exactly where it was.**  That is why the cure names the store instead, and why
+the escaping cell is in the guard: it is the one a decline cannot pass.
+
+⚠ **The keyed kinds diverge on a question this fix does not settle.**  `e = [Row { k: 1, v: 51 }]`
+over a captured `hash` / `sorted` / `index` REFILLS the existing store instead of minting one, so
+the closure reads the reassigned value where the vector and struct spellings read the build-time
+one.  The store-lifetime half is correct either way — no leak, no premature free, both backends —
+so this is a contract question, recorded in `formal/closures.md` under `(L-CapHeap)` and filed.
+
+Guard `tests/scripts/1324-a-reassigned-capture-suppresses-the-store-the-record-holds.loft`,
+12 cells over reassignment count, build order, capture kind, spelling, loop depth and escape;
+falsified at `392694cd`.  Six of its shapes leaked on that build and none do now; the ASSERT
+channel moves only on the escaping cell, because `make falsify` runs a guard through `--tests`,
+which does not leak-check.
+
+### Every path of a bound value branch has its own binding — D-own-8 and D-bind-16 closed (2026-09-03)
+
+loft#1320 (residual), loft#1321, loft#1323.  `@FR-O-Complete` asks for the ownership fact per
+binding, per path; a binding joined from arms that disagree carried both arms' deps and so
+had ONE fact for two paths — a borrow, which left the arm that minted with no owner (leak) or,
+read the other way, let the join alias the arm a plain bind would have copied (`@FR-B-Copy`).
+The close widens loft#1320's principle to the whole arm-kind table: `Scopes::arm_bind`
+rewrites every arm tail a SINGLE bind would leave owning into `{ __lift_N = <tail>;
+__lift_N }` — a fn-ref call of any ownership, a named call answering a record the caller must
+copy, a plain variable (record: copied at the bind; vector: refilled into a function-scoped
+buffer by `OpReplaceVector`, whose element type the scope pass now reads from the `Stores`
+registry it is handed — `scopes::check(data, database)`) — and the joined binding's dep list
+is rewritten to name the temps.  A view arm stays a view; a branch in call-ARGUMENT position
+lifts calls only (an argument aliases).  The two shapes loft#1320 declined take a witness
+SNAPSHOT (`__wit_N`, written beside each bind from that bind's base — `@FR-O-Latest`); the
+`??` hoist of a call subject owns what a plain bind of it would and releases its previous
+store in the IR (so `--native`, which does not release a displaced store on a fn-ref re-bind
+of a user local — loft#1328 — stays flat); `gen_set_first_at_tos`'s Reference/Enum null-init
+arm is asked through `.base()`; and the loft#1245 witnessed lift no longer frees a fn-ref
+return that is a raw keyed or index VIEW (it emptied the caller's hash — a regression since
+PR #1268).  Two more proxy sites declare `@FR-O-Proxy asks free` and consult the override.
+Guards: `1323-every-arm-of-a-value-branch-has-its-own-binding`,
+`1321-a-joined-binding-copies-what-a-plain-bind-copies`,
+`1245b-a-witnessed-lift-does-not-free-a-keyed-view`, each falsified at 26d17f4b on both
+backends.  Filed beside it: loft#1327 (a fn-ref through a fn-typed PARAMETER reads owned and
+frees the caller's collection — present on 2026.8.0) and loft#1328.
+
+### A call-shaped argument names the store a fn-ref may hand back (2026-09-03)
+
+loft#1318.  `@FR-O-Oracle` says a call resolves through the callee's return summary, and a
+`Join` is settled at run time by store identity against the base the dep names.  The summary
+is written in the CALLEE's parameter space, so delivering it means naming the caller value the
+returned store may lie in — and where that translation gave up, a `CallRef` answered `Owned`,
+the one verdict that licenses a free.  A fn-ref `??` handing back its argument then released a
+container the caller still held: `g(pick(vs, 0))` in a loop answered 42, then `null(oob)` with
+`len(vs)` at 0, then the `??` default, with nothing said.  Present on both backends.
+
+Three translations were losing the base, all in `use_analysis::caller_arg_base`:
+
+* an argument that is itself a CALL.  The structural walk stops at one deliberately — a
+  callee's returned store may be its argument's or one it minted — on the stated ground that
+  the caller lifts it into a temp first.  A BORROW-returning callee is not lifted, so the
+  premise did not hold and the walk simply answered "unnameable".  It now asks the oracle,
+  which is the thing that decides that split: `g(pick(vs, 0))` roots at `vs` one frame further
+  out, and `g(mk())` stays unnameable because a minted store belongs to no caller variable.
+* a keyed lookup.  `projection_ops`, the set the oracle roots a borrow through, carried four
+  ops and was short of `OpGetRecord`, `OpVectorRef` and `OpVectorRefNullable` — every one
+  declared `-> reference[arg0]`.  `m[k].v` therefore read as a MINT, and the caller emptied
+  its own collection: quietly at `hash`, with `Store access out of bounds` at `sorted` and
+  `index`.
+* a hidden `__retbuf`.  Hidden parameters were refused wholesale as return mechanism rather
+  than something the author wrote.  The delivery BUFFER is the exception — the caller
+  allocates its own `__ref_N` and passes it at that position — so a callee handing back its
+  `__retbuf` hands back a store the caller already holds.  `__closure` stays refused, since
+  nothing is passed at its position and `closure_capture_base` reads that one out of the
+  closure build.
+
+Naming the base rather than declining is what keeps the other half: the mint arm of the same
+closure is still freed per call, measured at 70 000 iterations against the 65 535-store
+ceiling.
+
+⚠ **Statement context is an axis in this family, and it retires guard cells silently.**
+`s += g(vs[0])[1]` and `c = g(pick(vs, 0))[1]` are CORRECT on the broken build while the same
+reads inside an interpolation are wrong — the accumulate and bind paths reach a different lift
+decision.  Two cells of the guard were vacuous until each was measured against the pre-fix
+build.  The filed axis table also had one row backwards: two straight-line calls fail too, and
+the loop only makes it easy to see.
+
+⚠ **`is_projection_op` is still short by the two nullable element reads by its own criterion,
+and correcting it is blocked.** Adding `OpGetVectorNullable` / `OpVectorRefNullable` strands
+three `Cell` records in `tests/scripts/1040-generic-par-worker-in-generic-fn.loft`:
+`state/codegen.rs`'s @PLN130 F1 materialise arm fires on the deps PROXY while the free sweep
+reads the ORACLE, and a `par` body's element bind sits in the gap — `@FR-O-Proxy`'s named
+hazard in the allocate direction.  It does not reproduce on `main`, so it stays a measurement
+rather than an issue; the doc comment on `projection_ops` carries it.
+
+Guard `tests/scripts/1318-a-call-shaped-argument-names-the-store-a-fn-ref-may-hand-back.loft`,
+14 cells over container kind, argument shape, call spelling, statement context and which arm
+runs; falsified at `b1bd3212` (interpret exit 1 -> 0, 6 assertion failures -> 0; native exit
+1 -> 0).  Eight cells fail on that build and six are its controls.
+
+### A nullable whole-value bind COPIES, like its dense twin (2026-09-03)
+
+loft#1319.  `@FR-B-Copy` says a plain bind — scalar or heap whole-value — leaves the bound
+variable INDEPENDENT.  It did not hold when the source was nullable: `b = a` with
+`a: vector<integer>?` aliased `a`, and so did a nullable struct, while the keyed kinds copied.
+None of the rule's three exceptions reaches the shape — `B-View` is a struct PROJECTION,
+`B-View-Base` a BORROWED base, `B-View-Depth` an INDEX or nested read — and this is a whole
+value off an owned local.
+
+One cause, four sites, and it is the spelling again: `τ?` is `Optional(τ)`, the same storage
+behind a nullability marker (`@FR-L-Null`), and each site decided the lowering by matching the
+`Type` variant BARE, so the wrapped shape reached none of the copy paths and the default stood.
+
+| site | what it decides |
+|---|---|
+| `Parser::classify_vec_bind` + its consumer | whether a vector bind is a copy at all |
+| `codegen::gen_set_first_at_tos` | the interpreter's first-set dispatch |
+| `generation::dispatch` whole-record bind (`heap_def_nr`) | native's copy |
+
+The second half is that a copy must not turn ABSENCE into EMPTINESS — a null source has to
+leave the destination null, not holding the store the copy allocated for it.  Both mechanisms
+already existed:
+
+* `Stores::vector_replace` gains the guard `replace_keyed` has carried since loft#1150 — *an
+  absent source copies nothing and marks the destination absent* — and the nullable vector
+  bind emits `OpReplaceVector` rather than `OpAppendVector` to reach it.  A dense destination
+  cannot be absent and keeps the append, so its IR is unchanged.
+* the record bind routes through `OpBindOrCopy` with the SOURCE as its own witness: a present
+  source aliases the witness, so the borrow arm materialises a fresh store and deep-copies;
+  an absent one fails the `store_nr != u16::MAX` half and is ADOPTED, which lands the true
+  sentinel.  Native emits the same decision as a guarded `if var_src.rec == 0`.
+
+⚠ `OpCopyRefOrNull` was tried first and is wrong here.  It binds `Stores::null()`, whose
+`store_nr` is a REAL slot with `rec == 0`, while `x == null` on a record lowers to
+`OpRefIsNull`, which tests `store_nr == u16::MAX`.  The two spellings of absence agree for the
+element read it was written for and not for a bound local.
+
+**The `??` column of the filed matrix is a DIFFERENT defect** — measured, not assumed.  It was
+filed as "the same defect discharged"; a JOIN with no nullability anywhere in it
+(`b = if c { a } else { [0, 0] }`) aliases identically on both backends and on the shipped
+2026.8.0, and this fix leaves those cells where they were.  `a ?? d` lowers to
+`if !isnull(a) { a } else { d }`, so the `??` cells were reaching the join lowering.  Filed as
+loft#1321, registered as the OPEN deviation D-bind-16.
+
+Guard: `tests/scripts/1319-a-nullable-whole-value-bind-copies-like-its-dense-twin.loft`,
+falsified at `dad9b359` on both backends; controls are `&` (must still alias), the struct
+projection and index read (must still view), the collection projection off an owned base (must
+still copy), and every keyed kind (must not move).
+`tests/scripts/bind-copies-or-views-the-whole-boundary.loft` — the one place the copy-vs-view
+boundary is pinned — gains the nullable-subject axis it never had: all eleven of its subjects
+were declared non-null, which is why eleven cells and both backends read green over this.
+
+### A `reference<T>` field may be nullable, and `?` no longer turns a pointer into a copy (2026-09-03)
+
+loft#1316.  `@FR-L-Null` and `@FR-L-Null-Tag` split on a property of the type: a τ that reserves
+a null VALUE keeps its own bytes and spends the reserved pattern on absence; only a struct stored
+INLINE needs a discriminant.  A stored reference reserves `nullref`, so `reference<T>?` is the
+first case.  `synth_nullable_struct_fields` gave it the second.
+
+Both notions are `Type::Reference` in the IR, told apart by the FIELD's `u16::MAX` share marker
+(#328) — the same bit `Data::has_value_cycle` reads to skip pointer edges — and the rewrite
+discarded the deps with `_`.  Measured with `LOFT_DUMP_TYPES=1`:
+
+```
+HolderN { l: reference<Leaf>  }   ->  HolderN[12/4]  l:dbref[0]
+HolderQ { l: reference<Leaf>? }   ->  HolderQ[16/8]  l:__nullable<Leaf>[0]   <- was
+HolderS { l: Leaf             }   ->  HolderS[8/8]   l:Leaf[0]
+HolderSQ{ l: Leaf?            }   ->  HolderSQ[16/8] l:__nullable<Leaf>[0]
+```
+
+`reference<Leaf>?` and `Leaf?` were byte-identical, so the `?` erased the pointer.  Three sites
+read the field type without peeling and each produced a different face of it:
+
+* **`typedef.rs::synth_nullable_struct_fields`** tagged the field.  A struct stored inline cannot
+  contain itself, so on a reference graph returning to its own struct the field had no finite
+  size: `struct Node { next: reference<Node>? }` failed with *"field 'next' has no position
+  (u16::MAX)"*.  That is why loft#1313 had to suppress `(N-Store)` for the shape — the cure it
+  would have named did not compile.
+* **`objects.rs`'s `&` head gate** matched `Type::Reference` unpeeled, so `&pool[i]` in a literal
+  — the one position `@FR-B-Ref-StoredRef` admits — was refused once the `?` was written.
+* **`collections.rs`'s #328 repoint arm** matched unpeeled too, so `h.l = &pool[i]` fell through
+  to `copy_ref`: an `OpCopyRecord` through the field's CURRENT value.  Against the pre-fix build
+  that compiles and answers plausibly — the same program prints `11` where a pointer prints `22`
+  — so declaring `?` replaced sharing with a copy in silence.
+
+All three read the marker or peel with `base()`.  `@FR-L-Null-Which` is added to the contract:
+the split is decidable from the field, and `synth_nullable_struct_fields` is its one home.
+
+Consequences.  loft#1313's suppression (`field_has_no_nullable_spelling` +
+`Data::reference_cycle_back_to`) is deleted, and its guard cells in `tests/heap_nstore.rs` flip
+from silent to warning.  The notice they now emit had the same defect one layer up: `Type::name`
+renders a pointer field as the bare struct name, so the cure read `Node?` — the inline form,
+which on a self-referencing struct does not compile at all and on an acyclic one compiles while
+swapping the pointer for a copy.  `Parser::cure_spelling` names the field's own type.  Two
+`issue_328` corpus tests adopt the spelling they always wanted (`next: reference<Node>?`, walker
+`cur: Node?`); both were carrying an undeclared null because nothing else was writable.
+
+Alongside, `@FR-B-Ref-StoredRef` gains the half its gate was missing (D-bind-14): the rule admits
+the `&` on the FIELD'S TYPE and says nothing about field order, but the gate accepted only `;`/`}`
+as the terminator — the tokens that end an ASSIGNMENT — so `Trail { link: &pool[0], id: 7 }` was
+refused for its comma while the same literal with the fields swapped compiled.  `AmpHead` names
+the position (`No` / `AssignRhs` / `StoredRefField`) and the terminator set is read off it.
+
+Guard: `tests/scripts/1316-a-nullable-reference-field-is-still-a-pointer.loft`, falsified at
+`3bae617b` (interpret exit 1 -> 0, native exit 1 -> 0), controls being the `?`-less pointer field
+(still shares) and the embedded `T?` (still copies).  `tests/scripts/150-amp-head-position.loft`
+gains the not-last cell.  All 42 published libraries pass unchanged.
+
+### The revalidate-libs gate can be green (2026-09-03)
+
+loft#1315.  `scripts/revalidate_libs_local.sh` printed `1 COMPILE-BREAK` and exited 1 on a tree
+with no language break in it, and did so against the binary the offending package was published
+with — so nothing downstream could gate on its status, a real break read `2 COMPILE-BREAK`, and
+the closing sentence about the freeze printed on every green run.
+
+The cause was not a design gap.  The matrix policy was written TWICE — inline in
+`.github/workflows/revalidate-libs.yml` and again in the local script that documents itself as
+re-classifying *"exactly as the workflow does"* — and the two had drifted on four questions:
+
+| question | workflow | local script |
+|---|---|---|
+| the `loft` package | skipped: it is the compiler, not a library | checked, and its test corpus is not standalone-compilable |
+| known-broken map | present, entries cite a tracking issue | absent |
+| `subpath` default | `"."` (the repo IS the package) | the package NAME, a directory that does not exist |
+| yanked versions | validated | excluded |
+
+Only the first showed, because the compiler's `tests/` holds `--lib` fixtures and files that are
+*supposed* not to compile: 26 of 400 failed the `--dump` re-classification, on any binary.  The
+fourth is the one worth noting anyway — the shipped gate could have reported on a version the
+registry has withdrawn.
+
+`scripts/revalidate_matrix.py` is now the single source both read, with a `--self-test` that gives
+each rule an input it must act on (an exclusion that is never exercised is indistinguishable from
+a pass-through) and is wired into `make ci`.  The discover job checks the repo out to reach it.
+A clean run now reads `42 pass, 0 runtime/env, 0 skipped, 0 COMPILE-BREAK` and exits 0; the
+240-second hang the `loft` leg contributed goes with it.
+
+
+### A fn-level `@EXPECT_FAIL` no longer costs its file the whole native suite (2026-09-03)
+
+loft#1311.  The documented contract is that a fn-level tag excuses one function and *"sibling
+fns still must pass"*.  `tests/native.rs` dropped the FILE for any declaration, and the finer
+per-function mechanism under it — which emits `// skipped (EXPECT_FAIL): {name}` in place of a
+call — hand-rolled its own parser:
+
+```rust
+.filter(|l| l.contains("@EXPECT_FAIL"))
+.flat_map(|l| l.split_whitespace().skip_while(|w| *w != "@EXPECT_FAIL").skip(1) …)
+```
+
+The documented form `// @EXPECT_FAIL: <reason>` tokenizes with the colon attached, so the skip
+set came back empty for every file written that way — the fn-level mechanism was inert, and the
+drop above it was the only thing that ran.
+
+One parser now: `common::expect_fail_fns`, positional as the documentation defines the
+annotation, shared with `tests/wrap.rs`, returning the fn names and whether a file-level tag is
+present.  Only the file-level one drops the file.
+
+`75-native-stub.loft` must still be dropped, and now is for its real reason rather than its
+annotation: it declares a `#native` fn with no registered implementation, so the generator emits
+`compile_error!` into the Rust and the macro fails the build wherever it is expanded.  The gate
+reads that refusal, which also covers a file carrying no annotation at all.
+
+### `(N-Store)` reaches the heap half of the rule it was always written for (2026-09-03)
+
+loft#1313.  `formal/types.md` `(N-Opt)` states the default for every type — *"Storage is non-null
+by default: a binding, field, or `vector` element of type `τ` never holds `null`"* — and
+`(N-Store)` carries no type restriction.  @PLN25's DN1 landed the model and gated the enforcement
+on `Parser::is_non_null_scalar`, so a bare `null` into a non-null reference, collection or
+struct-enum passed in silence at the four positions where the scalar twin warns: a field, a
+return, a vector element, a call argument.  A heap LOCAL was never in the gap — `change_var`
+refuses `x: It = null` on its own — which is why the hole read as deliberate.
+
+Two other homes had already specified the heap half.  `LOFT.md` § Types says *"you cannot store a
+`null` into a plain `integer` / `text` / `Row`"*, and `Row` is a struct; `keys::callarg_nstore_
+enabled` describes its own split as *"a non-narrow scalar/heap param WARNS"*.  Only
+`is_non_null_scalar`'s doc comment said otherwise, and it stated the carve-out as though it were
+the model — which is what made the deviation survive a reading of the code.
+
+The predicate is `data::is_dbref`, called rather than respelled: its own doc records how a
+hand-written copy drifts short of the five KEYED collections, which do not look like references at
+the call site.  The synthetic `__nullable<S>` is excluded exactly as the DN3 branch excludes it —
+it is the inline spelling of `S?`.
+
+**Warning, never an error**, and that is `(N-Store)`'s existing Phase-1 split rather than a new
+call: there is no narrow heap width to run out of room the way a `u8` does, and loft#1232 settled
+the compatibility half — reporting where there was silence is a strict gain, refusing what a
+shipped package already compiles is the break the freeze forbids.  The scalar wording is unchanged
+to the byte; the heap half drops the word `scalar` from the same message rather than adding a
+second one.  Opt out with `LOFT_NO_HEAP_NSTORE`.
+
+**One shape is excluded, because the cure does not exist for it.**  A `reference<T>` field
+standing on a reference CYCLE back to its own struct has no nullable spelling — `struct Node {
+next: reference<Node>? }` fails layout validation, and so does the mutual `A`/`B` pair, while the
+same field on an acyclic type is fine (loft#1316).  A linked list's terminator therefore has to
+be a bare `null` in a non-null slot, and reporting it would name `Node?` as the fix, which does
+not compile.  `Parser::field_has_no_nullable_spelling` asks that question through
+`Data::reference_cycle_back_to` — the reference-edge twin of `has_value_cycle`, reading the same
+`u16::MAX` share-marker (#328) that one reads to EXCLUDE these fields, so the two walks cannot
+disagree about which edge is which.  It is the CYCLE that excuses the field, not the
+`reference<…>` spelling and not the type being recursive: an acyclic `reference<Leaf>` field and
+a cyclic type's `-> Node` RETURN both keep their notice.  The exclusion is a workaround for
+loft#1316 and goes when it closes.
+
+Blast radius, measured A/B across the 1083-file script corpus: **4 sites in 2 files**, all true
+positives, no exit code moved.  ⚠ That scan was INCOMPLETE — it covered `tests/scripts/*.loft`
+and not the inline `code!` sources in `tests/issues.rs`, where the two cyclic-field cases live.
+The full suite is the corpus; a glob over one directory is not.  Both keep their signatures and declare the notice —
+`98-struct-order-in-use.loft`'s subject IS a `return null` under a non-null heap return, and
+`754-tail-place-read-return.loft` guards the non-null RECORD return ABI, which `Section?` does not
+use (no hidden buffer), so "correcting" either signature would have retired the shape it guards.
+
+`tests/heap_nstore.rs` COUNTS notices on both backends, because the negative half has no corpus
+channel: a `.loft` guard can declare a notice it expects and cannot assert one that must not fire.
+Falsified by reverting the predicate — the two positive tests go to 0 notices, the five controls
+stay green, which is the correct signature for a change that only adds a report.
+
+### A custom iterator's loop: a missing return buffer, and a break test that asked the wrong question (2026-09-03)
+
+loft#1310 was filed as an ICE on a non-nullable STRUCT item.  The matrix said the filed scope
+was one cell of six broken ones, and that the filed workaround — declare the item `Item?` —
+fixes two of them.  Three independent defects met in one loop.
+
+**The synthesised call skipped `add_defaults`.**  A `next` answering a heap value takes a
+hidden buffer the CALLER allocates; the for-loop desugaring hand-built its `Value::Call` with
+`self` alone, so the compiler aborted with *"Too few parameters on t_7Counter_next (got 1, need
+2)"*.  This is the third site in the class — loft#945 at the combinator callbacks, loft#1114 at
+a lambda — and the cure is the helper those already share, `callback_call`.
+
+**The break test asked a second spelling of "is this null".**  `null_test` documents itself as
+the ONE place that answers *what is `τ`'s null*, and warns that answering it elsewhere mints
+another spelling — the defect loft#1014 was.  The loop reached for `convert(τ, Boolean)`.  The
+two agree for an `integer`, a `text` and a bare reference, and diverge for a `vector` and a
+struct-enum, whose truthiness rule is written against the NULLABLE form — and the loop variable
+is deliberately typed as the non-null item (@PLN102 D1).  So the test saw the bare type, got no
+conversion at all, and `OpNot` inverted the raw handle.
+
+**And the fallback asked whether the item was FALSY.**  That coincides with "is it null" only
+where the type's null is its only falsy value.  An `integer`'s conversion is `!= i64::MIN` and a
+`text`'s null is out-of-band, so `0` and `""` elements correctly kept iterating; a `boolean`'s
+conversion is the IDENTITY and its null is the three-state `255` (C73), so a `boolean?` iterator
+ended on its first `false`.  The fallback is now `null_test`'s own documented one — compare
+against the TYPED null — so the loop asks `item == null` and nothing else.
+
+Both later defects are **`silent-wrong`**: four of the ten item types yielded zero elements and
+exited 0, with no diagnostic.  The ICE was the only reason the type was looked at.  Fifteen
+cells on both backends in
+`tests/scripts/1310-a-custom-iterator-yields-every-heap-item-type.loft`, each asserting the
+ELEMENTS — a count- or leak-only cell scores a zero-iteration loop as a pass.
+
 ### A keyed `&` write-back does not release the caller's collection (2026-09-02)
 
 loft#1287 settled that a `&` parameter's whole-value write-back may release the store it

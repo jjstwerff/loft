@@ -6,12 +6,149 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **1** (D-bind-11); D-bind-12 and D-bind-13 each opened and CLOSED the same day.
+OPEN: **0** — D-bind-11 and D-bind-16 CLOSED 2026-09-03 (below); D-bind-12, D-bind-13,
+D-bind-14 and D-bind-15 each opened and CLOSED the same day.
 D-const-2 opened and CLOSED the same day (2026-09-01), found by the Store Locks
 reference review.
 B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
 opened and closed 2026-08-05); B-Ref-AnnotationOnly is enforced in every position, not
 only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
+
+> **D-bind-16 — CLOSED 2026-09-03 (opened the same day, loft#1321) — `(B-Copy)` did not hold
+> when the right-hand side is a branch JOIN.**
+>
+> `b = if c { a } else { [0, 0] }` ALIASES `a`, and so does the struct spelling, while the
+> plain bind of the identical value one line away copies. Present on the shipped 2026.8.0,
+> so long-standing rather than a regression, and identical on both backends.
+>
+> **It was filed as part of D-bind-15 and is not.** loft#1319's matrix carried a `??` column
+> described as *"the same defect discharged"*; the control above has no nullability in it at
+> all and aliases the same way, because `a ?? d` lowers to `if !isnull(a) { a } else { d }`.
+> So the axis is the JOIN and the `?` was a passenger — and D-bind-15's fix leaves these
+> cells exactly where they were, which is the other half of that measurement. Two defects
+> sharing a symptom read as one until a cell moves only one of them.
+>
+> The destination ends up DEPENDING on the source (`b: vec<int> deps=[a]`) rather than
+> owning: `classify_vec_bind` recognises a bare `Var` and an owned field read and nothing
+> else, and the record side keys on `Value::Var` in both backends. That dep is what closes
+> every copy path downstream — `owned_ref` requires `depend().is_empty()`, so the
+> `OpBindOrCopy` arm written for exactly this shape is unreachable. The ownership ORACLE
+> reports the joined binding `Owned` throughout, so the analysis has the right answer and the
+> shipped fact does not.
+>
+> **An attempt was made, measured, and REVERTED (2026-09-03), and what it established is the
+> useful part.** The rule it implemented — a join read ARM BY ARM, copying where every arm
+> would have copied on its own — is right, and three facts the arm walk needs were not
+> obvious:
+>
+> * reading the JOIN rather than its arms is wrong. `v[i]` is `τ?`, so the ordinary element
+>   read is `c = vv[0] ?? [0]` — a branch. Copying it makes `(B-View-Depth)` unreachable for
+>   its own documented spelling, and `bind-copies-or-views-the-whole-boundary.loft` goes red
+>   on the cell that exists to say so.
+> * a `??` HOISTS its subject into a temp (`__ncc_N = vv[0]`), so the arm the walk reaches is
+>   a bare `Var` and the projection is one statement up. The walk has to resolve a temp
+>   against what its block bound.
+> * `use_analysis::is_projection_op` does not name `OpGetVectorNullable`, while
+>   `generation::hoist::ELEMENT_ADDRESS_OPS` pairs it with `OpGetVector` for the same
+>   question. Two one-homes, one notion, and reading only the first answers "not a place" for
+>   every nullable element read.
+>
+> The third is why it was reverted: **a CALL arm may return a BORROW.** `it = get(b) ?? d`,
+> where `get` answers a view of its parameter, has no syntactic projection in any arm, so the
+> walk said "copy" and the caller then freed at scope exit what it had borrowed — loft#974's
+> guarded behaviour, caught by `accessor_borrow::an_accessors_returned_view_names_its_parameter`.
+> Trading a silent alias for a wrong free is not an improvement.
+>
+> **CLOSED 2026-09-03, with the copy face and the free face as one change.**  The rule the
+> attempt implemented stands; what changed is WHERE it is applied.  Instead of deciding the
+> join's copy and then re-deriving each arm's copy in both backends, each qualifying arm tail
+> is rewritten into the bound spelling on a temp — `{ __lift_N = a; __lift_N }` — and the temp
+> is bound by the SINGLE bind's own lowering (`scopes.rs::lift_join_arm_tails`, ownership.md's
+> D-own-8 record has the whole arm-kind table).  The three facts above are then honoured for
+> free: a `??` hoist is a variable the join hands back and is left alone unless its subject
+> was a call the caller must copy; the join is never read whole; and a call arm that returns a
+> borrow is bound by the same codegen arm that copies `it = get(b)` — no syntactic walk decides
+> anything.  A record arm copies at the bind on its first and every later execution; a vector
+> arm is refilled into a function-scoped buffer by `OpReplaceVector`, whose element type the
+> scope pass now reads from the store registry it was handed for the purpose.
+>
+> Measured on both backends: the filed matrix (vector and struct, `if` and `match`, the `??`
+> spelling), a parameter arm and a loop-element arm against their plain binds, the accessor and
+> closure view arms (which also closes an interpreter/native split: the interpreter viewed and
+> native copied), a null nullable subject binding its default, and the return position.
+> `(B-View-Depth)`'s `c = vv[0] ?? [0]` stays a view.  Guard
+> `1321-a-joined-binding-copies-what-a-plain-bind-copies.loft`, falsified at 26d17f4b.
+>
+> So the predicate the next attempt wants is not the syntactic walk but *"does this arm's
+> VALUE borrow?"*, which the return TYPE already answers — loft#974 is the change that put
+> the dep there (`-> Y974?["b"]`).
+
+> **D-bind-15 — CLOSED (2026-09-03, loft#1319) — `(B-Copy)` did not hold for a NULLABLE
+> heap local: a whole-value bind ALIASED its source.**
+>
+> `b = a` with `a: vector<integer>?` aliased `a`, and so did a nullable struct, while the
+> keyed kinds copied — which is what said the axis was the `?` and not "heap". None of the
+> rule's three exceptions reaches it: this is a whole value off an OWNED local, not a struct
+> projection (B-View), not a borrowed base (B-View-Base), not an index or nested read
+> (B-View-Depth).
+>
+> **One cause, and it is the spelling again.** `τ?` is `Optional(τ)` — the same storage
+> behind a nullability marker (`@FR-L-Null`) — and FOUR sites decided the lowering by
+> matching the `Type` variant BARE, so the wrapped shape reached none of them and the
+> default (alias) stood: the vector-bind selector and its consumer, the interpreter's
+> first-set dispatch, and the native generator's whole-record bind. D-bind-13 is the same
+> sentence one construct over, and the keyed kinds took this peel in loft#1143 — so this is
+> the third time the register records it, and the sites were siblings of ones already fixed.
+>
+> **The second half is that a copy must not turn ABSENCE into EMPTINESS.** A null source has
+> to leave the destination null, not holding the store the copy allocated for it. Both
+> mechanisms already existed and are reused rather than restated: `Stores::vector_replace`
+> gains the guard `replace_keyed` has carried since loft#1150, and the record bind routes
+> through `OpBindOrCopy`, whose borrow arm materialises and whose other arm adopts — which
+> for the null sentinel is exactly "stay null". `OpCopyRefOrNull` was tried first and is
+> wrong here: it binds `Stores::null()`, whose `store_nr` is a REAL slot with `rec == 0`,
+> while `x == null` on a record lowers to `OpRefIsNull` and tests `store_nr == u16::MAX`.
+> The two spellings of absence agree for the element read it was written for and not for a
+> bound local.
+>
+> **Why eleven cells and both backends read green over it.**
+> `tests/scripts/bind-copies-or-views-the-whole-boundary.loft` is the one place the
+> copy-vs-view boundary is pinned, and every one of its eleven subjects was declared
+> non-null — `??` appeared in it only inside element-read assertions. The axis it never
+> moved is the one that broke. It has the nullable-subject axis now, and the four added
+> cells fail on the pre-fix build.
+>
+> Guard: `tests/scripts/1319-a-nullable-whole-value-bind-copies-like-its-dense-twin.loft`,
+> whose controls are `&` (must still alias), the struct projection and index read (must still
+> view), the collection projection off an owned base (must still copy) and every keyed kind
+> (must not move).
+
+> **D-bind-14 — CLOSED (2026-09-03, loft#1316) — `(B-Ref-StoredRef)` admitted its one
+> position only when the field came LAST, and not at all once the field was nullable.**
+>
+> The rule names exactly one place a prefix `&` is legal outside a `&τ` binding — a
+> struct-literal field whose declared type is `reference<τ>` — and it conditions that on the
+> FIELD'S TYPE and on nothing else. Two things were read instead.
+>
+> **The terminator.** The gate accepted the `&` only when the next token was `;` or `}`, which
+> is what ends an ASSIGNMENT right-hand side. A field value also ends at the `,` before the
+> next field, so `Trail { l: &pool[0], n: 4 }` was refused while the identical literal with
+> the fields swapped compiled. Field ORDER is not in the rule, and a reader hitting this reads
+> it as "`&` does not work here" rather than "`&` does not work last-but-one".
+>
+> **The type.** The same gate matched `Type::Reference` unpeeled, so a field declared
+> `reference<τ>?` — whose bytes `L-Null` makes identical to `reference<τ>`'s — was not a
+> `reference<τ>` field as far as the gate was concerned, and the `&` the pointer field exists
+> for had no spelling once the `?` was written. That is D-layout-4's mechanism reaching this
+> doc: one IR spelling, two source notions, and a site that reads neither the share marker nor
+> `base()`.
+>
+> **Status — CLOSED.** The position is named rather than inferred: `AmpHead` is `No`,
+> `AssignRhs` or `StoredRefField`, and the terminator set is read off it, so "which tokens end
+> this operand" is answered once per position instead of once per gate. The type test peels.
+> Guard: `tests/scripts/1316-a-nullable-reference-field-is-still-a-pointer.loft` (the nullable
+> half, both backends) and `tests/scripts/150-amp-head-position.loft` (the position family,
+> which already owned the `&`-in-a-field cell and gains the not-last one).
 
 > **D-const-2 — CLOSED (2026-09-01) — `(Const-Value)` went unenforced on two
 > append routes, and both mutated the CALLER while the parameter said `const`.**
@@ -158,6 +295,50 @@ only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
 > that always worked (`p.1 = p.0`, a fresh literal) pass there, which is what made this read
 > as *"writes to `p.1` are fine"*.
 
+> **D-bind-11 — CLOSED (2026-09-03, loft#1006): a `&(τ, …)` holds any element a struct field
+> can, and the two options the entry below named were never a choice.**  The stack form cannot
+> OWN a `text` element — a 16-byte `Str` borrow has no owner of its own in a frame — while the
+> record form already performed this exact swap correctly on both backends through the loop
+> variable over a `vector<(text, text)>`.  So a `&(…)` whose elements are not all scalars is a
+> reference to the synthesized `__tuple<…>` RECORD — precisely what a `&S` is — and the one
+> refusal site, `Parser::ref_var_type`, builds that type instead of refusing.
+>
+> **The whole distance was the LITERAL local.**  A tuple local bound from a heap-tuple RETURN
+> was already that record; a loop variable was already that record; only `a = ("a1", "b1")` was
+> stack-built.  Making EVERY heap-tuple literal local a record was measured and rejected: 17
+> corpus scripts changed exit code, two of them crashes — nullable elements, fn-ref elements,
+> nested and forward-referenced tuples, destructure ownership, none of which a `&` ever touches.
+> The representation moves only for a tuple local that is the SOURCE OF A LINK: recorded in
+> pass 1 at the link (`b = &a`, `c: &(…) = a`) and at the call argument, applied at the bind in
+> pass 2 (`Parser::ref_linked_tuple_locals`, the `adopted_ret_defs` pattern), built by the
+> return path's own `rewrite_tail_tuple_with_work_ref`.  With that scope the corpus answers
+> identically with and without the change — measured script by script against the pre-change
+> binary.
+>
+> ⚠ **Three cuts the matrix caught.**  Pass 1 typed the linked local as the stack tuple, and
+> the record RHS was then UNBOXED back to it (`unboxes_stored_tuple`), so the link saw a stack
+> tuple on pass 2; the unbox is declined for a linked local.  An annotated `c: &(text, text) =
+> a` failed on pass 1, where `a` was still a stack tuple and the link's derived type disagreed
+> with its own annotation; the link derives the record type as soon as the fact is recorded.
+> And `slow-reference-parameter` fired for `&(text, text)` — advice whose premise (a by-value
+> parameter already propagates writes) is FALSE for a tuple, whose by-value form is a copy
+> (`1278-…`); suppressed for a `__tuple<…>` reference.
+>
+> **What stays refused, and each is a cell in `102-…`:** a NULLABLE element (its `?` does not
+> survive the synthetic name), a fn-ref element, a nested tuple — the record cannot spell or
+> lay them out as a field; a by-value tuple PARAMETER or a FIELD as the source (no local to
+> build the record for, `T-Ref-Src`); and a `&(…)` containing a type declared LATER in the
+> file, refused the way a tuple return is (`refuse_forward_ref_tuple_params`, which has to
+> match the RESOLVED type — `resolve_adopted_stubs` has already replaced the stub by then).
+>
+> The rule moved with it: [tuples.md](tuples.md) gains `(T-Ref-Rep)` (which representation a
+> `&(…)` names) and `(T-Ref-El)` now admits what a struct field can.  Measured on both
+> backends, `LOFT_POISON` clean, no native leak: a literal local, a return-bound local, a loop
+> variable, a local link in both spellings, `text` / vector / struct / keyed / three mixed
+> elements, a linked local re-bound, copied, destructured, appended and passed to two callees
+> 500 times.  Guard: `tests/scripts/reference-tuple-heap-elements-link.loft`, seven cells,
+> falsified at 29743c5c.
+>
 > **D-bind-11 — OPEN (2026-08-19) — `&(τ, …)` admits only SCALAR elements, against
 > B-Ref-Alias and B-Ref-Uniform.** `B-Ref-Alias` says the `&τ` annotation makes **ANY**
 > binding — scalar OR heap — a live link, and `B-Ref-Uniform` says a `&τ` variable is used

@@ -90,7 +90,7 @@ fn main() {{
             "probe server must parse clean: {:?}",
             parser.diagnostics.lines()
         );
-        loft::scopes::check(&mut parser.data);
+        loft::scopes::check(&mut parser.data, &mut parser.database);
         let mut data = parser.data;
         let mut state = State::new(parser.database);
         compile::byte_code(&mut state, &mut data);

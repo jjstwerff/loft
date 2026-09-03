@@ -566,6 +566,13 @@ checked against it either.  Both gained the clause they were missing — `(I-Nar
 closed D-Narrow-Asgn, and `(N-Reserve)`, which turns an open design question into a stated
 deviation.  A register is only as strong as the completeness of the rules above it.
 
+⚠ **And it read `OPEN: 0` again while D-Null-Heap was live, where the rules were NOT the weak
+part.**  `(N-Opt)` and `(N-Store)` are written for every `τ` and always were; what disagreed was
+the enforcement, gated on a scalar-only predicate whose own doc comment stated the carve-out as
+if it were the model.  So a register can also be wrong when its rules are complete and nothing
+re-measures the code against them — the second failure mode, and the one a reading of this doc
+alone cannot catch.
+
 ## Conformance check (how we know a deviation is real)
 
 Each deviation should have a falsifying program — the case where obeying the rule and

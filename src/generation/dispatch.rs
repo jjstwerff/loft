@@ -151,6 +151,9 @@ impl Output<'_> {
     fn materialises_element(&self, var: u16, to: &Value) -> bool {
         let variables = self.data.def(self.def_nr).variables();
         variables.tp(var).heap_def_nr().is_some()
+            // @FR-O-Proxy asks copy — the arm this selects ALLOCATES a record and deep-copies
+            // into it, so a proxy that answered "owner" for a borrow costs a materialisation
+            // and never a release.
             && variables.tp(var).depend().is_empty()
             && crate::generation::container_element_base(self.data, to.unspan()).is_some()
     }
@@ -198,12 +201,34 @@ impl Output<'_> {
                 // `base()`, because a dense keyed local cannot be assigned the sentinel at all.
                 // Both backends leaked identically here, which is @FR-O-NoDiverge holding: they
                 // read the same fact and it was short by the same kinds.
+                // A VECTOR destination belongs here for the same reason, and was the one kind
+                // this side never carried: `x: vector<T> = []; for i in 0..N { x = m(i) }` over
+                // a fn-ref held one store per iteration, released only at frame exit, while the
+                // interpreter's twin stayed flat.  @FR-O-NoDiverge is what settles it — the two
+                // backends read the SAME deps facts, so a shape test present on one side and
+                // absent on the other is the divergence the rule forbids, not a judgement call
+                // this side gets to make.  The list is now the interpreter's verbatim, `base()`
+                // and all, so the peel covers the nullable destination too.
                 && (matches!(
-                    variables.tp(var),
-                    Type::Reference(_, _) | Type::Enum(_, true, _)
+                    variables.tp(var).base(),
+                    Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
                 ) || crate::parser::vectors::is_keyed(variables.tp(var).base()))
-                && variables.tp(var).depend().is_empty()
-                // @FR-O-Proxy — the empty dep list is only a PROXY for ownership, so a
+                && !variables.is_captured(var)
+                // D-own-16 residual, the native twin of `state/codegen.rs`'s
+                // `borrows_one_argument`.  Both backends must read the SAME fact
+                // (@FR-O-NoDiverge); leaving this side short is how the two came to disagree
+                // about the keyed kinds.  The displaced free is guarded by `_old != place`
+                // and released through `free_displaced`, which declines a free-protected
+                // store, so the caller's argument survives the first round.
+                && (variables.tp(var).depend().is_empty() || {
+                    let d = variables.tp(var).depend().clone();
+                    d.len() == 1
+                        && d[0] != var
+                        && matches!(variables.tp(var), Type::Optional(_))
+                        && variables.is_argument(d[0])
+                        && !variables.is_argument(var)
+                })
+                // @FR-O-Proxy asks free — the empty dep list is only a PROXY for ownership, so a
                 // free taken on it must consult @FR-O-Override.  The interpreter's twin
                 // (`state/codegen.rs`'s `owned_ref`) already does; this one did not, which
                 // made the two backends read different facts for the same decision — the
@@ -211,14 +236,24 @@ impl Output<'_> {
                 // reproduced a fault, including under LOFT_POISON / LOFT_STRICT_STORES),
                 // and closed because the rule is what says which fact a free may read.
                 && !variables.is_skip_free(var)
-                // A fresh-store-producing rhs: a call, an inline object `Insert`,
-                // or a `Block` that builds a new store (the `nullable_unwrap_copy`
-                // / `ncc` materialisers — `chosen = v[i] ?? d`).  A bare `Var` rhs
-                // (a borrow / move) is excluded — `depend().is_empty()` above
-                // already gates out borrowed locals.
+                // A fresh-store-producing rhs: a call in EITHER spelling, an inline
+                // object `Insert`, or a `Block` that builds a new store (the
+                // `nullable_unwrap_copy` / `ncc` materialisers — `chosen = v[i] ?? d`).
+                // A bare `Var` rhs (a borrow / move) is excluded — `depend().is_empty()`
+                // above already gates out borrowed locals.
+                //
+                // loft#1328 — `CallRef` is the second spelling and it was missing, so a local
+                // rebound from a CLOSURE call displaced its store with nothing freeing it:
+                // `x: P? = null; for i in 0..N { x = m(i) }` held one store per iteration to
+                // frame exit.  Not a leak the exit gate can see — everything is freed when the
+                // frame ends — but the PEAK grows with N, and at 70 000 iterations `--native`
+                // aborts with `store table exhausted` where the interpreter completes. That is
+                // an accept/reject split, which @FR-O-NoDiverge forbids: the interpreter's twin
+                // reaches this through `state/codegen.rs`'s `owned_ref`, which keys on the
+                // DESTINATION and so never had a spelling to miss.
                 && matches!(
                     to.unspan(),
-                    Value::Call(_, _) | Value::Insert(_) | Value::Block(_)
+                    Value::Call(_, _) | Value::CallRef(_, _) | Value::Insert(_) | Value::Block(_)
                 )
                 && (!is_retbuf_attr || self.retbuf_witness.contains(&var));
             if owned_ref_reassign {
@@ -698,9 +733,38 @@ impl Output<'_> {
             // a same-store NRVO alias, else deep-copy. JOIN (witnessed): adopt a
             // null/fresh `_src` that does NOT alias the borrowed arg `witness`, else
             // (it aliases the witness) materialise — the join's owned/borrow split.
+            // Enforces @FR-O-Detach: the COPY arm clears `_dst` in place, so it may not run
+            // where `_src` still names that store — the destination would be prepared before
+            // the value it is copying from is read.
+            //
+            // The passthrough both arms share: a NULL return has no store to copy, and a
+            // return already living in the destination's own store IS the destination's
+            // store.  Spelled once because the witnessed arm is a REFINEMENT of the default
+            // and not a second opinion — writing it twice is how the witnessed form came to
+            // omit it.
+            const PASSTHROUGH: &str = "_src.store_nr == u16::MAX || _src.store_nr == _dst.store_nr";
             let adopt = match &join_witness {
+                // @FR-O-Move — the caller COPIES only to obtain its OWN store.  When `_src`
+                // already lives in the destination's own store the caller HAS that store, so
+                // the rule asks for nothing and the copy is not merely redundant but
+                // destructive: the COPY arm clears `_dst` in place via `OpDatabase`, which
+                // wipes the record `_src` names before `OpCopyRecord` reads it.  That is the
+                // same-store passthrough the `None` arm below carries and the @P290 comment
+                // above requires ("clearing that store would wipe the very data we copy, so
+                // pass the reference through unchanged"); the witnessed form REPLACED the
+                // whole condition instead of refining it and so dropped it.  Measured:
+                // `c = cond(c, 3)` where `cond` returns its argument on one path answered
+                // `x = 0` on `--native` against `2` on the interpreter, silently, on the
+                // shipped 2026.8.0 release.  Guard
+                // `tests/scripts/1017b-a-conditional-borrow-into-its-own-binding.loft`.
+                //
+                // It is a strict widening of the ADOPT arm: the extra disjunct fires only
+                // where the destination's old store and the returned value are one store, so
+                // the adopt arm's own displaced-free (`_dst.store_nr != _src.store_nr`) is
+                // false there and nothing is freed — the assignment becomes the no-op it
+                // always was.
                 Some(witness) => {
-                    format!("_src.store_nr == u16::MAX || _src.store_nr != var_{witness}.store_nr")
+                    format!("{PASSTHROUGH} || _src.store_nr != var_{witness}.store_nr")
                 }
                 // loft#974 — a callee that returns a VIEW hands back a pointer into a
                 // store the CALLER already owns, so the destination ALIASES it: that is
@@ -720,7 +784,7 @@ impl Output<'_> {
                 // So the alias follows the destination's ownership, not the callee's
                 // return alone.
                 None if is_borrowed_view && variables.skip_free(var) => "true".to_string(),
-                None => "_src.store_nr == u16::MAX || _src.store_nr == _dst.store_nr".to_string(),
+                None => PASSTHROUGH.to_string(),
             };
             // @PLN85 (the adopt-arm placeholder leak) — the ADOPT arm replaces
             // `var_{name}`'s slot with `_src`, orphaning `_dst` when it is a
@@ -881,11 +945,18 @@ impl Output<'_> {
         // For a first declaration, we also need to allocate a fresh store via
         // OpDatabase(null_named(…)) so the destination has its own record to copy into.
         // For reassignment, the existing destination record is reused in-place.
-        if let (Some(d_nr), Value::Var(src)) = (variables.tp(var).heap_def_nr(), to_unspanned)
-            && variables.tp(*src).heap_def_nr().is_some()
+        // `base()`, because `S?` is `Optional(Reference(S))` — the same storage behind a
+        // nullability marker — and `heap_def_nr` reads the bare spelling only.  Unpeeled,
+        // a nullable whole-value bind reached neither this arm nor any other and fell
+        // through to `let mut var_d = var_s;`, a pointer copy: an ALIAS, where `@FR-B-Copy`
+        // says the bound variable is INDEPENDENT (loft#1319).
+        if let (Some(d_nr), Value::Var(src)) =
+            (variables.tp(var).base().heap_def_nr(), to_unspanned)
+            && variables.tp(*src).base().heap_def_nr().is_some()
         {
             let src_name = sanitize(variables.name(*src));
             let tp_nr = self.data.def(d_nr).known_type();
+            let first_bind = !self.declared.contains(&var);
             if self.declared.contains(&var) {
                 // Reassignment: the variable was pre-declared via null_named
                 // (Set(var, Null)) at function entry.  OpDatabase below
@@ -900,6 +971,40 @@ impl Output<'_> {
                     "let mut var_{name}: {tp_str} = stores.null_named(\"var_{name}\");"
                 )?;
                 self.indent(w)?;
+            }
+            // A source that may be ABSENT is asked before it is dereferenced: a copy of an
+            // absent value is absent, and `OpCopyRecord` would read `allocations[u16::MAX]`.
+            // Allocating first and copying second would be worse than the panic — it leaves
+            // the destination holding the record allocated for it, PRESENT where its source
+            // was absent.  Same shape and same predicate as the element-read arm above
+            // (loft#823): `rec == 0` is the absence test every store accessor uses, and it
+            // covers both spellings — the true sentinel and an index past a live container.
+            if matches!(variables.tp(*src), Type::Optional(_)) {
+                // On the absent arm the placeholder must go back: at a FIRST bind that is
+                // the `null_named` store allocated just above, while a REASSIGNMENT is
+                // already wrapped by `output_set`'s `_old_*` stash, which frees the
+                // displaced store itself — freeing here too would free it twice.
+                let release = if first_bind {
+                    format!(
+                        "if var_{name}.store_nr != u16::MAX \
+                         {{ OpFreeRef(cell, var_{name}, \"{name}(absent)\"); }} "
+                    )
+                } else {
+                    String::new()
+                };
+                write!(
+                    w,
+                    "if var_{src_name}.rec == 0 {{ {release}var_{name} = DbRef::NULL; }} \
+                     else {{ var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32); \
+                     OpCopyRecord(cell,var_{src_name}, var_{name}, {tp_nr}_i32); }}"
+                )?;
+                crate::copy_manifest::record(
+                    self.def_nr,
+                    var,
+                    tp_nr,
+                    crate::copy_manifest::Origin::NativeRecordBind,
+                );
+                return Ok(());
             }
             writeln!(w, "var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32);")?;
             self.indent(w)?;
@@ -1280,6 +1385,24 @@ impl Output<'_> {
                         let vars = self.data.def(self.def_nr).variables();
                         !vars.is_argument(*v) && matches!(vars.tp(*v), Type::Tuple(_))
                     });
+                // loft#1325 — the WHOLE tuple, one level out from the arm above.  `u = a` over
+                // a local `(text, text)` emitted `let mut var_u: (String, String) = var_a;`,
+                // which MOVES it, so every later read of `var_a` is rustc E0382 and the
+                // program does not build — while the interpreter runs it and answers what
+                // `@FR-B-Copy` promises, an INDEPENDENT copy.  A backend that refuses what the
+                // other computes is the divergence `formal/operational.md` D-op-1 forbids, and
+                // the refusing side is the one that is wrong here: `B-Copy` says the bind is a
+                // copy, so `.clone()` is the emission that keeps the promise.
+                //
+                // Only a non-Copy leaf needs it — an all-scalar tuple is `Copy` and the move is
+                // a copy already — and only a LOCAL source: a tuple PARAMETER arrives borrowed
+                // and is re-spelled by `tuple_arg_owned_elems` below, which owns that pair.
+                let whole_tuple_clone = matches!(variables.tp(var), Type::Tuple(elems)
+                    if tuple_has_non_copy_leaf(elems))
+                    && matches!(to_inner, Value::Var(v) if {
+                        let vars = self.data.def(self.def_nr).variables();
+                        !vars.is_argument(*v) && matches!(vars.tp(*v), Type::Tuple(_))
+                    });
                 // loft#840 — the destination is an owned tuple slot holding text
                 // (`(i64, String, u8)`) and the source is a tuple PARAMETER, which
                 // the native backend passes borrowed (`(i64, &str, u8)`).  Nothing
@@ -1350,6 +1473,11 @@ impl Output<'_> {
                         let src_name = sanitize(self.data.def(self.def_nr).variables().name(*v));
                         write!(w, "var_{src_name}.{idx}.clone()")?;
                     }
+                } else if whole_tuple_clone {
+                    if let Value::Var(v) = to.unspan() {
+                        let src_name = sanitize(self.data.def(self.def_nr).variables().name(*v));
+                        write!(w, "var_{src_name}.clone()")?;
+                    }
                 } else {
                     self.output_code_inner(w, to)?;
                 }
@@ -1361,6 +1489,7 @@ impl Output<'_> {
                     && !refvar_text_clone
                     && !tuple_text_elem_clone
                     && !nested_tuple_clone
+                    && !whole_tuple_clone
                 {
                     write!(w, ".to_string()")?;
                 } else if wrap_fn_ref {

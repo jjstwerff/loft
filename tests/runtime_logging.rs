@@ -590,6 +590,114 @@ fn main() {
     }
 }
 
+/// The spelling with no binding at all — `(E-Report)`'s "a following null-check" reaching
+/// the form where the fault site sits INSIDE the test (`D-op-5`).
+///
+/// `rewrite_defended_fault_sites` keys on a `Set` followed by an `if` that tests the
+/// variable, and here there is no `Set` to key on, so the site kept reporting a fault the
+/// program had already defended. It needs no adjacency window and no dataflow: the guard is
+/// the SAME expression, so the null this site produces is consumed by the comparison and no
+/// other reader can observe it.
+///
+/// Both orders of the comparison and both polarities, because the rewrite picks whichever
+/// operand is not the null literal.
+#[test]
+fn a_fault_site_inside_its_own_null_test_is_guarded() {
+    for (tag, guard) in [
+        ("eq", "if v[5] == null { print(\"a\\n\"); }"),
+        (
+            "ne",
+            "if v[5] != null { print(\"b\\n\"); } else { print(\"c\\n\"); }",
+        ),
+        ("rev", "if null == v[5] { print(\"d\\n\"); }"),
+        ("or", "if v[5] == null || v[0] == 7 { print(\"e\\n\"); }"),
+    ] {
+        let source = format!("fn main() {{\n  v: vector<integer> = [7];\n  {guard}\n}}\n");
+        for native in [false, true] {
+            let log = run_logged(&format!("inline_null_test_{tag}"), &source, native);
+            assert!(
+                !log.contains("[index_out_of_bounds]"),
+                "`{guard}` guards its own fault site ({}); got {log:?}",
+                if native { "native" } else { "interp" }
+            );
+        }
+    }
+}
+
+/// The control for the cell above, and the one that decides whether it is sound.
+///
+/// A comparison that is not a NULL test guards nothing — the null flows into it as an
+/// ordinary operand and on into the program — so the site still owes its report. This is
+/// what stops the rewrite being "any `if` that mentions the site".
+#[test]
+fn a_fault_site_in_a_non_null_comparison_still_reports() {
+    let source = "\
+fn main() {
+  v: vector<integer> = [7];
+  if v[5] > 3 { print(\"big\\n\"); } else { print(\"small\\n\"); }
+}
+";
+    for native in [false, true] {
+        let log = run_logged("inline_non_null_cmp", source, native);
+        assert!(
+            log.contains("[index_out_of_bounds]"),
+            "a non-null comparison does not own the null and must still report ({}); got {log:?}",
+            if native { "native" } else { "interp" }
+        );
+    }
+}
+
+/// `match x { null => … }` guards its subject, though it names a COPY of it (`D-op-5`).
+///
+/// The match has no `Value::Match` in the IR — it lowers to a nested block whose first act is
+/// `_match_subj_N = x`, so the arms test the temp and the adjacency scan, looking for an `if`
+/// testing the variable itself, saw a `Block` and gave up.
+#[test]
+fn a_match_on_null_guards_its_subject() {
+    let source = "\
+fn main() {
+  v: vector<integer> = [7];
+  x = v[5];
+  r = match x { null => \"n\", _ => \"v\" };
+  print(\"{r}\\n\");
+}
+";
+    for native in [false, true] {
+        let log = run_logged("match_null_guard", source, native);
+        assert!(
+            !log.contains("[index_out_of_bounds]"),
+            "a `null` match arm owns the null ({}); got {log:?}",
+            if native { "native" } else { "interp" }
+        );
+    }
+}
+
+/// The control that makes the cell above sound: a match that is not on `null` guards nothing.
+///
+/// `match x { 5 => … }` lowers to the same subject copy followed by `OpEqInt(subj, 5)`. The
+/// null flows into that comparison as an ordinary operand and on into the program, so the
+/// site still owes its report — and a version of the scan that accepted any test after the
+/// copy would go quiet here.
+#[test]
+fn a_match_on_a_value_still_reports() {
+    let source = "\
+fn main() {
+  v: vector<integer> = [7];
+  x = v[5];
+  r = match x { 5 => \"five\", _ => \"other\" };
+  print(\"{r}\\n\");
+}
+";
+    for native in [false, true] {
+        let log = run_logged("match_value_reports", source, native);
+        assert!(
+            log.contains("[index_out_of_bounds]"),
+            "a non-null match arm does not own the null and must still report ({}); got {log:?}",
+            if native { "native" } else { "interp" }
+        );
+    }
+}
+
 /// The other direction, and the one that matters more: widening "guarded" SUPPRESSES a
 /// diagnostic, so these three shapes must keep reporting.
 ///

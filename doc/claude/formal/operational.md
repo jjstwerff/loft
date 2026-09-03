@@ -403,11 +403,16 @@ drift apart; verified both backends —
 
 ## Deviations
 
-**OPEN: 4.**
+**OPEN: 2.**
 - **D-op-1** — there is no shared operational semantics — the interpreter is the spec
 - **D-op-2** — interpreter/native divergences are test-caught, not definition-caught
-- **D-op-5** — two spellings of a following null-check still report differently
-- **D-op-9** — (E-Report)'s soft-halt clause reaches div0 and OOB but not OVERFLOW
+
+D-op-9 was listed here as a fourth while the paragraph below already recorded it CLOSED
+(2026-09-01) — the count and the prose disagreed, and the count is the half a reader trusts.
+Kept below for its reasoning, which is still the live question for any future check on a hot
+op: whether the checking form is emitted always or only under a flag is a measurement.
+
+- **D-op-9 (CLOSED)** — (E-Report)'s soft-halt clause reaches div0 and OOB but not OVERFLOW
   (loft#1265, both backends).  Overflow is the one recoverable fault the rule ALSO
   denies a log record, so the triage flag is its only channel and it is silent there
   too.  It never reaches `raise`: `ops::op_add_long` folds it into

@@ -3,133 +3,327 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# 152 — Retire the silent default: a fit-failing narrow store must be typed, not defaulted
+# 152 — Let the existing spellings reach the types they cannot reach today
 
 ## Status
 
-**Rewritten 2026-09-02 (owner call).** The plan opened as *"carry validity beside the
-value"*; four phases of measurement retired that mechanism and left one thing genuinely
-wrong, which is now the whole plan: **a fault reaching a narrow non-null slot takes the
-type's DEFAULT — a legal, in-range value indistinguishable from a computed one.**
-
-What the measurement phases settled, and why they redirected the plan, is in
-[MEASUREMENTS.md](MEASUREMENTS.md). The short version: the defect list was already banked by
-other work (B), the collapse site already existed and already reported (C), the one real hole
-closed with two lines at that site (E, shipping loft#1305 + loft#1306) — and the flag itself
-measured a **net +0.5–0.8 % slowdown**, so its performance argument is refuted by its own
-Phase A. **The flag is retired.** Phases F–H that depended on it are dropped.
+**Steps 0–3 are DONE and `??` now reaches the narrow widths** — `x = (x + 10) ?? 255` into a
+`u8` answers `255` on both backends, where it was refused before. Steps 3–7 open. Shipped along the way:
+loft#1305 and loft#1306. The measurement record that redirected this plan three times is in
+[MEASUREMENTS.md](MEASUREMENTS.md); the arc-B design detail is in
+[ARC-B-DESIGN.md](ARC-B-DESIGN.md).
 
 Tracker: [@PLN152](https://github.com/loft-lang/plans/issues/152).
 
 ## Goal
 
-A fit-failing operation whose target is a declared-narrow slot types `τ?` and requires
-discharge, so the language never silently substitutes a value the author did not choose.
+**Let a programmer write code that handles the special type cases correctly — using the
+spellings loft already has.**
 
-## The rules already prescribe this
+- **No new arithmetic.** C80 and C85 stand. Operators do not change, results do not change,
+  and a program that says nothing behaves exactly as it does today.
+- **No new syntax.** `??` and `!` already mean *"give me a fallback"* and *"did this not
+  happen"*. The work is making them REACH the cases where they currently cannot — not adding
+  a construct.
+- **Opt-in.** Absent those spellings, emission is byte-identical. Adding no error also keeps
+  this outside [COMPATIBILITY.md](../../COMPATIBILITY.md)'s one-directional rule, so it is
+  legal at any time rather than pre-freeze-only.
 
-This is not a design proposal. [`formal/types.md`](../../formal/types.md) says it:
+The test of this plan is one question: **can an author who cares write a correct handler,
+without learning anything new?**
 
-> `a op b` and `e as τ` are **non-null when the result provably fits** the target range …
-> and `τ?` only when the range could miss (a narrowing `as`, **a declared-narrow slot**, a
-> genuinely i64-overflowing product).
->
-> Overflow-to-null is therefore the *correct* runtime behavior … **the work is to type it
-> and require discharge**.
+Frequency does not enter it. A case a programmer cannot write correctly is worth fixing
+whether or not many programmers reach it — the limitation is arbitrary, and removing
+arbitrary limitations is the job (§ Why this is worth doing).
 
-*A declared-narrow slot* is named explicitly. So `x: u8 = 250; x += 10` should type `u8?`
-and demand a discharge; it instead types `u8`, takes `0`, and says nothing. **That is a
-deviation from a written rule, not a decided edge** — which is what makes this plan
-obligatory rather than optional.
+## What the two spellings already mean, and where they stop
 
-## Why the narrow case is different from C85, precisely
+Both already work — on the types that keep a spare code. Measured
+([MEASUREMENTS.md](MEASUREMENTS.md)):
 
-[C85](../../DESIGN_DECISIONS.md) keeps `+ - *` typed non-null because forcing `integer?` on
-all arithmetic *"poisons the common path to guard a fault that essentially never fires"*.
-That is a **proportionality** argument, and it is calibrated for `i64`: overflow there needs
-operands around 3 × 10⁹.
+```loft
+fn bump(v: integer, d: integer) -> integer { (v + d) ?? 42 }
+bump(i64::MAX, 1)          // 42     — `??` supplies the author's fallback, at runtime
+z: u8? = 250; z += 10;     // null   — `!z` is true: the failure is testable
+```
 
-**For a `u8` the same fault fires at 256.** The exemption's premise is simply false at narrow
-widths, so extending it there was a mis-application rather than a decision. C85 does not need
-reversing — it needs its scope stated: the exemption is an i64 judgement.
+| | `??` reaches it | `!` reaches it |
+|---|---|---|
+| `integer`, `i32` — keep a bottom code | **yes, today** | **yes, today** |
+| `u8?`, `i16?`, … — a nullable narrow | yes | **yes, today** |
+| **`u8`, `i8`, `u16`, `i16`, `u32` — non-null narrow** | **no** | **no** |
 
-This is also why the burden stays small. Nullability is **range-driven**, so range-tracking
-already proves the fitting cases and they keep their non-null type: `(x & 255) as u8` and
-`(non-neg) % c as u8` demand nothing today and will demand nothing after.
+So there is no missing operator. There is a family of five types the existing operators
+cannot see into, because every code in their range is a legitimate datum and their failure
+has nowhere to live:
 
-## Scope
+```loft
+x: u8 = 250;  x += 10;   // x = 0 — and !x is false, x == null is false, x == 0 is true,
+y: u8 = 200;  y += 10;   // y = 210      exactly as they are for a real, computed 0
+```
 
-**In** — the widths with no usable sentinel, which are exactly the ones that default:
-`u8`, `i8`, `u16`, `i16`, and `u32` (whose spare code is the top one, which no non-null read
-tests for).
+`x` is fabricated and `y` is computed and **nothing in the program can tell them apart.**
+That is the whole defect.
 
-**Out** — plain `integer` and `i32`. They keep a bottom code back, already answer `null`, and
-C85 governs them unchanged. Also out: the validity flag, and any change to `OpRangeDefault`'s
-runtime behaviour. **This plan changes what a fit-failing narrow op is TYPED, not what the
-runtime does with it.** The collapse stays where Phase E put it; it simply stops being
-reachable without the author having said what should happen.
+## What has to change, and what must not
 
-## ⚠ Pre-freeze only
+**Change:** those five types gain somewhere for a failure to live, so `??` and `!` have
+something to act on. That is the selective boolean — introduced only for a variable whose
+status the program actually observes, never for arithmetic at large.
 
-Requiring a discharge is **ADDING an error**, and
-[COMPATIBILITY.md](../../COMPATIBILITY.md) § *The error surface is one-directional* says loft
-may never add one after contract 1. So this lands before the freeze or not at all — and that
-asymmetry is also the argument for doing it now rather than deferring: dropping the
-requirement later is always legal, re-adding it never is.
+**Must not change:**
+
+- **the surface** — `a: u8 = 250; a += 10; if !a { … }` is existing syntax throughout;
+- **ordinary arithmetic** — `integer`, `float` and `single` keep a sentinel, so they never
+  need a companion bit and their emission is untouched. This is what bounds the cost, and it
+  is why Phase A's +0.5–0.8 % does not transfer: that measured a blanket bit on two
+  benchmarks which are plain `integer` throughout ([ARC-B-DESIGN.md](ARC-B-DESIGN.md));
+- **the default** — a program that observes nothing still takes the type's default, silently,
+  exactly as today.
+
+## Why this is worth doing, and separately, what it risks
+
+**The justification is not frequency.** A programmer who reaches for a `u8` and writes
+arithmetic on it cannot write correct code today: the failure is unobservable and the
+substituted value is not theirs. That is an **arbitrary limitation** — arbitrary because
+nothing about the language requires it, only the absence of a mechanism — and loft exists to
+carry that kind of load for the programmer, not to hand it back
+([GOALS.md](../../GOALS.md)).
+
+The doctrine is already on the record, in the maker's own words under
+[C79](../../DESIGN_DECISIONS.md), and the entry notes that it generalises:
+
+> *"If we cannot fulfil what a programmer asks for us that should be an error instead of
+> silently different semantics … otherwise we will have to support this seemingly
+> undefined/strange behaviour into our future."*
+
+`x: u8 = 250; x += 10` asked for one thing and silently got another. C79's own answer was to
+refuse rather than substitute; here refusing is not available — C80 keeps the program running
+and this plan adds no error — so the same principle takes its other form: **make the
+substitution visible and choosable.** Rare or not, that is the case being fixed.
+
+### What the rarity DOES tell us: the risk is near zero
+
+Narrow widths are barely used for arithmetic. Counted across the tree:
+
+| where narrow-typed `.loft` files live | files |
+|---|---|
+| `tests/scripts` | 52 |
+| `doc/claude` (prose, not code) | 37 |
+| `tests/fixtures` · `tests/docs` · `tests/integration` · `tests/leak_cases` | 17 |
+| `tools/` | **2** |
+| `lib/` | **0** |
+
+The owner reports the same outside this repo: almost no narrow-width code in active use, the
+exception being hex vectors carrying many `u8` cases as **limited template values without
+arithmetic**. Those write no `??` and no `!`, so they stay unmarked and their emission is
+byte-identical. **The population that could be disturbed is approximately empty** — which is
+what a measured blast radius is for, and it is the only thing this count decides.
+
+It also makes **S5** a bound rather than a gate: measuring the cost where the bit is live
+records a number, but little is live for it to slow down.
+
+**And the low usage may itself be the defect's shadow.** A type family that cannot be used
+safely for arithmetic gets used only for storage and template values — exactly the usage
+described. If so, this plan does not repair a construct people use; it makes one usable.
+**Falsifier:** land it, and if narrow-width arithmetic still does not appear, the types were
+niche and this reading was wrong.
+
+## Hard constraint: the bit lives BESIDE THE EXPRESSION, and is never stored
+
+**Nothing is stored anywhere.** Not in a struct, not in a collection element, not in a
+variable's slot. The bit exists while an expression is being evaluated, is consumed by the
+thing that validates it, and is gone. Storage layout is untouched by construction — no
+store-format change, nothing for @PLN97's layout hash to notice, and no way for an
+implementation to drift into widening anything.
+
+That matters because narrow types exist for **density**, measured on 200 000 elements:
+
+| | store capacity | per element |
+|---|---|---|
+| `vector<u8>` | **0.362 MB** | 1 byte |
+| `vector<integer>` | **5.909 MB** | 8 bytes |
+
+**16×** — 20 MB against 320 MB at the scale these types are chosen for. A bit stored beside
+every element would give back half of that, so the constraint is not a preference; it is the
+reason the types exist.
+
+### What this permits, and what it forbids
+
+The rule decides a question this plan had left open, and it decides it against one of the
+sketches that motivated the plan:
+
+```loft
+x = (x + 10) ?? 255;                  // ✅ the bit rides the expression, `??` consumes it
+if !(x + 10) { … }                    // ✅ `!` reads the bit of the expression beside it
+
+f.i += 100;                           // ✅ ADJACENT FORM — the `if` directly follows,
+if !f.i { … }                         //    so the bit lives in a temp across the pair
+
+f.i += 100;                           // ❌ a statement intervenes: nothing carries the
+log("…");  if !f.i { … }              //    status that far without storing it
+```
+
+**The adjacent form is admitted**, and it is still storage-free: when an `if` testing the
+assigned place is the *very next* statement, the compiler can see both together and keep the
+bit in a temp across exactly that window. Nothing is written to a struct, an element, or a
+variable slot — the window is statically known and bounded at two statements.
+
+**Anything further apart is not**, because past the next statement there is nothing left to
+carry the status but the place itself, and the place is storage.
+
+The bit is therefore an evaluation-time value with a bounded lifetime, not a stored one — and
+everything hard about a per-variable design stays gone: no marker on `Variable`, no
+pass-1/pass-2 split (the hazard this tree has been bitten by), no companion slot, no
+propagation rule for `b = a`, and no way to damage layout even by mistake.
+
+### The adjacency rule polices itself, with a lint that already ships
+
+The obvious hazard is that adjacency is invisible: insert a line between the assignment and
+the `if`, and the check silently stops working. **It does not go silent — an existing warning
+catches it.** Measured today, on both the adjacent and the non-adjacent shape:
+
+```
+warning[redundant-null-negation]: '!' on a 'not null' integer(0, 255) is always false
+```
+
+So the design's job is to make that warning **stop firing in the fused position and keep
+firing everywhere else**. Then moving a line restores it, and an author who writes the check
+too far from the assignment is told that it is always false rather than left believing it
+works. The guard rail exists; it needs teaching, not building — and it gives S3 an exact
+gate rather than a judgement call.
+
+## Mechanism
+
+A fit-failing operation evaluates to its value **and** a validity bit, for the five widths
+that cannot represent their own failure. The bit is available only to a validator in the same
+expression:
+
+- **`??`** consumes it — the author's fallback replaces the type's default, routed into
+  `OpRangeDefault`'s `dflt`, which is already the fallback slot (Phase E).
+- **`!`** reads it — *did this fail to produce a value?* — either of the expression it is
+  applied to, or of the assignment in the immediately preceding statement when it names that
+  same place.
+
+Where neither appears, the bit is never produced and emission is byte-identical: that is the
+opt-in claim, and it is checkable with an `introspect` diff rather than argued.
+
+Ordinary arithmetic is untouched. `integer`, `float` and `single` keep a sentinel, so their
+failure is already a value and they never produce a bit — which is what bounds the cost, and
+why Phase A's +0.5–0.8 % (measured on two benchmarks that are plain `integer` throughout)
+does not transfer ([ARC-B-DESIGN.md](ARC-B-DESIGN.md)).
+
+The predicate this hangs off already exists and must be extended rather than re-spelled:
+`IntegerSpec::reserves_sentinel_unconditionally`, reached through `uncomputable_default`, is
+exactly *"can this type represent its own failure?"* — Phase E proved it is the single home by
+reading its answer off `dflt`. 173 sites already ask a narrow-width question, so the hazard
+is a duplicate list, not the branch ([ARC-B-DESIGN.md](ARC-B-DESIGN.md)).
 
 ## Composition matrix — Stage A
 
-Axes this change touches: **target width** (`u8`/`i8`/`u16`/`i16`/`u32` in; `i32`/`integer`
-as the must-not-move controls), **nullability** (`τ` vs `τ?` — the nullable spelling already
-answers null and must stay burden-free), **the seam** (local compound assign · field store ·
-element store · call argument · return · `par` merge · deserialisation), and **fit
-provability** (provably-fits must stay non-null; provably-misses and cannot-prove must type
-`τ?`). Backends: both, though this is a parse-time change and the runtime is untouched.
+Axes: **width** (the five in scope; `integer`/`i32`/`float`/`single` as controls that must not
+move), **spelling** (`??` · `!` · `== null` · none), **seam** (local compound assign · field ·
+element · argument · return), **fault shape** (out-of-range vs landing on the sentinel — two
+different paths, per Phase C), and **backend**. The before-half exists as
+[`probes/`](probes/) and [`probes/axis/`](probes/axis/); a cell with no spelling written must
+be byte-identical to today, which is the opt-in claim and the thing the matrix must prove.
+One axis is not about values at all: **stored SIZE**, asserted with `store_memory()` on a
+large narrow collection, because a design that passed every value cell while doubling
+`vector<u8>` would have broken the reason the type was declared.
 
-The existing probes are the before-half: [`probes/`](probes/) (19 value cells + the refusal
-and diagnostic channels) and [`probes/axis/`](probes/axis/) (overflow shape × storage kind).
-Their expectations change only in the cells this plan intends to move, which is the gate.
+## Sub-arcs — small steps, each able to go red on its own
 
-## Sub-arcs
+Cut against the two bounds ([loft-plan-workflow](../../../../.claude/skills/loft-plan-workflow/SKILL.md)
+§ Cutting a phase): **upper** — the old path and the new one both run and compare exactly;
+**lower** — the step can fail for a real reason without the next one. Every step's opt-in
+claim has the same shape of check, an `introspect` diff over a corpus that writes neither
+`??` nor `!`, so a step that quietly changed ordinary emission cannot pass.
 
-| Item | Source | Verify | Status |
+| # | Step | Verify — what goes red | Status |
 |---|---|---|---|
-| **N1** — measure the real conversion set: instrument the parser to count narrow-target seams where the fit is NOT provable, and confirm range-tracking already clears the provable ones | this README | the count, plus a hand-checked sample; a burden far above the ~16 files a first grep suggests kills the clean design and routes to a narrower seam set | Open |
-| **N2** — type the result `τ?` at the compound-assign seam where the fit is not provable | § the rules | the axis matrix's narrow cells stop answering `0` and start demanding a discharge; the provably-fitting cells are UNCHANGED (the control that a blanket rule would fail) | Open |
-| **N3** — the remaining narrow-target seams: field, element, argument, return | `guard_declared_range` / `compound_range` | one cell per seam, both backends; the `i32` and `integer` controls must not move | Open |
-| **N4** — convert the in-tree sites, then the published-lib gate | `scripts/revalidate_libs_local.sh` | `make ci`, then the lib gate — a language change is not green until the published libraries build | Open |
-| **N5** — rules + decision record: close the deviation, and state C85's exemption as an i64 judgement | `formal/types.md`, `DESIGN_DECISIONS.md` | `scripts/rule_tags.py check`; the deviation register moves | Open |
+| **0** | Probe: where must the opt-in gate live? | **DONE by inspection, no build needed** — `guard_declared_range` / `guard_compound_range` already receive the whole stored expression, so the gate lives at the store guard and needs no parse-time flag. | **Done** |
+| **1** | Pin the three spellings that ship today and are guarded by nothing | `tests/scripts/152-the-fallback-and-failure-spellings-that-already-work.loft`; INERT against `origin/main` by design and recorded as such — it is a LOCK, and what moves it is a change made BY this plan. | **Done** |
+| **2** | `??` reaches a non-null narrow — guard INSIDE the discharge, sentinel as its default | `tests/scripts/152-a-coalesce-chooses-the-fallback-for-a-narrow-slot.loft`, falsified at `4f229521` (the shape was refused before, so the guard cannot compile on the control) — both backends; the three probe channels unchanged. | **Done** |
+| **3** | `??` at the remaining positions: field, element, argument, return, struct literal | `tests/scripts/152-the-fallback-reaches-every-position-a-narrow-store-takes.loft`, falsified at `4f229521`, both backends. **Came free with step 2** — wiring both seams covered all five; each cell uses a distinct fallback so none can pass on a neighbour's answer. | **Done** |
+| **4** | ~~`!` in-expression~~ | **RETIRED — not implementable.** `x + 10` widens to `integer` and `260` is a good one, so a free expression has no narrow type, no range, and no failure to read. The failure is a property of a STORE ([MEASUREMENTS.md](MEASUREMENTS.md)). Folded into step 5. | **Retired** |
+| **5** | **`!` in the adjacent form**: `f.i += 100;` then `if !f.i { … }` — now the ONLY spelling in which the question can be asked, since the assignment is what supplies the target | The lint is silent when fused and **fires one statement later**; `probes/diag` already scores that channel. Red if fusion reaches across an intervening statement, or misses an adjacent one. | Open |
+| **6** | **Cost where the bit is live** (a bound, not a gate — § Why this is worth doing). | A narrow-width benchmark, which `bench/` does not contain and this step writes. Records a number; does not block. | Open |
+| **7** | **Docs and diagnostics agree with what shipped** — the narrowing error already advertises `?? d`. | The advertised cure works when followed. Red if the message still prescribes something that does not work in the position it is offered. | Open |
 
-## Phase ordering
+## Step 5's target shape — proven, so the peephole is translation not invention
 
-1. **N1 first, and it can kill the plan.** The whole case rests on the burden being
-   proportional. If the un-provable set is large, the answer is a narrower seam set, not a
-   blanket rule — and better to learn that from a count than from a converted tree.
-2. **N2 before N3**: the compound assign is the seam the defect was filed at, and it is the
-   one with an existing matrix.
-3. **N4 cannot be skipped.** `make ci` green is not the bar for a language change; the
-   published libraries are.
-4. **N5 last**, so the rules record what shipped rather than what was intended.
+The loft-codegen gate is *do not edit the compiler until you can point at the working form*.
+Here it is, hand-written and running today ([`probes/step5-target-shape.loft`](probes/step5-target-shape.loft)):
 
-## Open design questions
+```loft
+fit = (f.i + 100) as u8?;   // null when it does not fit — the CHECKED cast already does this
+f.i = fit ?? 0;             // the slot still takes the type's default, exactly as now
+if !fit { … }               // and `!` reads the failure
+```
 
-1. **What happens at a seam that cannot be typed** — a `par` merge, deserialisation, a store
-   image read. Those write a narrow slot without an expression to type. The collapse still
-   applies there; whether it should also report is N3's question, not N2's.
-2. **Does `u32` belong with the four, or with `i32`?** Its spare code exists but is at the
-   top, where no non-null read tests for it. Phase B measured it answering the default like
-   the four; the rules describe it that way. Confirm it is not a third case.
-3. **Is the discharge the right ergonomics, or should a narrow slot get a declared
-   saturating/wrapping intent?** `x: u8 = 250; x += 10` demanding `?? 0` is honest but
-   verbose where the author wanted saturation. Out of scope here — but if it is the real
-   answer, N2 is the wrong shape, so it is worth asking before N2 rather than after.
+`f.i = 200` plus 100 does not fit, so `fit` is null, `!fit` is true, and `f.i` is `0` — the
+same value the slot takes today. `g.i = 100` plus 100 fits, so the control branch runs and
+`g.i` is `200`.
+
+**Every construct in it already exists.** `as τ?` is the checked cast, `??` the discharge, `!`
+the presence test. No new op, no new runtime, nothing stored — `fit` is an ordinary
+`integer?` temp, which is the plan's constraint satisfied by construction.
+
+So step 5 is a mechanical rewrite of an adjacent pair:
+
+```
+place op= expr;            __fit_N = (place op expr) as <narrow>?;
+if !place { … }      ⟹     place    = __fit_N ?? <type default>;
+                           if !__fit_N { … }
+```
+
+What remains genuinely open in it: where the peephole runs (a post-pass over the completed
+statement list is cleanest — the list is built in `parse_block_inner` with `Value::Line`
+markers interleaved, which the pair-matching must skip), minting `__fit_N` safely on both
+passes, and teaching `redundant-null-negation` to go silent for the fused `!` only.
+
+## Ordering, and why each boundary is where it is
+
+1. **Step 0 before anything.** It is throwaway and it can invalidate the whole shape for the
+   price of one build — the cheapest phase in the plan and the one most likely to save work.
+2. **Step 1 before any change**, so the three behaviours that ship today are pinned *before*
+   the code that could break them exists. They are unguarded right now.
+3. **Steps 2 and 3 split by seam, not by feature.** One seam proves the mechanism against an
+   exact comparison; the rest are the same mechanism at more places, each with its own cell.
+   Doing them together would mean a red cell could not be attributed to a seam.
+4. **Step 4 is retired into step 5.** A free expression cannot fail, so the adjacent form is
+   not one spelling of two — it is the only one in which the question can be asked without new
+   syntax. Step 5 therefore also owns the lint behaviour step 4 was to have established.
+5. **Steps 2–5 must all land before this is claimed done.** Choose-only cannot branch, log or
+   count; detect-only cannot supply a value inline. Either alone leaves the case
+   half-handleable, which is the state being complained about.
+
+## Open questions
+
+1. **Constant or expression fallback?** `dflt` is `const integer` today, so a constant is
+   nearly free and an expression needs evaluating at the collapse.
+2. **`u32`** — its spare code exists but sits at the top where no non-null read tests for it.
+   Phase B measured it defaulting with the four; confirm it is not a third case.
+3. **Does `!` on an expression conflict with its existing meaning?** `!` tests presence today,
+   and on a non-null narrow expression it is currently always false — `redundant-null-negation`
+   says so and would have to learn this case. Check that the lint and the new reading agree
+   rather than one silently outranking the other.
+4. **Double evaluation.** `if !(x + 10) { … } else { x = (x + 10) ?? 0; }` writes the
+   expression twice, which C92 made *"evaluate the place exactly once"* for compound
+   assignment precisely because double evaluation is a silent-wrong when the expression has
+   effects. If that shape is the one authors will write, it wants a form that does not repeat
+   the expression — which is a surface question for S2/S3, not an implementation detail.
+
+**Resolved by the expression-local constraint** (recorded so they are not re-opened): whether
+a marked variable's null becomes representable — there are no marked variables; and how far a
+mark propagates through `b = a` — nothing propagates, because nothing is stored.
 
 ## See also
 
-- [MEASUREMENTS.md](MEASUREMENTS.md) — phases A/B/C/E: what was measured, and the two
-  corrections it forced on this plan's own premise.
-- [`formal/types.md`](../../formal/types.md) § Null-flow laws — the rule this plan makes hold.
-- [DESIGN_DECISIONS.md](../../DESIGN_DECISIONS.md) C85 (the i64 exemption), C90 (the in-band
-  residual), C80 (the spreadsheet model, unchanged).
-- [COMPATIBILITY.md](../../COMPATIBILITY.md) § The error surface is one-directional.
-- Shipped from the retired phases: loft#1305, loft#1306.
+- [MEASUREMENTS.md](MEASUREMENTS.md) — what phases A/B/C/E measured, and the corrections they
+  forced on this plan's own premise.
+- [ARC-B-DESIGN.md](ARC-B-DESIGN.md) — why the bit is structural, how much is needed, and the
+  predicate it must extend.
+- [`formal/types.md`](../../formal/types.md) § Null-flow laws ·
+  [DESIGN_DECISIONS.md](../../DESIGN_DECISIONS.md) C80, C85, C90.
+- Shipped here: loft#1305, loft#1306.

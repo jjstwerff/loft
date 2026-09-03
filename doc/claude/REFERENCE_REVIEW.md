@@ -816,6 +816,11 @@ differently and only a cell could ever have caught the claim.
 
 | chapter source | reviewed through | commit |
 |---|---|---|
+| `default` | 2026-09-03 | `b1ccf0e9` |
+| `doc/00-vs-python.html` | 2026-09-03 | `b1ccf0e9` |
+| `doc/00-vs-rust.html` | 2026-09-03 | `b1ccf0e9` |
+| `doc/install.html` | 2026-09-03 | `b1ccf0e9` |
+| `doc/roadmap.html` | 2026-09-03 | `b1ccf0e9` |
 | `tests/docs/01-keywords.loft` | 2026-08-31 | `e9643ff6` |
 | `tests/docs/02-text.loft` | 2026-08-31 | `e9643ff6` |
 | `tests/docs/03-integer.loft` | 2026-08-31 | `e9643ff6` |
@@ -836,26 +841,21 @@ differently and only a cell could ever have caught the claim.
 | `tests/docs/19-threading.loft` | 2026-09-01 | `e9643ff6` |
 | `tests/docs/20-logging.loft` | 2026-09-01 | `e9643ff6` |
 | `tests/docs/22-time.loft` | 2026-09-01 | `e9643ff6` |
-| `tests/docs/23-safety.loft` | 2026-09-01 | `b6dc9a61` |
-| `tests/docs/24-json.loft` | 2026-09-01 | `f21577f2` |
-| `tests/docs/25-generics.loft` | 2026-09-02 | `951d6a3a` |
-| `tests/docs/26-closures.loft` | 2026-09-01 | `64808d31` |
-| `tests/docs/27-coroutines.loft` | 2026-09-01 | `320949cb` |
-| `tests/docs/28-tuples.loft` | 2026-09-01 | `320949cb` |
-| `tests/docs/29-match.loft` | 2026-09-01 | `dac44e52` |
-| `tests/docs/30-formatting.loft` | 2026-09-01 | `6686e0d9` |
-| `tests/docs/31-ref-forward.loft` | 2026-09-01 | `6de316c9` |
-| `tests/docs/33-features.loft` | 2026-09-02 | `951d6a3a` |
-| `tests/docs/34-running.loft` | 2026-09-01 | `1c5e7b17` |
-| `tests/docs/35-testing.loft` | 2026-09-01 | `65dd5efd` |
-| `tests/docs/36-debugging.loft` | 2026-09-02 | `9e79234c` |
-| `tests/docs/37-projects.loft` | 2026-09-02 | `7488943a` |
-| `tests/docs/38-call-it-yourself.loft` | 2026-09-02 | `57853cbc` |
-| `doc/00-vs-rust.html` | 2026-09-02 | `a41ee548` |
-| `doc/00-vs-python.html` | 2026-09-02 | `a41ee548` |
-| `doc/install.html` | 2026-09-02 | `80568550` |
-| `doc/roadmap.html` | 2026-09-02 | `462d42ee` |
-| `default` | 2026-09-02 | `951d6a3a` |
+| `tests/docs/23-safety.loft` | 2026-09-03 | `b1ccf0e9` |
+| `tests/docs/24-json.loft` | 2026-09-03 | `b1ccf0e9` |
+| `tests/docs/25-generics.loft` | 2026-09-03 | `b1ccf0e9` |
+| `tests/docs/26-closures.loft` | 2026-09-03 | `b1ccf0e9` |
+| `tests/docs/27-coroutines.loft` | 2026-09-03 | `b1ccf0e9` |
+| `tests/docs/28-tuples.loft` | 2026-09-03 | `b1ccf0e9` |
+| `tests/docs/29-match.loft` | 2026-09-03 | `b1ccf0e9` |
+| `tests/docs/30-formatting.loft` | 2026-09-03 | `b1ccf0e9` |
+| `tests/docs/31-ref-forward.loft` | 2026-09-03 | `b1ccf0e9` |
+| `tests/docs/33-features.loft` | 2026-09-03 | `b1ccf0e9` |
+| `tests/docs/34-running.loft` | 2026-09-03 | `b1ccf0e9` |
+| `tests/docs/35-testing.loft` | 2026-09-03 | `b1ccf0e9` |
+| `tests/docs/36-debugging.loft` | 2026-09-03 | `b1ccf0e9` |
+| `tests/docs/37-projects.loft` | 2026-09-03 | `b1ccf0e9` |
+| `tests/docs/38-call-it-yourself.loft` | 2026-09-03 | `b1ccf0e9` |
 
 ## See also
 

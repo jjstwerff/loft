@@ -239,6 +239,15 @@ than a third spelling both would have to learn.  Guard:
 > Guard: `tests/scripts/1104-a-tuple-element-argument-borrow-witness.loft`, scored by the wrap
 > harness's leak gate — `loft --tests` cannot fail it even with `LOFT_STRICT_STORES=1`.
 
+> **The rule extended (2026-09-03, with binding.md D-bind-11's close).** `(T-Ref-El)` said
+> *"every τᵢ must be one of integer, float, single, character, boolean"* — a statement of the
+> stack form's reach, and the deviation binding.md carried against `B-Ref-Alias`.  It now
+> admits what a struct field can hold, and a new `(T-Ref-Rep)` says which representation a
+> `&(…)` names: the stack for an all-scalar tuple, the `__tuple<…>` record otherwise — the
+> record a heap-tuple return and a loop variable already were.  `(T-Ref-Src)` gained the
+> parameter half of its source rule.  Spec-may-adjust in the ROADMAP's sense, and it adjusted
+> TOWARD the more general rule, not away from it.
+>
 > **D-tup-1 — CLOSED (2026-08-20) — the reference tuple has a rule.** This doc specified
 > construction, projection, destructuring and returns and said nothing about `&(τ₁, …, τₙ)` —
 > the composition of `&` ([binding.md](binding.md)) with a tuple. Both halves were specified and

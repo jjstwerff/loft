@@ -323,7 +323,7 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
     if p.diagnostics.level() >= loft::diagnostics::Level::Error {
         return Err(Error::from(std::io::ErrorKind::InvalidData));
     }
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let end_def = p.data.definitions();
@@ -359,22 +359,34 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
         out.output_native_reachable(&mut buf, start_def, end_def, &entry_defs)?;
     }
 
+    // A file the GENERATOR itself refused cannot be a native job.  `compile_error!` is
+    // what loft emits for a shape `--native` cannot express — a `#native` fn with no
+    // registered implementation, a refused coroutine yield type — and the macro fails the
+    // build wherever it is expanded, so reachable-but-never-called is not a rescue.
+    //
+    // This is the honest form of the drop that `@EXPECT_FAIL` used to stand in for.  The
+    // annotation says a function is expected to FAIL; it never said the file could not be
+    // COMPILED, and reading it as if it did is what cost every sibling its coverage
+    // (loft#1311).  Keyed on the refusal itself, this also covers a file that carries no
+    // annotation at all.
+    if String::from_utf8_lossy(&buf).contains("compile_error!") {
+        return Err(Error::other(
+            "native codegen refused this file (compile_error! in the generated Rust)",
+        ));
+    }
+
     // For test-style files without fn main(), generate a main() that calls
     // each test function so the native binary is a valid executable.
     // Skip functions marked with @EXPECT_FAIL in the source.
     if !has_main && !test_fns.is_empty() {
         use std::io::Write;
         let src = std::fs::read_to_string(entry).unwrap_or_default();
-        let expect_fail_fns: std::collections::HashSet<String> = src
-            .lines()
-            .filter(|l| l.contains("@EXPECT_FAIL"))
-            .flat_map(|l| {
-                l.split_whitespace()
-                    .skip_while(|w| *w != "@EXPECT_FAIL")
-                    .skip(1)
-                    .map(String::from)
-            })
-            .collect();
+        // The SAME parser the interpreter runner reads the annotation with, so the two
+        // cannot disagree about which functions a file excuses.  A second parser here
+        // keyed on words-on-the-line could not see the documented
+        // `// @EXPECT_FAIL: <reason>` form — the token carries the colon — and came back
+        // empty for every file that used it (loft#1311).
+        let (expect_fail_fns, _file_level) = common::expect_fail_fns(&src);
         // P199 — wrap Stores in UnsafeCell for the new ABI; the work
         // buffers (`stores.null_named(...)`) need a temporary `&mut Stores`
         // derived from the cell.
@@ -390,10 +402,9 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
         writeln!(buf, "    init(&cell);")?;
         for (d_nr, name) in &test_fns {
             let user_name = name.strip_prefix("n_").unwrap_or(name);
-            if expect_fail_fns
-                .iter()
-                .any(|f| user_name.contains(f.as_str()))
-            {
+            // Exact: the parser yields the name off the `fn` line, so a substring test
+            // would also skip a sibling whose name merely contains the excused one.
+            if expect_fail_fns.contains(user_name) {
                 writeln!(buf, "    // skipped (EXPECT_FAIL): {name}")?;
             } else {
                 // Generate work-buffer locals for hidden __work_* / __ref_* parameters
@@ -926,8 +937,13 @@ fn native_scripts() -> std::io::Result<()> {
                 println!("skip {entry:?} (has @EXPECT_ERROR)");
                 continue;
             }
-            if common::declares_expect_fail(&src) {
-                println!("skip {entry:?} (has @EXPECT_FAIL)");
+            // Only a FILE-LEVEL `@EXPECT_FAIL` drops the file.  A fn-level one names a
+            // single function, and the documented contract is that its siblings still
+            // must pass — so dropping the whole file cost every sibling its native
+            // coverage, silently (loft#1311).  The fn itself is skipped in
+            // `prepare_native_test`, which reads the same parser.
+            if common::expect_fail_fns(&src).1 {
+                println!("skip {entry:?} (has file-level @EXPECT_FAIL)");
                 continue;
             }
         }
@@ -3398,7 +3414,7 @@ fn a_c_binding_is_refused_by_name_on_a_wasm_target() {
         "the declaration itself must stay legal on every target: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let main_nr = p.data.def_nr("n_main");
@@ -4488,4 +4504,68 @@ fn a_nested_narrow_vector_field_keeps_the_type_ids_aligned() {
             String::from_utf8_lossy(&out.stdout)
         );
     }
+}
+
+/// loft#1311 — a FN-LEVEL `@EXPECT_FAIL` excuses one function, not the whole file.
+///
+/// Two defects met here.  The suite dropped the file for ANY declaration of the tag, and
+/// the finer per-function mechanism underneath it — which emits
+/// `// skipped (EXPECT_FAIL): {name}` in place of a call — could not parse the documented
+/// `// @EXPECT_FAIL: <reason>` form, because its hand-rolled `split_whitespace` looked for
+/// the bare token and the documented one carries a colon.  So the skip-set was empty for
+/// every file written the documented way, and the drop above it silently cost each of
+/// those files' passing functions their native coverage.
+///
+/// The guard reads the GENERATED main, which is where the contract is decidable: the
+/// excused function must appear as a skip, and every sibling must still be called.
+/// Asserting only that the file was prepared would pass with the skip-set still empty.
+#[test]
+fn a_fn_level_expect_fail_keeps_its_siblings_in_the_native_suite() {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+
+    // The documented colon form is the one the old parser could not read.
+    let src = "\
+fn test_1311_sibling_before() { assert(1 == 1, \"before\"); }
+
+// @EXPECT_FAIL: deliberately broken
+fn test_1311_excused() { assert(false, \"deliberate\"); }
+
+fn test_1311_sibling_after() { assert(2 == 2, \"after\"); }
+";
+
+    // Parsed alone, the tag names one function and declares nothing file-level.
+    let (fns, file_level) = common::expect_fail_fns(src);
+    assert!(
+        fns.contains("test_1311_excused"),
+        "the documented `@EXPECT_FAIL: <reason>` form must name its fn; got {fns:?}"
+    );
+    assert!(
+        !file_level,
+        "a tag under a declaration is fn-level, not file-level"
+    );
+    // Control: the SAME tag in the header IS file-level, so the drop still has a subject.
+    let (_, header_level) = common::expect_fail_fns("// @EXPECT_FAIL: whole file\nfn t() { }\n");
+    assert!(header_level, "a header tag must still read as file-level");
+
+    let scratch = loft::platform::scratch_dir();
+    let entry = scratch.join("loft1311_fn_level_expect_fail.loft");
+    std::fs::write(&entry, src).expect("write the probe script");
+
+    let job = prepare_native_test(&entry).expect("a fn-level @EXPECT_FAIL must still prepare");
+    let generated = std::fs::read_to_string(&job.tmp_rs).expect("read the generated Rust");
+
+    assert!(
+        generated.contains("// skipped (EXPECT_FAIL): n_test_1311_excused"),
+        "the excused fn must be skipped, not called:\n{generated}"
+    );
+    for sibling in ["n_test_1311_sibling_before", "n_test_1311_sibling_after"] {
+        assert!(
+            generated.contains(&format!("{sibling}(&cell)")),
+            "sibling {sibling} lost its native coverage:\n{generated}"
+        );
+    }
+
+    let _ = std::fs::remove_file(&entry);
 }

@@ -182,6 +182,12 @@ The rule wants splitting rather than weakening, and the split is decidable from 
                size(S?) > size(S).  Absence is discriminant 0.  Every writer and reader of such
                a slot goes through the tag; the pair that holds this is
                `Parser::emit_nullable_slot_write` / `emit_nullable_slot_read`.
+  (L-Null-Which) which of the two governs a FIELD is decided by the field, not by the type it
+               names: `Type::Reference(S, deps)` is the IR spelling of BOTH an embedded `S`
+               and a `reference<S>` pointer, and the `u16::MAX` share marker in `deps` (#328)
+               is what tells them apart — the same bit `Data::has_value_cycle` reads to skip
+               pointer edges.  Marked ⟹ `(L-Null)`, a 12-byte pointer with `nullref` for
+               absence; unmarked ⟹ `(L-Null-Tag)`.  One home: `synth_nullable_struct_fields`.
   (L-Null-Text) `text` reserves TWO spellings of absence and they are ONE value: an UNSET
                handle (str_rec 0 — the `nullref` above) and an ALLOCATED record holding the
                `STRING_NULL` (`"\0"`) bytes.  A reader tests the CONTENT, never the handle
@@ -189,6 +195,15 @@ The rule wants splitting rather than weakening, and the split is decidable from 
                so the content test is TOTAL and subsumes the handle test.  An allocated `""`
                is a present value, not an absence (@P375).  One home: `Store::text_is_null`.
 ```
+
+`(L-Null-Which)` is there because the split above is decidable from the type and the code still
+got it wrong: both halves are reachable through ONE `Type` variant, so a site that reads the
+variant and not the marker picks a representation by accident.  Measured (loft#1316): the field
+rewrite discarded `deps`, `reference<Leaf>?` and `Leaf?` laid out byte-identically, and writing
+`?` on a pointer field silently replaced sharing with an inline copy — while on a reference graph
+that returns to its own struct the inline form has no finite size, so a linked list's terminator
+could not be declared at all.  A rule that says WHICH half applies but not HOW a site decides is
+the incomplete kind this doc has been bitten by twice already (see the ⚠ above).
 
 `(L-Null-Text)` is the same kind of record for the one scalar whose sentinel is not a bit
 pattern in its own slot.  A text slot holds a HANDLE, and absence is spelled twice because the
@@ -257,8 +272,14 @@ falsifier ([@PLN97](../plans/97-layout-contract/README.md)):
   read-path (narrow widths, the nested-vector stride at runtime, tuple packing, enum tag+fields) on
   interpreter, `--native`, and wasm: a value-corrupting ABI divergence fails on the divergent
   backend. (D-op-1's differential falsifier applies here as elsewhere.)
-- **`L-Null`** — the golden renders a nullable and a not-null field identically (same size, same
-  offsets); nullability lives in the schema, not the hash.
+- **`L-Null` / `L-Null-Which`** — the golden renders a nullable and a not-null field identically
+  (same size, same offsets); nullability lives in the schema, not the hash.  The golden compares
+  a `τ?` with its own dense twin, so it cannot see a `τ?` given the WRONG half's representation —
+  `reference<Leaf>?` laid out as a well-formed `__nullable<Leaf>` and every size check passed.
+  `tests/scripts/1316-a-nullable-reference-field-is-still-a-pointer.loft` scores that on
+  behaviour instead, on both backends: the marked field must SHARE (write through the source, read
+  it through the field) and the unmarked one must COPY, which is the pair no layout dump
+  distinguishes.
 - **`L-Null-Text`** — `tests/scripts/1270-an-absent-text-is-one-absence.loft`, on both backends:
   every way of SAYING absent (literal `null`, an omitted field, an assignment, a call, a parse)
   writes ONE document and round-trips to itself, while an allocated `""` stays a present value.

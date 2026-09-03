@@ -290,8 +290,8 @@ pub fn check_generated_with(src: &str, poison: bool) -> Result<(), String> {
     }
 
     let mut data = p.data;
-    let database = p.database;
-    scopes::check(&mut data);
+    let mut database = p.database;
+    scopes::check(&mut data, &mut database);
     let mut state = State::new(database);
     byte_code(&mut state, &mut data);
     state.database.poison_free = poison;

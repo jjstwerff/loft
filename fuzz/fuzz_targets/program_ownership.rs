@@ -427,9 +427,9 @@ fn run_oracle(src: &str) {
     // recorded in fuzz-proof-gate.md and routed to its own investigation —
     // dropped here so it does not drown the ownership signal.
     let mut data = p.data;
-    let database = p.database;
+    let mut database = p.database;
     let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        scopes::check(&mut data);
+        scopes::check(&mut data, &mut database);
         let mut state = State::new(database);
         byte_code(&mut state, &mut data);
         (state, data)

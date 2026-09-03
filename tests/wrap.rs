@@ -119,7 +119,7 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
             true,
         )?;
     }
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let end_def = p.data.definitions();
@@ -1002,7 +1002,7 @@ fn main(args: vector<text>) {
         println!("{l}");
     }
     assert!(p.diagnostics.is_empty(), "parse errors");
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let args = ["hello", "world", "foo"]
@@ -1246,46 +1246,10 @@ fn entry_point_names(data: &Data, start_def: u32) -> Vec<String> {
 /// Scan source for `// @EXPECT_FAIL` annotations bound to specific functions.
 /// Returns a set of function names whose panics should be tolerated.
 /// Also returns true if the file has a file-level `@EXPECT_FAIL`.
+///
+/// One parser, shared with the native runner — see [`common::expect_fail_fns`].
 fn expect_fail_fns(source: &str) -> (HashSet<String>, bool) {
-    let mut fns = HashSet::new();
-    let mut file_level = false;
-    let mut pending = false;
-    let mut in_header = true;
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("fn ") {
-            in_header = false;
-            if pending
-                && let Some(name) = trimmed
-                    .strip_prefix("fn ")
-                    .and_then(|s| s.split(&['(', ' ', '{'][..]).next())
-            {
-                fns.insert(name.to_string());
-            }
-            pending = false;
-            continue;
-        }
-        if trimmed.starts_with("struct ") || trimmed.starts_with("enum ") {
-            in_header = false;
-            pending = false;
-            continue;
-        }
-        if trimmed.starts_with("//") {
-            if common::expect_tag(trimmed, "@EXPECT_FAIL").is_some() {
-                if in_header {
-                    file_level = true;
-                } else {
-                    pending = true;
-                }
-            }
-        } else {
-            pending = false;
-        }
-    }
-    if pending {
-        file_level = true;
-    }
-    (fns, file_level)
+    common::expect_fail_fns(source)
 }
 
 /// Collect all `// @EXPECT_ERROR:` and `// @EXPECT_WARNING:` annotation substrings.
@@ -1697,7 +1661,7 @@ fn run_test_inner(
     // Scope check and bytecode generation can panic on compiler bugs.
     // When the file has @EXPECT_FAIL annotations, tolerate the panic.
     let compile_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        scopes::check(&mut p.data);
+        scopes::check(&mut p.data, &mut p.database);
         let mut state = State::new(p.database);
         byte_code(&mut state, &mut p.data);
         (state, p.data)

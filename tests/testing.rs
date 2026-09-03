@@ -338,7 +338,7 @@ impl Drop for Test {
         if p.diagnostics.level() >= Level::Error {
             return;
         }
-        scopes::check(&mut p.data);
+        scopes::check(&mut p.data, &mut p.database);
         // P132: also generate per-test native code in release builds so the
         // n2..n10/o7 codegen-inspection tests can read tests/generated/<name>.rs
         // when the suite is run via `cargo test --release` (the new default

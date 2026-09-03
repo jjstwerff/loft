@@ -866,7 +866,22 @@ impl Stores {
     /// `displaced` is the store the binding held before a write installed `witness`.  When the
     /// two name one store the write kept it, and there is nothing to release.
     ///
-    /// The second guard is @FR-H-Free's other side condition: a store a CALLER marked
+    /// The second guard is the `store(r) ≠ 0` side condition of the rule cited at it: the
+    /// eval-stack store is never an owned heap store, so a binding that stopped pointing at
+    /// a stack record released nothing.  It is a NO-OP here rather than the loud `#306`
+    /// refusal [`Self::free_named`] raises, and the two are not in tension — they answer
+    /// different questions.  `free_named` is asked *"release this store"*, and for store 0
+    /// the FreeStack rule makes that a FAULT: the caller believed it owned a heap store and
+    /// did not.  This function is asked *"release the previous value IF it was ours"*, which
+    /// the side condition simply does not license — the same shape [`Self::free_named`]'s
+    /// `u16::MAX` sentinel check treats as nothing-to-do.
+    ///
+    /// A nullable heap local reaches here holding a stack record on the paths where it never
+    /// took a store of its own — an ordinary state for it, not a wrong free.  Removing this
+    /// guard turns `1085-ret-buffer-passthrough-free` red with a `#306` refusal at
+    /// `OpFreeRefIfDistinct`, which is the falsification record for it.
+    ///
+    /// The third guard is @FR-H-Free's other side condition: a store a CALLER marked
     /// protected-from-free for the duration of a call is not this frame's to release.  A `&`
     /// parameter's write-back displaces whatever the caller's binding named, and the callee
     /// cannot see whether the caller OWNS that store — a plain heap parameter forwarded into a
@@ -875,6 +890,12 @@ impl Stores {
     /// the store it does not own; this is where the mark is honoured.
     pub fn free_displaced(&mut self, displaced: &DbRef, witness: &DbRef) {
         if displaced.store_nr == witness.store_nr {
+            return;
+        }
+        // @FR-H-Free — `store(r) ≠ 0`.  Guarded by `stack_store_at_zero` for the same reason
+        // `free_named`'s `#306` check is: store 0 is only the eval stack once the interpreter
+        // has claimed it, and a durable/embedded `Stores` numbers its first real store 0.
+        if displaced.store_nr == 0 && self.stack_store_at_zero {
             return;
         }
         if (displaced.store_nr as usize) < self.allocations.len()

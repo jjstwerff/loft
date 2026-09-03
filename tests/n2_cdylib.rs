@@ -180,7 +180,7 @@ fn build_scalar_lib_cdylib(stem: &str, lib_src: &str, fn_name: &str) -> Option<(
     p.data = data;
     p.database = db;
     p.parse_str(lib_src, "lib", false);
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
 
     let scalar = loft::native_gate::scalar_dispatchable(&p.data);
     let fn_nr = p.data.def_nr(&format!("n_{fn_name}"));
@@ -226,7 +226,7 @@ fn build_shared_lib_cdylib(stem: &str, lib_src: &str, fn_name: &str) -> Option<(
     p.data = data;
     p.database = db;
     p.parse_str(lib_src, "lib", false);
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
 
     let shared = loft::native_gate::shared_store_dispatchable(&p.data);
     let fn_nr = p.data.def_nr(&format!("n_{fn_name}"));
@@ -312,7 +312,7 @@ fn shared_cdylib_with_native_package_emits_cabi_extern() {
         "lib",
         false,
     );
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
     // Register the symbol's package exactly as a `[native] crate` manifest would
     // (`parse_str` reads source, not a manifest): a non-empty `native_packages`
     // plus the symbol→crate mapping the codegen consults.
@@ -391,7 +391,7 @@ fn cabi_extern_declares_i64_for_plain_and_optional_integers() {
         "lib",
         false,
     );
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
     p.data.native_packages.push((
         "loft-roll-native".to_string(),
         "/nonexistent/roll".to_string(),
@@ -469,7 +469,7 @@ fn run_shared_dispatch(so: &Path, native_decl: &str, source: &str) {
     p.parse_str(source, "test", false);
     let has_errors = p.diagnostics.lines().iter().any(|l| l.starts_with("Error"));
     assert!(!has_errors, "diagnostics: {:?}", p.diagnostics.lines());
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
 
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
@@ -833,7 +833,7 @@ fn lean_interface_drives_shared_dispatch() {
     p.data = data;
     p.database = db;
     p.parse_str(SHAPE_LIB, "lib", false);
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let area_nr = p.data.def_nr("n_area");
     let make_nr = p.data.def_nr("n_make_rect");
     let shared = loft::native_gate::shared_store_dispatchable(&p.data);
@@ -905,7 +905,7 @@ fn auto_native_marks_and_dispatches_normal_library_fn() {
     );
     let has_errors = p.diagnostics.lines().iter().any(|l| l.starts_with("Error"));
     assert!(!has_errors, "diagnostics: {:?}", p.diagnostics.lines());
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
 
     // Auto-mark the library's function native (the `use`-time hook).  Before
     // byte_code, so calls route through OpStaticCall.
@@ -1001,7 +1001,7 @@ fn auto_native_text_return_shapes() {
     );
     let has_errors = p.diagnostics.lines().iter().any(|l| l.starts_with("Error"));
     assert!(!has_errors, "diagnostics: {:?}", p.diagnostics.lines());
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
 
     let greet_nr = p.data.def_nr("n_greet");
     let candidates: std::collections::HashSet<u32> = std::iter::once(greet_nr).collect();
@@ -1085,7 +1085,7 @@ fn f3_body_bearing_marked_fn_dispatch_vs_interpret() {
         "parse: {:?}",
         p.diagnostics.lines()
     );
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
 
     let fn_nr = p.data.def_nr("n_vec_sum");
     let export: HashSet<u32> = std::iter::once(fn_nr).collect();
@@ -1223,7 +1223,7 @@ fn p303_text_return_marked_fn_expression_and_dest_context() {
         "parse: {:?}",
         p.diagnostics.lines()
     );
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
 
     let fn_nr = p.data.def_nr("n_ename");
     // Precondition the whole test rests on: the fn carries a text_return

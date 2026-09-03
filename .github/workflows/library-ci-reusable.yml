@@ -28,9 +28,15 @@ on:
         required: false
         default: main
         type: string
+      stale-days:
+        description: 'days without activity before unreleased work is red (default: 14)'
+        required: false
+        default: 14
+        type: number
 
 permissions:
   contents: read
+  pull-requests: read       # the unreleased-work job lists this repo's own PRs
 
 jobs:
   test:
@@ -467,3 +473,47 @@ jobs:
       - name: Transitive dep tests
         working-directory: ${{ matrix.package }}
         run: LOFT_TIMEOUT=240 loft test --deps
+
+  # Does this repo carry work that never reached anyone?  A branch ahead of the default
+  # branch with no PR, a PR nobody has touched, or a loft.toml version the registry has
+  # never seen.  All three are invisible from inside a package's own test run, and the
+  # maintainer's `registry_maintain.sh` only surfaces the first two during a publish —
+  # by which time a branch has typically been sitting for months.
+  #
+  # Its own job, not a step in the matrix: the question is about the REPO, and asking it
+  # once per package would multiply the API calls by the package count and report the
+  # same finding fourteen times.  It also runs whatever the tests do, because a red test
+  # and a forgotten branch are unrelated problems and hiding the second behind the first
+  # helps nobody.
+  #
+  # The threshold is days since last ACTIVITY (`stale-days`, default 14).  A gate that
+  # counts age-since-creation reddens long-running work that is actively moving, which is
+  # how a step gets ignored.  What it cannot read — a `gh` call that fails, an
+  # unreachable index — it reports and never counts as clean.
+  unreleased:
+    runs-on: ubuntu-latest
+    name: unreleased work
+    steps:
+      - name: Checkout the library
+        uses: actions/checkout@v4
+
+      # One file, not the whole engine: this job builds nothing, and a full loft checkout
+      # to read a single script is minutes of clone for seconds of work.
+      - name: Fetch the checker from loft
+        uses: actions/checkout@v4
+        with:
+          repository: loft-lang/loft
+          ref: ${{ inputs.loft-ref }}
+          path: loft-src
+          sparse-checkout: scripts/unreleased-work.py
+          sparse-checkout-cone-mode: false
+
+      - name: Branches, PRs and versions that never shipped
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 loft-src/scripts/unreleased-work.py \
+            --repo "${{ github.repository }}" \
+            --packages '${{ inputs.packages }}' \
+            --stale-days "${{ inputs.stale-days }}" \
+            --summary "$GITHUB_STEP_SUMMARY"

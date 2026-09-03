@@ -43,7 +43,7 @@ fn run_with_breakpoint(
             other => panic!("def parse of {def:?} failed: {other:?}"),
         }
         let mut warm = State::new(p.database.clone());
-        loft::scopes::check(&mut p.data); // assign slots (locals need it)
+        loft::scopes::check(&mut p.data, &mut p.database); // assign slots (locals need it)
         compile::byte_code(&mut warm, &mut p.data);
     }
     let entry = match p.parse_statement(call) {
@@ -53,7 +53,7 @@ fn run_with_breakpoint(
     let mut state = State::new(p.database.clone());
     // Assign slots before codegen (the REPL paths do this; bare expressions get
     // away without it, but a struct-constructing call needs its work-ref slots).
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
     compile::byte_code(&mut state, &mut p.data);
     let d_nr = p.data.def_nr(&format!("n_{bp_fn}"));
     assert!(d_nr != u32::MAX, "function {bp_fn} not defined");
@@ -142,7 +142,7 @@ fn breakable_lines_cover_non_arithmetic_lines() {
         other => panic!("def failed: {other:?}"),
     }
     let mut state = State::new(p.database.clone());
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
     compile::byte_code(&mut state, &mut p.data);
     let d = p.data.def_nr("n_f");
     // Line 2 (`m = n;`, no arithmetic) and line 3 (`if m {...}`, no arithmetic) are
@@ -368,7 +368,7 @@ fn step_picks_up_repl_edited_value() {
         other => panic!("def failed: {other:?}"),
     }
     let mut warm = State::new(p.database.clone());
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
     compile::byte_code(&mut warm, &mut p.data);
     // The program asserts the EDITED result (990); false without the edit (50).
     let entry = match p.parse_statement("assert(calc(5) == 990, \"edited n to 99\")") {
@@ -376,7 +376,7 @@ fn step_picks_up_repl_edited_value() {
         other => panic!("call failed: {other:?}"),
     };
     let mut state = State::new(p.database.clone());
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
     compile::byte_code(&mut state, &mut p.data);
     let calc = p.data.def_nr("n_calc");
     state.enable_stepping();
@@ -432,7 +432,7 @@ fn run_to_pause(p: &mut Parser, defs: &[&str], call: &str, bp_fn: &str, line: u3
             other => panic!("def parse of {def:?} failed: {other:?}"),
         }
         let mut warm = State::new(p.database.clone());
-        loft::scopes::check(&mut p.data);
+        loft::scopes::check(&mut p.data, &mut p.database);
         compile::byte_code(&mut warm, &mut p.data);
     }
     let entry = match p.parse_statement(call) {
@@ -440,7 +440,7 @@ fn run_to_pause(p: &mut Parser, defs: &[&str], call: &str, bp_fn: &str, line: u3
         other => panic!("call parse of {call:?} failed: {other:?}"),
     };
     let mut state = State::new(p.database.clone());
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
     compile::byte_code(&mut state, &mut p.data);
     let d_nr = p.data.def_nr(&format!("n_{bp_fn}"));
     state.enable_stepping();
@@ -749,7 +749,7 @@ fn breakpoint_at_fn_body_start_by_name() {
         other => panic!("call failed: {other:?}"),
     };
     let mut state = State::new(p.database.clone());
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
     compile::byte_code(&mut state, &mut p.data);
     assert!(
         state.set_breakpoint_fn_start("dbl", &p.data).is_some(),
@@ -1139,7 +1139,7 @@ fn cooperative_pause_yields_control_then_resumes_to_completion() {
     {
         // Warm-compile so compute's slots + line table exist before the run build.
         let mut warm = State::new(p.database.clone());
-        loft::scopes::check(&mut p.data);
+        loft::scopes::check(&mut p.data, &mut p.database);
         compile::byte_code(&mut warm, &mut p.data);
     }
     let entry = match p.parse_statement("compute(40)") {
@@ -1147,7 +1147,7 @@ fn cooperative_pause_yields_control_then_resumes_to_completion() {
         other => panic!("call parse failed: {other:?}"),
     };
     let mut state = State::new(p.database.clone());
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
     compile::byte_code(&mut state, &mut p.data);
     let d_nr = p.data.def_nr("n_compute");
     assert!(

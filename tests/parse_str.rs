@@ -29,7 +29,7 @@ fn parse_str_survives_a_use_clause() {
         p.diagnostics.lines()
     );
     // And it runs: the resumed second half of the virtual file (main) exists.
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
     let mut data = p.data;
     let mut state = State::new(p.database);
     compile::byte_code(&mut state, &mut data);

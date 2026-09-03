@@ -70,8 +70,34 @@ available). A bare `f` (a function's name used as a value) is a first-class func
                  the same DbRef either way, so a field write, an element write and an append
                  from inside the closure all reach the caller — and a `&integer` / `&text` is
                  COPIED at creation by (L-CapScalar).  The `&` itself does NOT survive into
-                 the closure: a write that would replace what it points AT is D-clo-18.
+                 the closure, so a write that would replace what it points AT is REFUSED
+                 (a decided edge, DESIGN_DECISIONS C115 — not a deviation: the copy is what
+                 (L-CapScalar) requires, so no code change closes it).
 ```
+
+⚠ **A REASSIGNMENT of the captured variable is not a mutation-through, and the two are worth
+keeping apart.** `(L-CapHeap)` shares the store, so `b.v = 9` after the capture reads through;
+`b = other` does not, because it rebinds the variable while the closure keeps the `DbRef` it was
+built with. That is what a captured vector and a captured struct do — the closure answers the
+build-time value. It is also the fact that decides which store the record takes over the free of
+([ownership.md](ownership.md) `O-Latest`, loft#1324).
+
+⚠ **A rebind INSIDE the closure now replaces at every keyed kind too (loft#1326).** `(L-CapHeap)`
+shares the store, so `m = […]` written inside a closure over a captured `hash` / `sorted` /
+`index` / `trie` replaces its contents, exactly as the captured vector spelling does and as the
+same collection reached through a captured struct field always did. It used to EMPTY the
+collection: the keyed replace is selected on the destination being a struct FIELD, and a capture
+is an `OpGetDbRef` rather than an `OpGetField`, so the branch was skipped — the fourth time that
+family of selector has been the narrow part while its lowering was already right.
+
+⚠ **What is still open is the rebind OUTSIDE the closure, and the rule does not yet say which is
+right.** `e =
+[Row { k: 1, v: 51 }]` over a captured `hash` / `sorted` / `index` REFILLS the existing store
+rather than minting one, so the closure reads the reassigned value where the vector and struct
+spellings read the build-time one. Both are "the closure kept its `DbRef`"; what differs is
+whether a rebind mints. Measured on all three keyed kinds, both backends, and unchanged by
+loft#1324's fix — the store-lifetime half is correct either way, so this is a contract question
+rather than a leak, and it is open.
 
 **In words.** A closure that captures an `integer x` freezes `x`'s value at the moment the closure
 is built (verified: capture, then `x = 20`, still yields `10`). A closure that captures a struct or
@@ -99,53 +125,49 @@ with the closure's environment in scope.
 
 ## Deviations
 
-**OPEN: 3.**
-- **D-clo-18** — a `&` SCALAR parameter written from inside a closure is REFUSED, where
-  `(L-CapRef)` + `(F-ParamRef)` together say the write should reach the caller. The value
-  lives in the caller's slot and `(L-CapScalar)` gives the closure a copy of it, so there is
-  no shared record for the write to land in; making it work needs the REF itself in the
-  closure record plus a write-back, which the cell machinery (the mechanism that makes the
-  same shape work for a plain local) cannot supply — reads in the enclosing body would then
-  see the cell while the caller still sees its own slot. Refusing is deliberate and is the
-  half of loft#1276 that is not a fix: before the refusal the program COMPILED and answered
-  quietly wrong (`fn bump(p: &integer) { g = fn() { p += 1; }; g(); p = p + 10; }` on `n = 5`
-  answered 15 where 16 is correct — the closure's increment dropped through a parameter whose
-  whole purpose is the write-back). Every other `&` capture shape is closed. Reject twin
-  `tests/scripts/1276-reject-a-ref-parameter-a-closure-cannot-write.loft`
-- **D-clo-20 — CLOSED 2026-09-02 (loft#1281), as a REFUSAL.** `(F-ParamHeap)` makes a
-  whole-value rebind of a heap PARAMETER local to the callee, and a rebind written inside a
-  CLOSURE that captures that parameter reached the CALLER instead:
-  `fn repl(p: vector<integer>) { g = fn() { p = [7,7]; }; g(); }` left the caller's `[1,2]`
-  as `[7,7]`, on both backends, with nothing reported, while the identical rebind written
-  without the closure correctly left it alone. Every heap kind did it — vector, keyed and
-  struct alike — and every right-hand side: a literal, a call, another local.
+**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
+[closures-history.md](closures-history.md).
 
-  The two rules meet here and the code followed only one. `(L-CapHeap)` is right that the
-  closure and the callee body see one collection; what does not follow is that the caller
-  does. The closure record holds a COPY of the parameter's DbRef, so the rebind lowered to a
-  clear plus a refill of the store that copy names — and `(F-ParamHeap)` makes that store the
-  caller's. A capture has no route back to the parameter SLOT, which is the binding
-  `(F-ParamRebind)` rebinds.
+> **An `OPEN: 0` is a claim to re-measure, and this is what its oracle covers.** The closing
+> guards are `1248-…` (a fn-ref `??` join's argument witness and single capture witness),
+> `1248b-…` (the capture SLOT: two store-bearing captures, a captured collection, a capture
+> beside a pure mint, a capture returned directly), `1257b-…` (a collection return freed by
+> identity, every kind and spelling) and `1320-…` (a branch-joined binding).  What they hold
+> FIXED: every closure is built in the frame that calls it, every witness variable is assigned
+> once, and no closure is stored in a container or in a struct a container holds (a decided
+> refusal, C115/#247).  Two shapes are DECLINED and asserted by value only — `c ?? d`, where
+> either capture may come back, and a capture variable reassigned after the build — and each
+> keeps the leak it had.
 
-  It is REFUSED now, which is the call `D-clo-18` makes for the `&`-scalar shape and for the
-  same reason: making it mean what it says needs the binding reachable from inside the
-  closure PLUS a write-back, and the cell machinery that gives a mutated captured SCALAR
-  exactly that cannot serve a heap value — reads in the enclosing body would then see the
-  cell while the caller still sees its own slot. Measured rather than assumed: repointing
-  the capture slot alone does not fix it, because the callee reads its own slot directly
-  (`t_6vector_len(p(0))`, not a read through the record), so a repoint moves the wrong answer
-  from the caller to the callee instead of removing it.
+**D-clo-7 CLOSED 2026-09-03.**  The last open half — a `??` whose borrow arm hands back a
+capture the caller could not NAME — resolved by reading the SLOT off the callee's body: the
+subject's `OpGetDbRef(__closure, off)` and the build's `OpSetDbRef(___clos_N, off, var)` share
+an offset, so one offset over a variable assigned once is a witness as good as an argument's
+(`use_analysis::capture_return_offsets`, `closure_capture_base`).  A collection `??` over a
+capture turned out never to hand the capture back at all — its chosen arm is COPIED into the
+caller's `__retbuf` — and is separated from a capture returned DIRECTLY by whether the return's
+dep names `__closure` (`callref_capture_blocks`).
 
-  The refusal is narrow, and each exclusion still works: a captured LOCAL (no caller to reach
-  past), a `&` parameter (`(L-CapRef)`, where the write-back is the point), a scalar or text
-  parameter (the cell machinery), and every mutation-THROUGH — `p += [x]`, `p[i] = v`,
-  `p.clear()`, a field write — which `(L-CapHeap)` and `(F-ParamGrow)` require to reach the
-  caller. Reject twin `tests/parse_errors.rs::a_closure_cannot_replace_a_captured_heap_parameter`
-  (all three right-hand sides, vector + hash + struct); the shapes it must not reach are
-  `tests/scripts/1281-a-closure-cannot-replace-a-captured-parameter.loft`, which cannot hold
-  the refused spelling because the fixed compiler will not parse it
-- **D-clo-7** — a lambda's `??`-default store leaks one store per call where the borrow arm's witness cannot be NAMED and the call has nothing to witness either: TWO store-bearing captures, whose return dep names `__closure` and not which slot; that entry's value half, its BOUND-return leak half, its ARGUMENT-witness half, its single-CAPTURE witness and its literal-`null` argument are all closed (loft#1248, loft#1245)
-- **D-clo-14** — a closure's `??` at a COLLECTION return leaks its mint arm; the over-free half (the lift emptied the caller's own vector) is closed, and declining the unguarded lift was the only cure correct on both backends (loft#1257)
+**D-clo-14 CLOSED 2026-09-03** (loft#1257, and its bound-spelling mint arm with loft#1320): a
+closure's collection `??` return is freed by store IDENTITY against the `Join` base the temp's
+own dep names — inline, bound, as an argument, in a branch arm, at every collection kind. The
+record is in [closures-history.md](closures-history.md).
+
+**The cluster's premise is now measured false, and D-clo-14 is what measured it.** Both rows were
+recorded as *"the same missing mechanism — a per-execution ownership witness"* together with
+[ownership.md](ownership.md)'s `D-own-16` ([QUALITY.md](../QUALITY.md)'s cluster register). All
+three closed or narrowed WITHOUT one: a `Join`'s owner is decidable at run time by store
+IDENTITY against the variable the dep already NAMES, which costs no witness slot, no IR temp and
+no deps strip. The sharper question the cluster should have asked is whether a row has a NAMEABLE
+base — and D-clo-7's remaining half is exactly the case where it does not.
+
+**D-clo-18 is no longer here.** A `&` SCALAR parameter written from inside a closure is REFUSED,
+and refusing is deliberate: `(L-CapScalar)` gives the closure a COPY of the caller's value, so
+there is no shared record for the write to land in and no code change closes it. Per
+[ROADMAP.md](ROADMAP.md), a row that turns out **spec-may-adjust** leaves `formal/` and becomes a
+decided edge — it is [DESIGN_DECISIONS C115](../DESIGN_DECISIONS.md), together with `D-clo-20`,
+its heap twin, which took the same refusal for the same reason one rule over. Counting a
+permanent refusal as distance from the spec overstates the register by one.
 
 The full register — these entries in full, plus every closed one with its dates and
 issue numbers — is the companion [closures-history.md](closures-history.md).

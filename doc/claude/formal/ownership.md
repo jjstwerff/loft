@@ -58,6 +58,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
                 caller's binding; the callee never frees what it transfers.  If the return
                 *borrows* a parameter, the return type records it (`{Attr(param)}`) and the
                 caller COPIES to obtain its own store.
+  (O-Opaque)    A RETURN TYPE THAT CANNOT RECORD.  O-Move puts the obligation on the return
+                type, which presumes a type able to carry it.  A fn TYPE cannot: `fn(τ) -> σ`
+                is the whole of what an author may spell, so a call through a fn-typed
+                PARAMETER arrives with empty deps whatever its target does.  Empty deps are
+                then read as *"the callee minted this"* — the one reading that licenses a
+                free — and the caller releases its own argument on the arm where the closure
+                handed it back.  Where the type cannot record, the caller assumes the return
+                BORROWS every heap argument it passed.
   (O-Borrow)    BORROW TRACKING.  A value aliasing another (param / field / element / `&τ`)
                 carries the source in its `deps`; the borrower is skip-free; the single
                 owner frees once.
@@ -73,6 +81,18 @@ only return a view into an argument, the type says so and the caller makes its o
 Anything that just borrows is tracked but never frees. Crucially, *where* to free is
 **computed** from these facts, not guessed per code-site — and it's computed for **every**
 binding on **every** branch, not just the easy ones.
+
+**`O-Detach` is about ORDER, and it is the one rule here that a correct ownership FACT cannot
+save you from.** Every other rule answers *who owns this store*; this one answers *when may the
+lowering act on that answer*. A binding whose ownership is computed perfectly is still read as
+`null` if the sentinel that detaches it is emitted before the expression that reads it — which is
+what `p = mk(p.a + 1)` did on a heap parameter, on both backends, with nothing reported
+(loft#1312). The same order appears three more times: the `--native` adopt-vs-copy guard cleared
+the destination while the source still named that store; the reassignment path in `codegen.rs`
+avoids it by asking `Value::reads_var` and deferring the free; and the @PLN87 P2.1 literal
+lowering avoids it by hoisting the field reads into temporaries. Declining the detach is NOT a
+third option — that is what D-own-16's open half does, and it trades a wrong answer for a
+retained store rather than resolving the order.
 
 **This is an INTERNAL system — it never rejects a program it can compile.** loft has no
 user-facing borrow checker; the user writes naively and the compiler always finds a valid
@@ -133,7 +153,17 @@ and a decision that reads the wrong one is wrong in the silent direction:
                 DEPTH at which that assignment was taken (`Scopes::owned_refs`, a memo of
                 O-Oracle plus that depth).  A type-level `deps` list can express neither,
                 so the ownership-TRANSITION free — freeing the store a binding is about to
-                stop pointing at — reads THIS and not `deps`.
+                stop pointing at — reads THIS and not `deps`.  The same sentence decides
+                which store a CLOSURE RECORD takes over the free of: the one its capture
+                named AT THE BUILD (`Scopes::capture_build_backing`), not the one the
+                local's dep names at scope exit (loft#1324).
+  (O-Detach)    DETACH AFTER THE READS.  A binding's DETACH — the free, sentinel or
+                re-allocation that stops it naming its current store — is sequenced AFTER
+                every read of that binding by the value being assigned to it.  A lowering
+                that must detach early hoists those reads into temporaries first; one that
+                cannot hoist defers the detach past the assignment.  Detaching before the
+                reads is never admissible, and DECLINING the detach to avoid the hazard
+                trades the wrong answer for a retained store rather than resolving it.
 ```
 
 **In words.** There is a real oracle, and it is not the dep list. `deps` is a cheap
@@ -141,6 +171,24 @@ stand-in for it that is right most of the time and wrong for a borrow nobody rec
 for; `is_skip_free` is the patch that makes the stand-in safe at a free site; and
 `owned_refs` carries the two things a type cannot — *which* assignment, and *how deep in
 loops* it happened.
+
+⚠ **`(O-Oracle)`'s interprocedural half has a failure mode of its own: it can lose the
+callee's answer on the way back to the caller.** The summary is stated in the CALLEE's
+parameter space, and delivering it means naming the caller value the returned store may lie
+in. Where that translation gives up, the honest answer is *"a borrow whose base I cannot
+name"* — but a `CallRef` answered `Owned`, the one verdict that licenses a free, so the
+caller released a container it still held and the next read came back `null` with nothing
+said (loft#1318). Three shapes reached it: an argument that is itself a CALL (the structural
+walk stops at one, on the ground that the caller lifts it into a temp first — which a
+BORROW-returning callee is not), a keyed lookup (`m[k].v`, missing from the oracle's own
+projection set, so a view read as a mint), and a hidden `__retbuf` (refused as "not a
+parameter the author wrote", though the caller allocates that buffer and passes it).
+
+**The rule that decides all three is one sentence: a translation that cannot name a base must
+not upgrade the verdict.** Naming the base is always preferable to declining — the base is
+what `(O-Oracle)`'s run-time test compares against, so a named one keeps the mint arm's free
+as well — but between an unnameable base and `Owned` there is no trade: `Owned` is the
+over-free direction, and a leak is recoverable where a premature free is not.
 
 ⚠ **The reason to write this down is that the choice is currently invisible.** 38 functions
 test `depend().is_empty()`; some legitimately want the proxy (they are asking "is this a
@@ -163,7 +211,40 @@ of those three consulted `is_skip_free` — and the corpus never noticed, becaus
 `skip_free` binding currently reaches them (measured over `tests/scripts` and `tests/docs`,
 zero hits). A site that frees on the proxy and happens never to meet a marked binding is
 indistinguishable from one that asks correctly, which is the same invisibility this section
-is about, one level down. The remaining eleven free-deciding sites are in that state now.
+is about, one level down.
+
+⚠ **And the "seventeen decide a free" above is a HAND count the gate could not reproduce.**
+Re-measured 2026-09-03, after `scripts/o_proxy_check.py` was given a decidable predicate for
+*"does this site reach a free?"*: of 24 positive sites **6 reach one, and all 6 discharge the
+veto**. Two of those six were undischarged until that run — `scan_set`'s displaced-owned dep
+strip and `gen_set_first_ref_var_copy`'s move — and both now consult it.
+
+**The seventeen the gate cannot decide lexically now DECLARE what they ask**, which is the
+cure the ⚠ above names — the choice is written at the site instead of inferred from it. Each
+proxy site carries one of four verdicts, and the census is countable:
+
+| declares | sites | what the empty dep list decides there |
+|---|---|---|
+| `free`   | 9 | ownership, and a free follows — **@FR-O-Override is required with it** |
+| `copy`   | 8 | copy-vs-alias / materialise-vs-view; a wrong answer costs a copy, never a release |
+| `alloc`  | 4 | whether to ALLOCATE or null-init a store — the opposite direction from a free |
+| `oracle` | 3 | an independent derivation that drives no emission (@PLN94, witness accounting) |
+
+A declaration is a claim, so the gate contradicts it where it can: a site declaring anything
+but `free` while a free IS visible in the region it gates is reported rather than trusted.
+What it cannot do is catch a site that declares `copy` and frees somewhere the region cannot
+see — that residual risk is real, and it is a much smaller one than *"nothing in the source
+distinguishes them, and both compile."*
+
+⚠ **The pass corrected one of its own conclusions, which is why it is worth writing down.**
+`parse_field_iteration` looked like a `free` site and its own prose said so — *"a
+borrow/skip_free binding owns no allocation"* — so it was first declared `free` and given the
+veto. The differential probe then reported **8 of 1119 corpus files** reaching it with a
+`skip_free` binding, i.e. a live behaviour change rather than a latent guard. Reading the
+mechanism settled it: the frees that follow are of FRESH per-field bindings
+(`copy_variable` + `remap_var_deep`), never of the binding tested — so the veto does not
+belong there, and the site is `copy`. **A site's own comment is not a measurement**, and the
+prose there still overstates its filter.
 
 ⚠ This does **not** re-open `D-own-1` (CLOSED: *"every free/copy/move reads `deps`"*). That
 remains true in the letter — these sites do read `deps`. What was never true is the
@@ -173,10 +254,52 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-**OPEN: 3.**
-- **D-own-26** — eleven free-deciding proxy sites never consult `O-Override` (measured; three folded onto `Scopes::owns_freeable_store` the day it opened)
-- **D-own-16** — a value that READS the local it assigns never frees the store it displaces
-- **D-own-8** — a Join's ownership fact is true on one path only
+**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
+[ownership-history.md](ownership-history.md).
+
+> **A zero here is a claim to re-measure, and this is what its oracle covers.**  The join
+> family is pinned by three files: `1323-every-arm-of-a-value-branch-has-its-own-binding`
+> (every arm KIND of a bound value branch, the two shapes loft#1320 declined, the `??` hoist
+> of a call, each on the 65535-store ceiling with a borrow-direction cell beside it),
+> `1321-a-joined-binding-copies-what-a-plain-bind-copies` (the copy face, both spellings,
+> the return position) and `1320-…` (the fn-ref arm that opened it).  Held FIXED, and
+> therefore NOT measured by them: a fn-ref whose TARGET cannot be resolved — a fn-typed
+> parameter or field — which is loft#1327 and reads `Owned` at every site that frees on the
+> oracle; a `&` binding or a struct-`Enum` variable as an arm (they keep the alias they had);
+> and the `--native` release of a displaced store on a fn-ref re-bind of a USER local, which
+> is loft#1328 and which the `??` hoist sidesteps by releasing in the IR.
+
+**D-own-8 CLOSED 2026-09-03** (loft#1320, loft#1321, loft#1323): a Join's ownership fact was
+true on one path only because ONE binding carried two paths.  The close is structural, not
+N-ary: every arm tail of a bound value branch that a single bind would leave OWNING — a fn-ref
+call of any ownership, a named call answering a record the caller must copy, a plain variable
+(`(B-Copy)`) — is given a binding of its own, bound by that single bind's own lowering, and
+the joined binding borrows the temps.  The two shapes loft#1320 declined take the witness the
+base itself could not be: a SNAPSHOT of the store the base named at the bind (`(O-Latest)`,
+the way a rebindable parameter's entry stash already witnesses).  And the `??` hoist that
+binds a CALL subject now owns what a plain bind of that call would.  Measured on both backends
+at the ceiling and in the over-free direction; the full record, including the two regressions
+the first cut introduced and what each taught, is in
+[ownership-history.md](ownership-history.md).
+
+**D-own-26 CLOSED 2026-09-03**, against the bar its own entry set: *"the honest cure is a way
+to fail a build in which a free-deciding site reads the proxy without the veto."* That gate
+now exists, is falsified on five separate paths, and passes — 9 sites declare `free` and all
+9 consult `O-Override`; the other 15 declare which of the other three facts they read. The
+"eleven of seventeen" it opened with was a hand count that could not separate *asking* the
+proxy from *freeing* on it. What the close does NOT cover: a site that declares a non-free
+question and frees somewhere the gate cannot see. The full record is in
+[ownership-history.md](ownership-history.md).
+
+**D-own-16 CLOSED 2026-09-03.** Every cell that should reach zero does, on both backends, with
+every value unchanged: a minting call that reads the local, the self-referential join
+`c = mk(i) ?? c`, a conditional borrow, and a local bound from a PARAMETER and then minted.
+The one shape that still retains a store is a lambda-CAPTURED local, and that is
+`(L-CapHeap)` holding rather than a leak — a captured heap value is SHARED, so declining the
+free is the right answer and its right answer keeps a store.  Guard:
+`tests/scripts/1085b-a-nullable-local-frees-what-it-displaces.loft`; the full record, including
+the two mechanisms that were tried and reverted, is in
+[ownership-history.md](ownership-history.md).
 
 The full register — these entries in full, plus every closed one with its dates and
 issue numbers — is the companion [ownership-history.md](ownership-history.md).
@@ -297,6 +420,99 @@ runtime-witness discharge (a separate `OpFreeRefIfDistinct` lemma); proving the 
 analysis directly (the certifier sidesteps it).
 
 ## Conformance
+
+- **A `??` default-arm mint is released once (`O-Borrow`, loft#1322)** — `_vec_N` and
+  `__vdb_N` name one store, and exactly one of them frees it: at the vector and keyed kinds,
+  empty and non-empty defaults, nested, bound outside a closure, and at the store ceiling.
+  ⚠ **No value can carry this verdict**, which is why the guard is split: a second free of an
+  already-freed store is a no-op (`free_named` returns) and `LOFT_STRICT_STORES` does not flag
+  it either, so `tests/scripts/1322-…` pins the SHAPES and `tests/redundant_free.rs` reads the
+  only channel there is — `LOFT_TRACE_DB`'s `already_free=true` count. That file carries a
+  `the_harness_can_see_a_redundant_free` cell for the same reason: without one, a trace that
+  stopped reporting would read exactly like a clean tree.
+  ⚠ **The flags this decision sets are CUMULATIVE ACROSS PASSES**, and that is what makes
+  "does the view's free run?" a real question. A capture subject reads empty deps on pass 1 and
+  takes the view model (`skip_free`), then reads non-empty deps on pass 2 and arrives at the
+  other arm; silencing the record there too leaves the store with no owner at all. Asked as
+  `is_skip_free`, which is which arm the variable ENDED in rather than which one a pass took.
+  ⚠ **A residual with the same rule and a different pair of names:** a closure record is
+  released through BOTH the fn-ref value and its `___clos_N` local, so its cascade runs twice
+  and the second pass finds the capture's store gone. Pre-existing, and it is the cell that
+  proves the instrument above works.
+
+- **An opaque fn-ref return borrows its arguments (`O-Opaque`, loft#1327)** — a closure called
+  through a fn-typed PARAMETER leaves the caller's vector intact over 300 calls with a filler
+  allocation between them, at the nullable and dense parameter spellings and across a branch
+  over both arms, while the same call in the frame that OWNS the closure and a named function
+  passed through the same parameter are unchanged. Both backends. Guard
+  `tests/scripts/1327-an-opaque-fn-ref-return-may-be-its-argument.loft`, 6 cells.
+  ⚠ Declining a free normally trades an over-free for a leak; here it costs nothing, because
+  the fn-ref call's own runtime buffer already owns what the closure minted. Measured at 70 000
+  default-arm calls past the store table, both backends — not assumed.
+  ⚠ Still open, and the parser cannot see it: a fn-ref LOCAL assigned two DIFFERENT lambdas is
+  opaque in the same way, and the same free reaches it. `Scopes::fnref_target` is where that
+  fact lives, one pass later than the typing this fixes.
+
+- **A rebind from a call frees what it displaces, in BOTH call spellings (`O-NoDiverge`,
+  loft#1328)** — `x = m(i)` in a loop over a fn-ref `m` completes at 70 000 iterations on both
+  backends, at a nullable reference, a dense one and a keyed collection, with the direct-call
+  spelling and a destination-reading callee as controls. Guard
+  `tests/scripts/1328-a-fn-ref-rebind-frees-the-store-it-displaces.loft`, 6 cells.
+  ⚠ The exit-leak gate cannot see this class: the frame frees everything, so a 1000-iteration
+  cell reports no leak on either backend and the defect is entirely in the PEAK. The 65 535-store
+  table is what turns that watermark into an accept/reject split — the channel a guard can
+  actually score, and the reason these cells count past it.
+
+- **The vector destination, at both spellings and both nullabilities (`O-NoDiverge`,
+  loft#1329)** — loft#1328's sibling, and it reached the store ceiling three separate ways,
+  each a different reader of ONE fact. `--native`'s displaced-free gate listed
+  `Reference | Enum | keyed` and not `Vector`, where the interpreter's twin has carried the
+  bare `Vector` arm all along. Then BOTH backends declined for a FORWARDING fn-ref, so they
+  agreed and the shared fact was short: a capturing lambda's assignment is a block that mints
+  the closure record, writes each capture into it and yields the `FnRef`, and a capture that
+  is itself a fn-ref is an `FnRefDnr` argument of that write — so `fnref_target_in`'s tree
+  walk saw two definition numbers and returned "names TWO targets", the answer reserved for a
+  slot two lambdas were assigned to. A capture is a payload, not a candidate; the target is
+  what the right-hand side YIELDS. Guard
+  `tests/scripts/1329-a-fn-ref-vector-rebind-frees-the-store-it-displaces.loft`, 8 cells, 5 of
+  which fail on `a8c0b74d`; the other 3 are its controls.
+  ⚠ The NULLABLE spelling could not be measured at all until a third reader was fixed: a
+  lambda declaring `-> vector<τ>?` aborted the compiler on the H5 two-pass contract, because
+  the between-passes buffer sweep asked *"does this deliver a collection?"* through
+  `ret_promo_base` (which peels `Optional(Vector)`) and then rejected the same definition on
+  the RAW type, so pass 2 GREW the attribute. Its native twin — the fn-ref dispatch deciding
+  whether to MINT that buffer — read the raw type too, and handed the callee `DbRef::NULL`
+  to deliver through.
+  ⚠ And `owned_ref`'s bare `Vector` arm carried a claim that this closed by measuring:
+  *"a nullable vector already releases through its own path, and widening would free twice."*
+  It does not. `x: vector<τ>? = null` grew the peak 1:1 with the iteration count on both
+  backends, and the peel is safe because an `Optional` destination routes to the
+  runtime-GUARDED post-free, which `free_displaced` no-ops on a same-store, free-protected or
+  stack-record ref. A carve-out's own safety claim is a measurement, not a premise.
+
+- **A closure record's suppression names the store it holds (`O-Latest`, loft#1324)** — a
+  capture REASSIGNED after the build keeps the build-time store inside the closure (42 while
+  the variable reads 52) and leaves no store unfreed: straight-line, twice over, in a 200-turn
+  loop, at the `|x|` spelling, beside an untouched second capture, and for a closure that
+  ESCAPES its defining frame. Both backends. Guard
+  `tests/scripts/1324-a-reassigned-capture-suppresses-the-store-the-record-holds.loft`,
+  12 cells.
+  ⚠ It closed a use-after-free as well as the filed leak, and that is what says the cure had
+  to NAME the right store rather than decline: the suppression was reading
+  `function.tp(v).depend()`, which for a reassigned capture names the store the local holds
+  NOW, so the store the record ADOPTED kept its frame-exit free and an escaping closure read
+  it released. Declining to suppress stops the leak and leaves that half exactly where it was.
+
+- **A call-shaped argument names its base (`O-Oracle`, loft#1318)** — a fn-ref `??` whose
+  argument is `pick(vs, 0)`, `m[k].v` at the hash / sorted / index kinds, `vs[0]`, or a value
+  delivered through the caller's own `__ref_N` buffer keeps the caller's container intact over
+  five borrows, while the mint arm of the same closure still costs no store per call at 70 000
+  iterations and a MINTING argument (`g(mk())`) is still adopted. Both backends. Guard
+  `tests/scripts/1318-a-call-shaped-argument-names-the-store-a-fn-ref-may-hand-back.loft`,
+  14 cells, 8 of which fail on `b1bd3212`; the other 6 are its controls.
+  ⚠ Its two interpolated cells are interpolated deliberately: `s += g(vs[0])[1]` and
+  `c = g(pick(vs, 0))[1]` are CORRECT on the broken build, so the accumulate and bind
+  spellings of the same read score nothing. Statement context is an axis here.
 
 This area's "falsifying programs" are the store-lifetime bugs themselves — each is a
 program where the derived-free invariant (O-Derived) or completeness (O-Complete) fails

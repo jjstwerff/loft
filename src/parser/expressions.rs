@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{
-    Level, LexItem, Parser, Parts, Type, Value, diagnostic_format, v_block, v_if, v_loop, v_set,
+    AmpHead, Level, LexItem, Parser, Parts, Type, Value, diagnostic_format, v_block, v_if, v_loop,
+    v_set,
 };
 use crate::data::Deps;
 
@@ -126,6 +127,14 @@ fn uncomputable_default(nullable: bool, spec: &crate::data::IntegerSpec) -> i64 
 ///
 /// `None` when the question does not arise — the target declares no range of its own (the
 /// plain `integer` / i32 templates), or it is not an integer at all.
+///
+/// ⚠ **It answers the `limit(lo, hi)` spelling and NOT the narrow ALIASES.** It returns `None`
+/// the moment `forced_size` is set, which is exactly what `u8` / `i8` / `u16` / `i16` / `u32`
+/// are — so a caller reaching for this to guard a narrow width silently guards nothing, with
+/// no error to notice. [`Parser::compound_range`] is the one that partitions both, and is what
+/// a caller wanting *"whatever range this target declares, however it was spelled"* must use.
+/// Measured: a guard written against this function claimed no store at all until it was
+/// switched (@PLN152 step 2).
 fn declared_range(tp: &Type, nullable: bool) -> Option<(i64, i64, i64)> {
     let Type::Integer(spec) = tp.base() else {
         return None;
@@ -747,6 +756,9 @@ impl Parser {
                         self.vars.is_caller_hidden_buf(r),
                     );
                 }
+                // @FR-O-Proxy asks alloc — this decides which work-refs get a null-init in
+                // the preamble, which is the opposite direction from a free: it puts a slot
+                // in a known-absent state, and releases nothing.
                 if !self.vars.is_argument(r)
                     && !self.vars.is_inline_ref(r)
                     // @PLAN51 Cluster IV: also null-init caller-side hidden-
@@ -788,6 +800,9 @@ impl Parser {
                 if fallback < ls.len() {
                     fallback += 1;
                 }
+                // @FR-O-Proxy asks alloc — the same null-init question as above, for the
+                // inline-ref temporaries, placed at each temp's first use rather than in the
+                // preamble.  It chooses where an init lands, never whether a store is freed.
                 for r in &inline_refs {
                     if !self.vars.is_argument(*r) && self.vars.tp(*r).depend().is_empty() {
                         let pos = ls
@@ -1586,16 +1601,28 @@ use a separate collection or add after the loop"
         f_type: &Type,
         s_type: &Type,
     ) -> VecBind {
+        // Read both sides through `base()`.  `vector<τ>?` is `Optional(Vector(τ))` — the
+        // same storage behind a nullability marker (`@FR-L-Null`) — and matching the bare
+        // spelling alone answered `NotABind` for it, so the whole-value copy this selector
+        // exists to pick never ran and the bind stayed an ALIAS: `b = a; a[1] = 99` then
+        // read 99 through `b`, against `@FR-B-Copy` (loft#1319).  Nullability is not one of
+        // that rule's three exceptions — a struct PROJECTION, a BORROWED base, an INDEX or
+        // nested read — and this selector already distinguishes all three.  The keyed kinds
+        // took the same peel in loft#1143 and have been copying correctly since; this is
+        // their sibling, and `@FR-L-Null` is the reason both are the same question.
         if op != "="
             || var_nr == u16::MAX
-            || !matches!(f_type, Type::Unknown(_) | Type::Vector(_, _))
-            || !matches!(s_type, Type::Vector(_, _))
+            || !matches!(f_type.base(), Type::Unknown(_) | Type::Vector(_, _))
+            || !matches!(s_type.base(), Type::Vector(_, _))
         {
             return VecBind::NotABind;
         }
         // The bare-Var test is deliberately NOT unspanned (a Span-wrapped RHS
         // lowers elsewhere); the field-read and self-assign tests are.
         let is_bare_var = matches!(code, Value::Var(_));
+        // @FR-O-Proxy asks copy — the verdict is a `VecBind` (`CopyVar` / `CopyOwnedField` /
+        // `SelfAssign`), and every arm of it copies or does nothing.  A wrong answer picks the
+        // wrong lowering, not a release.
         let owned_field_read = if let Value::Call(d, args) = code.unspan()
             && *d == self.data.def_nr("OpGetField")
             && let Some(Value::Var(bv)) = args.first().map(Value::unspan)
@@ -2303,6 +2330,29 @@ use a separate collection or add after the loop"
         );
         let detach = self.cl("OpInitRefSentinel", &[Value::Var(var_nr)]);
         let assign = std::mem::replace(code, Value::Null);
+        // Enforces @FR-O-Detach — the detach is sequenced AFTER every read of the binding by
+        // the value being assigned to it.  `free, detach, assign` is only correct while the
+        // RHS does not read `var_nr`: the detach sentinels the slot, so a RHS that reads it
+        // reads `null`.  Measured on `p = mk(p.a + 1)`, which answered `null` on BOTH backends
+        // with no diagnostic while `p = Big{a: p.a + 1, …}` answered correctly — the literal
+        // lowering in `objects.rs` is this same rule's other copy and hoists its field reads
+        // into temporaries before detaching (loft#1312).
+        //
+        // The hoist is what that copy does, spelled for an arbitrary RHS: evaluate into a temp
+        // while the binding is still intact, then detach, then adopt.  It is the compiler
+        // applying the workaround a user would write by hand (`t = mk(p.a + 1); p = t`), which
+        // is what makes the target shape a proven artifact rather than a guess.
+        if let Value::Set(dst, rhs) = &assign
+            && *dst == var_nr
+            && rhs.reads_var(var_nr)
+        {
+            let tp = self.vars.tp(var_nr).clone();
+            let hoisted = self.vars.work_refs(&tp, &mut self.lexer);
+            let eval = Value::Set(hoisted, rhs.clone());
+            let adopt = Value::Set(var_nr, Box::new(Value::Var(hoisted)));
+            *code = Value::Insert(vec![eval, free, detach, adopt]);
+            return;
+        }
         *code = Value::Insert(vec![free, detach, assign]);
     }
 
@@ -2571,7 +2621,11 @@ use a separate collection or add after the loop"
         // where a leading `&` binds a reference, so open the head there.  A COMPOUND
         // assignment (`b += &a`) is excluded on purpose: it mutates `b`, it does not
         // give `b` a reference type, so it is not a bind site.
-        self.amp_head = op == "=";
+        self.amp_head = if op == "=" {
+            AmpHead::AssignRhs
+        } else {
+            AmpHead::No
+        };
         // Name the destination this assignment writes, for this RHS only, along with
         // whether it REPLACES it.  A comprehension that reads its own destination needs
         // both: `=` repoints the target at a fresh store, `+=` appends into what it already
@@ -2580,9 +2634,38 @@ use a separate collection or add after the loop"
         let prev_target = std::mem::replace(&mut self.assign_target, var_nr);
         let prev_replaces = std::mem::replace(&mut self.assign_replaces, op == "=");
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
+        // tuples.md T-Ref — a tuple LITERAL bound to a local that is the SOURCE OF A `&` LINK
+        // (recorded in pass 1 at the link or the call) and carries a heap element is built as
+        // the `__tuple<…>` RECORD a heap-tuple return and a loop variable already are, so the
+        // link can name it.  Every other tuple local keeps its stack form.  Built by the
+        // return path's own builder.
+        if op == "="
+            && let Value::Var(lhs) = to
+            && matches!(code.unspan(), Value::Tuple(_))
+            && let Type::Tuple(ref types) = s_type
+            && types.iter().any(|t| !crate::data::is_scalar(t.base()))
+            && types.iter().all(crate::data::ref_tuple_record_element_ok)
+            && self
+                .ref_linked_tuple_locals
+                .contains(&(self.context, self.vars.name(*lhs).to_string()))
+        {
+            let types = types.clone();
+            let synth = self.data.tuple_def(&mut self.lexer, &types);
+            if synth != u32::MAX {
+                let synth_ref = Type::Reference(synth, Deps::none());
+                let w = self.vars.work_refs(&synth_ref, &mut self.lexer);
+                let kt = self.data.def(synth).known_type();
+                self.rewrite_tail_tuple_with_work_ref(synth, kt, w, code);
+                s_type = Type::Reference(synth, Deps::frame1(w));
+                // The local was typed from the literal while the RHS parsed; it IS the record
+                // now, and the stack-tuple type would otherwise unbox the record back.
+                self.vars
+                    .set_type(*lhs, Type::Reference(synth, Deps::none()));
+            }
+        }
         self.assign_target = prev_target;
         self.assign_replaces = prev_replaces;
-        self.amp_head = false;
+        self.amp_head = AmpHead::No;
         self.expected = prev_read_target;
         // A `& vector` bind (`d = &v` / `d = &self.data`): the source is a vector lvalue
         // and the `&` opts INTO aliasing (B-Ref-Write — the write-through "north star" —
@@ -2649,6 +2732,16 @@ use a separate collection or add after the loop"
             //             (`OpGet*(OpGetVector(v,..), 0)` → strip to the inner)
             //   field   — `OpGetField(<base>, fld)`, the record at the field's offset.
             // Bind `c`/`r` to that ref; reads/writes deref it the same as L1/L4.
+            // tuples.md T-Ref — the source of a `&(…)` link with a heap element must be a
+            // record; say so for pass 2's bind (see `ref_linked_tuple_locals`).
+            if let Some(src) = stack_src
+                && let Type::Tuple(elems) = self.vars.tp(src)
+                && elems.iter().any(|e| !is_scalar(e.base()))
+                && elems.iter().all(crate::data::ref_tuple_record_element_ok)
+            {
+                let name = self.vars.name(src).to_string();
+                self.ref_linked_tuple_locals.insert((self.context, name));
+            }
             let heap_ref = if stack_src.is_none() && is_scalar(&s_type) {
                 match code.unspan() {
                     Value::Call(g, gargs) if self.data.def(*g).name().starts_with("OpGet") => {
@@ -2670,7 +2763,21 @@ use a separate collection or add after the loop"
             };
             if let Some(src) = stack_src {
                 amp_unlowered = false;
-                let inner = self.vars.tp(src).clone();
+                let mut inner = self.vars.tp(src).clone();
+                // tuples.md T-Ref — a linked tuple local with a heap element is the
+                // `__tuple<…>` record.  On pass 1 its bind has not been rewritten yet (the fact
+                // was recorded a moment ago), so derive the link's type from the record the
+                // bind WILL build, or an annotated `c: &(…) = a` disagrees with itself.
+                if let Type::Tuple(elems) = &inner
+                    && elems.iter().any(|e| !is_scalar(e.base()))
+                    && elems.iter().all(crate::data::ref_tuple_record_element_ok)
+                {
+                    let elems = elems.clone();
+                    let d = self.data.tuple_def(&mut self.lexer, &elems);
+                    if d != u32::MAX {
+                        inner = Type::Reference(d, Deps::none());
+                    }
+                }
                 let is_ref = matches!(inner, Type::Reference(..));
                 *code = self.cl("OpCreateStack", &[Value::Var(src)]);
                 // @PLN85 D-own-5 — the borrow fact rides `deps` (O-Borrow), not a
@@ -3366,7 +3473,15 @@ use a separate collection or add after the loop"
         // retype so the var-type-change check compares the tuple with itself instead of
         // erroring "cannot change type from (integer, text) to __tuple<integer,text>".
         // Same early-convert shape as the nullable-to-dense assign above.
+        // tuples.md T-Ref — a linked tuple local IS the record now; pass 1 typed it as the
+        // stack tuple, and unboxing the record back to that would undo the representation the
+        // link needs.  `f_type` is pass 1's answer for it.
+        let keeps_record = var_nr != u16::MAX
+            && self
+                .ref_linked_tuple_locals
+                .contains(&(self.context, self.vars.name(var_nr).to_string()));
         if op == "="
+            && !keeps_record
             && self.unboxes_stored_tuple(&s_type, f_type)
             && self.convert(code, &s_type, f_type)
         {
@@ -3917,6 +4032,9 @@ use a separate collection or add after the loop"
                 //   clear+append emptied the field).  A borrow is visible in
                 //   the var's type deps; only a dep-free (owned) var is
                 //   provably alias-free and may take the direct fast path.
+                // @FR-O-Proxy asks copy — an ALIASING question: only a dep-free var is
+                // provably independent of the destination, so only it may take the direct
+                // clear+append.  The other arm materialises into a temp; neither frees.
                 let owned_var_rhs = matches!(
                     code.unspan(),
                     Value::Var(rv) if self.vars.tp(*rv).depend().is_empty()
@@ -4022,13 +4140,45 @@ use a separate collection or add after the loop"
         // @P307/loft#895 defect this branch exists to fix — on a `spatial` field `=` still
         // meant `+=` (a one-element literal over one element read back as two) and `= []`
         // still did nothing at all.  The keyed-LOCAL path below already lists all five.
+        //
+        // loft#1326 — and a CAPTURED keyed collection is the same lvalue wearing a different
+        // op, which is the fourth time this family's selector has been the narrow part while
+        // the lowering was right (P261, loft#917, loft#1279, this).  A capture resolves to
+        // `OpGetDbRef` of the closure-record field rather than to the `OpGetField` a struct
+        // field gives, so `is_field` alone answered "not a field" and the whole branch was
+        // skipped: `m = [Row { … }]` inside a closure read back EMPTY at every keyed kind,
+        // while the identical rebind of a captured VECTOR was correct (loft#1279 taught the
+        // vector branch above this same difference) and the identical keyed collection
+        // reached through a captured STRUCT FIELD was correct throughout.
+        //
+        // The literal ARRIVES differently through a capture, and that is the second half: it
+        // is a `Block` whose ops build straight into the destination (@PLN93's
+        // build-into-target), where a struct field gets a `Value::Insert` of the same ops.
+        // Both want the clear FIRST — the construction then fills an emptied collection —
+        // and asking "does this right-hand side construct in place?" through
+        // `value_writes_into` is the same question the vector branch asks, for the same
+        // reason: a comprehension that merely NAMES its destination builds a fresh
+        // collection and must not be cleared before it reads its source (loft#1195).
+        let captured_dest = self.is_captured_dbref(to);
+        let builds_into_dest =
+            matches!(&*code, Value::Block(_)) && captured_dest && self.value_writes_into(code, to);
         let keyed_field_write = !self.first_pass
             && op == "="
             && var_nr == u16::MAX
-            && self.is_field(to)
-            && (matches!(&*code, Value::Insert(_)) || matches!(s_type, Type::Null));
+            && (self.is_field(to) || captured_dest)
+            && (matches!(&*code, Value::Insert(_))
+                || builds_into_dest
+                || matches!(s_type, Type::Null));
         if keyed_field_write && let Some(kt) = self.keyed_type_id(f_type) {
             let clear = self.keyed_group_clear(to, kt, &lhs_parent_tp);
+            if builds_into_dest {
+                // The construction is one opaque block: put the clear in front of it rather
+                // than inside it, or the clear erases what the block has just built.
+                let mut ops = clear;
+                ops.push(code.clone());
+                *code = Value::Insert(ops);
+                return Type::Void;
+            }
             match code {
                 // A literal: run the clear FIRST, so the element-construction ops that
                 // follow build into an empty collection instead of appending to the old one.
@@ -4073,7 +4223,7 @@ use a separate collection or add after the loop"
             self.classify_vec_bind(code, op, var_nr, f_type, &s_type)
         };
         if !matches!(vec_bind, VecBind::NotABind)
-            && let Type::Vector(elm_tp, _) = &s_type
+            && let Type::Vector(elm_tp, _) = s_type.base()
         {
             // `v = v` self-assign — emit nothing rather than clear+reappend
             // off the same storage.
@@ -4082,7 +4232,15 @@ use a separate collection or add after the loop"
                 return Type::Void;
             }
             let elm_tp_clone = (**elm_tp).clone();
-            let vec_tp = Type::Vector(Box::new(elm_tp_clone.clone()), Deps::none());
+            let dense = Type::Vector(Box::new(elm_tp_clone.clone()), Deps::none());
+            // The COPY is what the selector decided; whether the value may be ABSENT is the
+            // source's own fact and survives it.  Dropping the marker here would make the
+            // destination non-null and lose the null arm.
+            let vec_tp = if matches!(s_type, Type::Optional(_)) {
+                Type::Optional(Box::new(dense))
+            } else {
+                dense
+            };
             self.change_var(to, &vec_tp);
             let field_read = matches!(vec_bind, VecBind::CopyOwnedField);
             // #426 — a struct vector-FIELD read (`af = bx.v`, `field_read`) must
@@ -4149,7 +4307,20 @@ use a separate collection or add after the loop"
                     // Reassignment: v already owns a store — clear, then refill.
                     stmts.push(self.cl("OpClearVector", std::slice::from_ref(to)));
                 }
-                stmts.push(self.cl("OpAppendVector", &[to.clone(), code.clone(), rec_tp]));
+                // A NULLABLE destination takes the whole-value REPLACE rather than the
+                // append, for the one thing the append cannot express: an ABSENT source
+                // must leave the destination absent, not holding the empty store the alloc
+                // above just gave it.  `Stores::vector_replace` carries that rule, the same
+                // one `replace_keyed` carries for the keyed kinds — which is why the keyed
+                // sibling of this bind has been answering `b == null` correctly all along.
+                // A dense destination cannot be absent, so it keeps the append and its IR is
+                // unchanged.
+                let op = if matches!(self.vars.tp(var_nr), Type::Optional(_)) {
+                    "OpReplaceVector"
+                } else {
+                    "OpAppendVector"
+                };
+                stmts.push(self.cl(op, &[to.clone(), code.clone(), rec_tp]));
                 *code = Value::Insert(stmts);
             }
             return Type::Void;
@@ -4679,7 +4850,16 @@ use a separate collection or add after the loop"
         // in `forced_size` alone, so range containment saw nothing here either and this
         // site — which covers both the annotated local and the field WRITE — was the last
         // place `b.v = n` could be caught before it silently stored 705032704.
-        if op == "=" && !self.first_pass && Self::is_narrowing_int_store(&s_type, f_type) {
+        // @PLN152 — a `??` in the stored expression names what happens when the value does
+        // not fit, so guard inside the discharge and leave this store alone: neither the
+        // refusal below nor the outside-the-expression guard after it applies.
+        let discharged =
+            op == "=" && !self.first_pass && self.range_guard_inside_discharge(code, f_type);
+        if !discharged
+            && op == "="
+            && !self.first_pass
+            && Self::is_narrowing_int_store(&s_type, f_type)
+        {
             let dst = self.int_type_name(f_type);
             if let Some(hint) = self.nullable_sentinel_hint(code, f_type, &dst) {
                 // The literal fits the type but lands on the reserved null
@@ -4687,10 +4867,11 @@ use a separate collection or add after the loop"
                 diagnostic!(self.lexer, Level::Error, "{hint}");
             } else if !self.int_value_fits(code, f_type) {
                 let src = self.int_type_name(&s_type);
+                let cures = Self::narrowing_cures(code, &dst);
                 diagnostic!(
                     self.lexer,
                     Level::Error,
-                    "cannot implicitly narrow {src} to {dst} (may lose data) — cast explicitly with `as {dst}`"
+                    "cannot implicitly narrow {src} to {dst} (may lose data) — {cures}"
                 );
             }
         }
@@ -4701,7 +4882,7 @@ use a separate collection or add after the loop"
         // local and the field WRITE".  A `limit(...)` slot never sets `forced_size`, so
         // `is_narrowing_int_store` above cannot see it — which is why a declared range on
         // a LOCAL went unenforced entirely, not merely mis-stored.
-        if op == "=" && !self.first_pass {
+        if !discharged && op == "=" && !self.first_pass {
             let holds_null = target_holds_null(f_type, &lhs_parent_tp);
             self.guard_declared_range(code, f_type, &s_type, holds_null);
         }
@@ -5185,12 +5366,16 @@ use a separate collection or add after the loop"
         // `parse_assign_op`.  Open the head here too so a bare `&a;` / block-final
         // `{ &a }` still reaches the D-bind-7 guard below with its own message,
         // instead of being reported here as a sub-expression use.
-        self.amp_head = started_with_amp;
+        self.amp_head = if started_with_amp {
+            AmpHead::AssignRhs
+        } else {
+            AmpHead::No
+        };
         // loft#1205 — only a discharge built by THIS left-hand side may be peeled below,
         // so the flag starts clear rather than carrying an earlier statement's answer.
         self.last_place_discharge = false;
         let mut f_type = self.parse_operators(&Type::Unknown(0), code, &mut parent_tp, 0);
-        self.amp_head = false;
+        self.amp_head = AmpHead::No;
         self.in_tuple_lhs = saved_tuple_lhs;
         if let (Type::RefVar(_), Value::Var(v_nr)) = (&f_type, &code) {
             self.vars.in_use(*v_nr, true);
@@ -6086,6 +6271,14 @@ use a separate collection or add after the loop"
     /// function's: @FR-E-Uncomp for a slot that can hold null and @FR-E-Uncomp-NN for one
     /// that cannot.  Both arms ask it, so the two spellings of one range cannot answer
     /// differently.
+    /// The range a compound-assignment target declares, in EITHER spelling: the
+    /// `limit(lo, hi)` form via [`declared_range`], and the narrow ALIASES (`u8`, `i8`, `u16`,
+    /// `i16`, `u32`, `i32`) that `declared_range` deliberately cannot see because it stops at
+    /// `forced_size`.
+    ///
+    /// Reach for THIS when the question is *"whatever range this target declares"*; reach for
+    /// [`declared_range`] only when the `limit(...)` spelling is specifically what is meant.
+    /// Getting that backwards is silent — the guard simply never fires (@PLN152 step 2).
     fn compound_range(tp: &Type, nullable: bool) -> Option<(i64, i64, i64)> {
         // `declared_range` answers the `limit(lo, hi)` spelling and deliberately nothing
         // else — it returns `None` the moment `forced_size` is set.  So the two arms
@@ -6119,6 +6312,143 @@ use a separate collection or add after the loop"
         // Asking it HERE rather than answering `range_default` directly is what makes a
         // nullable narrow alias answer null: this arm is the only one a `u8?` reaches.
         Some((lo, hi, uncomputable_default(nullable, spec)))
+    }
+
+    /// @PLN152 — an author-written `??` IS the answer for a value that does not fit, so
+    /// guard INSIDE the discharge rather than around it, and report nothing.
+    ///
+    /// `x = (x + 10) ?? 255` into a `u8` is refused today as a narrowing that may lose data,
+    /// which is true of the coalesce's RESULT — `x + 10` can be 265 — and false of what the
+    /// author wrote: the `??` names exactly what happens when it does not fit. Wrapping the
+    /// whole discharge cannot express that, because by then the out-of-range value has
+    /// already been chosen as the coalesce's non-null answer.
+    ///
+    /// So the guard goes on the discharge's SUBJECT, with the SENTINEL as its default rather
+    /// than the type's: an out-of-range subject then reads null, the existing coalesce
+    /// supplies the author's value, and what reaches the slot is always in range. The
+    /// sentinel never lands anywhere — it lives in the `__ncc_N` temp, which is a full
+    /// `integer` — so no narrow storage is asked to hold a value it has no code for.
+    ///
+    /// Returns true when it claimed the store, so the caller skips both the narrowing
+    /// refusal and the ordinary outside-the-expression guard.
+    /// The cures for an implicit narrowing store that does not provably fit — @PLN152 N1.
+    ///
+    /// `as <dst>` is deliberately NOT among them, and it used to be the only thing offered.
+    /// This error fires exactly when the value does not provably fit, which is also exactly
+    /// when the explicit cast is refused (*"narrowing cast ... may not fit at runtime; use
+    /// `<dst>?` for a checked cast"*). So the old advice cost the reader a second refusal to
+    /// discover the first was unusable — two hops to a cure the first message could name.
+    ///
+    /// The `??` cure is real rather than aspirational: a discharge at the ROOT of the stored
+    /// expression supplies the fallback (`range_guard_inside_discharge`), so the position it
+    /// is offered in is the position it works in.
+    pub(crate) fn narrowing_cures(code: &Value, dst: &str) -> String {
+        let mut out = format!(
+            "give it a fallback with `?? <value>`, take the checked cast `as {dst}?` (value or \
+             null), or make the value provably fit (a mask, or an `if` range check)"
+        );
+        // @PLN152 N2 — a `??` that discharges a SUB-expression reads, to its author, as if it
+        // should have covered the store. Only a discharge at the root does. Shallow on
+        // purpose: the shape this is for is `(v[0] ?? 0) + 10`, where the discharge is a direct
+        // operand of the root, and a deeper walk would start claiming coincidences.
+        if !Self::is_root_discharge(code)
+            && let Value::Call(_, args) = code.unspan()
+            && args.iter().any(Self::is_root_discharge)
+        {
+            out.push_str(
+                " — the `??` already here discharges a value INSIDE the expression, not the \
+                 store, so it cannot supply the fallback; move it outside",
+            );
+        }
+        out
+    }
+
+    /// Is this expression itself a null discharge (`a ?? b`)?
+    fn is_root_discharge(v: &Value) -> bool {
+        matches!(v.unspan(), Value::Block(bl) if bl.name == "ncc")
+    }
+
+    pub(crate) fn range_guard_inside_discharge(&mut self, code: &mut Value, target: &Type) -> bool {
+        // A nullable target already answers null for a value that does not fit, and its own
+        // `??` reads that today — there is nothing here to add and claiming it would move a
+        // shape that works.
+        if matches!(target, Type::Optional(_)) {
+            return false;
+        }
+        // `compound_range`, not `declared_range`: the latter answers the `limit(lo, hi)`
+        // spelling and returns None the moment `forced_size` is set, which is exactly what a
+        // narrow ALIAS is — so it cannot see the five widths this exists for.
+        if Self::compound_range(target, false).is_none() {
+            return false;
+        }
+        let Type::Integer(spec) = *target.base() else {
+            return false;
+        };
+        // Only the block-shaped discharge carries a subject that can be guarded once. A bare
+        // variable subject lowers to a plain `if` that reads it twice (see
+        // `null_discharge_subject`), and guarding there would evaluate the range test on one
+        // read and not the other.
+        // A discharge reaches here in TWO shapes, and taking only the first is why an
+        // author's `b ?? 255` on a bare variable stayed refused while `(b + 1) ?? 255`
+        // worked.  `null_discharge_subject` above is the one home for what they look like:
+        // a non-trivial subject is bound to an `__ncc_N` temp by the block's head statement,
+        // while a bare VARIABLE subject can be read twice for free and so lowers to a plain
+        // `if` with the subject standing in the condition AND the then arm.
+        //
+        // Both reads are guarded in the second shape.  That is sound because the checked cast
+        // is PURE and SILENT — it raises nothing, so evaluating it twice costs a range test
+        // and reports nothing twice.  With `OpRangeDefault` it would have reported the same
+        // store twice, which is one more reason this path does not use it.
+        let subjects: Vec<Value> = match code.unspan() {
+            Value::Block(bl) if bl.name == "ncc" => match bl.operators.first().map(Value::unspan) {
+                Some(Value::Set(_, subject)) => vec![(**subject).clone()],
+                _ => return false,
+            },
+            Value::If(cond, then, _) => {
+                let mut v = vec![(**then).clone()];
+                // the condition is `OpConvBoolFromInt(subject)` — guard the read inside it too
+                if let Value::Call(_, args) = cond.unspan()
+                    && let Some(first) = args.first()
+                {
+                    v.push(first.clone());
+                }
+                v
+            }
+            _ => return false,
+        };
+        // Already guarded — the two seams that reach one store must not judge it twice.
+        if subjects.iter().any(|sub| {
+            matches!(sub.unspan(), Value::Call(d, _) if self.data.def(*d).name() == "OpRangeDefault")
+        }) {
+            return true;
+        }
+        let guarded: Vec<Value> = subjects
+            .into_iter()
+            .map(|mut sub| {
+                self.dn4_checked_cast(&mut sub, &Type::Integer(spec), &crate::data::I64);
+                sub
+            })
+            .collect();
+        match code.unspan_mut() {
+            Value::Block(bl) => {
+                if let Some(Value::Set(_, subject)) =
+                    bl.operators.first_mut().map(Value::unspan_mut)
+                {
+                    **subject = guarded[0].clone();
+                }
+            }
+            Value::If(cond, then, _) => {
+                **then = guarded[0].clone();
+                if let Some(g) = guarded.get(1)
+                    && let Value::Call(_, args) = cond.unspan_mut()
+                    && let Some(first) = args.first_mut()
+                {
+                    *first = g.clone();
+                }
+            }
+            _ => return false,
+        }
+        true
     }
 
     pub(crate) fn guard_declared_range(
@@ -6794,6 +7124,8 @@ use a separate collection or add after the loop"
         // provably independent of `v`; a borrow (`w = v; v = w`) and any expression
         // (`v = tail(v)`) are not.  Same three-way split as the struct-field vector
         // replacement above, which is the same invariant one level down.
+        // @FR-O-Proxy asks copy — the same aliasing question one level down, for a `&`-bound
+        // vector rather than a struct field.  It chooses direct-append vs materialise.
         let owned_var_rhs = matches!(
             code.unspan(),
             Value::Var(rv) if self.vars.tp(*rv).depend().is_empty()

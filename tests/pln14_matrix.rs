@@ -43,7 +43,7 @@ fn build(defs: &[&str], ty: &str, expr: &str) -> (Parser, State) {
     let src = format!("fn probe() -> {ty} {{\n{expr}\n}}\n");
     p.parse_str(&src, "<probe>", false);
     let mut state = State::new(p.database.clone());
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
     compile::byte_code(&mut state, &mut p.data);
     // This harness reads the probe's return value off the stack, so it is a
     // CLAIMING caller in the same sense the REPL's capture wrapper is: without
@@ -291,7 +291,7 @@ fn faulting_bind_records_a_fault_not_a_value() {
     let src = "fn probe() -> integer {\n  assert(false, \"boom\");\n  1\n}\n";
     p.parse_str(src, "<probe>", false);
     let mut state = State::new(p.database.clone());
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
     compile::byte_code(&mut state, &mut p.data);
     state.execute_argv("probe", &p.data, &[]);
     assert!(

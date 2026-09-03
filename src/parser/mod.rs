@@ -145,6 +145,30 @@ struct DeferredPar {
     count: u16,
 }
 
+/// Which binding position a leading `&` may occupy at the point the operand parser
+/// reaches it, and therefore which token ENDS the operand the `&` annotates.
+///
+/// `@FR-B-Ref-AnnotationOnly` makes `&` a type annotation rather than an operator, so it
+/// is legal only at a bind site; `@FR-B-Ref-StoredRef` names the one other position, a
+/// struct-literal field whose declared type is `reference<τ>`.  The two positions END
+/// differently — a statement at `;`, a field value at `,` as well — and peeking the next
+/// token alone cannot tell the whole right-hand side from the LAST operand of one.  Naming
+/// the position is what lets the guard ask both halves of that question from one value.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub(crate) enum AmpHead {
+    /// Not a bind site.  A leading `&` here is the parse error the rule names — an
+    /// operand, a call argument, a collection element, a condition.
+    #[default]
+    No,
+    /// A plain `=` right-hand side (`a = &b`).  A compound assignment is deliberately not
+    /// one: it mutates the target rather than giving it a reference type.
+    AssignRhs,
+    /// A struct-literal field declared `reference<τ>` (`@FR-B-Ref-StoredRef`).  The rule
+    /// admits the `&` on the strength of the FIELD'S TYPE and says nothing about where the
+    /// field sits in the literal, so a field followed by another field ends at its `,`.
+    StoredRefField,
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct Parser {
     pub todo_files: Vec<(String, u16)>,
@@ -346,7 +370,7 @@ pub struct Parser {
     /// element, a parenthesis), sees `false` and is rejected.  Without it the guard
     /// could only peek the NEXT token, which cannot tell the whole RHS from the LAST
     /// operand of one — the hole that let `b = 1 + &a;` compile.
-    pub(crate) amp_head: bool,
+    pub(crate) amp_head: AmpHead,
     /// The local an assignment is writing, for the duration of that assignment's right-hand
     /// side; `u16::MAX` outside one.  Paired with [`Parser::assign_replaces`], which says
     /// whether the write REPLACES the target (`=`, which repoints it at a fresh store) or
@@ -596,6 +620,12 @@ pub struct Parser {
     /// closure (`717-closure-struct-return.loft`).  Only a return nothing declared can have
     /// missed the earlier slot.
     adopted_ret_defs: std::collections::HashSet<u32>,
+    /// Tuple LOCALS that are the source of a `&` link — bound by `b = &a` / `c: &(…) = a`, or
+    /// passed to a `&(…)` parameter — and carry a heap element, keyed `(function, name)`.
+    /// Such a local is built as a `__tuple<…>` RECORD so the link can name it (tuples.md
+    /// T-Ref); every other tuple local keeps its stack form.  Recorded in pass 1 at the link
+    /// and consulted at the bind in pass 2, the same shape as `adopted_ret_defs`.
+    ref_linked_tuple_locals: std::collections::HashSet<(u32, String)>,
     /// loft#945 — every `(function, variable)` whose vector LITERAL turned out to be the
     /// RECEIVER of a `.map`/`.filter`/`.reduce` chain (`d = [1, 2, 3].map(…)`).
     ///
@@ -1226,7 +1256,7 @@ impl Parser {
             pending_param_locks: Vec::new(),
             pending_param_positions: Vec::new(),
             amp_pending: false,
-            amp_head: false,
+            amp_head: AmpHead::default(),
             assign_target: u16::MAX,
             assign_replaces: false,
             rebind_lowered: u16::MAX,
@@ -1246,6 +1276,7 @@ impl Parser {
             late_text_tails: Vec::new(),
             infer_ret_defs: std::collections::HashSet::new(),
             adopted_ret_defs: std::collections::HashSet::new(),
+            ref_linked_tuple_locals: std::collections::HashSet::new(),
             literal_chain_lhs: std::collections::HashSet::new(),
             bound_method_stubs: Vec::new(),
             stub_origin: std::collections::HashMap::new(),
@@ -2105,6 +2136,7 @@ impl Parser {
         // newly-heap return gets its `__retbuf` in the same breath.
         let adopted = self.data.resolve_adopted_stubs(&mut self.lexer);
         self.refuse_forward_tuple_returns(&adopted);
+        self.refuse_forward_ref_tuple_params(&adopted);
         // @PLN125 — the same class, one step earlier in the chain: a bound-method stub's
         // hidden parameters are decided from the INTERFACE method's return type, which on
         // pass 1 can still be an unresolved forward reference.  Re-derive here, before the
@@ -2267,23 +2299,39 @@ impl Parser {
     /// here rather than repeating the check beside it: a second copy of the admitted list
     /// is the shape loft#1006 already was.
     ///
-    /// The restriction is on the STACK-backed reference tuple this annotation builds.  A
-    /// record-backed one — the `RefVar(Tuple)` a `for` loop binds over a vector of tuples —
-    /// reaches its elements through a real record and admits any element type; it is built
-    /// elsewhere and does not come through here.
+    /// Which representation the `&(…)` names is decided here too (tuples.md T-Ref-Rep): the
+    /// stack for an all-scalar tuple, and a reference to the `__tuple<…>` RECORD — what a `&S`
+    /// is — for anything else.  The remaining refusal is for an element the record cannot
+    /// spell or lay out as a field.
     pub(crate) fn ref_var_type(&mut self, tp: Type) -> Type {
+        // A `&(…)` whose elements are not all scalars is a reference to the synthesized
+        // `__tuple<…>` RECORD — exactly what a `&S` is — rather than a stack link: a heap
+        // element has no stack form the reference ops can address (tuples.md T-Ref).  The
+        // record form already carries every element type a struct field can, which is what
+        // the loop variable over a `vector<(…)>` and a heap-tuple RETURN use.
+        if let Type::Tuple(ref elems) = tp
+            && elems.iter().any(|e| !crate::data::ref_tuple_element_ok(e))
+            && elems.iter().all(crate::data::ref_tuple_record_element_ok)
+        {
+            let elems = elems.clone();
+            let d = self.data.tuple_def(&mut self.lexer, &elems);
+            if d != u32::MAX {
+                return Type::RefVar(Box::new(Type::Reference(d, crate::data::Deps::none())));
+            }
+        }
         if !self.first_pass
             && let Type::Tuple(ref elems) = tp
-            && let Some(bad) = elems.iter().find(|e| !crate::data::ref_tuple_element_ok(e))
+            && let Some(bad) = elems
+                .iter()
+                .find(|e| !crate::data::ref_tuple_record_element_ok(e))
         {
             let bad_name = bad.name(&self.data);
             diagnostic!(
                 self.lexer,
                 Level::Error,
-                "a `&` reference tuple may only hold scalar elements, and this \
-                 one holds `{bad_name}` — take the tuple by value and return a \
-                 new one, or use a struct, whose fields of any type write \
-                 through a `&` parameter"
+                "a `&` reference tuple cannot hold a `{bad_name}` element — a nullable, \
+                 fn-ref or nested-tuple element has no record form the reference can \
+                 address; take the tuple by value and return a new one, or use a struct"
             );
         }
         Type::RefVar(Box::new(tp))
@@ -2326,6 +2374,56 @@ impl Parser {
         }
     }
 
+    /// tuples.md T-Ref — a `&(…)` PARAMETER with a heap element is backed by the synthesized
+    /// `__tuple<…>` record, whose shape the signature must know; an element declared later in
+    /// the file is a stub on pass 1, so the two passes would type the parameter two ways.  The
+    /// same refusal a tuple RETURN gets (`refuse_forward_tuple_returns`), for the same reason.
+    fn refuse_forward_ref_tuple_params(&mut self, adopted: &[(u32, Type)]) {
+        if adopted.is_empty() {
+            return;
+        }
+        for d in 0..self.data.definitions.len() as u32 {
+            if !matches!(self.data.def_type(d), crate::data::DefType::Function) {
+                continue;
+            }
+            let late = self.data.def(d).attributes().iter().find_map(|a| {
+                let Type::RefVar(inner) = &a.typedef else {
+                    return None;
+                };
+                let Type::Tuple(elems) = &**inner else {
+                    return None;
+                };
+                if !elems.iter().any(|e| !crate::data::ref_tuple_element_ok(e)) {
+                    return None;
+                }
+                // `resolve_adopted_stubs` has already pointed the stub at the real type, so a
+                // forward-declared element is recognised by BEING one of the adopted types.
+                elems.iter().find_map(|e| {
+                    adopted
+                        .iter()
+                        .find(|(stub, real)| {
+                            e == real || matches!(e, Type::Unknown(n) if n == stub)
+                        })
+                        .map(|(stub, _)| (a.name.clone(), self.data.def(*stub).name().to_string()))
+                })
+            });
+            let Some((pname, late)) = late else {
+                continue;
+            };
+            let fname = self.data.def(d).name().trim_start_matches("n_").to_string();
+            let pos = self.data.def(d).position.clone();
+            self.lexer.pos_diagnostic(
+                Level::Error,
+                &pos,
+                &format!(
+                    "`{fname}` takes `{pname}: &(…)` containing `{late}`, which is declared later \
+                     in the file — move the declaration of `{late}` above `{fname}`. A `&(…)` \
+                     with a heap element is backed by a record whose shape the signature has \
+                     to know, and it cannot ask a type that does not exist yet"
+                ),
+            );
+        }
+    }
     fn promote_par_worker_tuple_returns(&mut self) {
         let mut workers: Vec<u32> = self.par_worker_defs.iter().copied().collect();
         workers.sort_unstable(); // deterministic `__tuple<…>` def order across runs
@@ -2513,7 +2611,18 @@ impl Parser {
             {
                 continue;
             }
-            let ret = def.returned().clone();
+            // Through `ret_promo_base`, which is the same read the two `delivers_a_*`
+            // questions above are asked with.  Asking this one on the RAW type made the
+            // sweep contradict itself on a nullable collection: `-> vector<τ>?` answered
+            // "delivers a collection" and was then rejected here, so no buffer was
+            // reserved — while the peel had already admitted it to the promotion pass,
+            // which then GREW the attribute in pass 2 and aborted the compiler on the H5
+            // two-pass contract.  One question, one spelling.
+            //
+            // The buffer's own type is the BASE, matching the signature-time reservation
+            // in `definitions.rs`: the buffer is storage, and storage is never absent —
+            // the `?` belongs to the RETURN, which is a value the caller reads.
+            let ret = def.returned().ret_promo_base().clone();
             if !matches!(
                 ret,
                 Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
@@ -3058,6 +3167,7 @@ impl Parser {
         // newly-heap return gets its `__retbuf` in the same breath.
         let adopted = self.data.resolve_adopted_stubs(&mut self.lexer);
         self.refuse_forward_tuple_returns(&adopted);
+        self.refuse_forward_ref_tuple_params(&adopted);
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
@@ -3117,6 +3227,7 @@ impl Parser {
         // newly-heap return gets its `__retbuf` in the same breath.
         let adopted = self.data.resolve_adopted_stubs(&mut self.lexer);
         self.refuse_forward_tuple_returns(&adopted);
+        self.refuse_forward_ref_tuple_params(&adopted);
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
@@ -3185,7 +3296,7 @@ impl Parser {
                     ));
                 }
             }
-            scopes::check(&mut self.data);
+            scopes::check(&mut self.data, &mut self.database);
             if debug {
                 self.output(&f, types, from)?;
             }
@@ -3259,6 +3370,7 @@ impl Parser {
         // newly-heap return gets its `__retbuf` in the same breath.
         let adopted = self.data.resolve_adopted_stubs(&mut self.lexer);
         self.refuse_forward_tuple_returns(&adopted);
+        self.refuse_forward_ref_tuple_params(&adopted);
         let lvl = self.lexer.diagnostics().level();
         if lvl == Level::Error || lvl == Level::Fatal {
             self.diagnostics.fill(self.lexer.diagnostics());
@@ -3976,6 +4088,28 @@ impl Parser {
     /// Reporting where there was silence is a strict gain; refusing what a shipped package
     /// already relies on is a break the freeze forbids, and raising the tier later is
     /// COMPATIBILITY.md's process rather than this function's call.
+    /// The spelling a `τ?` cure has to be written in for this target.
+    ///
+    /// [`Type::name`] renders `Type::Reference(d, …)` as the bare struct name, which is what an
+    /// EMBEDDED field is called (`item: Row` really is a `Row`) and not what a POINTER field is
+    /// (`link: reference<Row>`).  One IR spelling carries both notions and the `u16::MAX` share
+    /// marker (#328) is what tells them apart — the same bit `Data::has_value_cycle` reads to
+    /// skip pointer edges.
+    ///
+    /// Naming the wrong one hands the reader a cure that does not do what the message says.
+    /// `@FR-L-Null` gives `reference<Row>?` the pointer's own bytes with `nullref` for absence,
+    /// while `@FR-L-Null-Tag` makes `Row?` an INLINE tagged record: applying `Row?` to a pointer
+    /// field compiles and silently replaces sharing with a copy, and on a struct whose reference
+    /// graph returns to itself it does not compile at all.
+    fn cure_spelling(&self, target_tp: &Type) -> String {
+        match target_tp {
+            Type::Reference(d, deps) if deps.is_pointer_marker() => {
+                format!("reference<{}>", self.data.def(*d).name())
+            }
+            other => other.name(&self.data),
+        }
+    }
+
     fn n_store_violation(
         &mut self,
         value_tp: &Type,
@@ -4087,21 +4221,50 @@ impl Parser {
         // The stdlib is held to the SAME rule (no STD_SOURCE exemption): F1b(b)'s `min`/`max`/`clamp`
         // non-null bodies are now clean (nullable args — including DN3-typed division results —
         // route to the `τ?` overload), so no trusted-source `return null` remains to exempt.
+        //
+        // The HEAP half of the same rule (loft#1313).  `(N-Opt)` is written for every `τ`, and
+        // DN1 landed it for the scalars only — so a bare `null` into a non-null reference,
+        // collection or struct-enum passed in silence at a field, a return, a vector element and
+        // a call argument, the four positions where the scalar twin warns.  A heap LOCAL was
+        // never in the gap: `change_var` refuses `x: Item = null` with its own message.
+        //
+        // `is_dbref` rather than a spelled list, because its own doc records how that list
+        // drifts — the three obvious kinds get written and the five keyed collections are
+        // forgotten, and a short list here would route a handle down the scalar path.  The
+        // synthetic `__nullable<S>` is excluded for the reason the DN3 branch excludes it: it is
+        // the INLINE spelling of `S?` and is exactly as nullable as the `?` it stands for.
+        //
+        // Gated on `nullflow_enabled` as well, so `LOFT_NO_NULLFLOW` restores the pre-@PLN102
+        // model EXACTLY: the scalars back to the uniform hard error below, and the heap half
+        // back to silence.  Letting it fall through to that error instead would hand the opt-out
+        // a refusal this branch never had — the one outcome the freeze forbids here.
+        let heap_target = crate::keys::heap_nstore_enabled()
+            && crate::keys::nullflow_enabled()
+            && crate::data::is_dbref(target_tp)
+            && !self.data.is_nullable_wrapper(target_tp);
         if crate::keys::pln25_dn1_enabled()
             && matches!(value_tp, Type::Null)
-            && Self::is_non_null_scalar(target_tp)
+            && (Self::is_non_null_scalar(target_tp) || heap_target)
         {
-            let nm = target_tp.name(&self.data);
+            let nm = self.cure_spelling(target_tp);
             // @PLN102 (N-Store) Phase 1 — same warn/error split as the DN3 branch: a bare `null`
             // into a NON-narrow scalar target warns (the slot reserves its null distinctly, so it
             // holds null and reads back null); a NARROW width keeps the hard error (no room).
             let narrow =
                 !never_error && matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
-            if crate::keys::nullflow_enabled() && !narrow {
+            // A heap target never escalates.  There is no narrow heap width to run out of room
+            // the way a `u8` does, and loft#1232 settled the rest: reporting where there was
+            // silence is a strict gain, while refusing what a shipped package already compiles is
+            // the break the freeze forbids.  Raising the tier later is COMPATIBILITY.md's process.
+            if heap_target || (crate::keys::nullflow_enabled() && !narrow) {
+                // The scalar wording is unchanged to the byte — `scalar ` is what the heap half
+                // drops, not a second message.  Two spellings of one diagnostic is how the
+                // fixtures that pin this text would start disagreeing with the rule behind it.
+                let kind = if heap_target { "" } else { "scalar " };
                 let msg = diagnostic_format(
                     Level::Warning,
                     format_args!(
-                        "`null` is stored into {what} of the non-null scalar type `{nm}` — the slot holds null; declare it `{nm}?` to make that explicit"
+                        "`null` is stored into {what} of the non-null {kind}type `{nm}` — the slot holds null; declare it `{nm}?` to make that explicit"
                     ),
                 );
                 self.nstore_diag(at, Level::Warning, &msg);
@@ -4231,18 +4394,26 @@ impl Parser {
         // here typed as the full `integer` — a nullable narrow field left out of a struct
         // literal takes its default this way — so the widened width test (loft#931) would
         // otherwise refuse `n.c = null` and `N { t: 1 }` on an `i32?` field.
+        // @PLN152 — an author-written `??` names what happens when the value does not fit,
+        // so a discharged store is not an unanswered narrowing.  The guard goes inside the
+        // discharge and this seam then leaves the store alone: no refusal, and no second
+        // guard around the outside.
+        let discharged = !self.first_pass
+            && !self.in_explicit_cast
+            && self.range_guard_inside_discharge(code, should);
         let narrows = if self.in_explicit_cast {
             Self::is_narrowing_int(is_type, should)
         } else {
             Self::is_narrowing_int_store(is_type, should)
         } && !self.is_null_source(code);
-        if !self.first_pass && narrows && !self.int_value_fits(code, should) {
+        if !discharged && !self.first_pass && narrows && !self.int_value_fits(code, should) {
             let src = self.int_type_name(is_type);
             let dst = self.int_type_name(should);
+            let cures = Self::narrowing_cures(code, &dst);
             diagnostic!(
                 self.lexer,
                 Level::Error,
-                "cannot implicitly narrow {src} to {dst} (may lose data) — cast explicitly with `as {dst}`"
+                "cannot implicitly narrow {src} to {dst} (may lose data) — {cures}"
             );
         }
         // loft#984 — a value meeting a slot that DECLARES a range is guarded here, which
@@ -4250,7 +4421,7 @@ impl Parser {
         // field, a call ARGUMENT, a return.  An explicit `as` is excluded — a cast has its
         // own answer for a value that does not fit (`400 as u8` is null), and folding the
         // default in would silently change it.
-        if !self.first_pass && !self.in_explicit_cast && !self.is_null_source(code) {
+        if !discharged && !self.first_pass && !self.in_explicit_cast && !self.is_null_source(code) {
             // A struct LITERAL's field, an ARGUMENT and a RETURN all name a DECLARED type,
             // so the wrapper is the answer here — the element-write ambiguity
             // `target_holds_null` exists for cannot arise at this seam.
@@ -4518,6 +4689,39 @@ impl Parser {
                         self.cl("OpCreateStack", &[Value::Var(wv)]),
                     ]);
                 }
+            }
+            return true;
+        }
+        // tuples.md T-Ref — a tuple LOCAL passed to a `&(…)` parameter whose elements are
+        // not all scalars.  The parameter is a reference to the `__tuple<…>` record, and the
+        // local is a stack tuple on pass 1: record that it must be BUILT as that record, and
+        // let pass 1 through.  On pass 2 the bind has already made it one, so a stack tuple
+        // still arriving here is not a local this function declares (a by-value parameter,
+        // a projection), and a link cannot name it — B-Ref-Reshape's rule: refuse rather
+        // than downgrade to a copy.
+        if let Type::RefVar(ref_tp) = should
+            && let Type::Reference(d, _) = &**ref_tp
+            && self.data.def(*d).name().starts_with("__tuple<")
+            && let Type::Tuple(elems) = is_type
+            && elems.iter().all(crate::data::ref_tuple_record_element_ok)
+        {
+            if let Value::Var(v) = code.unspan() {
+                self.ref_linked_tuple_locals
+                    .insert((self.context, self.vars.name(*v).to_string()));
+            }
+            if !self.first_pass {
+                let what = match code.unspan() {
+                    Value::Var(v) if self.vars.is_argument(*v) => "a by-value parameter",
+                    Value::Var(_) => "a variable this function did not declare",
+                    _ => "not a tuple variable",
+                };
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "a `&(…)` reference tuple with a heap element links to a tuple LOCAL \
+                     of the calling function, and this argument is {what} — bind it to a \
+                     local first and pass that"
+                );
             }
             return true;
         }

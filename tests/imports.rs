@@ -20,7 +20,7 @@ fn wildcard_import_makes_names_accessible() {
     p.parse_dir("default", true, true).unwrap();
     p.lib_dirs = vec![format!("tests{s}lib")];
     p.parse(&format!("tests{s}lib{s}wildcard_import_main.loft"), false);
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     assert!(
         p.diagnostics.level() < Level::Error,
         "Expected no errors; got: {:?}",
@@ -36,7 +36,7 @@ fn selective_import_makes_named_item_accessible() {
     p.parse_dir("default", true, true).unwrap();
     p.lib_dirs = vec![format!("tests{s}lib")];
     p.parse(&format!("tests{s}lib{s}selective_import_main.loft"), false);
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     assert!(
         p.diagnostics.level() < Level::Error,
         "Expected no errors; got: {:?}",
@@ -66,7 +66,7 @@ fn match_accepts_library_enum_variants() {
     p.parse_dir("default", true, true).unwrap();
     p.lib_dirs = vec![format!("tests{s}lib")];
     p.parse(&format!("tests{s}lib{s}match_lib_enum_main.loft"), false);
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     assert!(
         p.diagnostics.level() < Level::Error,
         "Expected no errors; got: {:?}",
@@ -91,7 +91,7 @@ fn p173_intra_cycle_resolves_cross_file_types() {
     p.parse_dir("default", true, true).unwrap();
     p.lib_dirs = vec![format!("tests{s}lib")];
     p.parse(&format!("tests{s}lib{s}p173_cycle_main.loft"), false);
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     assert!(
         p.diagnostics.level() < Level::Error,
         "Expected cyclic `use` to resolve; got: {:?}",
@@ -111,7 +111,7 @@ fn pln22_phase3_use_as_aliasing() {
     p.parse_dir("default", true, true).unwrap();
     p.lib_dirs = vec![format!("tests{s}lib")];
     p.parse(&format!("tests{s}lib{s}p3_alias_main.loft"), false);
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     assert!(
         p.diagnostics.level() < Level::Error,
         "Expected no errors; got: {:?}",
@@ -129,7 +129,7 @@ fn pln22_phase4_grouped_import() {
     p.parse_dir("default", true, true).unwrap();
     p.lib_dirs = vec![format!("tests{s}lib")];
     p.parse(&format!("tests{s}lib{s}p4_group_main.loft"), false);
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     assert!(
         p.diagnostics.level() < Level::Error,
         "Expected no errors; got: {:?}",
@@ -171,7 +171,7 @@ fn pln102_c97_library_may_define_a_stdlib_name() {
     p.parse_dir("default", true, true).unwrap();
     p.lib_dirs = vec![format!("tests{s}lib")];
     p.parse(&format!("tests{s}lib{s}c97_shadow_main.loft"), false);
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     assert!(
         p.diagnostics.level() < Level::Error,
         "a library defining the stdlib name `clamp` must be module-scoped, not a C95 redefinition; got: {:?}",
@@ -193,7 +193,7 @@ fn issue940_a_library_fn_a_stdlib_method_shadows_says_so() {
     p.parse_dir("default", true, true).unwrap();
     p.lib_dirs = vec![format!("tests{s}lib")];
     p.parse(&format!("tests{s}lib{s}c97_shadow_main.loft"), false);
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let msgs = p.diagnostics.lines().join("\n");
     assert!(
         msgs.contains("shadowed-by-method") && msgs.contains("`clamp`"),
@@ -308,7 +308,7 @@ fn pln13_c101_reserved_names_and_std_qualifier() {
         "c101_std.loft",
         false,
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     assert!(
         p.diagnostics.level() < Level::Error,
         "std::max must resolve to the stdlib; got: {:?}",
@@ -325,7 +325,7 @@ fn parse_lib_main(file: &str) -> Parser {
     p.parse_dir("default", true, true).unwrap();
     p.lib_dirs = vec![format!("tests{s}lib")];
     p.parse(&format!("tests{s}lib{s}{file}"), false);
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     p
 }
 

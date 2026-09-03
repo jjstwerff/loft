@@ -12,7 +12,14 @@ captures, whose return dep names `__closure` and not which slot (D-clo-7, below;
 value half, its BOUND-return leak half, its ARGUMENT-witness half, its single-CAPTURE witness
 and its literal-`null` argument are all closed), and the same `??` at a COLLECTION return
 leaks its mint arm because declining the unguarded lift was the only cure correct on both
-backends (D-clo-14).
+backends (D-clo-14; its cost is now measured on the PEAK, and both frees a cure must guard
+are named — see the entry).
+
+**D-clo-18 left the register on 2026-09-03 without being fixed**, which is why the count fell to
+2 with no code change: a `&` scalar parameter written from inside a closure is permanently
+REFUSED, so per [ROADMAP.md](ROADMAP.md) it is a decided edge
+([DESIGN_DECISIONS C115](../DESIGN_DECISIONS.md)) rather than distance from the spec. Its record,
+and `D-clo-20`'s, are below.
 
 ⚠ **A rebind is not a mutation, and a capture is the one place the code could not tell them
 apart (D-clo-20, loft#1281, closed 2026-09-02).** `(L-CapHeap)` shares a captured heap value
@@ -29,8 +36,8 @@ fix, and the one the keyed kinds appear to model — does not work HERE, because
 reads its own slot directly (`t_6vector_len(p(0))`, not a read through the closure record).
 Two readers, one binding: a repoint moves the wrong answer from the caller to the callee
 rather than removing it. Making it mean what it says needs the binding reachable from inside
-the closure plus a write-back, which is precisely what `D-clo-18` records as unavailable for
-the `&`-scalar shape — the cell machinery that gives a mutated captured SCALAR that channel
+the closure plus a write-back, which is precisely what `D-clo-18` (now a decided edge,
+[DESIGN_DECISIONS C115](../DESIGN_DECISIONS.md)) records as unavailable for the `&`-scalar shape — the cell machinery that gives a mutated captured SCALAR that channel
 cannot serve a heap value, because reads in the enclosing body would then see the cell while
 the caller still sees its own slot. Same wall, one rule over, so the same answer.
 
@@ -113,6 +120,73 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > short lambda through `map`/`any`/`all`/`sort_by`/`filter` (D-clo-2's fix named
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
+
+> **D-clo-18 — RECLASSIFIED as a decided edge (2026-09-03, loft#1276): a `&` SCALAR parameter
+> written from inside a closure is REFUSED, and no code change closes it.**
+>
+> `(L-CapRef)` + `(F-ParamRef)` read together say the write should reach the caller. It does not,
+> and the reason is one rule further in: the value lives in the caller's slot and `(L-CapScalar)`
+> gives the closure a COPY of it, so there is no shared record for the write to land in. Before
+> the refusal existed the program COMPILED and answered quietly wrong —
+> `fn bump(p: &integer) { g = fn() { p += 1; }; g(); p = p + 10; }` on `n = 5` answered **15**
+> where 16 is correct, the closure's increment dropping through a parameter whose whole purpose
+> is the write-back.
+>
+> Making it mean what it says needs the REF itself in the closure record plus a write-back, and
+> the cell machinery — the mechanism that gives a mutated captured LOCAL scalar exactly that
+> channel — cannot supply it: reads in the enclosing body would then see the cell while the
+> caller still sees its own slot.
+>
+> **Why it left the register rather than closing.** It was carried as an OPEN deviation for two
+> days while the refusal it describes was already permanent, so the count read one higher than
+> the distance actually was. [ROADMAP.md](ROADMAP.md) already says what to do with that: a row
+> that turns out **spec-may-adjust** leaves `formal/` and becomes a decided edge. It is
+> [DESIGN_DECISIONS C115](../DESIGN_DECISIONS.md), which carries both halves — this one and
+> `D-clo-20`, the heap twin below, whose refusal is the same answer one rule over. The rule keeps
+> the carve-out in its own text: `(L-CapRef)` now states the refusal and cites C115 instead of a
+> deviation number.
+>
+> Guard `tests/scripts/1276-reject-a-ref-parameter-a-closure-cannot-write.loft`
+> (*"Cannot write to the `&` parameter 'p' from a closure"*), whose read-only cells are the
+> control saying that widening the write-walk to credit a lambda's WRITES did not also credit
+> its READS.
+
+> **D-clo-20 — OPENED AND CLOSED (2026-09-02, loft#1281), as a REFUSAL: a whole-value rebind of
+> a captured heap PARAMETER reached the caller.**
+>
+> `(F-ParamHeap)` makes a whole-value rebind of a heap parameter local to the callee, and a
+> rebind written inside a CLOSURE that captures that parameter reached the CALLER instead:
+> `fn repl(p: vector<integer>) { g = fn() { p = [7,7]; }; g(); }` left the caller's `[1,2]` as
+> `[7,7]`, on both backends, with nothing reported, while the identical rebind written without
+> the closure correctly left it alone. Every heap kind did it — vector, keyed and struct alike —
+> and every right-hand side: a literal, a call, another local.
+>
+> The two rules meet here and the code followed only one. `(L-CapHeap)` is right that the closure
+> and the callee body see one collection; what does not follow is that the CALLER does. The
+> closure record holds a COPY of the parameter's DbRef, so the rebind lowered to a clear plus a
+> refill of the store that copy names — and `(F-ParamHeap)` makes that store the caller's. A
+> capture has no route back to the parameter SLOT, which is the binding `(F-ParamRebind)`
+> rebinds.
+>
+> It is REFUSED, which is the call `D-clo-18` makes for the `&`-scalar shape and for the same
+> reason: making it mean what it says needs the binding reachable from inside the closure PLUS a
+> write-back, and the cell machinery that gives a mutated captured SCALAR exactly that cannot
+> serve a heap value. Measured rather than assumed: repointing the capture slot alone does not
+> fix it, because the callee reads its own slot directly (`t_6vector_len(p(0))`, not a read
+> through the record), so a repoint moves the wrong answer from the caller to the callee instead
+> of removing it.
+>
+> The refusal is narrow, and each exclusion still works: a captured LOCAL (no caller to reach
+> past), a `&` parameter (`(L-CapRef)`, where the write-back is the point), a scalar or text
+> parameter (the cell machinery), and every mutation-THROUGH — `p += [x]`, `p[i] = v`,
+> `p.clear()`, a field write — which `(L-CapHeap)` and `(F-ParamGrow)` require to reach the
+> caller.
+>
+> Reject twin `tests/parse_errors.rs::a_closure_cannot_replace_a_captured_heap_parameter` (all
+> three right-hand sides × vector, hash, struct); the shapes it must NOT reach are
+> `tests/scripts/1281-a-closure-cannot-replace-a-captured-parameter.loft`, which cannot hold the
+> refused spelling because the fixed compiler will not parse it. Both halves are recorded as one
+> decided edge, [DESIGN_DECISIONS C115](../DESIGN_DECISIONS.md).
 
 > **D-clo-19 — OPENED AND CLOSED (2026-09-01, loft#1279): `=` on a captured collection was two
 > other operations, decided by the SOURCE of the right-hand side.**
@@ -575,6 +649,81 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > which keeps the struct / nested-vector / keyed element types as controls — those are the
 > @PLN93 shapes the tuple row fell outside of, and a fix that took one of them down would be
 > worse than the defect.
+
+> **D-clo-7 — CLOSED (2026-09-03): the witness was a SLOT, and the slot was in the body.**  The
+> open half read *"the return's dep names `__closure` and never which slot"*, and that was the
+> whole of it: `closure_capture_base` answered only for a closure with ONE capture
+> (`Some([only])`), because the callee's base is the `__closure` variable and the mapping the
+> build writes — `OpSetDbRef(___clos_N, off, var)` — was collected with its offsets thrown away.
+> The callee's `??` subject reads `OpGetDbRef(__closure, off)` at exactly one of those offsets.
+> `capture_return_offsets` collects the offsets a return can hand back, skipping a read whose
+> result is consumed on the spot by an op that answers no store (`OpGetInt(OpGetDbRef(__closure,
+> 12), 0)` is a field of another capture, not the capture); `fnref_captures` keeps `(off, var)`;
+> one offset resolves to one caller variable, and the routes already shipped take it from there
+> — `OpBindOrCopy` for a record (loft#1248), store identity for a collection (loft#1257).
+>
+> Measured, both backends, every value unchanged, `LOFT_POISON` and `LOFT_STRICT_STORES` clean:
+> two store-bearing captures with a record return 499 stores at N=500 → 3 and 70 000 calls
+> under the ceiling; a captured collection 65535 (abort) → 3; two captured collections 499 →
+> 3; a store-bearing capture beside a pure mint 500 → 3; the borrow arms leave both captures
+> intact and the bound spelling is a copy.
+>
+> ⚠ **Three things the matrix caught, each a wrong cut before it shipped.**  (1) Answering
+> `Borrowed { u16::MAX }` from `classify` for an unnameable base — instead of the `Owned`
+> fallback the readers were gating around — broke the direct nullable-capture return
+> (`fn(n) -> P? { return c; }`, guard 1114); the fallback stays, and the free-deciding sites ask
+> the predicate below instead.  (2) A collection `??` over a capture never hands the capture
+> back — its chosen arm is COPIED into the caller's `__retbuf` — but a first cut read that as
+> *every* collection return, and `fn(k) -> vector { c }` plus 1180's captured field were then
+> freed under the closure.  The callee's own ownership verdict cannot separate them either: it
+> answers a callee LOCAL (`__vdb_1`, the mint's backing).  What does is the return's DEP LIST:
+> it names `__closure` only where the capture can come back.  (3) A capture variable assigned
+> again after the build keeps naming the NEW store while the closure holds the build-time one
+> (`L-CapHeap`), so `Defs::multi_assigned` refuses it as a witness — and reassigning such a
+> variable leaks a store at exit today regardless (loft#1324, pre-existing).
+>
+> Declined on purpose: `c ?? d`, where either capture may come back and one witness cannot
+> answer for two.  Guard: `tests/scripts/1248b-a-capture-witness-is-the-slot-the-return-reads.loft`,
+> six cells, falsified at c6239cbf.
+
+> **D-clo-14 — the traded leak CLOSED, one spelling residual (2026-09-03, loft#1257).** The
+> decline above cost the mint arm one store per call — 389 live at N=400, a store-table abort
+> at scale. It no longer does, on both backends, with every borrow-arm value unchanged.
+>
+> **The cure needed no witness, and the entry below is where that was got wrong.** It reads
+> *"a cure has to carry the Join base as a witness to BOTH sites"*, and both halves of that
+> sentence were measured — but `(O-Oracle)` already says what a `Join` means at run time
+> (*"adopt iff the value's store ≠ `base`'s store"*), and the dep NAMES that base. So the
+> owner is decidable by store IDENTITY, which is `ownership.md` D-own-16's route one shape
+> over, at no witness slot and no IR temp.
+>
+> **What answers for BOTH frees is one thing, not two: the base rides on the temp's TYPE.**
+> `callref_owned_return` types `__lift_N` with `Deps::frame1(base)` instead of `Deps::none()`,
+> and a non-empty dep stops `state/codegen.rs` emitting the unconditional pre-Set free at all —
+> the RE-SET that left the interpreter wrong when only the scope-exit free was guarded.
+> `get_free_vars` then emits `OpFreeRefIfDistinct(__lift_N, base)` for the one that remains.
+> One guarded free per evaluation.
+>
+> ⚠ **The container KIND broke it once, and only on one backend.** The keyed arms were written
+> blind and kept `Deps::none()`, so the pre-Set free survived for them alone: the hash cell
+> emptied its caller's collection on the INTERPRETER while `--native` stayed green. Found by
+> moving the axis, not by reading the code — `matrix_axes.py` reported `A1 container kind 2/6`
+> for the probe set that had already passed.
+>
+> **RESIDUAL, and it is a statement CONTEXT rather than a shape:** `r = if c { g(some) } else
+> { g(none) }` still leaks the mint arm — 246 stores at N=500, attributed to the closure's own
+> mint line — because the lift is not consulted for a call in an `if`/`match` arm at all. Not
+> a regression: it leaks identically under `LOFT_NO_LIFT_JOIN_WITNESS`.
+>
+> **Not reached, and measured so:** the CAPTURE witness (`c ?? [7,8]` over a captured `c`)
+> aborts at the ceiling with the route on exactly as with it off — the return's dep names
+> `__closure` and not which slot, so there is no base. That is D-clo-7's open half, and this
+> is the measurement the ROADMAP asked for when it said whether the identity route reaches the
+> two closure rows was untested.
+>
+> Guard: `tests/scripts/1257b-a-lifted-collection-return-is-freed-by-identity.loft`, eight
+> cells, falsified at d9a2ec21 (interpret exit 101 -> 0, native exit 1 -> 0, both panicked ->
+> clean). Opt-out `LOFT_NO_LIFT_JOIN_WITNESS` keeps the pre-lift form as the A/B leg.
 
 > **D-clo-14 — the OVER-FREE closed, the leak it traded for OPEN (2026-09-01, loft#1257).**
 > `g = fn(q: vector<integer>?) -> vector<integer> { q ?? [7, 8] }` used INLINE inside a LOOP

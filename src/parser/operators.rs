@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{
-    Data, IntegerSpec, Level, OPERATORS, Parser, Position, Type, Value, diagnostic_format, rename,
-    to_default, v_block, v_if, v_set,
+    AmpHead, Data, IntegerSpec, Level, OPERATORS, Parser, Position, Type, Value, diagnostic_format,
+    rename, to_default, v_block, v_if, v_set,
 };
 
 // Operator parsing and type dispatch.
@@ -1053,7 +1053,17 @@ impl Parser {
                         || self.lexer.peek_token("*=")
                         || self.lexer.peek_token("%=")
                         || self.lexer.peek_token("/=");
-                    let next_terminates = self.lexer.peek_token(";") || self.lexer.peek_token("}");
+                    // What ENDS the operand depends on the position the head opened in.
+                    // A statement ends at `;` (a block-final one at `}`); a struct-literal
+                    // field value ends at the `,` before the next field just as well.
+                    // `@FR-B-Ref-StoredRef` admits the `&` on the strength of the FIELD'S
+                    // TYPE and conditions it on nothing else, so a `reference<τ>` field
+                    // that is not the LAST field in the literal is the same legal position
+                    // — `TrailNN { l: &pool[0], n: 4 }`.  Reading only `;`/`}` refused it,
+                    // which made the rule's one admitted position depend on field order.
+                    let next_terminates = self.lexer.peek_token(";")
+                        || self.lexer.peek_token("}")
+                        || (at_head == AmpHead::StoredRefField && self.lexer.peek_token(","));
                     // An invalid `&` must not stay "pending": clear the flag in each
                     // error branch so it cannot leak into `parse_assign_op`'s
                     // reference-lowering (1160) or the D-bind-7 bare-statement guard
@@ -1069,7 +1079,7 @@ impl Parser {
                              not an assignment target; drop the `&` (the binding is already linked)"
                         );
                         self.amp_pending = false;
-                    } else if !next_terminates || !at_head {
+                    } else if !next_terminates || at_head == AmpHead::No {
                         // `next_terminates` alone accepts the LAST operand of any
                         // expression (`b = 1 + &a;`, `b += &a;`, `S { x: &a }`, a
                         // block-final `{ 1 + &a }`) — it only proves nothing FOLLOWS
@@ -1493,8 +1503,7 @@ impl Parser {
                     // T1.5: element access through a reference-tuple parameter — pair.0, pair.1.
                     let elems = elems.clone();
                     self.parse_ref_tuple_elem(&mut t, code, &elems);
-                } else if let Type::Reference(d_nr, _) = t
-                    && self.data.def(d_nr).name().starts_with("__tuple<")
+                } else if let Some(d_nr) = Self::record_tuple_def(&self.data, &t)
                     && matches!(self.lexer.peek().has, crate::lexer::LexItem::Integer(_, _))
                 {
                     // P189b: vector-of-tuple loop var / index result —
@@ -1769,6 +1778,22 @@ impl Parser {
     /// T1.5: parse a `.N` element index on a `&(T1, T2, ...)` reference-tuple.
     /// Updates `t` to the element type and rewrites `code` to `TupleGet(var, idx)`
     /// when `code` is a plain variable reference.
+    /// The synthesized `__tuple<…>` struct a record-backed tuple receiver names — a plain
+    /// `Reference(__tuple<…>)` (a loop variable, a local bound from a heap-tuple return) or the
+    /// same behind the `&` a `&(…)` with a heap element denotes (tuples.md T-Ref).  Both read
+    /// and write their elements as that struct's fields.
+    fn record_tuple_def(data: &crate::data::Data, t: &Type) -> Option<u32> {
+        let d = match t {
+            Type::Reference(d, _) => *d,
+            Type::RefVar(inner) => match **inner {
+                Type::Reference(d, _) => d,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        data.def(d).name().starts_with("__tuple<").then_some(d)
+    }
+
     fn parse_ref_tuple_elem(&mut self, t: &mut Type, code: &mut Value, elems: &[Type]) {
         if let Some(idx) = self.lexer.has_integer() {
             let idx = idx as usize;
@@ -2537,6 +2562,12 @@ impl Parser {
                 matches!(op.unspan(), Value::Set(sv, val)
                     if *sv == w && self.inline_slot_word(val).is_some())
             });
+            // The backing record this view reads out of, read BEFORE the strip below removes
+            // the only place it is written down.
+            let backing: Option<u16> = match self.vars.tp(w).clone() {
+                Type::Vector(_, dep) => dep.as_slice().first().copied(),
+                _ => None,
+            };
             if let Type::Vector(elm, dep) = self.vars.tp(w).clone()
                 && !dep.is_empty()
             {
@@ -2583,6 +2614,30 @@ impl Parser {
                 // — and taking its preamble allocation away leaves the default arm building
                 // into a null sentinel, which answers length 0 for every literal default.
                 self.vars.mark_inline_ref(w);
+                // loft#1322 — and then exactly one of the pair may free the store.
+                //
+                // `_vec_N` and `__vdb_N` name ONE store: the view is `OpGetField(__vdb_N, 0)`.
+                // This arm leaves the view's free in place (the return-delivery materializer
+                // owns it) while the record keeps a scope-exit free of its own, so the same
+                // store was released twice — `free #N already_free=false` then `=true`, both
+                // backends.  `(O-Borrow)`: one owner, one free.  Here the view's free is the
+                // one that runs, so the record is the one that goes quiet.
+                //
+                // ⚠ ONLY WHERE THE VIEW'S FREE ACTUALLY RUNS, and the flags are CUMULATIVE
+                // ACROSS PASSES, which is what makes that a real question rather than a
+                // rhetorical one.  A capture subject reads `deps=[]` on pass 1 and takes the
+                // OWNED arm above — `skip_free(_vec_N)`, the view model — and reads `deps=[…]`
+                // on pass 2 and arrives here.  Such a `_vec_N` is already never-freed, so
+                // silencing the record too leaves the store with no owner at all: measured, it
+                // exhausts the 65535-store table in
+                // `1248b-a-capture-witness-is-the-slot-the-return-reads`.  Asking
+                // `is_skip_free(w)` is asking which of the two arms this variable ENDED in,
+                // not which one this pass took.
+                if !self.vars.is_skip_free(w)
+                    && let Some(db) = backing
+                {
+                    self.vars.set_skip_free(db);
+                }
             }
         }
 
@@ -2756,15 +2811,28 @@ impl Parser {
             // `Definition::returns_borrowed_view` — a hidden attr is not a borrow.
             let owned_vector = matches!(lhs_type, Type::Vector(_, dep)
                 if dep.iter().all(|&d| self.vars.is_caller_hidden_buf(d)));
+            // A RECORD subject that is a CALL is what a plain bind would leave the local
+            // OWNING — a fresh mint is adopted, a borrowed or `Join` return is deep-copied by
+            // codegen (`Definition::return_adopts_fresh_store` is the split), and a fn-ref
+            // call's is the store minted for that call or `OpBindOrCopy`'s answer — so the
+            // temp that binds it owns a store on every arm too (`@FR-O-Complete`: the fact
+            // per binding, per path).  Marked never-free, the arm that minted was owned by
+            // nobody: `r = g(none) ?? d` held one record per call to frame exit, and
+            // `r = mk(i) ?? d` was clean only while `r` freed on the mint arm a store it
+            // merely borrowed on the other.  A projection subject (`o.inner ?? d`) stays the
+            // view it is (`@FR-B-View`), and a bare variable is never hoisted at all.
+            let owned_record = matches!(lhs_type, Type::Reference(_, _) | Type::Enum(_, true, _))
+                && match code.unspan() {
+                    Value::Call(d, _) => self.data.def(*d).is_loft_defined(),
+                    Value::CallRef(_, _) => true,
+                    _ => false,
+                };
             if matches!(
                 lhs_type,
-                Type::Text(_)
-                    | Type::Reference(_, _)
-                    | Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Enum(_, true, _),
-            ) || (matches!(lhs_type, Type::Vector(_, _)) && !owned_vector)
+                Type::Text(_) | Type::Sorted(_, _, _) | Type::Hash(_, _, _) | Type::Index(_, _, _)
+            ) || (matches!(lhs_type, Type::Reference(_, _) | Type::Enum(_, true, _))
+                && !owned_record)
+                || (matches!(lhs_type, Type::Vector(_, _)) && !owned_vector)
             {
                 self.vars.set_skip_free(tmp);
             }
@@ -4158,6 +4226,15 @@ impl Parser {
             if var == u16::MAX
                 || self.vars.uses(var) == 0
                 || !matches!(self.vars.tp(var), Type::RefVar(inner) if matches!(**inner, Type::Reference(_, _)))
+            {
+                continue;
+            }
+            // A `&(…)` with a heap element is a reference to a `__tuple<…>` record, and the
+            // advice's premise does not hold for it: a by-value TUPLE parameter is a copy whose
+            // writes stay in the callee, so the `&` is what makes them land (tuples.md T-Ref).
+            if let Type::RefVar(inner) = self.vars.tp(var)
+                && let Type::Reference(d, _) = **inner
+                && self.data.def(d).name().starts_with("__tuple<")
             {
                 continue;
             }

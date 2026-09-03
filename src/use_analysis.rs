@@ -108,6 +108,24 @@ fn def_nrs(data: &Data, names: &[&str]) -> HashSet<u32> {
 /// inside a write (`OpSetInt(OpGetVector(t,…), …)`) writes `t`; inside a read
 /// (`OpGetInt(OpGetVectorNullable(t,…), …)`) reads `t`. They therefore PROPAGATE the
 /// incoming context to arg 0 (the remaining args — an index — are pure reads).
+///
+/// **The membership test is the op's own declaration: `-> reference[arg0]`.** Every
+/// element read carries it in both spellings (`OpGetVector` / `OpVectorRef` and their
+/// nullable twins), as does the keyed lookup `OpGetRecord` and the field read
+/// `OpGetField`. `OpGetDbRef` is the one member without it and is deliberate: it reads a
+/// STORED `DbRef` out of a record, which may name any store, and it is here because a
+/// closure's `__closure` read must still resolve to the record the caller holds.
+///
+/// [`Ownership::borrow_base_guarded`] roots a borrow through this set, so a
+/// store-preserving read MISSING from it makes the oracle call a view of somebody
+/// else's container `Owned` — the over-free direction (loft#1318, where `h[k].v` handed
+/// to a fn-ref emptied the caller's hash, and the `sorted` and `index` kinds faulted).
+///
+/// [`is_projection_op`] asks the narrower ROOT-NAMING question over an overlapping list,
+/// and the two are not the same set: this one carries `OpGetDbRef` and both nullable
+/// element reads, that one carries neither. Where they differ, say which fact the site
+/// wants — `@FR-O-Oracle` for own-vs-borrow, root-naming for which container a view came
+/// out of.
 fn projection_ops(data: &Data) -> HashSet<u32> {
     def_nrs(
         data,
@@ -115,6 +133,9 @@ fn projection_ops(data: &Data) -> HashSet<u32> {
             "OpGetVector",
             "OpGetVectorNullable",
             "OpGetField",
+            "OpVectorRef",
+            "OpVectorRefNullable",
+            "OpGetRecord",
             "OpGetDbRef",
         ],
     )
@@ -1759,13 +1780,16 @@ fn fn_body_tail(code: &Value) -> Option<&Value> {
 /// right-hand sides?
 ///
 /// A fn-ref reaches its variable three ways and only one of them is a bare marker: an
-/// explicit `FnRef` / `FnRefDnr` names the target wherever it sits — a CAPTURING lambda
-/// assigns a BLOCK (build the closure record, then the ref), so the marker is nested —
-/// while a NON-capturing lambda is stored as the bare definition number.
+/// explicit `FnRef` / `FnRefDnr` names the target — a CAPTURING lambda assigns a BLOCK
+/// (build the closure record, then the ref), so the marker is the block's TAIL — while a
+/// NON-capturing lambda is stored as the bare definition number.
 ///
-/// Only a DIRECT integer counts for that last case: the capturing block is full of
-/// unrelated ints (a type id, a field offset), and treating those as candidates makes
-/// every capturing case read as ambiguous.
+/// The marker is read from what the right-hand side YIELDS ([`collect_yielded`]), never
+/// from the whole tree: the capturing block WRITES each capture into the record before it
+/// yields the ref, so a capture that is itself a fn-ref appears there as a second
+/// definition number and made every such variable read as naming TWO targets (loft#1329).
+/// The same reading covers the bare-integer case, where a capturing block is full of
+/// unrelated ints (a type id, a field offset) that are not candidates either.
 ///
 /// `None` = this right-hand side names no target at all.  `Some(u32::MAX)` = it names
 /// TWO, which is a different answer and must stay one: a var whose FIRST definition
@@ -1778,10 +1802,16 @@ fn fn_body_tail(code: &Value) -> Option<&Value> {
 /// built) — and a fn-ref they disagreed about would be lifted by one and adopted by the
 /// other.
 pub(crate) fn fnref_target_in(rhs: &Value) -> Option<u32> {
+    let mut yielded: Vec<&Value> = Vec::new();
+    collect_yielded(rhs, &mut yielded);
     let mut found: Option<u32> = None;
     let mut ambiguous = false;
-    rhs.walk(&mut |inner| {
-        let d = match inner {
+    for inner in &yielded {
+        // `collect_yielded` already hands back unspanned nodes, and this peels anyway:
+        // `Value::unspan`'s contract is that a site discriminating on specific variants
+        // calls it, and a site that is correct only because of what its one caller does
+        // is one refactor away from being wrong.
+        let d = match inner.unspan() {
             Value::FnRef(d, _, _) => u32::try_from(*d).ok(),
             Value::FnRefDnr(d) => Some(u32::from(*d)),
             _ => None,
@@ -1792,13 +1822,54 @@ pub(crate) fn fnref_target_in(rhs: &Value) -> Option<u32> {
                 _ => found = Some(d),
             }
         }
-    });
-    if found.is_none()
-        && let Value::Int(d) = rhs.unspan()
-    {
-        found = u32::try_from(*d).ok();
+    }
+    if found.is_none() {
+        for inner in &yielded {
+            if let Value::Int(d) = inner.unspan() {
+                found = u32::try_from(*d).ok();
+                break;
+            }
+        }
     }
     if ambiguous { Some(u32::MAX) } else { found }
+}
+
+/// The sub-values a right-hand side can EVALUATE TO — one per path it may take.
+///
+/// [`fnref_target_in`] reads its markers from here rather than from the whole tree, and the
+/// difference is the whole of what a capturing lambda's assignment looks like: it is a BLOCK
+/// that mints the closure record, WRITES each capture into it, and then yields the `FnRef`.
+/// A capture that is itself a fn-ref is written as an `FnRefDnr` argument of that write, so a
+/// tree walk sees a second definition number and reports the variable as naming TWO targets —
+/// the answer reserved for a slot two different lambdas were assigned to.  A capture is a
+/// payload, not a candidate: only what the right-hand side yields names the target.
+///
+/// Every branch is yielded, so a fn-ref genuinely chosen between two lambdas
+/// (`f = if c { a } else { b }`) still reports the ambiguity that reading is for.
+fn collect_yielded<'a>(rhs: &'a Value, out: &mut Vec<&'a Value>) {
+    let tail = |ops: &'a [Value]| {
+        ops.iter()
+            .rev()
+            .find(|o| !matches!(o.unspan(), Value::Line(_)))
+    };
+    match rhs.unspan() {
+        Value::Block(bl) => {
+            if let Some(last) = tail(&bl.operators) {
+                collect_yielded(last, out);
+            }
+        }
+        Value::Insert(ops) => {
+            if let Some(last) = tail(ops) {
+                collect_yielded(last, out);
+            }
+        }
+        Value::If(_, then, alt) => {
+            collect_yielded(then, out);
+            collect_yielded(alt, out);
+        }
+        Value::Return(inner) | Value::Drop(inner) => collect_yielded(inner, out),
+        other => out.push(other),
+    }
 }
 
 /// The target every one of a fn-ref variable's definitions agrees on, or `None`.
@@ -1848,7 +1919,13 @@ pub(crate) struct Defs {
     fnref_targets: HashMap<u16, u32>,
     /// The CALLER variables each fn-ref's closure record holds, in capture-slot order — what
     /// lets a return that borrows the hidden `__closure` attribute name a witness at all.
-    fnref_captures: HashMap<u16, Vec<u16>>,
+    /// Per fn-ref variable, the closure record's captures as `(field offset, caller var)`,
+    /// in offset order — what the closure BUILD's `OpSetDbRef(___clos_N, off, var)` wrote.
+    fnref_captures: HashMap<u16, Vec<(i32, u16)>>,
+    /// Caller variables assigned at more than one site.  A closure captures the store its
+    /// variable held at BUILD time (`L-CapHeap`), so a variable reassigned afterwards no longer
+    /// names what the closure hands back and cannot witness for it.
+    multi_assigned: HashSet<u16>,
 }
 
 /// The ops that establish a var's CONTENTS without re-binding it — see [`Defs::filled`].
@@ -2083,7 +2160,7 @@ impl<'a> Ownership<'a> {
                         None => Own::Owned,
                     }
                 } else {
-                    self.call_ownership(*d, args)
+                    self.call_ownership(*d, args, func, defs)
                 }
             }
             // `??` / `if-else` lowers to `If`: the join of its two arms.
@@ -2138,10 +2215,16 @@ impl<'a> Ownership<'a> {
                     Own::Owned => return Own::Owned,
                     Own::Borrowed { base } | Own::Join { base } => base,
                 };
-                let mut base = self.caller_arg_base(d, callee_base, args);
+                let mut base = self.caller_arg_base(d, callee_base, args, func, defs);
                 if base == u16::MAX {
                     base = self.closure_capture_base(d, callee_base, *fn_var, defs);
                 }
+                // ⚠ An UNNAMEABLE base answers `Owned` here, and that is a fallback readers
+                // must not take at face value: every site that would free on it gates on
+                // `callref_capture_blocks`, which asks the CALLEE's own verdict
+                // (`return_ownership`) rather than this one.  Answering `Borrowed { u16::MAX }`
+                // instead was measured to break the direct nullable-capture return
+                // (`fn(n) -> P? { return c; }`, guard 1114), whose delivery reads this arm.
                 match callee_own {
                     Own::Join { .. } if base != u16::MAX => Own::Join { base },
                     _ => Own::Owned,
@@ -2159,13 +2242,19 @@ impl<'a> Ownership<'a> {
     /// the callee's parameter space into the CALLER's argument (the interprocedural
     /// piece): the callee's return borrows one of its visible params; map that param
     /// position to the caller's argument so the `base` is a var the caller can witness.
-    fn call_ownership(&mut self, callee_d: u32, caller_args: &[Value]) -> Own {
+    fn call_ownership(
+        &mut self,
+        callee_d: u32,
+        caller_args: &[Value],
+        func: &Function,
+        defs: &Defs,
+    ) -> Own {
         let callee_own = self.return_ownership(callee_d);
         let callee_base = match callee_own {
             Own::Owned => return Own::Owned,
             Own::Borrowed { base } | Own::Join { base } => base,
         };
-        let base = self.caller_arg_base(callee_d, callee_base, caller_args);
+        let base = self.caller_arg_base(callee_d, callee_base, caller_args, func, defs);
         match callee_own {
             Own::Join { .. } => Own::Join { base },
             _ => Own::Borrowed { base },
@@ -2180,11 +2269,36 @@ impl<'a> Ownership<'a> {
     /// the same walk the @P290 bracket protects through, so the store the guard witnesses
     /// against is the store the bracket marks.  `u16::MAX` when the argument is not a view
     /// of one nameable container: a mint, or a join reaching two different roots.
-    fn caller_arg_base(&self, callee_d: u32, callee_base: u16, caller_args: &[Value]) -> u16 {
+    ///
+    /// **An argument that is itself a CALL is resolved by the oracle rather than by that
+    /// walk.**  `view_root_slots` is structural and stops at a loft-defined call, whose
+    /// returned store may be its own argument's or one it minted — the split only
+    /// [`Ownership::classify`] decides.  So ask it: `g(pick(vs, 0))` roots at `vs` exactly
+    /// as `g(vs[0])` does, one frame further out, and `g(mk())` stays unnameable because
+    /// the store `mk` minted belongs to no caller variable.  Without this the witness is
+    /// missing for every call-shaped argument, and a missing witness is the OVER-FREE
+    /// direction at a `CallRef` (loft#1318).
+    fn caller_arg_base(
+        &mut self,
+        callee_d: u32,
+        callee_base: u16,
+        caller_args: &[Value],
+        func: &Function,
+        defs: &Defs,
+    ) -> u16 {
         let attrs = self.data.def(callee_d).attributes();
-        if callee_base == u16::MAX
-            || (callee_base as usize) >= attrs.len()
-            || attrs[callee_base as usize].hidden
+        if callee_base == u16::MAX || (callee_base as usize) >= attrs.len() {
+            return u16::MAX;
+        }
+        // A hidden parameter is a return MECHANISM rather than something the author
+        // wrote, and most of them name nothing on the caller's side.  The delivery
+        // BUFFER is the exception: the caller allocates its own `__ref_N` and passes it
+        // at that position like any other argument, so a callee handing back its
+        // `__retbuf` is handing back a store the caller already holds — nameable, and
+        // the one answer that stops the caller adopting its own buffer (loft#1318).
+        // `__closure` stays refused here: nothing is passed at its position, and
+        // `closure_capture_base` reads the capture out of the closure build instead.
+        if attrs[callee_base as usize].hidden && !is_synth_buffer(&attrs[callee_base as usize].name)
         {
             return u16::MAX;
         }
@@ -2207,7 +2321,19 @@ impl<'a> Ownership<'a> {
         // never-free answer rather than guessing one of them.
         match view_root_slots(self.data, arg).as_deref() {
             Some([root]) => *root,
-            _ => u16::MAX,
+            // A walk reaching MORE than one root has no single store to compare against.
+            Some(_) => u16::MAX,
+            // A structural walk names a variable and what projects out of one; an argument
+            // that is itself a CALL is not one of those shapes, and the oracle is what
+            // answers for a call (@FR-O-Oracle).  Ask it: a callee handing back a view of
+            // its own argument roots this argument in the caller's variable just as a
+            // projection does, one frame further out.  `Owned` — the callee minted the
+            // store — leaves the base unnameable, which is the right answer there, because
+            // then no caller variable holds it.
+            None => match self.classify(arg, func, defs) {
+                Own::Borrowed { base } | Own::Join { base } => base,
+                Own::Owned => u16::MAX,
+            },
         }
     }
 
@@ -2242,10 +2368,28 @@ impl<'a> Ownership<'a> {
         if self.data.def(callee_d).variables().name(callee_base) != "__closure" {
             return u16::MAX;
         }
-        match defs.fnref_captures.get(&fn_var).map(Vec::as_slice) {
-            Some([only]) => *only,
-            _ => u16::MAX,
+        let Some(captures) = defs.fnref_captures.get(&fn_var) else {
+            return u16::MAX;
+        };
+        // Which capture the return can hand back is written in the callee's body: the offset
+        // its `??` subject (or tail) reads through `OpGetDbRef(__closure, off)`.  One offset
+        // names one caller variable; two is `c ?? d` and no single witness answers for it.
+        let offsets = capture_return_offsets(self.data, callee_d);
+        let var = match (captures.as_slice(), offsets.as_slice()) {
+            ([(_, only)], _) => *only,
+            (many, [off]) => match many.iter().find(|(o, _)| o == off) {
+                Some((_, v)) => *v,
+                None => return u16::MAX,
+            },
+            _ => return u16::MAX,
+        };
+        // The closure holds the store the variable had at BUILD time; a variable assigned again
+        // since may name a different store, and comparing against that would adopt or free the
+        // closure's own capture.
+        if defs.multi_assigned.contains(&var) {
+            return u16::MAX;
         }
+        var
     }
 
     /// The owned-slot reassignments in function `d_nr`: for each var with more than
@@ -2700,6 +2844,27 @@ pub fn bracket_can_name(data: &Data, arg: &Value) -> bool {
 /// store IS the result's store, which is what makes a projection chain nameable by its root
 /// and lets the @P290 bracket protect `pick(b.s, …)`, `pick(w[0], …)` and `pick(h[k], …)`.
 ///
+/// ⚠ **The two NULLABLE element reads meet the criterion above and are deliberately NOT on
+/// the list, because adding them strands a store.** `OpGetVectorNullable` and
+/// `OpVectorRefNullable` are `v[i]` where an out-of-range index answers the null element
+/// instead of raising, and both are declared `-> reference[r]`, so the store they answer in
+/// is the receiver's exactly as their dense twins' is.
+///
+/// What blocks them is a disagreement one layer down, and it is `@FR-O-Proxy`'s named
+/// hazard in the ALLOCATE direction: the interpreter's materialise arm
+/// (`state/codegen.rs`, @PLN130 F1) fires on the deps PROXY — empty deps plus
+/// [`crate::generation::container_element_base`] — while the free sweep reads the ORACLE.
+/// A `par` body's element bind is typed without a dep and classifies `Borrowed`, so it sits
+/// in the gap: adding the spellings makes the arm allocate a store the sweep then declines
+/// to free. Measured on `tests/scripts/1040-generic-par-worker-in-generic-fn.loft` — three
+/// leaked `Cell` records, both backends. The arm's own premise says why: it assumes empty
+/// deps mean `scopes.rs` STRIPPED them and a free therefore exists, which holds for the
+/// reassigned-container case it was written for and not for a dep that was never set.
+///
+/// Nothing today reads the wrong answer through the gap — `caller_arg_base` resolves a
+/// nullable element read by asking the oracle instead, which is why loft#1318 closed
+/// without this. Correcting the list needs the two sites to ask ONE question first.
+///
 /// **The criterion is not "the return deps on parameter 0"**, which several more ops also
 /// satisfy: `OpNewRecord` and `OpInsertVector` both answer a `DbRef` in argument 0's store
 /// and are excluded, because they GROW that store rather than read it — a chain rooted at one
@@ -2858,6 +3023,179 @@ pub fn callref_join_first_bind(
         return None;
     }
     Some((*rec, base))
+}
+
+/// The caller variable a fn-ref's COLLECTION `??` return may still be aliasing — the base a
+/// bind of that call frees by store IDENTITY against (loft#1257, loft#1320).
+///
+/// The collection sibling of [`callref_join_first_bind`], and it answers the OPPOSITE way:
+/// that one strips the local's deps so a plain free is emitted and `OpBindOrCopy` makes the
+/// local own a store either way; a collection has no per-execution copy, so here the dep is
+/// KEPT — it names the witness — and the free is `OpFreeRefIfDistinct(local, base)`.  Same
+/// store as the base ⇒ still borrowing ⇒ decline; distinct ⇒ the closure minted ⇒ free.
+///
+/// Narrow for the same reasons: a `Join` with a NAMEABLE base only, and never through a
+/// fn-ref that captures a store — a capture reaches the return through `__closure`, which
+/// no caller variable names, so the identity test would have nothing true to compare with.
+/// The caller variable a fn-ref call's DECLARED return borrows, or `None` where the type
+/// names none.
+///
+/// The oracle's `CallRef` arm answers `Own::Owned` for a base it cannot NAME, and that
+/// fallback is not a verdict: a forwarding lambda (`fwd = fn(q) { inner(q) }`) reaches its
+/// own return through `__closure`, so its summary reads `Owned` while the type it declares
+/// says `vector<T>["q"]` — the return borrows a visible parameter.  A site that frees on the
+/// oracle alone therefore releases the caller's store.
+///
+/// The DECLARED dep is the fact the summary lost, and this maps it the same way
+/// [`Ownership::caller_arg_base`] maps a resolved one, so the base a guarded free witnesses
+/// against and the base the bracket protects cannot disagree.  Answers `None` for a hidden
+/// attribute (a delivery buffer is not a borrow) and for an argument no caller variable
+/// names, which is the conservative direction: no witness, no free.
+#[must_use]
+pub fn callref_declared_borrow_base(data: &Data, d_nr: u32, call: &Value) -> Option<u16> {
+    let Value::CallRef(v_nr, args) = call.unspan() else {
+        return None;
+    };
+    let defs = function_defs(data, d_nr);
+    let callee = defs
+        .fnref_targets
+        .get(v_nr)
+        .copied()
+        .filter(|d| *d != u32::MAX)?;
+    let def = data.def(callee);
+    if !def.returns_borrowed_view() {
+        return None;
+    }
+    let attrs = def.attributes();
+    let dep = *def
+        .returned()
+        .depend()
+        .iter()
+        .find(|&&d| attrs.get(d as usize).is_some_and(|a| !a.hidden))?;
+    let func = &data.def(d_nr).variables;
+    let base = Ownership::new(data).caller_arg_base(callee, dep, args, func, &defs);
+    (base != u16::MAX).then_some(base)
+}
+
+#[must_use]
+pub fn callref_collection_join_base(
+    data: &Data,
+    d_nr: u32,
+    tp: &Type,
+    value: &Value,
+) -> Option<u16> {
+    if !crate::keys::join_own_enabled() {
+        return None;
+    }
+    let base_tp = tp.base();
+    if !(matches!(base_tp, Type::Vector(_, _)) || crate::parser::vectors::is_keyed(base_tp)) {
+        return None;
+    }
+    if !matches!(value.unspan(), Value::CallRef(_, _)) {
+        return None;
+    }
+    if callref_capture_blocks(data, d_nr, value) {
+        return None;
+    }
+    match ownership_of(data, d_nr, value) {
+        Own::Join { base } if base != u16::MAX => Some(base),
+        // `Own::Owned` is also this arm's FALLBACK for a base the summary could not name —
+        // a forwarding lambda reaches its own return through `__closure` — so the DECLARED
+        // dep is asked next.  It names the same kind of witness (a visible parameter mapped
+        // to the caller's argument), which is why both answers feed one identity free rather
+        // than two mechanisms.
+        Own::Owned => callref_declared_borrow_base(data, d_nr, value),
+        _ => None,
+    }
+}
+
+/// The closure-record offsets a callee's return may hand back — every `OpGetDbRef(__closure,
+/// off)` in its body whose result is not consumed on the spot by an op that answers no store
+/// (`OpGetInt(OpGetDbRef(__closure, 12), 0)` reads a field of a capture; it cannot hand the
+/// capture back).  Empty means the return borrows no capture at all.
+#[must_use]
+pub fn capture_return_offsets(data: &Data, callee_d: u32) -> Vec<i32> {
+    let get_dbref = data.def_nr("OpGetDbRef");
+    let def = data.def(callee_d);
+    let vars = def.variables();
+    let closure_read = |v: &Value| -> Option<i32> {
+        let Value::Call(d, args) = v.unspan() else {
+            return None;
+        };
+        if *d != get_dbref || args.len() < 2 {
+            return None;
+        }
+        let (Value::Var(base), Value::Int(off)) = (args[0].unspan(), args[1].unspan()) else {
+            return None;
+        };
+        (vars.name(*base) == "__closure").then_some(*off)
+    };
+    fn walk(
+        node: &Value,
+        data: &Data,
+        closure_read: &dyn Fn(&Value) -> Option<i32>,
+        out: &mut Vec<i32>,
+    ) {
+        if let Some(off) = closure_read(node) {
+            if !out.contains(&off) {
+                out.push(off);
+            }
+            return;
+        }
+        if let Value::Call(d, args) = node.unspan()
+            && !crate::data::is_dbref(data.def(*d).returned().base())
+            && let Some(first) = args.first()
+            && closure_read(first).is_some()
+        {
+            // A capture read consumed by a non-store op: skip it, walk the rest.
+            for a in &args[1..] {
+                walk(a, data, closure_read, out);
+            }
+            return;
+        }
+        node.for_each_child(&mut |c| walk(c, data, closure_read, out));
+    }
+    let mut out = Vec::new();
+    walk(&def.code, data, &closure_read, &mut out);
+    out
+}
+
+/// Must a site that would FREE this fn-ref call's result decline?  True where the callee may
+/// hand back a capture and no caller variable can witness which store that is — the
+/// unresolved half of `formal/closures.md` D-clo-7.  False where the return borrows no
+/// capture, or where the oracle names the capture's variable (one slot, assigned once), which
+/// the identity and `OpBindOrCopy` routes then treat exactly like an argument witness.
+#[must_use]
+pub fn callref_capture_blocks(data: &Data, d_nr: u32, call: &Value) -> bool {
+    let Value::CallRef(v_nr, _) = call.unspan() else {
+        return false;
+    };
+    if !callref_captures(data, d_nr, call) {
+        return false;
+    }
+    let targets =
+        crate::scopes::collect_fnref_targets(&data.def(d_nr).code, data.def(d_nr).variables());
+    let Some(callee) = targets.get(v_nr).copied().filter(|d| *d != u32::MAX) else {
+        return true;
+    };
+    // The callee's return summary says whether what comes back can BE a capture: its deps
+    // name `__closure` when the return hands a capture's store back (a record's `??` subject,
+    // a capture returned directly, a captured struct's collection field), and only hidden
+    // buffers when the chosen arm was COPIED into the caller's `__retbuf` — which is how a
+    // `??` over a captured collection is delivered, so nothing there is borrowed.
+    let def = data.def(callee);
+    let closure_attr = def
+        .attributes()
+        .iter()
+        .position(|a| a.name == "__closure")
+        .map_or(u16::MAX, |i| i as u16);
+    if !def.returned().depend().contains(&closure_attr) {
+        return false;
+    }
+    if capture_return_offsets(data, callee).is_empty() {
+        return true;
+    }
+    !matches!(ownership_of(data, d_nr, call), Own::Join { base } if base != u16::MAX)
 }
 
 /// Does this call go through a fn-ref that captures something a RETURN COULD BORROW FROM?
@@ -3085,6 +3423,7 @@ pub(crate) fn function_defs(data: &Data, d_nr: u32) -> Defs {
     collect_defs(&def.code, &FillOps::of(data), &mut defs);
     defs.fnref_targets = crate::scopes::collect_fnref_targets(&def.code, &def.variables);
     defs.fnref_captures = crate::scopes::collect_fnref_captures(&def.code, &def.variables, data);
+    defs.multi_assigned = crate::scopes::multi_assigned_in(&def.code);
     defs
 }
 

@@ -472,11 +472,21 @@ while IFS=$'\t' read -r name ver repo libdir _why; do
     fi
     if ! python3 - "$REG_DIR/index.json" "$name" "$ver" "$tmp/entry_$name.json" \
         "https://github.com/$ORG/$repo/tree/main/$name" "${desc:-loft library $name}" "$desc_src" \
-        "${cats:-}" <<'EOF'
+        "${cats:-}" "$tmp/pub_$name.err" <<'EOF'
 import json, sys
 
-index_path, name, ver, entry_path, homepage, desc, desc_src, cats_raw = sys.argv[1:9]
-entry = json.loads("{%s}" % open(entry_path).read())[ver]
+index_path, name, ver, entry_path, homepage, desc, desc_src, cats_raw, pub_err = sys.argv[1:10]
+raw = open(entry_path).read()
+try:
+    entry = json.loads("{%s}" % raw)[ver]
+except json.JSONDecodeError as e:
+    # stdout is the machine half of `loft publish` and must parse on its own.  Say which
+    # line broke rather than dying in a traceback: this ran AFTER the GitHub release was
+    # cut, so the operator needs to know what to fix, not what to read.
+    print(f"::error::`{name}` {ver}: `loft publish` stdout is not a JSON entry ({e}).")
+    for n, line in enumerate(raw.splitlines()[:40], 1):
+        print(f"    {n:>3}| {line[:120]}")
+    sys.exit(1)
 index = json.load(open(index_path))
 
 # `[package] categories` off the manifest.  A package the index has never seen
@@ -518,6 +528,48 @@ if desc_src == "manifest" and desc:
 # manifest that declares none leaves an existing (hand-curated) list alone.
 if cats:
     pkg["categories"] = cats
+
+# `deps` is a CLAIM, and `loft publish` can only read it from `loft.toml`.  A
+# multi-package repo deliberately keeps its registry deps OUT of the manifest
+# (declaring them there resolves from the registry instead of the `--lib` path,
+# which breaks multi-library consumption), so for those packages an empty
+# `[dependencies]` means "not stated here" and pasting the entry verbatim would
+# publish a version that resolves none of its dependencies.  The package's own
+# previous entry is where those versions were stated, so carry them forward.
+# `[publish] deps-incomplete:` on stderr names what the SOURCE actually uses;
+# anything it names that is still absent afterwards is a refusal, not a note.
+incomplete = []
+try:
+    for line in open(pub_err, encoding="utf-8", errors="replace"):
+        if line.startswith("[publish] deps-incomplete:"):
+            incomplete = [d.strip() for d in line.split(":", 1)[1].split(",") if d.strip()]
+except OSError:
+    pass
+
+
+def _vkey(v):
+    return [int(p) if p.isdigit() else -1 for p in v.split(".")]
+
+
+if not entry.get("deps") and pkg["versions"]:
+    prev = max(pkg["versions"], key=_vkey)
+    carried = pkg["versions"][prev].get("deps") or {}
+    if carried:
+        entry["deps"] = dict(carried)
+        print(
+            f"  deps carried forward from {name} {prev}: "
+            + ", ".join(f"{k} {v}" for k, v in sorted(carried.items()))
+        )
+missing = [d for d in incomplete if d not in (entry.get("deps") or {})]
+if missing:
+    print(
+        f"::error::`{name}` {ver}: the source uses {', '.join(missing)}, and neither "
+        f"loft.toml nor the previous index entry says which version(s).  Publishing this "
+        f"would install a version that resolves none of them.  Add them to `[dependencies]` "
+        f"or to the previous entry's `deps` first."
+    )
+    sys.exit(1)
+
 pkg["versions"][ver] = entry
 # Bump the top-level `updated` so it reflects this publish (REGISTRY_SUBMIT.md).
 # Reuse the entry's own `published` UTC stamp — the precise moment this version

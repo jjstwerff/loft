@@ -810,7 +810,13 @@ pub(crate) fn run_tests(
                 .to_str()
                 .unwrap_or("")
                 .to_string();
-            let display_name = file_path.to_string_lossy();
+            // `/` on every platform.  This name is what every `ok` / `FAIL` line below
+            // prints, so it is read by someone who did not necessarily run it — in a CI log,
+            // in a bug report, or in the reference pages, whose transcripts `tests/doc_commands.rs`
+            // checks literally.  On Windows the host separator made the runner print
+            // `greeter\tests\greet.loft` where the page shows `greeter/tests/greet.loft`, and the
+            // documented output did not match the real one.
+            let display_name = crate::portable_path::portable(file_path);
 
             // Read the raw source to extract annotations before parsing.
             let source = match std::fs::read_to_string(file_path) {
@@ -960,7 +966,7 @@ pub(crate) fn run_tests(
             // puts a diagnostic in front of the reader. It used to sit after the test
             // discovery further down, which is why nothing it produced could ever be seen.
             let scopes_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                scopes::check(&mut p.data);
+                scopes::check(&mut p.data, &mut p.database);
             }));
             if let Err(payload) = scopes_ok {
                 let msg = panic_message(&*payload);

@@ -373,54 +373,38 @@ fn pe_default_reading_the_record_and_needing_a_temporary() {
   assert(p.pe_x == 1, "unreached");
 }
 
-// loft#1006 — a `&(…)` reference tuple admits exactly the scalars its element opcodes are
-// laid out for (`formal/tuples.md` T-Ref-El, one list in `data::ref_tuple_element_ok`).
-// Anything else is refused HERE, at the signature, naming the offending element type —
-// where it used to reach codegen and die as an internal compiler error.  The admitted
-// types are exercised in `1006-reference-tuple-element-types.loft`.
-//
-// `text` is refused for layout, not for a missing opcode: `OpGetText` / `OpSetText` take
-// the same `(ref, offset)` pair, but a reference tuple's storage is not a record with a
-// text slot the way a struct is.
-// @EXPECT_ERROR: reference tuple may only hold scalar elements
-fn rt1006_text_element(p: &(text, text)) {
+// loft#1006 / D-bind-11 — a `&(…)` reference tuple whose elements are not all scalars is
+// backed by the synthesized `__tuple<…>` record and admits what a struct field can hold
+// (`formal/tuples.md` T-Ref, T-Ref-El).  What it cannot hold is what that record cannot
+// spell or lay out as a field — a NULLABLE element, a fn-ref, a nested tuple — and those
+// are refused HERE, at the signature, naming the element type.  The admitted heap kinds
+// are exercised in `reference-tuple-heap-elements-link.loft`.
+// @EXPECT_ERROR: reference tuple cannot hold a `text?` element
+fn rt1006_text_element(p: &(text?, text)) {
   t = p.0;
   p.0 = p.1;
   p.1 = t;
 }
 
 // A function reference was ADMITTED by the old guard and died in the stack allocator
-// instead of codegen — a different internal error, same missing rule.
-// @EXPECT_ERROR: reference tuple may only hold scalar elements
+// instead of codegen — a different internal error, same missing rule.  It stays refused:
+// the `__tuple<…>` record cannot lay a fn-ref out as a field.
+// @EXPECT_ERROR: reference tuple cannot hold a `fn() -> integer` element
 fn rt1006_function_element(p: &(fn() -> integer, fn() -> integer)) {
   t = p.0;
   p.0 = p.1;
   p.1 = t;
 }
 
-// A struct element: the message names the cure, which is to use a struct for the whole
-// thing — its fields of any type write through a `&` parameter.
-struct Rt1006 { a: integer }
-// @EXPECT_ERROR: reference tuple may only hold scalar elements
-fn rt1006_struct_element(p: &(Rt1006, Rt1006)) {
-  t = p.0;
-  p.0 = p.1;
-  p.1 = t;
-}
+// A struct element and a `text` element at a LOCAL were refused here until 2026-09-03 and
+// are ADMITTED now — a `&(…)` with such an element is a reference to the `__tuple<…>` record
+// (tuples.md T-Ref-Rep); their positive cells are in `reference-tuple-heap-elements-link.loft`.
+// D-tup-2's point stands unchanged: `Parser::ref_var_type` is the ONE place a `&` in source
+// becomes a `Type::RefVar`, so the signature and the local cannot disagree — the nested
+// tuple below is refused at a local exactly as it is at a signature.
 
-// D-tup-2 — the SAME rule at the LOCAL position, which never asked it.  The refusal used
-// to belong to the signature alone, so this exact declaration compiled and died at codegen
-// as an internal compiler error on both backends.  `Parser::ref_var_type` is now the one
-// place a `&` in source becomes a `Type::RefVar`, so the two positions cannot disagree.
-// @EXPECT_ERROR: reference tuple may only hold scalar elements
-fn dtup2_text_element_at_a_local() {
-  a = ("p", "q");
-  b: &(text, text) = a;
-  b.0 = b.1;
-}
-
-// A nested tuple is not a scalar either, and the message names it as the element it is.
-// @EXPECT_ERROR: reference tuple may only hold scalar elements
+// A nested tuple is not a scalar and has no field form either, and the message names it.
+// @EXPECT_ERROR: reference tuple cannot hold a `(integer, integer)` element
 fn dtup2_nested_tuple_element_at_a_local() {
   a = ((1, 2), 3);
   b: &((integer, integer), integer) = a;

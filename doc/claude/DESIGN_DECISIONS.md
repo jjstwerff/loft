@@ -3454,3 +3454,84 @@ A consumer wants a vector of keyed collections and the struct wrapper is measura
 way — which means the wrapper's extra record is the cost being complained about. That is a
 layout question with an answer (an inline element region), and it arrives with the
 ownership rules `borrowed_spine` would need, not as a new arm in the emitter.
+
+---
+
+## C115 — a closure cannot write through a captured `&` scalar parameter, and cannot rebind a captured heap parameter
+
+Two composition edges, one wall, one answer. `(L-CapRef)` + `(F-ParamRef)` read together say a
+write to a `&` scalar parameter from inside a closure reaches the caller; `(L-CapHeap)` +
+`(F-ParamRebind)` read together leave it open whether a whole-value replace written inside a
+closure stops at the callee. Both are REFUSED at compile time.
+
+### What was actually there
+
+Neither edge was a missing feature — each was a program that compiled and answered quietly wrong.
+
+* **The `&` scalar (loft#1276).** `fn bump(p: &integer) { g = fn() { p += 1; }; g(); p = p + 10; }`
+  on `n = 5` answered **15** where 16 is correct: the closure's increment dropped through a
+  parameter whose whole purpose is the write-back.
+* **The heap rebind (loft#1281).** `fn repl(p: vector<integer>) { g = fn() { p = [7,7]; }; g(); }`
+  left the caller's `[1,2]` as `[7,7]`, on both backends, with nothing reported — while the
+  identical rebind written *without* the closure correctly left it alone. Every heap kind did it
+  (vector, keyed, struct) and every right-hand side (a literal, a call, another local).
+
+### Why not implement it
+
+The same wall, one rule apart, and it was measured rather than assumed.
+
+A `&` scalar lives in the caller's slot and `(L-CapScalar)` gives the closure a **copy** of the
+value, so there is no shared record for the write to land in. Making it mean what it says needs
+the REF itself in the closure record plus a write-back — and the cell machinery, the mechanism
+that gives a mutated captured *local* scalar exactly that channel, cannot supply it here: reads
+in the enclosing body would then see the cell while the caller still sees its own slot.
+
+The heap rebind hits that wall from the other side. The closure record holds a copy of the
+parameter's DbRef, so the rebind lowered to a clear plus a refill of the store that copy names,
+and `(F-ParamHeap)` makes that store the caller's. The obvious repair — repointing the capture
+slot — was tried and **does not fix it**, because the callee reads its own slot directly
+(`t_6vector_len(p(0))`, not a read through the record). Two readers, one binding: a repoint moves
+the wrong answer from the caller to the callee instead of removing it.
+
+So the cure in both cases is the binding reachable from inside the closure *plus* a write-back —
+a capture mechanism the language does not have, not an arm someone forgot to write.
+
+### Compatibility
+
+Nothing correct depended on either shape: both compiled to an answer the rules call wrong, so the
+refusal converts a silent wrong answer into a compile error. This is C79's
+*decline-what-we-cannot-implement-safely* revisit applied twice, and its forward-compatibility
+reason holds here too — an error can be dropped later, a silently different semantics cannot.
+
+The refusals are narrow, and every neighbouring shape still works: a captured **local** (no caller
+to reach past), a `&` parameter that is *read* (`(L-CapRef)`), a scalar or `text` parameter (the
+cell machinery), and every mutation-**through** a captured heap parameter — `p += [x]`, `p[i] = v`,
+`p.clear()`, a field write — which `(L-CapHeap)` and `(F-ParamGrow)` require to reach the caller.
+
+### Decision
+
+**Closed — refuse, 2026-09-02 (loft#1276, loft#1281).** Recorded here rather than in
+[formal/closures.md](formal/closures.md) because
+[formal/ROADMAP.md](formal/ROADMAP.md) says a row that turns out **spec-may-adjust** leaves
+`formal/` and becomes a decided edge: no code change will ever close these, so counting them as
+distance from the spec misreports the register. The rules keep their pointer here in place of a
+deviation number, and `(L-CapRef)` states the carve-out in its own text.
+
+* `&` scalar write — *"Cannot write to the `&` parameter 'p' from a closure"*; guard
+  `tests/scripts/1276-reject-a-ref-parameter-a-closure-cannot-write.loft`, whose read-only cells
+  are the control that says widening the write-walk to credit a lambda's writes did not also
+  credit its reads.
+* heap rebind — guard
+  `tests/parse_errors.rs::a_closure_cannot_replace_a_captured_heap_parameter` (all three
+  right-hand sides × vector, hash, struct). The shapes it must **not** reach live in
+  `tests/scripts/1281-a-closure-cannot-replace-a-captured-parameter.loft`, which cannot hold the
+  refused spelling because the fixed compiler will not parse it.
+
+### Revisit when
+
+A capture mechanism that carries the BINDING rather than a copy of its value exists — the same
+piece of work `formal/closures.md` D-clo-7 / D-clo-14 and `formal/ownership.md` D-own-16 need
+(QUALITY.md's per-execution ownership witness cluster). If that lands, both refusals become
+implementable in one step rather than two, and this entry is the evidence that they are one
+question. Nothing smaller reopens it: a repoint of the capture slot has already been measured
+and moves the defect rather than removing it.

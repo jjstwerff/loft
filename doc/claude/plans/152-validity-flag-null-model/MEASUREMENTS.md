@@ -277,3 +277,158 @@ consolidation case — the hot-path sentinel tests (A measured the saving), the 
 `Op*Nullable` duplicates, the `_nn` lattice this would make unnecessary, and provenance —
 and that is a value judgement about scope, not a defect list. **F and G should not start
 before that call is made.**
+
+## The fallback surface, measured 2026-09-02 (the rewrite's basis)
+
+The owner's ask — *"let users use the `?? 1.0` notation for the overflow case, opt-in"* —
+turned out to be half-shipped, and the missing half fails for a reason worth stating exactly.
+
+**On a type that keeps a sentinel, `??` already supplies the author's fallback**, at runtime,
+with no static knowledge:
+
+```loft
+fn bump(v: integer, d: integer) -> integer { (v + d) ?? 42 }
+fn plain(v: integer, d: integer) -> integer { v + d }
+```
+
+| call | answer |
+|---|---|
+| `bump(i64::MAX, 1)` | **42** — the author's fallback on a real overflow |
+| `plain(i64::MAX, 1)` | `null` — C85's default |
+| `bump(2, 3)` | `5` — the ordinary path is untouched |
+
+No `redundant-coalesce`, no static range knowledge needed. So for `integer` and `i32` the
+feature exists and is pinned by nothing.
+
+**The narrow widths do not fail because the `??` is missing — their fault is not a null.**
+
+| fault | null? | can a coalesce see it? |
+|---|---|---|
+| `x: integer` overflow → the sentinel | yes | yes — works today |
+| `x: u8 = 250; x += 10` → `260` | **no**, an ordinary number | **no** |
+
+`260` never becomes null, so no `??` can fire on it; the only thing that handles it is
+`OpRangeDefault`'s `dflt`, which is always compiler-chosen. That is the gap — a fallback the
+author cannot reach, not an operator that is absent.
+
+And the diagnostic already promises the cure. The narrowing refusal reads *"guard the value
+(`?? d`, mask, or an `if` range check)"*, while `a = (a + 10) ?? 255` into a `u8` is refused:
+`a + 10` has range `[10, 265]` and the `??` clamps nothing, because there is no null to
+substitute for. **The message advertises a cure that does not work in the position it is
+offered.** One of the two has to move, which is an open question of the rewritten plan.
+
+## What a failing narrow store can be TESTED for, measured 2026-09-02
+
+The owner's second ask — *"it should be possible to test if that fails and do something
+useful with the result … I think we currently drop that one on the floor"* — is right for one
+of the three shapes and already satisfied for the other two.
+
+```loft
+x: u8  = 250;  x += 10;   // x=0     !x=false   x==null false
+y: u8  = 200;  y += 10;   // y=210   !y=false
+z: u8? = 250;  z += 10;   // z=null  !z=true
+```
+
+| shape | today | testable? |
+|---|---|---|
+| `a: u8 = 300` — a literal that cannot fit | **compile error** (*"cannot implicitly narrow integer to u8"*) | n/a — caught, not dropped |
+| `x: u8` — a RUNTIME fit-failure | `0`, and every test an author can write says *ordinary zero*: `!x` is false, `x == null` is false, `x == 0` is true exactly as it is for a real `0` | **no — dropped on the floor** |
+| `z: u8?` | `null` | **yes — `if !z` already works** |
+
+So the owner's `if !a { … }` sketch is already the right spelling and already works; what it
+cannot reach is the NON-NULL narrow slot, which by construction has no code for null to
+occupy. `x=0` and `y=210` differ only in that one of them is a fabricated answer, and nothing
+in the program can tell.
+
+**This is the same root as the `??` gap and should share its cure.** A fallback the author
+chooses (`?? 255`) removes the surprise by making the substituted value deliberate; a
+testable outcome removes it by making the substitution visible. They are two answers to
+*"the language picked a value and did not say so"*, and a design that gives one should say
+why it does not give the other.
+
+Note the literal case is refused with a NARROWING message (*"cannot implicitly narrow"*)
+rather than a doesn't-fit one, though `cast-constant-out-of-range` exists for exactly *"a
+constant does not fit the type it is bare-cast to"*. Worth checking whether the constant
+initialiser should route to that code instead — a smaller, separate question.
+
+## Which widths can encode their own failure, measured 2026-09-02
+
+```loft
+a: u8  = 250;        a += 10;   b: i8  = 120;        b += 10;
+c: u16 = 65530;      c += 10;   d: i16 = 32760;      d += 10;
+e: u32 = 4294967290; e += 10;   f: i32 = 2147483640; f += 10;
+g: integer = 9223372036854775807; g += 1;
+```
+
+| | `u8` | `i8` | `u16` | `i16` | `u32` | `i32` | `integer` |
+|---|---|---|---|---|---|---|---|
+| overflow answers | `0` | `0` | `0` | `0` | `0` | `null` | `null` |
+
+Five of seven fill their width, so every code is a legitimate datum and the failure has
+nowhere to live. `i32` and `integer` keep a bottom code back, which is why `if !x` already
+reads a failure on those two and cannot on the others. This is what makes arc B's boolean
+structural rather than a preference — and it is also the bound on it: the bit is needed for
+five types, not for the type system.
+
+## A free expression cannot fail — measured 2026-09-02 (step 4 retired)
+
+Step 4 was cut as *"`!` in-expression: `if !(x + 10) { … }` on a non-null narrow"*. It is not
+implementable, and the reason is worth keeping because it also explains why `??` works.
+
+```loft
+x: u8 = 250;
+y = x + 10;      // y = 260
+```
+
+`x + 10` **widens to `integer`**, and `260` is a perfectly good one. Nothing failed. There is
+no narrow type on the expression, so there is no range for `!` to test against and no failure
+for it to read.
+
+**The failure is a property of a STORE into a narrow slot, never of a free expression.** That
+is exactly why step 2 works: `x = (x + 10) ?? 255` has a target, and the target supplies the
+`lo`/`hi` the guard needs. Strip the target and the whole question dissolves.
+
+Consequences:
+
+- **Step 4 is retired**, and folded into step 5. `!` can only read a failure where an
+  assignment names the slot — which is the adjacent form.
+- The owner's `if !(a = 300)` sketch would have worked for the same reason step 5 does (the
+  assignment supplies the target), but it is new syntax and was ruled out on that ground.
+- It sharpens what the adjacent form IS: not a convenience over the in-expression spelling,
+  but the only spelling in which the question can be asked at all without new syntax.
+
+## The closing measurement — the capability was never missing (2026-09-02)
+
+Run on the **pre-arc-A build** (`4f229521`), before any of this plan's code:
+
+```loft
+x: u8 = 250;
+x = ((x + 10) as u8?) ?? 255;        // -> 255   choose the fallback
+f.i = 200;
+fit = (f.i + 100) as u8?;
+f.i = fit ?? 0;
+if !fit { … }                        // -> detects, f.i = 0   see the failure
+```
+
+Both halves — choose the value AND know it happened — **already worked**, using `as τ?` (the
+DN4 checked cast, shipped 2026-07-02) with `??` and `!`. This plan opened on the premise that
+an author *cannot write correct code* for the fit-failure edge. **That premise was false**, and
+it stayed unexamined for most of the plan's life because every probe tested the spellings the
+plan proposed rather than the ones that already existed.
+
+What was genuinely wrong is narrower and still worth the fix that shipped:
+
+- the narrowing refusal **advertised `?? d` as its cure** and `?? d` did not work in the
+  position it was offered — a diagnostic promising something untrue, which arc A made true;
+- the natural spelling `(x + 10) ?? 255` required an explicit `as u8?` that the author had no
+  reason to expect.
+
+So arc A closed a message/behaviour mismatch and removed a ceremony step. Arc B would have
+removed one more (the explicit `fit` temp) from a form that already works. That is ergonomics
+on a working capability, not a missing one — which is why the plan closes here rather than
+carrying arc B as an obligation.
+
+**The lesson worth keeping is the method one.** Every probe in this plan tested what the design
+proposed. None tested whether the existing surface could already express the case, and that
+question was one build away the entire time — the same cached falsify worktree that answered it
+in the end had been sitting there since step 2.

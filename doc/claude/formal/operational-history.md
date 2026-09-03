@@ -228,7 +228,7 @@ only as strong as the rules above it, not only as strong as its oracle.
   found this, and the shared front end needs its own oracle rather than a differential one.
   Related: the reference-route discipline in [DEBUG.md](../DEBUG.md).
 
-### D-op-5 — OPEN (2026-08-25): two spellings of a following null-check still report
+### D-op-5 — CLOSED (2026-09-02, opened 2026-08-25): two spellings of a following null-check still reported
 
 - **Violates:** `(E-Report)` — *"a GUARDED site (the operand of `??` / **a following
   null-check**) emits the silent `*Nullable` op and reports NOTHING (the guard owns the null)"*.
@@ -243,18 +243,39 @@ only as strong as the rules above it, not only as strong as its oracle.
   | `x = v[i]; if x != null` | no ✓ |
   | `x = v[i]; if x == null \|\| …` | no ✓ |
   | `x = v[i]; g = 1; if x == null` | no ✓ — **was yes; fixed 2026-08-25** |
-  | `if v[i] == null` (no binding) | **yes** ✗ |
-  | `x = v[i]; match x { null => … }` | **yes** ✗ |
+  | `if v[i] == null` (no binding) | no ✓ — **was yes; fixed 2026-09-02** |
+  | `if v[i] != null` / `if null == v[i]` (no binding) | no ✓ — same fix |
+  | `if v[i] == null \|\| …` (no binding) | no ✓ — same fix |
+  | `x = v[i]; match x { null => … }` | no ✓ — **was yes; fixed 2026-09-02** |
 
 - **Effect:** a correctly defended program emits a runtime warning it did not earn.  The value
   is right in every cell — this is a REPORT-channel deviation, which is why a value-scored
   probe of this matrix comes back clean.
-- **Why the two survive, and they are not one problem:** the no-binding form puts the fault
-  site INSIDE the test rather than before it, so there is no `Set` to rewrite and the pass has
-  nothing to key on; the `match` form has no `Value::Match` in the IR at all — it lowers to a
-  subject temp, so the guard reaches the value through a COPY and the check names the temp,
-  not the variable.  Closing the second means following a copy chain, i.e. dataflow, not
-  adjacency.
+- **They were never one problem, and the first is now closed.** The no-binding form put the
+  fault site INSIDE the test rather than before it, so there was no `Set` to rewrite and the
+  pass had nothing to key on. That needed neither adjacency nor dataflow: the guard is the
+  SAME expression, so the null the site produces is consumed by the comparison and no other
+  reader can observe it. `rewrite_direct_null_test` swaps the operand of an equality against
+  the null literal, and it DESCENDS to find that equality — `||` and `&&` short-circuit, so
+  they reach the IR as a nested `if` rather than a call, and a top-level-only match saw
+  nothing in `if v[i] == null || …`.
+- **The `match` form closed the same day**, and needed one copy followed rather than the
+  dataflow this entry expected. It has no `Value::Match` in the IR: it lowers to a nested
+  block whose FIRST act is `_match_subj_N = x`, so the arms test the temp and the adjacency
+  scan saw a `Block` and gave up. `block_null_tests_a_copy` follows exactly that one copy,
+  from the block's own first statement, which keeps it adjacency.
+
+  ⚠ **Its arm reads like a truthiness test and is not one**, and the difference is the whole
+  licence: `match x { null => … }` becomes `OpNot(OpConvBoolFromInt(subj))`, and
+  `op_conv_bool_from_long` is `val != i64::MIN` — so it asks precisely "is this not the null
+  sentinel" and its negation is precisely "is this null". Measured before relying on it:
+  `x = 0` and `x = 5` both take the VALUE arm, and only a real null takes the null arm.
+  (An earlier note here called that lowering a truthiness test and treated it as a blocking
+  question. It was neither.)
+
+  ⚠ The arm must be a NULL test, not merely a test. `match x { 5 => … }` lowers to the same
+  copy followed by `OpEqInt(subj, 5)`, the null flows through it as an ordinary operand, and
+  that site still reports — `a_match_on_a_value_still_reports` is the control.
 - **Status:** OPEN.  Deliberately not closed by loosening the predicate: widening "guarded"
   SUPPRESSES a diagnostic, so an over-approximation goes silent on real faults while an
   under-approximation is merely noisy.  The 2026-08-25 widening was taken only as far as a
@@ -262,7 +283,13 @@ only as strong as the rules above it, not only as strong as its oracle.
   check* — with three negative cells (`a_null_that_escapes_before_its_check_still_reports`)
   pinning the loud direction.
 - **Guards:** `tests/runtime_logging.rs` — `a_defended_fault_site_reports_for_no_element_type`,
-  `a_null_check_after_an_unrelated_statement_still_owns_the_null`, and the two control cells.
+  `a_null_check_after_an_unrelated_statement_still_owns_the_null`,
+  `a_fault_site_inside_its_own_null_test_is_guarded` (four spellings, both backends),
+  `a_match_on_null_guards_its_subject`, and
+  the control cells: `a_fault_site_in_a_non_null_comparison_still_reports` — `if v[i] > 3`,
+  which the null flows straight through — `a_match_on_a_value_still_reports`, and
+  `a_null_that_escapes_before_its_check_still_reports`.
+  The controls are the load-bearing half here, because widening "guarded" SUPPRESSES.
 
 > **D-op-4 — CLOSED (formalize4), so it is deleted from the list above.** The runtime no
 > longer traps/halts on an uncomputable: div/mod-by-zero and integer overflow yield the null

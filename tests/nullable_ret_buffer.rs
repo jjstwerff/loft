@@ -144,18 +144,35 @@ fn a_borrowed_view_is_not_over_freed() {
 
 #[test]
 fn default_path_is_unchanged() {
-    // The A/B, now in the other direction: with the mechanism DISABLED the filed leak returns.
-    // Keeping it pins that the opt-out really opts out, so the switch stays a usable bisect
-    // step rather than a dead flag, and it re-proves the leak this issue is about.
-    let (out, err) = run(FILED, "--interpret", false, "filed_off");
+    // The A/B in the other direction, and what it exists for: with the mechanism DISABLED the
+    // damage returns, so the greens above are this switch's doing rather than something
+    // else's. Without a live before-half they prove nothing.
+    //
+    // ⚠ It is measured on MIXED and on the VALUE channel, and it used to be measured on FILED
+    // and on the leak channel. FILED stopped being a witness when loft#1329 gave `owned_ref`
+    // its `Optional` peel: the work-ref that program leaks through is an `Optional(Vector)`
+    // LOCAL re-Set every turn, so the displaced free now releases it whatever this switch
+    // says. That is the second cure this test's old message named as one of its two
+    // explanations, and it is the true one — FILED is clean in BOTH states now.
+    //
+    // MIXED is the right witness because the switch is the ONLY thing standing between it and
+    // a wrong answer: with the buffer off, `pick`'s aliasing arm hands back the caller's own
+    // `base` and the result is read as owned, so `base` is destroyed mid-loop and the program
+    // prints `base=2 base0=39` instead of `base=3 base0=71`. Measured identically on
+    // `a8c0b74d`, before the peel existed — this is the switch's own effect, not a regression
+    // the peel introduced. A value channel is also the stronger one: a leak gate is monotone
+    // and cannot score an over-free, which is exactly what the off-half does here.
+    let (out, err) = run(MIXED, "--interpret", false, "mixed_off");
     assert!(
-        out.contains("c=40"),
-        "value changed with the mechanism off: {out}"
+        out.contains("c=79"),
+        "the count changed with the mechanism off, so this no longer isolates the \
+         delivery: {out}{err}"
     );
     assert!(
-        leaked(&err),
+        out.contains("base=2 base0=39"),
         "LOFT_NO_NULLABLE_RETBUF no longer restores the pre-fix path, so the green tests \
-         above prove nothing — either the opt-out broke or the leak has another cure:\n{err}"
+         above prove nothing — either the opt-out broke, or the aliasing arm acquired a \
+         second cure the way FILED's leak did:\n{out}{err}"
     );
 }
 

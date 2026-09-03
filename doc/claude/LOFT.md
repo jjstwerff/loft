@@ -61,12 +61,18 @@ and can emit Rust code for host integration.
 | `character` | A single Unicode character                       |
 | `text`      | A UTF-8 string; `len()` counts bytes             |
 
-A type is **non-null by default**: you cannot *store* a `null` into a plain
-`integer` / `text` / `Row` — the compiler stops the write and asks you to discharge
-it (`??`, `?`, `match`) or to declare the slot `integer?`. Add `?` to make it
-nullable: `integer?` holds a value or `null`. (The old `not null` modifier is now
-the default and is **deprecated** — it parses as a no-op and warns; delete it.
-See "Fields" below.)
+A type is **non-null by default**: a plain `integer` / `text` / `Row` is not a slot for
+`null`, and the compiler says so wherever one is written — discharge it (`??`, `?`,
+`match`) or declare the slot `integer?`. Add `?` to make it nullable: `integer?` holds a
+value or `null`. (The old `not null` modifier is now the default and is **deprecated** —
+it parses as a no-op and warns; delete it. See "Fields" below.)
+
+How loudly depends on whether the slot has room for a null. Declaring a **local** `x: Row
+= null` is refused outright. A **field**, a **return**, a **vector element** and a **call
+argument** get a warning and the store proceeds, because the slot does reserve a null it
+can hold and read back — with one exception: a narrow width (`u8`…`u32`) spends its whole
+range on real values, so a null there is an error too. This applies to every type, records
+and collections alongside the scalars.
 
 **Non-null is a rule about writes, not a guarantee about reads.** A *fault* can still
 leave the reserved pattern in a non-null slot: an integer overflow writes the sentinel
@@ -217,6 +223,7 @@ internal utility should one become necessary.
 | `spatial<T[x,y]>` / `spatial<T[x,y,z]>` | Spatial keyed collection, 1–3 coordinate axes, Morton/Z-order radix tree |
 | `trie<T[field]>`                   | Text-keyed collection on ONE field — exact lookup, key order, and prefix |
 | `reference<T>`                     | Reference (pointer) to a stored `T` record            |
+| `reference<T>?`                    | The same pointer, allowed to be absent — a list terminator |
 | `iterator<T, I>`                   | Iterator yielding `T` using internal state `I`        |
 | `fn(T1, T2) -> R`                  | First-class function type                             |
 
@@ -1651,7 +1658,7 @@ Returning `null` from `next` terminates the loop:
 
 ```
 struct Counter { current: integer, limit: integer }
-fn next(self: Counter) -> integer {
+fn next(self: Counter) -> integer? {
     val = self.current;
     self.current = val + 1;
     if val >= self.limit { return null; }
@@ -1661,6 +1668,16 @@ fn next(self: Counter) -> integer {
 c = new_counter(5);
 for x in c { }    // iterates 0, 1, 2, 3, 4
 ```
+
+`Item` is any type: a scalar, a `text`, a struct, a collection, or an enum.  Whatever it
+is, the loop ends on the null of THAT type and on nothing else — a `0`, an `""` and a
+`false` are ordinary elements, and the loop yields them.
+
+Declare the item `Item?`, not `Item`.  Both run, but a non-null SCALAR return warns when
+`next` hands it `null`, because a scalar's null is a reserved value of its own range.
+
+Inside the body the loop variable is typed as the non-null `Item`: the loop has already
+ended by the time `next` answers null, so the body never binds one.
 
 `#count` and `#first` work; `#index` and `#remove` are not available.
 
@@ -1865,6 +1882,15 @@ changes what `e` reads) — see the swap warning under § Vectors.  Other
 explicit aliasing: `reference<T>` struct fields share by pointer (#328),
 and closure captures of struct references share the live record (capture
 rules above).
+
+**A `reference<T>` field may be nullable, and the `?` costs it nothing.**
+`next: reference<Node>?` is the linked-list terminator: the field keeps the
+pointer's own bytes and spells absence inside them, so it is the same size
+and still shares.  This works on a type that points back at ITSELF — a list,
+a tree, a mutual pair — where a plain `Node?` field cannot, because that one
+stores the record INLINE and a record cannot contain itself.  The two are
+different types, not two spellings of one: `reference<Leaf>?` links, `Leaf?`
+copies.
 ```
 x = 42
 name = "hello"

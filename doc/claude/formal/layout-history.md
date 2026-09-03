@@ -66,3 +66,51 @@
   leak. Guard: `tests/scripts/1198-a-nullable-source-is-tagged-into-its-slot.loft`, whose
   controls are the dense source (the half a corpus of literals can see) and the tuple member
   (the writer that already obeyed the rule).
+
+- **D-layout-4 — `τ?` picked the WRONG HALF of the split for a pointer field** (2026-09-03,
+  loft#1316). `L-Null` and `L-Null-Tag` divide on a property of the type: a τ that reserves a
+  null VALUE keeps its own bytes and spends the reserved pattern, and only a struct stored INLINE
+  needs the tag. A stored reference reserves `nullref`, so `reference<T>?` is `L-Null`'s case and
+  must lay out as the 12-byte pointer it already is. The rewrite that mints `__nullable<S>` gave
+  it `L-Null-Tag`'s instead.
+
+  Both notions travel as `Type::Reference`, told apart by the FIELD's own `u16::MAX` share marker
+  (#328) — the same bit `has_value_cycle` reads to skip pointer edges. `synth_nullable_struct_fields`
+  discarded the deps with `_` and so converted both. Measured: `reference<Leaf>?` and `Leaf?` laid
+  out byte-identically (`__nullable<Leaf>[16/8]`) where `reference<Leaf>` is `dbref[12/4]`.
+
+  Three faces, one mechanism, and the loudest hid the others:
+  * **the layout error.** A struct stored inline cannot contain itself, so on a reference graph
+    that returns to its own struct the field has no finite size: `struct Node { next:
+    reference<Node>? }` failed with *"field 'next' has no position (u16::MAX)"*. The terminator of
+    a linked list is the one slot that MUST hold null, and the only spelling that compiled was the
+    non-null one — which is why loft#1313 had to suppress `(N-Store)` for exactly this shape
+    rather than name a cure that does not compile.
+  * **the refusal.** `&pool[i]` in a literal is admitted by the FIELD'S TYPE (`B-Ref-StoredRef`),
+    and the gate matched `Type::Reference` unpeeled, so writing `?` withdrew the `&` the pointer
+    field exists for.
+  * **the quiet one.** `h.l = &pool[i]` fell past the `#328` repoint arm, also unpeeled, to
+    `copy_ref` — a deep copy through the field's CURRENT value. On an acyclic type that compiles
+    and answers plausibly: the control prints `11` where a pointer prints `22`, so declaring `?`
+    silently replaced sharing with a copy, with no diagnostic anywhere.
+
+  **Status — CLOSED.** All three read the marker or peel with `base()`. loft#1313's suppression
+  (`field_has_no_nullable_spelling` + `Data::reference_cycle_back_to`) is deleted with it, and its
+  guard cells in `tests/heap_nstore.rs` flip from silent to warning. The notice they now emit had
+  its own defect of the same kind: `Type::name` renders a pointer field as the bare struct name,
+  so the cure read `Node?` — the INLINE form, which on this shape does not compile, and on an
+  acyclic one compiles while swapping the pointer for a copy. `Parser::cure_spelling` names the
+  field's own type. Guard: `tests/scripts/1316-a-nullable-reference-field-is-still-a-pointer.loft`,
+  whose controls are the `?`-less pointer field (still shares) and the embedded `T?` (still
+  copies — `L-Null-Tag` still governs it).
+
+  ⚠ **The third entry in a row for one mechanism, and each closed on "all three sites".**
+  D-layout-2 was a nullable shape reaching a bare `Type` match, D-layout-3 was the same from the
+  write side, and this is the same again with the added twist that the two halves of the split
+  are BOTH reachable through one IR spelling. What repeats is not a site but a habit: a `Type`
+  matched without `base()` and without the marker, in a position a field type reaches. A census
+  of the parser plus `typedef.rs` finds **103** bare `Type::Reference` matches, of which **21**
+  read a field's declared type. That number is a QUEUE, not a defect count — most read the
+  synthetic `__nullable<S>`'s own payload attribute, where no `Optional` can arrive — but it is
+  the population any next instance of this class will be drawn from, and it is the reason the
+  rule-led walk over `@FR-L-Null` is not finished by this entry.

@@ -21,7 +21,7 @@ fn package_layout_use_finds_src_subdir() {
     p.parse_dir("default", true, true).unwrap();
     p.lib_dirs = vec![format!("tests{s}lib")];
     p.parse(&format!("tests{s}lib{s}package_test_main.loft"), false);
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     assert!(
         p.diagnostics.level() < Level::Error,
         "Expected no parse errors; diagnostics: {:?}",
@@ -196,7 +196,7 @@ fn arc_b_contract_current_loads_clean() {
         &format!("tests{s}lib{s}package_contract_ok_test_main.loft"),
         false,
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     assert!(
         p.diagnostics.level() < Level::Error,
         "A package at the current contract epoch should load; diagnostics: {:?}",
@@ -218,7 +218,7 @@ fn p129_no_duplicate_native_packages() {
         &format!("tests{s}lib{s}native_crate_import_main.loft"),
         false,
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     // Count occurrences of the crate name — must be exactly 1.
     let count = p
         .data
@@ -241,7 +241,7 @@ fn struct_fields_resolve_in_use_loaded_package() {
     p.parse_dir("default", true, true).unwrap();
     p.lib_dirs = vec![format!("tests{s}lib")];
     p.parse(&format!("tests{s}lib{s}struct_order_main.loft"), false);
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     assert!(
         p.diagnostics.level() < Level::Error,
         "Struct field types should resolve in use-loaded packages; errors: {:?}",
@@ -318,7 +318,7 @@ fn i337_manifest_path_dep_resolves_non_sibling() {
     let mut p = Parser::new();
     p.parse_dir("default", true, true).unwrap();
     p.parse(&b_root.join("src").join("b.loft").to_string_lossy(), false);
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     assert!(
         p.diagnostics.level() < Level::Error,
         "path dep should resolve; diagnostics: {:?}",
@@ -350,7 +350,7 @@ fn pkg_deps_resolve_before_the_dependent_is_parsed() {
     p.parse_dir("default", true, true).unwrap();
     p.lib_dirs = vec![format!("tests{s}lib")];
     p.parse(&format!("tests{s}lib{s}pkg714_main.loft"), false);
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     assert!(
         p.diagnostics.level() < Level::Error,
         "a directory package's two manifest deps must both resolve before the \
@@ -390,7 +390,7 @@ fn i826_parse(entry: &std::path::Path) -> Vec<String> {
     let mut p = Parser::new();
     p.parse_dir("default", true, true).unwrap();
     p.parse(&entry.to_string_lossy(), false);
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     p.diagnostics.lines()
 }
 

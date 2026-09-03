@@ -40,7 +40,7 @@ fn build(script: &str) -> (State, Data) {
     let mut p = Parser::new();
     p.parse_dir("default", true, false).unwrap();
     p.parse_str(script, "log_test", false);
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut data = p.data;
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut data);

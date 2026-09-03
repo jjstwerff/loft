@@ -756,9 +756,31 @@ fn synth_nullable_struct_fields(data: &mut Data, database: &mut Stores, lexer: &
                 let Type::Optional(inner) = data.attr_type(host, a_nr) else {
                     continue;
                 };
-                let Type::Reference(struct_d, _) = *inner else {
+                let Type::Reference(struct_d, ref deps) = *inner else {
                     continue;
                 };
+                // `Type::Reference` is one IR spelling for two source notions, and only
+                // one of them wants a tag.  An EMBEDDED struct field (`item: Row`) stores
+                // its payload inline and has no bit pattern to spare, so `Row?` takes the
+                // tagged `__nullable<Row>` — `@FR-L-Null-Tag`.  A `reference<Row>` field
+                // is a 12-byte pointer that already reserves `nullref`, so `@FR-L-Null`
+                // governs it instead: `layout(τ?) = layout(τ)` and absence is the
+                // sentinel in those same bytes.  The FIELD's own share-marker dep
+                // (`u16::MAX`, #328) is what tells the two apart — the same bit
+                // `Data::has_value_cycle` reads to skip these edges, so the walks and
+                // this rewrite cannot disagree about which edge is which.  This site is
+                // `@FR-L-Null-Which`'s one home: it is the only place the choice between
+                // the two representations is made for a field.
+                //
+                // Tagging a reference field is what erased the pointer: `reference<Leaf>?`
+                // and `Leaf?` laid out byte-identically, so `?` silently turned a shared
+                // pointer into an inline copy, and on a type whose reference graph returns
+                // to itself the inline form has no finite size at all — the reader got
+                // `field 'next' has no position (u16::MAX)` for a linked list's terminator
+                // (loft#1316).
+                if deps.contains(&u16::MAX) {
+                    continue;
+                }
                 // The same eligibility question the vector-element path asks, read from
                 // the one home.  This site had its own spelling and was missing the
                 // type-variable case, which is how a tuple built from a template's `T?`

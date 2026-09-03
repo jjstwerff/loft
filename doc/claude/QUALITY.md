@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 363 | 339 | **24** |
+| 377 | 353 | **24** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -501,6 +501,14 @@ loft#1186 moved it to 336 · 318 with the two predicates the join reading needed
 before they match, so they land on the peeling side and leave the opaque column where it was;
 loft#1185 to 337 · 319 with `parser::tail_calls_a_fnref_parameter`, which unspans for the same
 reason.
+
+loft#1329 moved it to 377 · 353 · 24 with `use_analysis::collect_yielded`, the new reading of
+which sub-values a right-hand side can evaluate to; it discriminates five variants and unspans
+at every level, so it lands on the peeling side. `use_analysis::fnref_target_in` entered the
+table in the same change by gaining an `Int` arm beside its two marker arms — and it entered
+the OPAQUE column, because it matched nodes `collect_yielded` had already unspanned. That is
+the shape this audit is worth having for: a site correct only because of what its one caller
+does. It peels for itself now, so the opaque column is where it was.
 
 loft#1200 moved it to 339 · 322 · 17 with `scopes::nullable_locals_that_displace`, the
 pre-scan that decides whether a nullable heap-record local is worth an ownership witness; it
@@ -2419,9 +2427,102 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 679 | 326 | 5 | **348** |
+| 694 | 337 | 5 | **352** |
 
-The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.
+The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.  It happened again on the 2026-09-03 join — one side carried `684 | 330 | 5 | 349` and the other `687 | 331 | 5 | 351`, and the tree that holds both measures `689 | 332 | 5 | 352`; the 2026-09-03 evening join (D-bind-11 onto the #1318 tree) measured `692 | 333 | 5 | 354`, loft#1327's opaque-fn-ref clause moved one function off the opaque column, and the D-own-8 closure moved two more onto the peeled one — one arm peeled (`gen_set_first_at_tos`'s null-init) beside two new scope-pass predicates.  The tree that holds BOTH measures `694 | 337 | 5 | 352`, which is neither side's number: two branches each adding predicates cannot have their counts added, because the audit classifies FUNCTIONS and a merged body is one function however many branches touched it.
+
+The most recent movement is loft#1327's, and it goes the right way for the ordinary reason: the
+new clause asks `is_dbref(ret_type.base())` of a fn-ref call's return, so the function it sits in
+peels the `Optional` wrapper instead of matching a bare variant. The total holds at 692 — the
+clause adds no new discriminating function, it changes what an existing one asks.
+
+An earlier movement went the OTHER way, and it was also the screen working. Giving the
+capture-adoption rule one home (`capture_adoption_owns_free`) took the `is_dbref(.base())` call
+out of `check_ref_leaks`' body — and that call was the only peel in it. The function drops from
+"see through the wrapper" to opaque, which is what it always was: the shape test it actually
+performs is a bare `if let Type::Reference(_, dep)`, so the assert never examines a `Vector` or
+a keyed local at all. A peel elsewhere in the body had been standing in front of that, exactly
+the masking B7i's note below describes. The number got worse and the tree did not: the new
+predicate is not counted here (it discriminates through `is_dbref` rather than on a variant of
+its own), so the total holds at 684 while the honest column gains one.
+
+loft#1308 moved two sites off the opaque column, and they are the ones this screen exists to
+catch. `get_free_vars` decided whether a captured local's scope-exit free is suppressed by
+asking `matches!(function.tp(v), Type::Reference(_, _))` — bare, so a capture whose store is a
+`Vector` or a keyed collection failed the test and the frame freed it under a live escaped
+closure. It now asks `is_dbref(.base())`, and `check_ref_leaks`' mirror of the same exemption
+asks it identically, because the two going out of step is what kept the defect hidden: the leak
+checker agreed the store needed no free, so nothing contradicted the suppression. That is the
+sixth and seventh entry in the drifted-list family the loft#1150 note records (`is_dbref` here
+and at D-own-13, `deps_mut`, `is_keyed`, `depend`).
+
+The TOTAL rises by two on the same change, which is the honest direction: the fix needs a
+predicate that says which captures the record's death cascades through, and giving it a name
+(`capture_attr_is_cascade_relevant`) makes it a function this screen can see, where before it
+was an inline `matches!` inside a larger body and invisible here. It reads `.base()`, so it
+lands in the see-through column rather than the opaque one — `@FR-L-Null` gives a `τ?` capture
+the same storage as its dense twin, so an `Optional(Reference)` attribute is exactly as
+cascade-relevant. Measured both ways: bare, the row is `682 | 328 | 5 | 349`, and peeling moves
+that site across with every capture guard, the ownership oracle and the leak sweep unchanged.
+Two callers now share it — `mark_borrowed_captures`, deciding which captures get a verdict, and
+`capture_is_adopted`, deciding whether a frame-exit free may be suppressed — and a capture the
+first skips must not be one the second adopts, or the store is freed twice.
+
+loft#1313 added two to the total and both to the OPAQUE column, with the argument for it
+written at each site — and loft#1316 then DELETED both, which is worth keeping rather than
+quietly editing out.  `Parser::field_has_no_nullable_spelling` asked whether a field was the
+`reference<T>` back-pointer of a cycle and `Data::reference_cycle_back_to` walked those edges;
+both read `Type::Reference` bare, and the case for not peeling was that the absence of the
+wrapper WAS the question.  The second half of that case was: *a cycle containing an `Optional`
+reference edge is unconstructible, because that is exactly the field loft#1316 reports a layout
+error for.*
+
+That premise was a defect, not a fact about the language.  `reference<T>?` failed layout because
+the `?` was routed to `@FR-L-Null-Tag`'s inline tagged form when `@FR-L-Null` governs a pointer;
+with that fixed the edge is perfectly constructible, the field HAS a nullable spelling, and both
+functions lose their subject.  So the screen's verdict was sound and its INPUT was not — an
+argument for opacity that leans on "no program can build that shape" is only as good as the
+reason the shape cannot be built, and here the reason was a bug one layer down.  That is the
+transferable part: when a site justifies reading a type bare by saying the wrapped form is
+impossible, the claim to check is the impossibility, not the reading.
+
+So the column counts sites that decide a shape without peeling; it is not a defect list, and a
+site whose question IS the wrapper belongs there — but a site whose question is *"can this
+wrapper exist?"* is making a claim the register can falsify.
+
+The row moves to `683 | 328 | 5 | 350` on that change, and the arithmetic is worth reading
+because it is not "one fixed". Two opaque functions LEFT (both deleted), and one arrived:
+`Parser::cure_spelling`, which reads `Type::Reference` bare and must, because the whole
+question it answers is *which spelling is this field declared in* — the marker, not the peel,
+is what it tests. Net −2 opaque, +1 opaque, and a total down by one because `cure_spelling`
+replaces two functions with one. The three sites the fix actually corrected — the field
+rewrite, the `&` head gate, the pointer repoint — do not appear in either column: none of
+them is a whole FUNCTION discriminating on a `Type`, they are arms inside larger bodies. That
+is the B7i masking this screen already warns about, seen from the other side: the unit is the
+function, so a defective arm inside a body that peels somewhere else is invisible here. The
+count is a queue of predicates, not a census of the shapes a `τ?` can reach.
+
+The loft#1321 attempt moved this row and then gave it back — the fix was reverted, so the
+numbers are those of the tree without it. Worth one line for the shape of the movement: the
+join predicates it added each tested a block's `result` against `Type::Void | Type::Null` to
+decide whether the block yields a value at all, which the audit counts as a bare `Type` match
+even though `Void` and `Null` are not shapes a `τ?` can wrap. A column read as a score rather
+than a queue would have asked for four meaningless peels.
+
+loft#1319 moves it again, to `684 | 330 | 5 | 349`, and every step is in the good direction:
+two more functions see through the wrapper and one fewer is opaque. The CALLER half of the
+screen is where that change is legible rather than inferred — `heap_def_nr`'s row goes from
+`2 peeled / 10 bare` to `4 / 8`, which is exactly the two call sites in the native generator's
+whole-record bind that now read `variables.tp(..).base().heap_def_nr()`. Unpeeled they
+answered `None` for `vector<τ>?` and `S?`, the bind reached no copy lowering, and the default
+(alias) stood — against `@FR-B-Copy`. `Parser::classify_vec_bind` took the same peel on the
+parser side.
+
+That is the same sentence D-bind-13 and loft#1143 already wrote for two other constructs, and
+it is what makes this column a queue rather than a scoreboard: the sites it names keep turning
+out to be siblings of ones already fixed. The interpreter's half of the same fix is again
+invisible here — it is an arm inside `gen_set_first_at_tos`, not a function of its own — which
+is the B7i masking from the other side, and the reason the guard for that half is behavioural.
 
 loft#1291 moved one site OFF the opaque column — the first entry here that does.
 `Type::is_amp_rebindable_heap` is the one home for *"is this a `&` parameter whose whole-value
@@ -5873,6 +5974,7 @@ belongs to [COMPATIBILITY.md](COMPATIBILITY.md)'s process, not to a fix pass.
 
 | Item | Section | Status |
 |---|---|---|
+| ~~**The per-execution ownership witness**~~ — the cluster is DISSOLVED: its premise was measured false | [formal/closures.md](formal/closures.md) D-clo-7 (CLOSED) / D-clo-14 (CLOSED) / D-own-16 (CLOSED); D-own-8 (CLOSED 2026-09-03, loft#1320/#1321/#1323 — every arm of a bound value branch its own binding; its two declined shapes took a witness SNAPSHOT of the base at the bind, the one slot the cluster predicted, and only where the base cannot stand witness itself) | **DISSOLVED 2026-09-03 — all three closed by the day's end, none with a witness slot: D-clo-7 fell to reading the capture SLOT off the callee's body, which made its base nameable after all.**  Two of the three closed with NO witness, and the third is residual.**  The identity route was measured against both closure rows: `D-clo-14` is closed for every spelling but a call in an `if`/`match` ARM (guard `1257b-a-lifted-collection-return-is-freed-by-identity.loft`, falsified at d9a2ec21 on both backends; 389 live stores at N=400 -> 1, the keyed kinds included), and `D-clo-7` is NOT reached — its return dep names `__closure`, so there is no base to compare against.  **The axis was never "is there a witness" but "is there a NAMEABLE base"**, and reading it the first way is what kept three rows filed as one piece of work for a month.  What follows is the original entry, kept because its measurements and its two blind-alley warnings are still true.  **OPEN, and the cluster's PREMISE is now known to be too strong.**  `D-own-16` was its third member and closed WITHOUT a witness: where the type already NAMES the variable a local might be aliasing, the owner is decidable at run time by store IDENTITY (`OpFreeRefIfDistinct` against that dep), which costs no witness slot.  So *"a runtime witness is the only mechanism"* is false as stated; the open question for the two closure rows is narrower — whether either has a nameable variable to compare against, and `D-clo-7`'s remaining half is exactly the case where the return dep names `__closure` and not WHICH slot, i.e. where there is none.  Recorded 2026-09-02 as a cluster because they are one piece of work.  Each is a store whose owner is decidable only at RUN time, and each is stuck at the same place: nothing static separates the arm that MINTS from the arm that HANDS BACK a caller's store, because they are the same call.  Where a witness exists the question is already answered — `OpBindOrCopy` settles the `Reference` / struct-`Enum` join per execution (D-clo-7's argument half, loft#1248), and `OpFreeRefIfDistinct` frees a placeholder only when it is genuinely a distinct store.  What has no witness: a COLLECTION join (D-clo-14, where the cure was first to DECLINE the lift and pay a leak, and is now to compare the store against the `Join` base the temp's own dep names), a capture whose return dep names only `__closure` and not WHICH slot (D-clo-7's remaining half), and a local reassigned from a join over ITSELF (D-own-16 — `c = mk(i) ?? c`, where freeing the displaced store before the assignment is a use-after-free on the arm that takes it).  ⚠ **Do not measure D-clo-14 on the program-exit leak channel**: its stores are freed at FRAME exit, so `Warning: N stores not freed` is silent for the life of the defect — `LOFT_ALLOC_SITES=1` reads 389 live stores at N=400 against 1 when the lift is allowed.  ⚠ **And a cure needs BOTH frees**, which is why a half-fix failed before: the loop-scope `OpFreeRef(__lift_N)` in `scopes.rs`, AND the implicit dep-empty pre-Set free on the next iteration's reassignment, which lives in codegen.  Taking these as one plan is what stops the third rediscovery of the same wall.  *(Both are answered by ONE change — putting the base on the lifted temp's TYPE, which stops the pre-Set free being emitted at all and leaves `get_free_vars` to guard the other.)* |
 | **Cluster III Route 2** — reassignment store-free across shared blocks | [plan-57](plans/2-vector-store-watermark/cluster-III-reassignment-pin.md) | **CLOSED 2026-08-21 — shipped, default ON.**  A local reassigned across sibling `if`/`else if`/`match` arms kept EVERY arm's store to scope exit, so the watermark grew with the number of reassignment SITES and not with how many ran: a 16-site function measured peak 20 whichever single arm was taken.  Route 2 (`recover_backer`) confines each block's store to its block — peak is now a flat 5 at 2/4/8/16 sites.  It had sat behind `LOFT_CONF_RECOVER` since 2026-06 pending an un-gate decision; re-measured on 4232 tests (2.2× the evidence it was parked on) and un-gated.  `LOFT_NO_CONF_RECOVER=1` is the opt-out and the first bisect step for a wrong answer in such a function.  Soundness is `store_dead_after_block`, not the flag: a local READ after the blocks does not confine, because freeing a confined store while the local still holds it returns the wrong element on the branch NOT taken.  Both branches verified green (4232 each), values identical on both backends, pinned by `tests/scripts/reassign-across-sibling-blocks.loft`. |
 | **@PLN85 cluster I** — FFI struct-return read gap (latent) | [@PLN85 README probe 01](plans/85-store-lifetime-retirement/README.md) | **Latent / unreachable** residual of the now-closed @PLN85.  A `#native` fn returning a non-vector **struct** has no `alloc_struct` helper to lay out a loft-readable ref, so the read path can't be exercised — gated on a future struct-return helper.  The reachable FFI **vector**-return instances (#409/#410) are FIXED.  Re-probe when the helper lands. |
 | **@PLN85 cluster IV** — @PLAN51 hidden-buffer-aliasing latent residuals | [@PLN85 README cluster IV](plans/85-store-lifetime-retirement/README.md).  Cites the `@PLAN51` probe set, preserved at [`plans/finished/51-hidden-buffer-aliasing/`](plans/finished/51-hidden-buffer-aliasing/) — the **legacy local plan** `@PLAN51`, *not* the tracker issue `@PLN51` (which is "[audience] Bumper-airplanes") | **RE-MEASURED 2026-08-21: 3 of 62, not ~11, and INTERPRETER-only — the row's "native-mostly" was inverted.**  All 62 probes run clean on both backends (exit 0); `40-nested-tuple-of-canvases`, `47-tuple-local-not-return` and `51-tuple-as-arg` leak on `--interpret` and are clean under `LOFT_NATIVE_LEAK_CHECK=1`, matching @PLAN51 cluster II's own note that *"`--interpret` leaked; `--native` was always clean"*.  The lambda/operator-vector-return, capture-heap-return and mixed-lit-call shapes the row named are now clean.  All three reduce to ONE mechanism, filed as **loft#1051** and **FIXED 2026-08-21**; guarded by `tests/scripts/1051-tuple-destructure-ownership.loft` on both backends.  ⚠ **The root cause recorded here on 2026-08-21 was WRONG, and the correction is the useful part.**  This row (and the issue) named `materialize_tuple_element` and concluded that "who owns a tuple's records" was an ownership-model question that had to be answered before the leak could be fixed.  Instrumented, that function is **never reached** for this shape — it serves the tuple-RETURN path (`t = pair()`), which was already clean, and its copy does not appear in the IR dump because it is inserted during IR-to-bytecode.  The real site is `codegen.rs`'s `gen_set_first_ref_tuple_copy`, which deep-copied a `Type::Reference` element UNCONDITIONALLY: the copy allocates a store and makes the binding its owner, while the binding's `deps` said BORROW, and a borrow is skip-free.  No ownership question needed answering — [formal/ownership.md](formal/ownership.md) **O-Deps** had already answered it (*the free DERIVES from `deps`; a codegen condition that re-derives it is the bug*), and the element-read arm three lines above carried the correct guard, `depend().is_empty()`, for exactly this reason.  Adding that same guard is the whole fix.  It also closed a backend divergence (O-NoDiverge): `--native` reads the same deps and aliases a borrow, which is why it was always clean.  **Why the earlier attempt failed and read as "the model must change first":** the dep was stripped in the parser, at a site this shape never executes, so nothing moved and the no-op looked like evidence for a deeper problem.  **Instrument note:** `LOFT_STORES=warn` reports NOTHING for these (below its floor, as this row said); `LOFT_STORES=timeline` states leak status explicitly and is what separated 3 from 59. |

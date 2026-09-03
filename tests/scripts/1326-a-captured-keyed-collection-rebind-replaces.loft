@@ -1,0 +1,150 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// `=` on a CAPTURED keyed collection replaces it, at every keyed kind and from every
+// right-hand side (loft#1326, `formal/closures.md` (L-CapHeap) and the `=` contract).
+//
+// It emptied the collection instead: `m = [Row { k: 9, v: 9 }]` inside a closure read back
+// `len 0`, on both backends, with nothing said. The identical rebind of a captured VECTOR was
+// correct (loft#1279 taught that branch the same lesson), the identical keyed collection
+// reached through a captured STRUCT FIELD was correct, and the same statement written without
+// a closure was correct — so only the intersection was wrong, and both axes are required.
+//
+// ONE cause, and loft#1279's commit predicted it in so many words: *"That selector has now been
+// too narrow three times, and the lowering was right every time."* This is the fourth. A
+// capture resolves to `OpGetDbRef` of the closure-record field rather than to the `OpGetField`
+// a struct field gives, so the keyed-field replace's `self.is_field(to)` answered no and the
+// whole branch — clear, then build into the emptied collection — was skipped.
+//
+// The literal ARRIVES differently through a capture, which is the second half of the cure: it
+// is a `Block` whose ops build STRAIGHT INTO the destination (@PLN93's build-into-target),
+// where a struct field gets a `Value::Insert` of the same ops. So the clear goes in FRONT of
+// that block rather than inside it.
+//
+// ⚠ NAMING THE DESTINATION IS NOT WRITING INTO IT, and the comprehension cell is why. A
+// comprehension over the captured collection itself (`s = [for x in s { … }]`) names `s`,
+// builds a fresh value, and must NOT be cleared before it reads its source — loft#1195's seven
+// cells answered `[]` under the loose predicate. `value_writes_into` asks the mutating-op
+// question instead, which is the same one the vector branch asks.
+//
+// ⚠ AND `+=` MUST STILL APPEND. The change touches `=` only; the append cell is the control
+// that says a replace was not handed to the other operator.
+//
+// @falsified-at: 24381205 — interpret exit 1 -> 0, interpret 2 assertion failures -> 0, native
+//   exit 1 -> 0, native 1 assertion failures -> 0.
+// ⚠ THOSE COUNTS ARE FLOORS, because a failing assert ends its test function and the runner
+//   stops at the first failing one on native. The census is the probe matrix over the same
+//   shapes: EIGHT of its thirteen cells answer wrong on that build — the four right-hand-side
+//   sources and all four keyed kinds — and the five that pass are this file's controls (the
+//   plain local, the captured struct field, the captured vector, `+=`, and the comprehension).
+//   Only the ASSERT channel moves; an emptied collection is a wrong ANSWER, so nothing here
+//   touches the leak or panic channel.
+
+struct Rw1326 { k: integer, v: integer }
+struct Tx1326 { k: text, v: integer }
+struct Hd1326 { rows: hash<Rw1326[k]> }
+
+fn test_a_literal_replaces_a_captured_keyed_collection() {
+  // The filed shape. Two entries in, one written, one expected — a build that appends would
+  // read 3 and the one that shipped read 0.
+  m: hash<Rw1326[k]> = [Rw1326 { k: 1, v: 1 }, Rw1326 { k: 2, v: 2 }];
+  q = fn() { m = [Rw1326 { k: 9, v: 9 }]; };
+  q();
+  assert(len(m) == 1, "length after a captured keyed replace: got {len(m)}");
+  assert(m[9].v == 9, "the replacing entry: got {m[9].v}");
+}
+
+fn test_an_empty_literal_clears_it() {
+  m: hash<Rw1326[k]> = [Rw1326 { k: 1, v: 1 }, Rw1326 { k: 2, v: 2 }];
+  q = fn() { m = []; };
+  q();
+  assert(len(m) == 0, "length after `= []`: got {len(m)}");
+}
+
+fn test_a_variable_source_replaces() {
+  // For vectors this was the SILENTLY DROPPED row rather than the appending one, so the
+  // right-hand side's source is its own axis.
+  src: hash<Rw1326[k]> = [Rw1326 { k: 9, v: 9 }];
+  m: hash<Rw1326[k]> = [Rw1326 { k: 1, v: 1 }, Rw1326 { k: 2, v: 2 }];
+  q = fn() { m = src; };
+  q();
+  assert(len(m) == 1, "length after a variable source: got {len(m)}");
+  assert(m[9].v == 9, "the replacing entry: got {m[9].v}");
+}
+
+fn test_a_call_source_replaces() {
+  m: hash<Rw1326[k]> = [Rw1326 { k: 1, v: 1 }, Rw1326 { k: 2, v: 2 }];
+  q = fn() { m = mk1326(); };
+  q();
+  assert(len(m) == 1, "length after a call source: got {len(m)}");
+  assert(m[9].v == 9, "the replacing entry: got {m[9].v}");
+}
+
+fn mk1326() -> hash<Rw1326[k]> { [Rw1326 { k: 9, v: 9 }] }
+
+fn test_every_keyed_kind_replaces() {
+  // The branch this joins carries a comment about a selector that once named three of five
+  // kinds, so each kind is a cell rather than a representative.
+  h: hash<Rw1326[k]> = [Rw1326 { k: 1, v: 1 }, Rw1326 { k: 2, v: 2 }];
+  qh = fn() { h = [Rw1326 { k: 9, v: 9 }]; };
+  qh();
+  assert(len(h) == 1, "hash: got {len(h)}");
+
+  s: sorted<Rw1326[k]> = [Rw1326 { k: 1, v: 1 }, Rw1326 { k: 2, v: 2 }];
+  qs = fn() { s = [Rw1326 { k: 9, v: 9 }]; };
+  qs();
+  assert(len(s) == 1, "sorted: got {len(s)}");
+
+  x: index<Rw1326[k]> = [Rw1326 { k: 1, v: 1 }, Rw1326 { k: 2, v: 2 }];
+  qx = fn() { x = [Rw1326 { k: 9, v: 9 }]; };
+  qx();
+  assert(len(x) == 1, "index: got {len(x)}");
+
+  t: trie<Tx1326[k]> = [Tx1326 { k: "a", v: 1 }, Tx1326 { k: "b", v: 2 }];
+  qt = fn() { t = [Tx1326 { k: "z", v: 9 }]; };
+  qt();
+  assert(len(t) == 1, "trie: got {len(t)}");
+}
+
+fn test_the_same_rebind_without_a_closure_is_unmoved() {
+  // The control that says this is about the captured DESTINATION and not about keyed replace.
+  m: hash<Rw1326[k]> = [Rw1326 { k: 1, v: 1 }, Rw1326 { k: 2, v: 2 }];
+  m = [Rw1326 { k: 9, v: 9 }];
+  assert(len(m) == 1, "plain local rebind: got {len(m)}");
+}
+
+fn test_the_same_collection_through_a_captured_field_is_unmoved() {
+  // Right before this change, and the row that says the lowering was already written: nothing
+  // about keyed collections or about capture forbids this, only the selector did.
+  h = Hd1326 { rows: [Rw1326 { k: 1, v: 1 }, Rw1326 { k: 2, v: 2 }] };
+  q = fn() { h.rows = [Rw1326 { k: 9, v: 9 }]; };
+  q();
+  assert(len(h.rows) == 1, "through a captured struct field: got {len(h.rows)}");
+}
+
+fn test_the_captured_vector_spelling_is_unmoved() {
+  // loft#1279's own shape.
+  v = [1, 2];
+  q = fn() { v = [7]; };
+  q();
+  assert(len(v) == 1, "captured vector length: got {len(v)}");
+  assert(v[0] == 7, "captured vector element: got {v[0]}");
+}
+
+fn test_append_through_a_capture_still_appends() {
+  // `=` is the only operator this touches.
+  m: hash<Rw1326[k]> = [Rw1326 { k: 1, v: 1 }, Rw1326 { k: 2, v: 2 }];
+  q = fn() { m += [Rw1326 { k: 9, v: 9 }]; };
+  q();
+  assert(len(m) == 3, "append through a capture: got {len(m)}");
+}
+
+fn test_a_comprehension_over_its_own_destination_reads_its_source_first() {
+  // Naming the destination is not writing into it. Clearing before this comprehension reads
+  // its source is what made loft#1195's cells answer empty.
+  s = [1, 2];
+  q = fn() { s = [for x in s { x * 10 }]; };
+  q();
+  assert(len(s) == 2, "comprehension over the captured source: got {len(s)}");
+  assert(s[0] == 10, "the comprehension's first element: got {s[0]}");
+}

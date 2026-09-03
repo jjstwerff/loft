@@ -22,19 +22,28 @@
 // `Reference` / record `Enum` arms still lift, because `OpBindOrCopy` settles it per execution
 // (loft#1248); a collection has no such guard.
 //
-// ⚠ THIS IS A TRADE, AND THE LAST CELL IS THE COST RATHER THAN A PASS.  The MINT arm of the
-// same closure goes back to leaking one store per call — measured peak 4 -> 403 at N=400,
-// which at scale is a store-table abort.  Taken deliberately: a leak announces itself and a
-// silently emptied container does not, which is why `silent-wrong` outranks `sev:`.  The cell
-// is here so the trade is visible and so a later fix that removes the leak has to keep the
-// value right.
+// ⚠ THE DECLINE WAS A TRADE, AND THE COST IS GONE — see
+// `1257b-a-lifted-collection-return-is-freed-by-identity.loft`.  Refusing the lift gave the
+// MINT arm back its leak, one store per call (peak 4 -> 403 at N=400, a store-table abort at
+// scale), and that was accepted because a leak announces itself and a silently emptied
+// container does not.  The lift is back, decided by store IDENTITY against the `Join` base,
+// and both directions now hold at once.  THIS file keeps the VALUE half: the cells below are
+// what a later change to the free must not break.
 //
-// A WITNESSED lift is the end state and was built and measured here: `OpFreeRefIfDistinct`
-// (the machinery `paired_witness` already drives for a work-ref) fixes `--native` and leaves
-// the INTERPRETER wrong, because on that side the damage is not the scope-exit free but the
-// RE-SET — one iteration is correct and two are not, so the transition-free on `__lift_N`'s
-// reassignment releases the borrowed store first.  Both halves are needed; only the decline is
-// correct on both backends today.  The one- and two-iteration cells below are what said so.
+// ⚠ MEASURE THE LEAK ON THE PEAK, NOT AT EXIT.  The stores are freed at FRAME exit, so
+// `Warning: N stores not freed at program exit` says NOTHING about it — a guard on that
+// channel is green for the life of the defect.  `LOFT_ALLOC_SITES=1` is the instrument:
+// 389 live stores at N=400 against 1 with the lift allowed.  The sibling file uses the 65535
+// store-table ceiling instead, which is the one channel that fails on BOTH backends.
+//
+// ⚠ AND BOTH FREES NEED THE BASE, WHICH IS WHY HALF A FIX FAILED.  There are two: the
+// loop-scope `OpFreeRef(__lift_N)` that `get_free_vars` emits after the use, AND the implicit
+// dep-empty pre-Set free on the NEXT iteration's reassignment.  Guarding only the first with
+// `OpFreeRefIfDistinct` fixed `--native` and left the INTERPRETER wrong, because on that side
+// the damage is the RE-SET — one iteration is correct and two are not.  What answers for both
+// is putting the base on the temp's TYPE: a non-empty dep stops the pre-Set free being emitted
+// at all, and `get_free_vars` guards the one that remains.  The one- and two-iteration cells
+// below are what located that.
 //
 // @falsified-at: ca1a829e — `--interpret` and `--native` both answer `s=null src=null(oob)
 //   len=0` in the first cell.  Scored by VALUE, not by the leak channel: the leak channel read
@@ -99,9 +108,9 @@ fn test_the_spellings_one_axis_away_are_unmoved() {
 }
 
 fn test_the_mint_arm_still_answers_and_this_cell_is_the_trade() {
-  // The same closure with an ABSENT argument takes the mint arm.  Declining the lift means
-  // its store is freed at frame exit rather than per call — correct, and no longer flat.
-  // The VALUE is what this cell holds; the leak is the documented cost.
+  // The same closure with an ABSENT argument takes the mint arm.  This cell recorded the
+  // decline's COST and now records only its value; the leak it named is measured gone in the
+  // sibling file, at the store-table ceiling on both backends.
   none: vector<integer>? = null;
   g = fn(q: vector<integer>?) -> vector<integer> { q ?? [7, 8] };
   s = 0;

@@ -34,7 +34,7 @@ fn compile(code: &str) -> (State, loft::data::Data) {
         "Parse errors: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     (state, p.data)
@@ -1030,7 +1030,7 @@ fn main() {
         "parse errors: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     state.execute("main", &p.data);

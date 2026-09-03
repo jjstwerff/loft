@@ -120,6 +120,26 @@ fn reference_field_takes_amp() {
   assert(ls[0].id == 1, "reference field id {ls[0].id} want 1");
 }
 
+// The rule admits the `&` on the FIELD'S TYPE and says nothing about where the field sits
+// in the literal, so a `reference<T>` field with another field AFTER it is the same legal
+// position.  The gate read only `;`/`}` — the tokens that end an assignment's right-hand
+// side — and refused this, which made the one admitted position depend on field order
+// (D-bind-14).  A field value ends at its `,` just as well.
+struct Trailing {
+  link: reference<Leaf>,
+  id: integer,
+}
+
+fn reference_field_takes_amp_when_not_last() {
+  pool = [Leaf { v: 42 }, Leaf { v: 43 }];
+  ts: vector<Trailing> = [Trailing { link: &pool[1], id: 7 }];
+  assert(ts[0].link.v == 43, "not-last reference field {ts[0].link.v} want 43");
+  assert(ts[0].id == 7, "and the field after it {ts[0].id} want 7");
+  // still a pointer, not a copy — the position must not change what the `&` means
+  pool[1].v = 99;
+  assert(ts[0].link.v == 99, "not-last reference field still shares {ts[0].link.v} want 99");
+}
+
 // ---- an INFIX `&` is still bitwise-and, not a reference --------------------------
 
 // The head gate must not touch the operator: `&` with a left operand is level-6 bitwise
@@ -144,6 +164,7 @@ fn main() {
   view_link_writes_source();
   param_link_writes_caller();
   reference_field_takes_amp();
+  reference_field_takes_amp_when_not_last();
   infix_amp_is_bitwise_and();
   println("150 ok");
 }

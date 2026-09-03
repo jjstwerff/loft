@@ -447,7 +447,7 @@ without anyone having to remember.
 | `@FR-O-Borrow` | an aliasing value names its source; borrowers are skip-free | the `Deps` list; `Function::make_independent` strips a dep to promote a borrow to owner |
 | `@FR-O-Owner` · `@FR-O-Derived` | single owner; free is DERIVED, once, at scope exit | `Scopes::get_free_vars` (`src/scopes.rs`) — the scope-exit sweep |
 | `@FR-O-Move` | a returned store transfers to the caller — and a return that BORROWS a parameter is recorded, so the caller copies | TRANSFER: `get_free_vars`'s `ret_var` / `return_sources` suppression; `Parser::ref_return` (`src/parser/control.rs`). BORROW: `Def::returns_borrowed_view` reads the recorded dep, `use_analysis::call_return_frees_source` gates the source-free bit on it plus the @P290 bracket. ⚠ The borrow clause is recorded only where a delivery arm runs — `block_result` for `Text` / `Vector` / `Reference` / keyed, and `parse_return` for the explicit spelling; a return shape reaching neither records nothing and reads as OWNED (loft#1140 was the keyed kinds missing from both) |
-| `@FR-O-Complete` | per binding, per path — set-and-reconcile | `Scopes::scan_if`'s intersect of `owned_refs` across both arms (`src/scopes.rs`) |
+| `@FR-O-Complete` | per binding, per path — set-and-reconcile | `Scopes::scan_if`'s intersect of `owned_refs` across both arms (`src/scopes.rs`); and a bound value branch gives every arm tail a single bind would leave OWNING a temp of its own, so the joined binding has one fact — `Scopes::arm_bind` / `lift_join_arm_tails` (D-own-8) |
 | `@FR-O-NoDiverge` | both backends translate the SAME facts | structural: `scopes` decides and writes `OpFreeRef` into the IR; the emitters translate |
 
 **The load-bearing invariant is `O-Complete`, not soundness.** loft has no user-facing
@@ -544,10 +544,70 @@ permissive one, and put the unnamed shapes on the other side of it.
 `O-Proxy` carries the first checkable obligation in this space: *a site that FREES on the
 empty-deps proxy must also consult `O-Override`.*
 
-### ✅ That obligation is now enforced (2026-08-24)
+### ✅ That obligation is now enforced (2026-08-24, re-measured 2026-09-03)
 
 `scripts/o_proxy_check.py`, gated by `doc_hygiene::o_proxy_frees_consult_the_override` and
-runnable as `make o-proxy-check`. 20 positive proxy sites, 8 negated, **0 violations**.
+runnable as `make o-proxy-check`. **24 positive proxy sites, 5 negated, 6 no-binding,
+0 violations — of which 6 positives actually reach a free.**
+
+⚠ **That last number is the one to read, and for its first week it was ZERO.** The check
+shipped matching only free EMITTERS (`OpFree`, `free_ref`, `emit_free`) inside the region a
+condition gates — but `get_free_vars` is what emits `OpFreeRef`, and these sites conclude
+ownership in one function while the free lands in another. So 25 of 29 verdicts were `ok`
+because nothing in the region matched, not because anything was proved, and a green run
+carried no content. It reported `0 violations` over two sites that had none of the veto:
+`scan_set`'s displaced-owned dep strip and `gen_set_first_ref_var_copy`'s move.
+
+Four discriminations closed that (5-7 below plus an amendment to 1), and the check now
+prints its own control — `N of M reach a free` — so a run where that number collapses says
+so instead of passing quietly. The rule the added ones encode: **a free is REACHED, not only
+emitted.** A site reaches one by WRITING the fact the sweep reads, which is two shapes and
+not the whole writer API — `make_independent` / `without_deps` strip the deps so the sweep
+frees, and `set_skip_free` ON THE PROXIED BINDING is the spelling of a move, where the
+target has taken the store and will free it. Adding a dep is the restrictive direction;
+`mark_inline_ref` and minting a fresh temp touch a different binding. And a writer counts
+only when it NAMES the binding the condition concluded about — without that, a
+`mark_inline_ref(db)` three lines under a proxy read on `vec` reads as a free of `vec`.
+
+⚠ **The `no-binding` class has to keep the emitters.** `O-Override` is per-binding, so a
+site reading `depend()` off a bare Type cannot consult it — but `tuple_owned_elem_frees`,
+this check's original catch, reads `elems[idx].depend()` and frees through `OpFreeRef`
+anyway. Excusing it on the spelling retires the one regression the check exists for;
+verified by deleting its veto and confirming the check goes red.
+
+### Every proxy site declares which of the four facts it reads (2026-09-03)
+
+The obligation above is decidable only where a free is lexically reachable from the
+condition. For the rest it is not, and widening the window does not fix it: a site can
+conclude ownership in the parser and have its free emitted by `get_free_vars`. That is the
+invisibility `ownership.md` names — *"some legitimately want the proxy, some memo the oracle,
+and some free. Nothing in the source distinguishes them, and both compile."*
+
+So the site says which, in a vocabulary the gate parses:
+
+| declaration | sites | what the empty dep list decides there |
+|---|---|---|
+| `// @FR-O-Proxy asks free` | 9 | ownership, and a free follows wherever it is emitted — **`O-Override` is required with it** |
+| `// @FR-O-Proxy asks copy` | 8 | copy-vs-alias / materialise-vs-view; a wrong answer costs a copy, never a release |
+| `// @FR-O-Proxy asks alloc` | 4 | whether to ALLOCATE or null-init a store — the opposite direction from a free |
+| `// @FR-O-Proxy asks oracle` | 3 | an independent derivation that drives no emission (@PLN94's oracle, witness accounting) |
+
+**A declaration is a claim, so the gate disproves what it can**: a site declaring anything
+but `free` while a free IS visible in the region it gates is reported as a contradiction
+rather than trusted. What no gate here can catch is a site that declares `copy` and frees
+where the region cannot see — a much smaller residual than the one it replaces, and the
+honest limit of the close.
+
+⚠ **The pass corrected one of its own verdicts, and that is the part worth carrying.**
+`parse_field_iteration` reads like a free site and its own comment asserts the veto belongs
+there — *"a borrow/skip_free binding owns no allocation"* — so it was declared `free` and
+given `!is_skip_free(v)`. A differential probe then reported **8 of 1119 corpus files**
+arriving with a `skip_free` binding: a live behaviour change, where every other veto added
+that day was inert. The mechanism settled it — `copy_variable` + `remap_var_deep` hand each
+field block a FRESH binding, so the frees that follow are of those and never of the binding
+tested, which is exactly why discrimination 6 excludes minting. The site is `copy`.
+**A site's own comment is not a measurement, and a rule citation is not a licence to change
+behaviour without one.**
 
 **Three discriminations, each of which was a false positive first:**
 

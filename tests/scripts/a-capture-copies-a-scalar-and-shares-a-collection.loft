@@ -20,11 +20,24 @@
 // of every collection row.  That sentence is what these cells now hold up.
 //
 // @falsified-at: none — this guard states where a boundary IS, and both halves have been in
-//   these places for as long as the corpus records; there is no build on which it fails, which
-//   makes it a LOCK rather than a regression test.  Checked by hand in both directions: every
-//   assert below was inverted one at a time and each one failed, naming its own row.  Its
-//   value is the day someone makes a collection capture copy, or a scalar capture share, and
-//   the Closures chapter silently stops being true.
+//   these places for as long as the corpus records, which makes it a LOCK rather than a
+//   regression test.  Checked by hand in both directions: every assert below was inverted one
+//   at a time and each one failed, naming its own row.  Its value is the day someone makes a
+//   collection capture copy, or a scalar capture share, and the Closures chapter silently
+//   stops being true.
+//
+// ⚠ This header used to add "there is no build on which it fails", and that was FALSE.  It was
+//   measured on an ordinary build, where `[profile.dev.package.loft]` strips debug assertions,
+//   so the gates that do fail were not running.  `a_returned_closure_still_holds_its_captures`
+//   fails under debug assertions and under `LOFT_POISON=1` — `make_total` returns a closure
+//   over a LOCAL vector, the store dies with the frame, and the read comes back
+//   rec=3735928559 (0xDEADBEEF).  It reproduces on the installed 2026.8.0, so it is
+//   pre-existing and this guard exposed it: **loft#1308**, a deviation from `(L-Escape)`,
+//   whose evidence line only ever verified `mk(7)()` ⇒ 7 — a SCALAR capture, which is copied,
+//   so the heap case it also promises was never measured.
+//
+//   The cell is left exactly as written.  It asserts what the rule promises, and it is the
+//   promise that is not kept.
 
 struct Counter {
   hits: integer,

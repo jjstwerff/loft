@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{
-    DefType, HashSet, I32, IntegerSpec, Level, LexItem, LexResult, Mode, OUTPUT_DEFAULT,
+    AmpHead, DefType, HashSet, I32, IntegerSpec, Level, LexItem, LexResult, Mode, OUTPUT_DEFAULT,
     OutputState, Parser, Position, SKIP_TOKEN, SKIP_WIDTH, ToString, Type, Value,
     diagnostic_format, to_default, v_block, v_if, v_set,
 };
@@ -544,8 +544,18 @@ impl Parser {
                     t = t.base().clone();
                 }
                 self.var_usages(v_nr, true);
-                if let Type::Reference(d_nr, _) = self.vars.tp(*into)
-                    && let Type::Reference(vd_nr, _) = self.vars.tp(v_nr)
+                // `@FR-B-Copy`: a plain whole-value bind COPIES, so the destination is
+                // made INDEPENDENT of the source and ends up owning its own store.  Read
+                // through `base()`, because `S?` is `Optional(Reference(S))` — the same
+                // storage behind a nullability marker — and matching the wrapper-free
+                // spelling alone left the destination DEPENDING on the source, which is an
+                // alias: `bns = ns; ns.v = 99` then read 99 through `bns`, and the same for
+                // a nullable `vector` (loft#1319).  Nullability is not one of `(B-Copy)`'s
+                // three exceptions — `(B-View)` is a struct PROJECTION, `(B-View-Base)` a
+                // borrowed base, `(B-View-Depth)` an index or nested read — and this is a
+                // whole value off an owned local.
+                if let Type::Reference(d_nr, _) = self.vars.tp(*into).base()
+                    && let Type::Reference(vd_nr, _) = self.vars.tp(v_nr).base()
                     && d_nr == vd_nr
                 {
                     // Don't create OpCopyRecord here: generate_set handles the copy when
@@ -556,7 +566,17 @@ impl Parser {
                     let into_var = *into;
                     self.vars.make_independent(into_var, v_nr);
                     *code = Value::Var(v_nr);
-                    return Type::Reference(d_nr, crate::data::Deps::none());
+                    // The COPY is what this arm decides; whether the value may be ABSENT is
+                    // the source's own fact and survives it.  `t` already carries that,
+                    // including the flow-narrowing peel above, so a source proven non-null
+                    // in this branch answers the bare type and a `τ?` stays `τ?` — dropping
+                    // the marker here would make `bns` non-null and lose the null arm.
+                    let bare = Type::Reference(d_nr, crate::data::Deps::none());
+                    return if matches!(t, Type::Optional(_)) {
+                        Type::Optional(Box::new(bare))
+                    } else {
+                        bare
+                    };
                 }
                 *code = Value::Var(v_nr);
             } else {
@@ -3445,7 +3465,18 @@ impl Parser {
                 // about — see `Type::Reference` vs `Type::RefVar`.)  Open the head only for
                 // that field type, so a `&` in a field of any OTHER type stays the
                 // sub-expression use the rule forbids.
-                self.amp_head = matches!(td, Type::Reference(_, _));
+                //
+                // Read through `base()`: a `?` on the field says the pointer may be
+                // absent, not that the field stopped being a pointer — `@FR-L-Null`
+                // gives `τ?` the same bytes as `τ`, so `reference<T>?` asks for the
+                // same `&` binding `reference<T>` does.  Matching the unpeeled type
+                // refused the terminator-carrying spelling of the very idiom this arm
+                // exists for (loft#1316).
+                self.amp_head = if matches!(td.base(), Type::Reference(_, _)) {
+                    AmpHead::StoredRefField
+                } else {
+                    AmpHead::No
+                };
                 // loft#1067 — a field's DECLARED type is an inference context, so a short
                 // lambda may stand as its value: `H { f: |x| { x * 2 } }` says exactly what
                 // `takes(|x| { x * 2 })` says, and used to be refused only because the `⇐`
@@ -3457,7 +3488,7 @@ impl Parser {
                 }
                 let t = self.parse_operators(&td, &mut value, &mut parent_tp, 0);
                 self.expected = saved_expected;
-                self.amp_head = false;
+                self.amp_head = AmpHead::No;
                 t
             };
             // #330: an initialiser that READS the in-place target is hoisted
@@ -3629,6 +3660,12 @@ impl Parser {
                         &[Value::Var(*v_nr), Value::Var(orig)],
                     ));
                     list.push(self.cl("OpInitRefSentinel", &[Value::Var(*v_nr)]));
+                    // Enforces @FR-O-Detach: the detach lands AFTER the field initialisers
+                    // have been hoisted into temporaries, so a field that reads the parameter
+                    // (`p = S{x: p.x + 1}`) reads it while it is still intact.  Its twin for
+                    // every other right-hand side is `expressions.rs::rebind_local_heap_param`,
+                    // which lost that ordering and answered null (loft#1312).
+                    //
                     // The literal builds IN PLACE, so the detach has to sit here, between
                     // the construction's own ops.  Tell `parse_assign_op` — which carries
                     // the same lowering for every OTHER right-hand side — that this

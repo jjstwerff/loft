@@ -32,7 +32,7 @@ fn run_leak_check_str(code: &str) {
         "parse errors: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     // Uncomment for IR/bytecode dump when debugging a new leak:
@@ -61,7 +61,7 @@ fn leaks_for(code: &str) -> Vec<String> {
         .map(|e| e.to_string_compact())
         .collect();
     assert!(errors.is_empty(), "parse errors: {errors:?}");
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     state.execute("test", &p.data);
@@ -263,7 +263,7 @@ fn p146_script_95_alias_copy_leak() {
         "parse errors: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let mut config = loft::log_config::LogConfig::full();
@@ -293,7 +293,7 @@ fn p147_script_81_iterator_protocol_leak() {
         "parse errors: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let mut config = loft::log_config::LogConfig::full();
@@ -317,7 +317,7 @@ fn p148_script_45_field_iteration_leak() {
         "parse errors: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let mut config = loft::log_config::LogConfig::full();
@@ -350,7 +350,7 @@ fn p149_script_76_nested_struct_segv() {
         "parse errors: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let mut config = loft::log_config::LogConfig::full();
@@ -459,7 +459,7 @@ pub fn test() {
         .map(|e| e.to_string_compact())
         .collect();
     assert!(errors.is_empty(), "parse errors: {errors:?}");
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     state.execute("test", &p.data);
@@ -516,7 +516,7 @@ pub fn test() {
         .map(|e| e.to_string_compact())
         .collect();
     assert!(errors.is_empty(), "parse errors: {errors:?}");
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     state.execute("test", &p.data);
@@ -576,7 +576,7 @@ pub fn test() {
         .map(|e| e.to_string_compact())
         .collect();
     assert!(errors.is_empty(), "parse errors: {errors:?}");
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     state.execute("test", &p.data);
@@ -666,7 +666,7 @@ pub fn test() {
         .map(|e| e.to_string_compact())
         .collect();
     assert!(errors.is_empty(), "parse errors: {errors:?}");
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     state.execute("test", &p.data);
@@ -718,7 +718,7 @@ fn p150_moros_map_serial_leak() {
         .map(|e| e.to_string_compact())
         .collect();
     assert!(errors.is_empty(), "parse errors: {errors:?}");
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     for name in [
@@ -762,7 +762,7 @@ fn brick_buster_yield_resume() {
     if p.diagnostics.level() >= loft::diagnostics::Level::Error {
         panic!("parse errors: {:?}", p.diagnostics.lines());
     }
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
 
@@ -1485,7 +1485,7 @@ pub fn test() {
         "parse errors: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     state.execute("test", &p.data);

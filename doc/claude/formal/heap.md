@@ -235,9 +235,8 @@ emits a free on a store the value provably OWNS, at its last use, so LIFO holds,
 never freed, and nothing freed is later read.
 
 ⚠ **That discharge is only as strong as the checker's register, and the register is not at
-zero.** `ownership.md` is at `OPEN: 3` — `D-own-26` (free-deciding proxy sites that never consult
-`O-Override`), `D-own-16` (a value that reads the local it assigns never frees what it
-displaces) and `D-own-8` (*"a Join's ownership fact is true on one path only"*). The last is a
+zero.** `ownership.md` is at `OPEN: 1` — `D-own-8` (*"a Join's ownership fact is true on one
+path only"*); `D-own-16` and `D-own-26` both closed 2026-09-03. What is left is a
 PATH-COMPLETENESS gap, precisely the property `H-Sound` leans on. So
 the free rules below are currently discharged by a checker with an open hole in the relevant
 direction. Re-read that entry before treating a free fault here as impossible. This doc
@@ -263,9 +262,10 @@ contract (this file). What remains is the SAME meta-deviation, not a heap-specif
   supplies the contract the oracle's heap-touching cases are read against.
 - **The lifetime side has the strongest standing proof, and it is not complete.** The free
   discipline's soundness (`H-Sound`) rests on [ownership.md](ownership.md), whose register was
-  at 0 when this line was written (2026-07-04) and is at **`OPEN: 3`** today, of which
-  `D-own-8` — a Join's ownership fact holding on one path only — is a path-completeness gap,
-  and path-completeness is what `H-Sound` consumes — so the discharge is real but qualified.
+  at 0 when this line was written (2026-07-04), re-opened, and back at **`OPEN: 0`** on
+  2026-09-03: the last entry, `D-own-8` — a Join's ownership fact holding on one path only —
+  was a path-completeness gap, which is what `H-Sound` consumes, and it closed by giving every
+  path of a value branch its own binding — so the discharge is real again.
   ⚠ A claim about another doc's register goes stale silently; re-read the register rather
   than this sentence.
 

@@ -23,13 +23,262 @@
 <nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <a href="38-call-it-yourself.html">Call it yourself</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries.html">Optional C libraries</a> · <a href="stdlib-system-directories.html">System directories</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations.html">Vector operations</a> · <a href="stdlib-stack-traces.html">Stack traces</a> · <a href="stdlib-coroutines.html">Coroutines</a> · <a href="stdlib-json.html">JSON</a> · <a href="stdlib-type-reflection.html">Type reflection</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>hex_form API</h1>
 <article>
-<p><a href="lib-hex_form.html">← hex_form</a> · version 0.1.0</p>
-<p>The registry does not record a public surface for <code>hex_form</code> 0.1.0. The field was added after this version was published, and it is filled from source at a package's next release — so this page fills itself in when <code>hex_form</code> ships again.</p>
-<p>Both of these work today:</p>
-<pre><code>loft api hex_form
-</code></pre>
-<p>prints the surface with its documentation, read from the package itself; and the source is the other route.</p>
-<p><a href="https://github.com/loft-lang/loft-libs-world/tree/main/hex_form">https://github.com/loft-lang/loft-libs-world/tree/main/hex_form</a></p>
+<p><a href="lib-hex_form.html">← hex_form</a> · version 0.1.2</p>
+<p class="lib-legend">56 public items, in source order. Generated from the registry index, which re-derives them from the package source at publish time — so a signature here is the one that version actually ships.</p>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_write</span>(f: <span class="en">Form</span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>── C2/C4: the layout ──────────────────────────────────────────────────────</p>
+<p>One element per line, single-space separators, no trailing space. Fields in declaration order: <code>stencil &lt;name&gt; h0 &lt;n&gt;</code> then one <code>side &lt;i&gt; len &lt;l&gt; turn &lt;t&gt;</code> per side, in index order.</p>
+<p>Example: @HXF-001</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_canon</span>(f: <span class="en">Form</span>) -&gt; <span class="en">Form</span></code></pre>
+<p>THE CANONICAL SPELLING — smallest <code>(turns, lens, h0)</code> over the n cyclic starts.</p>
+<p>Example: @HXF-004</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_canon_text</span>(f: <span class="en">Form</span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>The canonical text of a form, whichever corner it happened to be written from.</p>
+<p>Example: @HXF-004</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_read_name</span>(t: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>The name a text was written with. It is NOT part of the model — <code>Form</code> has no name field — so a round trip carries it only if the caller carries it.  Names are ONE WORD: the layout puts <code>h0</code> in the third field, so a name with a space writes a text this reader refuses.</p>
+<p>Example: @HXF-003</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_read</span>(t: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">Form</span></code></pre>
+<p>Parse a canonical text back into a Form. Returns a 0-sided form if the text does not have the canonical shape — the caller checks, and the gate treats that as a refusal.</p>
+<p>Example: @HXF-002</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_eq</span>(a: <span class="en">Form</span>, b: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Are two forms the same shape?  Compares the model rather than the text, which is what makes <code>form_eq(f, form_read(form_write(f)))</code> a round-trip check and not a tautology.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">head_norm</span>(h: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Normalise a heading to 0..11.</p>
+<p>EVERY index of the table goes through here.  A running heading is <code>h0 + sum(turn)</code> and the turns are -5..6, so it leaves 0..11 constantly — a 4-sided cycle turning 3 each time reaches h = 12 on its last side.  Two things then go wrong SILENTLY if the raw value is used: in loft a negative index reads from the END of a vector instead of returning null, and an index at or past the length returns null rather than wrapping.  Both hand back a plausible wrong answer, which is why this is the first function in the file.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">head_step</span>(h: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>The step for heading <code>h</code>, as (dk, dm) in doubled coordinates.</p>
+<p>Ordered counter-clockwise from +x: h = 0 is due east, and each step is +30 degrees.  Even h are the edge neighbours, odd h the vertex directions.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">head_n2_4</span>(h: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>4 * the squared world length of the step — EDGE_N2_4 or VERTEX_N2_4, exactly.</p>
+<p>Example: @HXF-007</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">head_is_edge</span>(h: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>An even heading is an edge-neighbour direction; an odd one points at a vertex.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rot60_k</span>(k: <span class="ty"><a href="stdlib-types.html">integer</a></span>, m: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The exact 60-degree rotation on doubled coordinates (ROUNDTRIP.md §1, constraint X1).</p>
+<p>Both halves stay integral because every lattice point satisfies k = m (mod 2): k's parity is <code>r &amp; 1</code> and m = 3r has the same parity.  On the heading table this acts as h -&gt; h + 2, which is what makes the six rotations of O a subgroup of the twelve headings.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rot60_m</span>(k: <span class="ty"><a href="stdlib-types.html">integer</a></span>, m: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The <code>m</code> of the same 60-degree rotation <code>rot60_k</code> gives the <code>k</code> of.  Rotate a step by walking both, and the result is still exactly on the lattice.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">refl_k</span>(k: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The exact reflection (constraint X2).  On the heading table this acts as h -&gt; 6 - h.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">refl_m</span>(m: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The <code>m</code> of the reflection — unchanged, since the mirror is about the m axis.  Present so a caller reflects by walking the same pair it rotates by, rather than special-casing one.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">head_of_step</span>(dk: <span class="ty"><a href="stdlib-types.html">integer</a></span>, dm: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The heading whose step is (dk, dm), or -1 if no heading has that step.  Used by the gate to check the table against hex_field's neighbours, and later by recovery.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Form</span></code></pre>
+<p>── LAW J — A STENCIL BOUNDARY IS A CLOSED TURTLE CYCLE (step S1) ───────────</p>
+<p>A Form is a walk: start facing <code>fm_h0</code>, and for each side walk <code>fm_len[i]</code> steps in the current heading, then turn by <code>fm_turn[i]</code>.  It is admissible only if it CLOSES, and that is two independent conditions:</p>
+<p>sum(len_i * e(h_i)) = (0, 0)     the walk returns to its start sum(turn_i)         = 12         it turned through exactly one revolution</p>
+<p>NEITHER IMPLIES THE OTHER, and the gate proves it both ways.  The last turn happens AFTER the last side, so it cannot move the endpoint — a wrong final turn leaves the vector sum at (0,0) and is caught only by the turn total.  Conversely a wrong LENGTH leaves the turn total at 12 and is caught only by the vector sum.</p>
+<p>THE TURN TOTAL IS +12, NOT -12.  A cycle walked the other way round is the same shape with turn total -12, so requiring +12 picks one spelling of the two — the canonical-form rule C3 (<code>DESIGN.md</code> §3) applied at its cheapest point, before anything is written down.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_new</span>(h0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, lens: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;, turns: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) -&gt; <span class="en">Form</span></code></pre>
+<p>Build a form: the heading its first side runs in, then a length and a turn per side. This is the only constructor — every other routine here reads one or places one.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_sides</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>How many sides the form has.  The bound for any walk over it, and 0 for the refusal form, which is why a caller can treat &quot;no sides&quot; as &quot;nothing to draw&quot;.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_heading</span>(f: <span class="en">Form</span>, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The heading side <code>i</code> runs in: the start heading plus every turn taken before it.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_turn_sum</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The turns added up.  A closed form's total is a full circle, so this is the cheap test for whether the walk comes back — checkable without generating a single coordinate.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_close</span>(f: <span class="en">Form</span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Where the walk ends up, relative to where it started, in doubled coordinates.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_closes</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Law J.  Both conditions, and a side count that can bound a region at all.</p>
+<p>Example: @HXF-006</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">perp_k</span>(_k: <span class="ty"><a href="stdlib-types.html">integer</a></span>, m: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>── WHY A LATTICE POLYGON CANNOT BE A RECTANGLE (step S1, OD-11) ────────────</p>
+<p>Two headings 90 degrees apart exist (0 and 3), so a turtle cycle CAN turn a right angle. What it cannot do is make both sides quantise the same way, and that is a property of the hex lattice rather than of this table:</p>
+<p>the perpendicular of (k, m) is (-m, 3k)          3*k*(-m) + m*(3k) = 0 its 4*len^2 is  3m^2 + 9k^2 = 3 * (3k^2 + m^2)   EXACTLY 3x the original</p>
+<p>Any lattice vector along that perpendicular is an integer multiple of the primitive one, so its length is sqrt(3) * (a rational) times the original — never equal, because sqrt(3) is irrational.  THERE IS NO SQUARE SUBLATTICE OF A HEXAGONAL LATTICE (a lattice cannot carry both 4-fold and 6-fold symmetry), so no choice of headings gives a rectangle whose two sides are counted in the same unit.</p>
+<p>That is why <code>housedraw</code>'s Plan is a CONTINUOUS rectangle rasterised centre-in-region, and why it — not a turtle cycle — is domain A's shape primitive.  See DESIGN.md §10.4.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">perp_m</span>(k: <span class="ty"><a href="stdlib-types.html">integer</a></span>, _m: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The <code>m</code> of the perpendicular <code>perp_k</code> gives the <code>k</code> of: the step turned a quarter turn, which is how an outward normal is taken without leaving the integers.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">vec_n2_4</span>(k: <span class="ty"><a href="stdlib-types.html">integer</a></span>, m: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>4 * the squared world length of an arbitrary doubled-coordinate vector.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_holds</span>(wid: <span class="ty"><a href="stdlib-types.html">integer</a></span>, dep: <span class="ty"><a href="stdlib-types.html">integer</a></span>, k: <span class="ty"><a href="stdlib-types.html">integer</a></span>, m: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Is the cell at doubled offset (k, m) from the plan's centre inside a wid x dep plan?</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_u_can_tie</span>(wid: <span class="ty"><a href="stdlib-types.html">integer</a></span>, k: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Can a cell centre ever lie exactly ON the boundary?  No — and this returns the reason as a checkable fact rather than a comment: the u test compares an even to an odd number.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_poly_k</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;</code></pre>
+<p>The turtle polygon's vertices, in doubled (k,m) RELATIVE to the start.  One vertex per side: the point the walk is standing on before it walks that side.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_poly_m</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;</code></pre>
+<p>The <code>m</code> coordinates of the form's corners, in walk order — the companion of <code>form_poly_k</code>.  Zip the two to get the polygon a renderer or an area check wants.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">poly_holds</span>(vk: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;, vm: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;,</code></pre>
+<p>Is (pk, pm) inside or ON the closed polygon?  Exact integer arithmetic throughout: the on-edge test is a zero cross product, and the crossing test compares a cross product's SIGN rather than computing an intersection, so there is no division and no epsilon anywhere.</p>
+<p>ON THE BOUNDARY COUNTS AS INSIDE, and that is the whole reason the closed forms come out integral: the turtle traces the centres of the boundary ring, so those cells ARE the shape.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_fill</span>(f: <span class="en">Form</span>, cq: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cr: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>THE ROUTINE: fill a closed Form into <code>cells</code>, anchored so the walk starts at cell (cq, cr).</p>
+<p>A NON-CLOSING FORM IS REFUSED, NOT PATCHED (the control).  Law J is the admission test; a walk that does not return to its start bounds no region, and silently filling &quot;what it would have enclosed&quot; would invent a shape the author never wrote.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_shoelace2</span>(cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>TWICE THE SIGNED AREA of the set's boundary, in doubled (k,m) units — summed over every boundary edge directly, so it needs no loop tracing: the shoelace of a closed loop is the sum over its edges, and summing over all loops is summing over all edges.</p>
+<p><code>hex_edge_corners(dir)</code> gives the edge's two corners in the winding order that makes the outer boundary positive and an enclosed hole negative, which is what makes <code>= 12 * cells</code> a real check on enclosure and not just on count.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">tri_cells</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>── THE CLOSED FORMS — predicted, not read off the fill ────────────────────</p>
+<p>Each is the count of lattice points inside-or-on the shape in the CENTRE basis (spanned by one edge step and the next-but-one), so each is a plain combinatorial identity rather than a measurement:</p>
+<p>triangle side n   the lattice points of a right triangle (n+1)(n+2)/2 rhombus a x b     a box in the centre basis, (a+1)(b+1) hexagon side n    the hex region of radius n, 3n^2 + 3n + 1</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rhombus_cells</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>How many cells an a-by-b rhombus covers, without building it.  Size a buffer, or reject a request as too large, before paying for the cells.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hexagon_cells</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>How many cells a hexagon of radius n covers — the same question as <code>rhombus_cells</code> for the other common shape, and the same reason to ask it first.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">boundary_ends</span>(cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>PART 1a — dangling ends.  A closed loop has NONE: every boundary vertex is entered and left.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">boundary_branches</span>(cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>PART 1b — pinches.  crawler's tracer relies on a hex boundary never pinching at a vertex (each vertex touches exactly 3 mutually adjacent cells), verified there over 412 forms — a T2 claim, re-measured here as a gate rather than assumed.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">boundary_loops</span>(cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>PART 1c — how many separate closed loops the boundary forms.  ONE means the region is a single simply-connected shape; TWO means it has a hole (the outer loop plus the hole's), which is <code>I3</code>'s named failure.  Label propagation over the edge graph — the edge count is small and this needs no auxiliary structure.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_is_convex</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>── A4 — LAW J IS NOT A SUFFICIENT ADMISSION RULE ──────────────────────────</p>
+<p>Law J asks only that the walk CLOSES: <code>Σ turn = 12</code> and the vector sum is zero.  Rung A4 grew the space to unequal sides and REFLEX corners, and found law J admits two things it must not:</p>
+<p>NON-SIMPLE walks — a repeated vertex, so the &quot;polygon&quot; crosses or touches itself and has no well-defined inside. NON-CONVEX forms — which VIOLATE LAW F.  Measured over the 70 simple non-convex 4-sided forms: 62 of 70 at unit scale, and still 36 of 70 grown five times, draw a field that some OTHER form also draws.  <code>draw</code> is not injective there, so no recovery — hull, tracing, or anything else — can tell them apart. Scaling shrinks the failure but never removes it.</p>
+<p>THAT IS A MODEL-SPACE LIMIT, NOT A METHOD LIMIT, and it is why the fix is at the DOORSTEP (<code>K-FIT</code>): the editor refuses a non-convex stencil at authoring time rather than letting one be drawn and fail to come back.  <code>DESIGN.md</code> §5.2 — a restriction the census finds is a fact to record, not a defect to engineer away.</p>
+<p>A convex form is exactly one whose turns are all POSITIVE: every exterior angle turning the same way, summing to one revolution.  A turn of 0 is a straight join, which is a re-spelling of a longer side rather than a corner, so it is refused too.</p>
+<p>Example: @HXF-005</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_is_simple</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Does the walk visit any point twice?  A repeated vertex means the boundary is not a simple closed curve, so &quot;inside&quot; is not defined and the fill is meaningless.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_admissible</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>THE ADMISSION RULE, as A4 leaves it: closed (law J), simple, and convex.</p>
+<p>Example: @HXF-005</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">cell_x</span>(q: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>A cell centre's world x.  The one place the exact lattice becomes a float, and it is deliberately at the EDGE of the library: everything upstream stays integer.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">cell_y</span>(q: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>A cell centre's world y — the other half of <code>cell_x</code>.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">fabs</span>(v: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>Absolute value for floats, used by the world-space helpers below.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Plan</span></code></pre>
+<p>── the plan: a rectangle in its own frame ──────────────────────────────────</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_new</span>(cq: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cr: <span class="ty"><a href="stdlib-types.html">integer</a></span>, wid: <span class="ty"><a href="stdlib-types.html">integer</a></span>, dep: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
+<p>Place a form in the world: which cell it is centred on, how wide and deep, which of the six exact rotations, and whether it is mirrored.  The Plan is the frame and the Form is the shape — keeping them apart is what lets one shape be placed many times.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_flip</span>(p: <span class="en">Plan</span>) -&gt; <span class="en">Plan</span></code></pre>
+<p>A flip toggles the chirality and NOTHING else — no side remapping, no t -&gt; 1-t. If an implementation finds itself remapping, the frame rule above is wrong somewhere.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_hw</span>(p: <span class="en">Plan</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>Half the plan's width in world units — the extent a caller needs for a bound or a hit test, without reconstructing the frame.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_hd</span>(p: <span class="en">Plan</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>Half the plan's depth in world units, the companion of <code>plan_hw</code>.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_to_world</span>(p: <span class="en">Plan</span>, lu: <span class="ty"><a href="stdlib-types.html">float</a></span>, lv: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>A point in the plan's own frame, expressed in the world.  The rotations are the six exact lattice ones, so this and <code>plan_to_local</code> invert each other rather than drifting.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_to_local</span>(p: <span class="en">Plan</span>, px: <span class="ty"><a href="stdlib-types.html">float</a></span>, py: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>A world point expressed in the plan's frame — the inverse of <code>plan_to_world</code>, and how a click or a probe is asked &quot;where is this ON the plan?&quot;.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_side_point</span>(p: <span class="en">Plan</span>, side: <span class="ty"><a href="stdlib-types.html">integer</a></span>, t: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>A point a fraction <code>t</code> along one side of the plan, in world coordinates.  Use it to place a door, a label or a joint without computing the side's endpoints yourself.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_side_normal</span>(p: <span class="en">Plan</span>, side: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>Outward, unit — taken from the MASSING (centre -&gt; side midpoint), never from the endpoint order.  Reading it off B - A lets a broken endpoint rule supply its own definition of outward, and the facade gate can then never fire.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">SideRun</span></code></pre>
+<p>── the boundary edges lying on one side, with their reading parameter ──────</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">side_run_len</span>(sr: <span class="en">SideRun</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>How many entries the run holds — the bound for walking one side's collected points.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">side_edges</span>(p: <span class="en">Plan</span>, cells: <span class="en">HexSet</span>, side: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">SideRun</span></code></pre>
+<p>Which side an edge lies on, and where along it.  An edge's midpoint is the midpoint of the two cell centres it separates — the shared edge bisects that line — so no corner table is needed.</p>
+</div>
 
   </article>
 <script src="search-index.js"></script>

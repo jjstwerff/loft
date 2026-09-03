@@ -10,9 +10,10 @@
 // (D-bind-12's collection half; a nested field read; a vector index read).  This file is the
 // answer to "does THIS bind copy?", and every cell is measured identical on both backends.
 //
-// The rule, over these eleven cells:
+// The rule, over these fifteen cells:
 //
-//   COPY  a whole VALUE (`d = v`, `p = o`) and every scalar
+//   COPY  a whole VALUE (`d = v`, `p = o`) and every scalar — nullable or dense, since
+//         `@FR-L-Null` makes `τ?` the same storage and the rule is written for every `τ`
 //   COPY  a ONE-LEVEL projection off an OWNED base whose type is a COLLECTION (`af = bx.v`)
 //   VIEW  a ONE-LEVEL projection off an OWNED base whose type is a STRUCT  (B-View: the one
 //         place aliasing is the default, because it names an interior place)
@@ -22,6 +23,19 @@
 //
 // `OWNERSHIP_MODEL § The law` is the prose; a view materialises where @PLN130's three
 // disturbance events end the place it names.
+//
+// ⚠ **The NULLABLE cells at the bottom are here because the file read green without them.**
+// Every one of the original eleven declared its bound source non-null — `??` appeared only
+// inside an element-read assertion, never as a subject — so the one axis the boundary broke
+// on was the one axis this file never moved: `b = a` with `a: vector<integer>?` aliased, and
+// so did a nullable struct, while eleven cells and both backends agreed (loft#1319).  A
+// boundary file is only as wide as the axes its subjects range over, and "does THIS bind
+// copy?" is not answerable from cells that all spell their subject the same way.
+//
+// @falsified-at: dad9b359 — interpret exit 1 -> 0, interpret 2 assertion failures -> 0,
+//   native exit 1 -> 0, native 1 assertion failures -> 0.  The moving cells are the four
+//   nullable ones added below; the original eleven pass on that build and on this one, which
+//   is what makes them the boundary rather than further instances.
 
 struct BdIn { k: integer }
 struct BdHold { vecf: vector<integer>, strf: BdIn }
@@ -115,4 +129,39 @@ fn test_struct_tuple_element_off_a_borrowed_base_is_a_view() {
     p.0 = BdIn { k: 9 };
     assert(c.k == 9, "borrowed-base struct tuple element copied: {c.k}");
   }
+}
+
+// ── COPY: the same whole values, spelled NULLABLE ────────────────────────────────────
+// `@FR-B-Copy` is written for every `τ`, and `@FR-L-Null` gives `τ?` the same storage as
+// its dense twin, so each of these must answer exactly as the cell it mirrors above.
+fn test_whole_var_nullable_vector_copies() {
+  x: vector<integer>? = [1, 2];
+  c = x;
+  x[0] = 9;
+  assert(len(c ?? []) == 2 && (c ?? [])[0] == 1, "nullable whole vector bind aliased: {c}");
+}
+
+fn test_whole_var_nullable_struct_copies() {
+  s: BdIn? = BdIn { k: 1 };
+  c = s;
+  s.k = 9;
+  assert((c ?? BdIn { k: 0 }).k == 1, "nullable whole struct bind aliased");
+}
+
+fn test_whole_var_nullable_keyed_copies() {
+  h: hash<BdIn[k]>? = [BdIn { k: 1 }];
+  c = h;
+  assert(len(c ?? []) == 1, "nullable whole keyed bind lost its element: {len(c ?? [])}");
+}
+
+// An ABSENT source binds ABSENT.  The copy above must not turn absence into emptiness —
+// they are different values, and a bind that answers `[]` for `null` is as wrong as one
+// that aliases.
+fn test_an_absent_source_binds_absent() {
+  v: vector<integer>? = null;
+  cv = v;
+  assert(cv == null, "an absent vector source bound something");
+  s: BdIn? = null;
+  cs = s;
+  assert(cs == null, "an absent struct source bound something");
 }

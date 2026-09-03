@@ -1518,6 +1518,9 @@ fn collect_witness_vars(data: &crate::data::Data, def_nr: u32) -> HashSet<u16> {
         counts: &mut HashMap<u16, (u32, u32)>,
     ) {
         let vars = data.def(def_nr).variables();
+        // @FR-O-Proxy asks oracle — this counts owned-vs-borrow assignments to pick the
+        // witness vars, and takes the real per-value answer from @FR-O-Oracle below
+        // (`ownership_of`).  The proxy only narrows the candidate set; it frees nothing.
         let is_candidate = !vars.is_argument(v)
             && matches!(vars.tp(v), Type::Reference(_, _) | Type::Enum(_, true, _))
             && vars.tp(v).depend().is_empty();

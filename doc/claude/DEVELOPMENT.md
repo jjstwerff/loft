@@ -65,6 +65,21 @@ plus any bugs found along the way.  Two consequences:
   `origin/main` in** (rebase conflicts against squash-merged duplicates), reconciling
   conflicts to keep both sides' features; where both branches converged on the same fix,
   take the mainline's canonical form and keep any local improvement on top.
+- ⚠ **`git checkout --theirs <file>` takes the WHOLE FILE, not the conflicted hunk.**  Every
+  other change your side made to that file is reverted with it, silently, and the diff you
+  review afterwards looks like a resolution rather than a loss.  Measured twice here: a
+  2026-09-02 join resolved `tests/docs/25-generics.loft` that way and dropped 101 lines of
+  chapter for 32 — the `<T, U>` restriction, the note that generic structs do not exist, an
+  empty-vector caveat and its assertion — and the branch's own log already carried the same
+  lesson from an earlier pick (*"Three chapters re-read after the release picks moved them,
+  and all three had lost something"*).  Resolve a conflicted SOURCE file by editing the
+  markers and keeping both halves; reserve `--ours`/`--theirs` for generated artefacts, which
+  you then REGENERATE rather than trusting either side.  The tell that you took a whole file
+  by accident is a diff far larger than the conflict was.
+- **A count that both sides changed is a MEASUREMENT, not a merge.**  Where a conflict is a
+  tracked number — an audit row, a site census — re-run the tool on the merged tree instead of
+  picking a side or splitting the difference.  The same join found `678 | 324 | 5 | 349` and
+  `678 | 325 | 5 | 348`, and the merged tree was neither.
 
 ---
 
@@ -104,13 +119,29 @@ The branch is merged to main via a single PR when all items pass CI.
   consumer's tree writes `native-auto/` and `.loft/` and is not read-only).
 
   **`scripts/revalidate_libs_local.sh` is that, for the whole registry** — one library is
-  the advice the incident produced and the gate is all 40. It reads the matrix from
-  `../loft-registry/index.json` (the workflow's own source), extracts each release TAG with
-  `git archive` so the sibling clones are never written to, runs the suite, and re-classifies
-  a failure exactly as the workflow does. Run it after any `src/**` or `default/**` change
-  that a library could notice. `--self-test` first if you are about to trust a green: it
-  injects a compile break and a runtime break and asserts the two are reported DIFFERENTLY.
-  A SKIP is not a pass — it means that repo is not cloned beside this one.
+  the advice the incident produced and the gate is all 42. It reads the matrix from
+  `../loft-registry/index.json` through `scripts/revalidate_matrix.py`, which is the
+  workflow's source too, extracts each release TAG with `git archive` so the sibling clones
+  are never written to, runs the suite, and re-classifies a failure exactly as the workflow
+  does. Run it after any `src/**` or `default/**` change that a library could notice.
+  `--self-test` first if you are about to trust a green: it injects a compile break and a
+  runtime break and asserts the two are reported DIFFERENTLY, and checks the shared matrix
+  policy on inputs each of its rules has to act on. A SKIP is not a pass — it means that
+  repo is not cloned beside this one.
+
+  **A clean run reads `42 pass, 0 runtime/env, 0 skipped, 0 COMPILE-BREAK` and exits 0.**
+  It did not until loft#1315: the matrix policy was written twice, once in the workflow and
+  once here, and the local copy was missing the workflow's skip of the `loft` package. That
+  package is the COMPILER — its `tests/` is this repo's own suite and holds fixtures that
+  are deliberately not standalone programs — so the re-classifier read 26 of its 400 files
+  as a language break and the summary said `1 COMPILE-BREAK` on a tree with nothing wrong
+  in it, against the very binary the package was published with. The exit status was
+  therefore 1 on every run, a real break read `2 COMPILE-BREAK` — one character from the
+  baseline everyone had learned to ignore — and the closing sentence about the freeze
+  printed on every green run. **If your run is not zero, read the rows: a number whose zero
+  is not zero measures nothing.** The two readers now share one policy file, which also
+  settled three quieter disagreements between them (the known-broken map, the `subpath`
+  default, and whether a YANKED version may be validated — it may not).
 
   ⚠ That self-test earned its place immediately: it found the shipped gate misclassifying.
   `loft --dump` WRITES a `tests/.loft` cache directory beside the file it compiles, the glob

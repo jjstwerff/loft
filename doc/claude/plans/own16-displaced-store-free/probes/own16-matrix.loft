@@ -1,0 +1,163 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// D-own-16 step 0 — the falsifier, RED before anything is touched.
+//
+// Measures the boundary of "a binding releases the store it displaces".  Every cell asserts
+// its VALUE (all of them are correct today — that is the point: only the leak channel speaks)
+// and the leak is read off stderr at program exit.
+//
+// ⚠ THIS FILE DOES NOT LIVE IN `tests/scripts/` YET, and that is deliberate.
+//   `tests/wrap.rs`'s Part-B leak gate hard-FAILS any script that leaks, and its allowlist
+//   `SCRIPTS_LEAK_ALLOW` was deliberately driven to empty ("the leak gate fails on any NEW
+//   leak") — grandfathering an entry back would regress that work.  `@EXPECT_FAIL` is not the
+//   escape either: `tests/native.rs:929` drops any file DECLARING the tag from the native
+//   suite wholesale, and step 0's exit criterion needs BOTH backends (loft#1311).  So it is run by hand
+//   from here, and moves into `tests/scripts/` in the step-4 commit that turns it green —
+//   that move IS the guard's falsification record.
+//
+// ONE STRUCT TYPE PER CELL, on purpose.  The leak report prints `kt=<n> <Type>×<count>`, so
+// distinct types make the report attribute leaks to the cell that produced them.  With a
+// single shared type the cells sum into one number and a half-fix reads like a whole one.
+//
+// ⚠ CALL THE SUBJECT ONCE, into a local, and assert on THAT.
+//   `assert(f() == n, "got {f()}")` runs `f` TWICE — loft evaluates the message eagerly, so
+//   the interpolation is a second call whether or not the assertion fails.  Cells 4 and 6
+//   were written that way first and measured 6 leaks where the shape leaks 3: a probe that
+//   double-counts reads exactly like a defect twice as bad as the one you have, and a later
+//   half-fix taking 6 to 3 would read as progress while changing nothing.
+//
+// HOW TO RUN
+//   ./target/release/loft --interpret <this file>
+//   LOFT_NATIVE_LEAK_CHECK=1 ./target/release/loft --native <this file>
+//     (`make check-rlib` FIRST — `cargo build --bin loft` does not rebuild the rlib the
+//      native path links, and a stale one makes a native result evidence of nothing.
+//      A bare `--native` run prints NO leak report at all and reads clean on a build
+//      carrying every one of these leaks.)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RED cells — these leak today.  Each must reach 0 in step 4.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Cell 1 — the callee READS the local and always MINTS.  `(O-Move)` already says the
+// returned store is fresh (the return type carries no dep), so the displaced store is
+// definitely dead — yet nothing frees it.  EXPECT today: MintOnly×9.
+struct MintOnly { x: integer }
+fn mint_only(s: MintOnly?, i: integer) -> MintOnly? { MintOnly { x: (s?.x ?? 0) + i } }
+
+fn cell_1_call_reads_and_mints() {
+  c: MintOnly? = MintOnly { x: 5 };
+  for i in 0..10 { c = mint_only(c, i); }
+  assert((c?.x ?? -1) == 50, "cell 1 value: got {c?.x ?? -1}, want 50");
+}
+
+// Cell 2 — the self-referential join.  The mint arm has its own temp (`__ncc_1`) and the
+// borrow arm IS the variable being assigned, so both arms are visible in the IR BEFORE the
+// merge — this is the shape step 5 can close with no witness at all.
+// EXPECT today: JoinSelf×9.
+struct JoinSelf { x: integer }
+fn join_mk(i: integer) -> JoinSelf? { JoinSelf { x: i } }
+
+fn cell_2_self_referential_join() {
+  c: JoinSelf? = JoinSelf { x: 5 };
+  for i in 0..10 { c = join_mk(i) ?? c; }
+  assert((c?.x ?? -1) == 9, "cell 2 value: got {c?.x ?? -1}, want 9");
+}
+
+// Cell 3 — the callee mints or borrows PER CALL.  This is the hard floor: nothing at the
+// call site can decide it, so it closes by runtime witness and never statically.  Five of
+// ten iterations mint; one survives as the live value.  EXPECT today: MaybeBorrow×4.
+struct MaybeBorrow { x: integer }
+fn maybe_borrow(s: MaybeBorrow?, i: integer) -> MaybeBorrow? {
+  if i % 2 == 0 { MaybeBorrow { x: i } } else { s }
+}
+
+fn cell_3_conditional_borrow() {
+  c: MaybeBorrow? = MaybeBorrow { x: 5 };
+  for i in 0..10 { c = maybe_borrow(c, i); }
+  assert((c?.x ?? -1) == 8, "cell 3 value: got {c?.x ?? -1}, want 8");
+}
+
+// Cell 4 — the local BORROWS a parameter before it is ever reassigned.  Its deps read
+// `["p"]`, so `owns_freeable_store`'s dep clause already excludes it and a peel cannot
+// reach it; the free has to come from the witness, which knows the first iteration is a
+// borrow and the rest are mints.  EXPECT today: ParamBorrow×3.
+struct ParamBorrow { x: integer }
+fn pb_mint(i: integer) -> ParamBorrow? { ParamBorrow { x: i } }
+fn pb_run(p: ParamBorrow?) -> integer {
+  d: ParamBorrow? = p;
+  for i in 0..3 { d = pb_mint((d?.x ?? 0) + i); }
+  d?.x ?? -1
+}
+
+fn cell_4_local_borrows_a_parameter_first() {
+  seed: ParamBorrow? = ParamBorrow { x: 7 };
+  got = pb_run(seed);
+  assert(got == 10, "cell 4 value: got {got}, want 10");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONTROLS — these must NOT change in step 4.  Cell 6 is the one that says the fix
+// did not become a use-after-free.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Cell 5 — the callee ALWAYS borrows its argument.  Its return type carries `["s"]`, so
+// nothing is displaced and there is nothing to free.  Clean today, must stay clean: a fix
+// that frees here is freeing the value it just assigned.  EXPECT: no leak, both backends.
+struct KeepOnly { x: integer }
+fn keep_only(s: KeepOnly?, i: integer) -> KeepOnly? { s }
+
+fn cell_5_control_always_borrows() {
+  c: KeepOnly? = KeepOnly { x: 5 };
+  for i in 0..10 { c = keep_only(c, i); }
+  assert((c?.x ?? -1) == 5, "cell 5 value: got {c?.x ?? -1}, want 5");
+}
+
+// Cell 6 — THE LOAD-BEARING CONTROL.  A lambda CAPTURES the local, then the local is
+// reassigned from a value that reads it.  `(L-CapScalar)`/`(L-CapHeap)` give the closure the
+// capture-time DbRef, so the closure still names the FIRST store — and `g()` answering 1
+// after three reassignments is what proves it.  The local's deps are EMPTY and its flags
+// read OWNS (`LOFT_VAR_TABLE=cell_6_control_captured_local`), so nothing in the static
+// picture forbids the free: this cell is the whole reason the peel needs a witness rather
+// than just a peel, and the reason `OpFreeRefIfDistinct` alone is not enough — the displaced
+// store IS distinct from the new one here, and must still not be freed.
+//
+// It leaks today (Captured×3), so this cell is RED for the leak channel and GREEN for the
+// value channel.  Step 4 must take the leak to 0 while `g()` still answers 1.  If `g()`
+// changes, the fix has become a use-after-free and the leak number is worthless.
+struct Captured { x: integer }
+fn cap_mint(i: integer) -> Captured? { Captured { x: i } }
+fn cap_run() -> integer {
+  c: Captured? = Captured { x: 1 };
+  g = fn() -> integer { c?.x ?? 0 };
+  for i in 0..3 { c = cap_mint((c?.x ?? 0) + i); }
+  g()
+}
+
+fn cell_6_control_captured_local() {
+  got = cap_run();
+  assert(got == 1, "cell 6 — the closure must still read its CAPTURE-TIME store: got {got}, want 1");
+}
+
+// Cell 7 — the DENSE twin of cell 1, which already gets the cure: stash the old ref,
+// compute, `OpFreeRefIfDistinct`.  Clean today and must stay clean — it is the shape whose
+// emitted form step 4 is teaching the nullable local to reach.
+struct Dense { x: integer }
+fn dense_mint(s: Dense, i: integer) -> Dense { Dense { x: s.x + i } }
+
+fn cell_7_control_dense_twin() {
+  c: Dense = Dense { x: 5 };
+  for i in 0..10 { c = dense_mint(c, i); }
+  assert(c.x == 50, "cell 7 value: got {c.x}, want 50");
+}
+
+fn main() {
+  cell_1_call_reads_and_mints();
+  cell_2_self_referential_join();
+  cell_3_conditional_borrow();
+  cell_4_local_borrows_a_parameter_first();
+  cell_5_control_always_borrows();
+  cell_6_control_captured_local();
+  cell_7_control_dense_twin();
+  print("all seven cells answered correctly — read the leak line for the boundary\n");
+}

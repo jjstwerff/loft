@@ -32,7 +32,7 @@ fn allocs_for(code: &str) -> u64 {
         "parse errors: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     state.execute("test", &p.data);

@@ -1146,7 +1146,8 @@ impl Parser {
     /// `fn f(p: vector<integer>) { g = fn() { p = [7,7]; }; g(); }` left the caller's
     /// `[1,2]` as `[7,7]`, on both backends, with nothing reported.
     ///
-    /// Refusing rather than lowering it is the same call `D-clo-18` makes one rule over,
+    /// Refusing rather than lowering it is the same call the `&`-scalar shape makes one
+    /// rule over (DESIGN_DECISIONS C115 records both halves as one decided edge),
     /// and for the same reason: making it MEAN what it says needs the binding reachable
     /// from inside the closure plus a write-back, and the cell machinery that gives a
     /// mutated captured SCALAR exactly that cannot serve a heap value — reads in the
@@ -2083,7 +2084,8 @@ or build a local and use that."
             // the pairing `finalize_capture_storage` keeps in step (#687).
             // A DECLARED `&` SCALAR parameter written from inside a closure is the one
             // capture shape that cannot be made to mean what it says, and it is refused HERE
-            // rather than allowed to compute quietly (loft#1276, `D-clo-18`).
+            // rather than allowed to compute quietly (loft#1276; the decision and why no code
+            // change closes it are DESIGN_DECISIONS C115).
             //
             // Everything else about a `&` capture works, because `closure_attr_type` captures
             // the POINTEE: a `&S` / `&vector<τ>` shares its DbRef, so a field write, an
@@ -2493,9 +2495,9 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
         //
         // ⚠ What this does NOT give back is the `&` itself.  A write THROUGH the capture
         // to the caller's slot — a scalar write, or a whole-value rebind of a heap
-        // capture — needs the ref in the record and a write-back, which is
-        // `D-clo-18`; `reject_ref_capture_write` refuses those at the capture site
-        // rather than letting them land in a copy.
+        // capture — needs the ref in the record and a write-back, which the language does
+        // not have (DESIGN_DECISIONS C115); `reject_ref_capture_write` refuses those at the
+        // capture site rather than letting them land in a copy.
         let tp = match tp {
             Type::RefVar(inner) => inner.as_ref(),
             other => other,
@@ -3540,6 +3542,10 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
         // and guarding it would turn a rebuild into an append.  `assign_replaces` is that
         // distinction and it is already threaded; `assign_target` pins the pair to THIS
         // variable, so a literal in some other position cannot read a stale flag.
+        // @FR-O-Proxy asks alloc — an empty dep list stands in for *does this variable
+        // already hold a store?*, and the answer decides whether to MINT one (and whether the
+        // mint is guarded).  Nothing here releases; the loft#1219 note above is about a mint
+        // that runs too often, not a free.
         if !substituted && self.vars.tp(vec).depend().is_empty() {
             let db_ops = self.vector_db(in_t, vec);
             let guarded_mint = !self.first_pass
@@ -3856,6 +3862,9 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
         })
     }
 
+    /// @FR-O-Proxy asks alloc — whether this vector needs a local `__vdb_N` backing store.
+    /// The proxy narrows it to locals that own their storage; the answer allocates or does
+    /// not, and the argument carve-out below exists to avoid an allocation, not a free.
     pub(crate) fn vector_needs_db(&self, vec: u16, in_t: &Type, is_var: bool) -> bool {
         is_var
             && *in_t != Type::Void

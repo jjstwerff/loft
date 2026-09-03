@@ -16,8 +16,10 @@
 # gate: the gate is the whole registry.  This script is that, locally.
 #
 # What it does, per published package at its LATEST non-yanked version:
-#   1. reads the matrix from ../loft-registry/index.json (the same source the
-#      workflow's `discover` job uses),
+#   1. reads the matrix from ../loft-registry/index.json through
+#      `scripts/revalidate_matrix.py` — the same index AND the same policy the
+#      workflow's `discover` job uses, so which packages are checked, at which
+#      version, and which are deliberately skipped cannot differ between them,
 #   2. extracts the release TAG's tree with `git archive` from the sibling clone,
 #   3. runs `loft --interpret --tests tests` against the loft you built,
 #   4. on failure re-classifies exactly as the workflow does — recompile every
@@ -76,25 +78,21 @@ if upstream="$(git -C "$reg_clone" rev-parse --abbrev-ref --symbolic-full-name '
   echo "  ⚠ $behind commit(s) behind $upstream — run: git -C $reg_clone pull" >&2
 fi
 
-# The matrix: package -> latest non-yanked version, its repo, its tag, its subpath.
+# The matrix: package -> latest installable version, its repo, its tag, its subpath.
+#
+# Read from `scripts/revalidate_matrix.py`, which the WORKFLOW reads too.  This file used
+# to compute it inline, and "exactly as the workflow does" then drifted on four separate
+# questions — the compiler's own package, the known-broken map, the `subpath` default, and
+# whether yanked versions count.  The one that showed was the first: `loft` is the
+# COMPILER, its `tests/` holds fixtures that are deliberately not standalone programs, and
+# the re-classifier read them as a language break — so this script printed
+# `1 COMPILE-BREAK` and exited 1 on a tree with nothing wrong in it, against the binary the
+# package was published with (loft#1315).  A gate whose zero is not zero cannot measure the
+# thing it was built for.  The exclusions are printed, for the same reason: a skip nobody
+# sees is indistinguishable from a package that passed.
 matrix="$work/legs.tsv"
-python3 - "$registry" > "$matrix" <<'PY'
-import json, re, sys
-idx = json.load(open(sys.argv[1]))
-def key(v): return [int(x) for x in re.findall(r'\d+', v)]
-for name, meta in sorted(idx["packages"].items()):
-    yanked = set(meta.get("yanked", []))
-    vers = {k: v for k, v in meta.get("versions", {}).items() if k not in yanked}
-    if not vers:
-        continue
-    latest = max(vers, key=key)
-    m = re.match(r"https://github\.com/([^/]+/[^/]+)/releases/download/([^/]+)/",
-                 vers[latest].get("url", ""))
-    if not m:            # non-GitHub / malformed URL — nothing to check out
-        continue
-    print("\t".join([name, latest, m.group(1), m.group(2),
-                     vers[latest].get("subpath", name)]))
-PY
+python3 "$root/scripts/revalidate_matrix.py" "$registry" > "$matrix" || {
+  echo "cannot read the registry matrix from $registry" >&2; exit 2; }
 
 # Extract one package's release tree into $work and echo its package directory.
 extract() {                       # extract <repo> <tag> <sub> <dest-name>
@@ -124,6 +122,12 @@ still_compiles() {                # still_compiles <pkg-dir> <log>
 }
 
 if [ "$self_test" = 1 ]; then
+  # The matrix policy first: which packages this run looks at is decided before any of
+  # them is compiled, so a wrong answer there is invisible to every check below — it was
+  # a permanently-red summary line rather than a wrong verdict on any one package
+  # (loft#1315).  Shared with the workflow, and self-tested where it lives.
+  python3 "$root/scripts/revalidate_matrix.py" --self-test || {
+    echo "self-test FAILED: the shared matrix policy does not hold"; exit 1; }
   read -r n v repo tag sub < <(head -1 "$matrix")
   p="$(extract "$repo" "$tag" "$sub" "selftest")" || { echo "self-test: cannot extract $n@$tag" >&2; exit 2; }
   victim="$(cd "$p" && find tests -type f -name '*.loft' | head -1)"

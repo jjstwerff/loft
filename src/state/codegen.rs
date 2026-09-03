@@ -2163,6 +2163,10 @@ impl State {
                     .iter()
                     .any(|a| a.hidden && stack.function.var(&a.name) == v)
             };
+            // Enforces @FR-O-Detach — this is the site that gets the order right, and the
+            // one the other three are measured against: the free is DEFERRED past the
+            // assignment when the RHS reads `v`, rather than the slot being prepared first.
+            //
             // #330 — ONE recursive "does the RHS read v?" predicate decides
             // the free strategy (shared with scopes' #316 transition logic).
             // The old top-level-arg S1 scan missed struct-literal field
@@ -2211,15 +2215,66 @@ impl State {
             // to `OpNullRefSentinel`, NOT to the @P302 in-place clear above) displaced its store
             // with nothing naming it — one orphan per evaluation on BOTH backends, values right
             // throughout.  Read through `base()`, because the shape that reaches this is the
-            // NULLABLE one: a dense keyed local cannot be assigned the sentinel at all.  The
-            // `is_keyed` half only; `Vector` keeps its bare spelling, since a nullable vector
-            // already releases through its own path and widening that one would free twice.
+            // NULLABLE one: a dense keyed local cannot be assigned the sentinel at all.
+            //
+            // `Vector` is read through `base()` for the same reason, and once did not be:
+            // the bare spelling carried the claim that a nullable vector *"already releases
+            // through its own path"*, so widening it *"would free twice"*.  Re-measured, that
+            // is false — `x: vector<τ>? = null; for i in 0..N { x = m(i) }` over a fn-ref held
+            // one store per iteration on BOTH backends, and the peak grew 1:1 with N while the
+            // dense twin beside it stayed flat.  What makes the peel safe is `nullable_local`
+            // below: an `Optional` destination routes to the runtime-GUARDED post-free, which
+            // `free_displaced` no-ops on a same-store, free-protected or stack-record ref —
+            // so the double free the bare spelling was avoiding cannot be reached from here.
+            // Enforces @FR-O-Proxy, and is a SECOND home for the question
+            // `Scopes::owns_freeable_store` already answers — *may this function free the
+            // store this binding names?*  The last three conjuncts are that predicate
+            // restated: `depend().is_empty() && !is_skip_free(v)` verbatim, and
+            // `!is_hidden_buf_arg` where it spells the argument carve-out
+            // `(!is_argument(v) || is_promoted_ret_buffer(..))`.  Two spellings of one rule
+            // is what lets them disagree, and they do: the shape test in front of them does
+            // not peel `Optional`, so a NULLABLE heap-record local (`c: S?` is
+            // `Optional(Reference(S))`) matches no arm and skips this whole free path —
+            // pre-free, stash and post-free alike — while its dense twin gets all three.
+            // That is `formal/ownership.md` D-own-16's open half, and folding this onto
+            // `owns_freeable_store` is where the peel belongs, so it lands once rather than
+            // at whichever site a leak was noticed
+            // (doc/claude/plans/own16-displaced-store-free/, step 2).
+            //
+            // ⚠ The peel is NOT sound on its own, which is why this comment is not a TODO to
+            // widen the `matches!`: the empty dep list the rule above calls a PROXY reads
+            // `OWNS` for a local a lambda has CAPTURED, and freeing there is a use-after-free
+            // against the closure's capture-time DbRef.  The licence has to come from a
+            // per-run witness.
+            // D-own-16 residual — a nullable heap local BOUND FROM A PARAMETER.  Its dep list
+            // names that parameter for the whole frame, so the local reads as a permanent
+            // borrow and every store a later minting call hands it leaks.  @FR-O-Latest is a
+            // per-RUN fact, and the dep list is flow-INsensitive; but the dep NAMES the
+            // variable the local might still be aliasing, so the question is decidable at
+            // runtime by store IDENTITY, with no witness slot.
+            //
+            // The displaced free this licenses is the GUARDED one (`nullable_local` routes it
+            // there), and its two side conditions are exactly what makes this safe on the
+            // FIRST round, where the displaced store is still the caller's: `free_displaced`
+            // declines a free-protected store — @FR-H-Free's other side condition — so the
+            // caller's argument is never released here.  Measured: `LOFT_POISON=1` answers
+            // identically to `LOFT_POISON=0`, which is what says no use-after-free survives.
+            let borrows_one_argument = {
+                let d = stack.function.tp(v).depend().clone();
+                d.len() == 1
+                    && d[0] != v
+                    && matches!(stack.function.tp(v), Type::Optional(_))
+                    && stack.function.is_argument(d[0])
+                    && !stack.function.is_argument(v)
+            };
+            // @FR-O-Proxy asks free — the pre-Set free of the store `v` is displacing.
             let owned_ref = (matches!(
-                stack.function.tp(v),
+                stack.function.tp(v).base(),
                 Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
             ) || crate::parser::vectors::is_keyed(stack.function.tp(v).base()))
-                && stack.function.tp(v).depend().is_empty()
+                && (stack.function.tp(v).depend().is_empty() || borrows_one_argument)
                 && !stack.function.is_skip_free(v)
+                && !stack.function.is_captured(v)
                 && !is_hidden_buf_arg;
             // An `OpNewRecord` RHS returns an INTERIOR ref into an existing
             // container's backing store (a vector element / nested field), so
@@ -2237,8 +2292,19 @@ impl State {
                 value.unspan(),
                 Value::Call(fn_nr, _) if stack.data.def(*fn_nr).name() == "OpNewRecord"
             );
+            // A NULLABLE heap local's slot does not always hold an owned heap store: on the
+            // paths where it never took one it holds the null sentinel, and where its record
+            // was stack-allocated it holds a stack-record ref.  The pre-Set free below is
+            // UNCONDITIONAL and whole-store, which is sound only for a local that always
+            // holds a store of its own — a dense `Reference` does, an `Optional` one does
+            // not.  Route it to the runtime-GUARDED post-free instead, which is the same
+            // answer `rhs_is_new_record` above takes for the same reason: `free_displaced`
+            // no-ops on a same-store, free-protected or stack-record displaced ref, where
+            // `OpFreeRef` can only refuse it loudly (`#306`).  @FR-H-Free's `store(r) ≠ 0`
+            // side condition is what separates the two frees; see `Stores::free_displaced`.
+            let nullable_local = matches!(stack.function.tp(v), Type::Optional(_));
             let mut stash_old_for_post_free = false;
-            if owned_ref && (rhs_reads_v || rhs_is_new_record) {
+            if owned_ref && (rhs_reads_v || rhs_is_new_record || nullable_local) {
                 let free_pos = stack.var_pos(v);
                 stack.add_op("OpVarRef", self);
                 self.code_add(free_pos);
@@ -2761,10 +2827,17 @@ impl State {
         if matches!(stack.function.tp(v).base(), Type::Text(_)) {
             self.gen_set_first_text(stack, v, value);
         } else if matches!(
-            stack.function.tp(v),
+            stack.function.tp(v).base(),
             Type::Reference(_, _) | Type::Enum(_, true, _)
         ) && *value == Value::Null
         {
+            // `.base()`: a `τ?` local's null-init is the same sentinel write as `τ`'s.  Asked
+            // bare, an `Optional(Reference)` temp fell to the generic fallthrough, which lands
+            // the shared null store (`Stores::null()`, a real slot with `rec == 0`) in the
+            // slot instead of the sentinel — and the scope-exit `OpFreeRef` of that temp then
+            // trips the stack-store net (BUG #306).  User code never reaches this arm with a
+            // `τ?` (a `P? = null` is parsed to `OpNullRefSentinel`); a compiler temp's
+            // preamble does.
             self.gen_set_first_ref_null(stack, v);
         } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
             && let Value::Call(op_nr, _) = value.unspan()
@@ -2773,15 +2846,25 @@ impl State {
             // The first assignment of a Reference variable being copied from another:
             // allocate a fresh store, initialize the struct record, then copy the data.
             self.gen_set_first_ref_copy(stack, v, d_nr, value);
-        } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+        } else if let Type::Reference(d_nr, _) = stack.function.tp(v).base().clone()
             && let Value::Var(src) = value
-            && let Type::Reference(src_d_nr, _) = stack.function.tp(*src)
+            && let Type::Reference(src_d_nr, _) = stack.function.tp(*src).base()
             && d_nr == *src_d_nr
         {
             // First assignment `d = c` where both are owned References to the same struct:
             // give d its own independent record by allocating storage and copying c's data.
+            //
+            // Read through `base()`, the peel the `Text` arm at the top of this function
+            // already takes and for the same reason: `S?` is `Optional(Reference(S))`, the
+            // same storage behind a nullability marker, and matching the bare spelling left
+            // a nullable bind on the plain-adopt fallthrough — an ALIAS, where `@FR-B-Copy`
+            // says a whole-value bind is INDEPENDENT (`c2 = ns; ns.v = 99` then read 99
+            // through `c2`, loft#1319).
             self.gen_set_first_ref_var_copy(stack, v, *src, d_nr);
         } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+            // @FR-O-Proxy asks copy — whether to MATERIALISE an element read into a store `v`
+            // owns rather than bind the interior pointer.  The materialise is what PREVENTS
+            // the container-wide free described below; it emits no free of its own.
             && stack.function.tp(v).depend().is_empty()
             && crate::generation::container_element_base(stack.data, value).is_some()
         {
@@ -2803,6 +2886,10 @@ impl State {
             self.gen_set_first_ref_elem_copy(stack, v, value, d_nr);
         } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
             && let Value::TupleGet(_, _) = value
+            // @FR-O-Proxy asks copy — whether a tuple-element bind deep-copies the record
+            // instead of aliasing it.  A binding whose deps say BORROW is skip-free, so
+            // copying for one would leave an owner nobody frees; the guard is against a
+            // stranded allocation, and the arm releases nothing.
             && stack.function.tp(v).depend().is_empty()
         {
             // T1.8c: tuple destructuring `(q1, q2) = expr` — when an element
@@ -3149,6 +3236,12 @@ impl State {
             && stack.function.tp(src).depend().is_empty()
             && !stack.function.is_argument(src)
             && !stack.function.is_captured(src)
+            // @FR-O-Proxy asks free, so @FR-O-Override applies.  A move is a free
+            // decision made one binding away: `v` takes `src`'s store and `v`'s scope-exit
+            // `OpFreeRef` releases it.  If the proxy was wrong about `src` that release lands
+            // on a store someone else owns — the same shape as the view this arm already
+            // refuses, reached through the flag instead of through the deps.
+            && !stack.function.is_skip_free(src)
         {
             let src_pos = stack.var_pos(src);
             stack.add_op("OpVarRef", self);
@@ -3180,15 +3273,47 @@ impl State {
         let slot_offset = stack.var_pos(v);
         stack.add_op("OpInitRef", self);
         self.code_add(slot_offset);
-        stack.add_op("OpDatabase", self);
-        self.code_add(slot_offset);
-        self.code_add(tp_nr);
-        let copy_nr = stack.data.def_nr("OpCopyRecord");
-        let copy_val = Value::Call(
-            copy_nr,
-            vec![Value::Var(src), Value::Var(v), Value::Int(i32::from(tp_nr))],
-        );
-        self.generate(&copy_val, stack, false);
+        // A source that may be ABSENT cannot take the plain allocate-then-copy: the copy
+        // dereferences the source store, so a `null` one indexes `allocations[u16::MAX]`,
+        // and copying NOTHING instead would be worse than the panic — the destination would
+        // keep the record allocated for it and read PRESENT where its source was absent,
+        // which is emptiness standing in for absence (the trade `Stores::vector_replace`
+        // records for the collections).
+        //
+        // `OpBindOrCopy` decides that at runtime, and with the source as its OWN witness it
+        // says exactly what `@FR-B-Copy` wants here: a present source aliases the witness,
+        // so the borrow arm materialises a fresh store and deep-copies into it; an absent
+        // one fails the `store_nr != u16::MAX` half and is ADOPTED, which lands the true
+        // sentinel and leaves the destination null.  It allocates on the arm that needs it,
+        // so no `OpDatabase` is emitted ahead of it.
+        //
+        // Not `OpCopyRefOrNull`, which is built for the same shape one read kind over: it
+        // binds `Stores::null()`, whose `store_nr` is a REAL slot with `rec == 0`, while a
+        // `x == null` on a record lowers to `OpRefIsNull` and tests `store_nr == u16::MAX`.
+        // The two spellings of absence agree for the element read it was written for and
+        // not for a bound local.
+        if matches!(stack.function.tp(src), Type::Optional(_)) {
+            self.generate(&Value::Var(src), stack, false);
+            // A PUSH op reads at the PRE-push position, so the witness offset is taken
+            // BEFORE `add_op`; the slot the opcode POPS into is taken after, at the
+            // post-pop position.  Same order as the `Join` emission in `generate_set`.
+            let witness_pos = stack.var_pos(src);
+            stack.add_op("OpVarRef", self);
+            self.code_add(witness_pos);
+            stack.add_op("OpBindOrCopy", self);
+            self.code_add(stack.var_pos(v));
+            self.code_add(tp_nr);
+        } else {
+            stack.add_op("OpDatabase", self);
+            self.code_add(slot_offset);
+            self.code_add(tp_nr);
+            let copy_nr = stack.data.def_nr("OpCopyRecord");
+            let copy_val = Value::Call(
+                copy_nr,
+                vec![Value::Var(src), Value::Var(v), Value::Int(i32::from(tp_nr))],
+            );
+            self.generate(&copy_val, stack, false);
+        }
         // @PLN130 — recorded HERE, past the last-use-move return above, so the manifest
         // claims a copy only where one is actually written.
         crate::copy_manifest::record(
@@ -3823,8 +3948,21 @@ impl State {
             };
         }
         if name == "OpCoroutineExhausted" && !parameters.is_empty() {
-            // parameters[0] is the gen expression — generate it (pushes DbRef, +12).
-            self.generate(&parameters[0], stack, false);
+            // parameters[0] — the gen expression — is ALREADY on the stack: `gen` is a real
+            // parameter (`fn OpCoroutineExhausted(gen: reference) -> boolean`), so the
+            // mutable-argument loop above generated it.  Generating it here as well pushed
+            // the DbRef TWICE and only one was consumed, stranding 16 bytes on the eval stack
+            // at every call (loft#1309).
+            //
+            // The header above says these ops "have only const params", and that is why the
+            // second push looked necessary.  It is true of `OpCoroutineNext`, whose
+            // `value_size: const u16` the loop skips — which is exactly why `next` was never
+            // affected and `exhausted` always was.
+            //
+            // Silent in release: the surplus is only NOTICED where a caller measures an
+            // argument's width, so `assert(exhausted(g), …)` reported it as a 24B-vs-8B
+            // mismatch under debug assertions while `d = exhausted(g)` leaked the same 16
+            // bytes with nothing to object.
             self.remember_stack(stack.position);
             super::emit_op(stack.data.def(op).op_code(), self);
             // Stack: -12 (DbRef consumed) + 1 (bool pushed).

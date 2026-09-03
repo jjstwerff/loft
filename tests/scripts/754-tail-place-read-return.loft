@@ -78,6 +78,10 @@ fn tail_after_local_vector(w: World) -> vector<u8> {
 // --- a RECORD return through the same shape.  `w.w_sections[0]` is an
 //     `OpGetVector` place read, so native returned the null DbRef and the
 //     caller read a null record — the tag below is what catches it. ---
+// The `-> Section` return is the point of this cell — a non-null RECORD return through a
+// place read — so the signature stays and the notice is declared.  `Section?` returns through
+// a different ABI (no hidden buffer) and would move the cell off the path it guards.
+// @EXPECT_WARNING: non-null type `Section`
 fn tail_record(w: World) -> Section {
   junk = [1, 2];
   if len(junk) > 99 { return null; }

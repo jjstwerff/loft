@@ -65,7 +65,12 @@ impl Fold {
             r#"{"schema_version": 1, "updated": "2026-08-01T00:00:00Z", "packages": {
                  "already": {"description": "an existing library",
                              "homepage": "https://example.invalid",
-                             "categories": ["text"], "yanked": [], "versions": {}}}}"#,
+                             "categories": ["text"], "yanked": [], "versions": {}},
+                 "withdeps": {"description": "a library with a registry dependency",
+                              "homepage": "https://example.invalid",
+                              "categories": ["game"], "yanked": [],
+                              "versions": {"0.1.0": {"url": "u", "sha256": "s",
+                                                     "deps": {"hex_field": ">=0.1"}}}}}}"#,
         )
         .expect("write index");
         Fold { dir, script, index }
@@ -73,6 +78,20 @@ impl Fold {
 
     /// Run the fold for one publish.  Returns (success, combined output).
     fn publish(&self, name: &str, ver: &str, cats: &str) -> (bool, String) {
+        self.publish_with_stderr(name, ver, cats, None)
+    }
+
+    /// The same, with a `loft publish` stderr log for the fold to read.  That log is where
+    /// `[publish] deps-incomplete:` names the dependencies the package's SOURCE uses, which
+    /// the fold reconciles against the entry — so a cell about deps supplies one and every
+    /// other cell passes a path that does not exist, the ordinary case.
+    fn publish_with_stderr(
+        &self,
+        name: &str,
+        ver: &str,
+        cats: &str,
+        stderr: Option<&str>,
+    ) -> (bool, String) {
         let entry = self.dir.join(format!("entry_{name}_{ver}.json"));
         std::fs::write(
             &entry,
@@ -81,6 +100,13 @@ impl Fold {
             ),
         )
         .expect("write entry");
+        let err_path = self.dir.join(format!("pub_{name}.err"));
+        match stderr {
+            Some(text) => std::fs::write(&err_path, text).expect("write stderr log"),
+            None => {
+                let _ = std::fs::remove_file(&err_path);
+            }
+        }
         let out = Command::new("python3")
             .arg(&self.script)
             .arg(&self.index)
@@ -91,6 +117,7 @@ impl Fold {
             .arg("a real one-line description")
             .arg("manifest")
             .arg(cats)
+            .arg(&err_path)
             .output()
             .expect("run fold");
         let text = format!(
@@ -171,6 +198,58 @@ fn a_declaring_manifest_refreshes_an_existing_list() {
     let (ok, _) = fold.publish("already", "0.2.0", r#"["text", "editor"]"#);
     assert!(ok);
     assert_eq!(fold.categories_of("already"), vec!["text", "editor"]);
+}
+
+/// `deps` is a CLAIM, and `loft publish` can only read it from `loft.toml` — which a
+/// multi-package repo deliberately leaves empty, because declaring registry deps there
+/// resolves them from the registry instead of the `--lib` path.  So an empty `deps` in a
+/// fresh entry means "not stated here", and pasting it verbatim publishes a version that
+/// resolves none of its dependencies.  The previous entry is where those versions were
+/// stated, so the fold carries them forward.
+///
+/// Measured on the real thing: hex_edge 0.2.0 would have published with `"deps": {}` and
+/// lost its hex_field dependency, which `loft install` reads from the index and nowhere
+/// else.  Only a JSON parse error in the entry stopped it.
+#[test]
+fn an_empty_deps_carries_the_previous_versions_forward() {
+    let fold = Fold::new("deps_carry");
+    let (ok, out) = fold.publish("withdeps", "0.2.0", "");
+    assert!(ok, "the fold refused an existing package:\n{out}");
+    let index = std::fs::read_to_string(&fold.index).expect("read index");
+    assert_eq!(
+        index.matches("hex_field").count(),
+        2,
+        "0.2.0 must carry 0.1.0's dependency forward; index now:\n{index}"
+    );
+}
+
+/// …and a dependency named by NEITHER the entry nor a previous one is a refusal, not a
+/// note.  `[publish] deps-incomplete:` on `loft publish`'s stderr names what the source
+/// actually uses; a package new to the index has no earlier entry to inherit from, so
+/// there is nowhere left for the versions to come from.
+#[test]
+fn a_source_dependency_in_neither_place_is_refused() {
+    let fold = Fold::new("deps_missing");
+    let (ok, out) = fold.publish_with_stderr(
+        "newpkg",
+        "0.1.0",
+        r#"["game"]"#,
+        Some("[publish] deps-incomplete: hex_field, hex_grid\n"),
+    );
+    assert!(
+        !ok,
+        "the fold accepted an entry with unresolvable deps:\n{out}"
+    );
+    assert!(
+        out.contains("hex_field") && out.contains("hex_grid"),
+        "the refusal must name what the source uses:\n{out}"
+    );
+    assert!(
+        !std::fs::read_to_string(&fold.index)
+            .expect("read index")
+            .contains("newpkg"),
+        "a refused publish must not leave the package in the index"
+    );
 }
 
 /// Malformed input is refused rather than silently read as "none declared" — an empty

@@ -594,6 +594,24 @@ both sides agree.  `--lib` does not redirect it either: a deliberately corrupted
 run the guard, restore it byte-identically — and record THAT in `@falsified-at` rather than the
 line the tool prints.  `the-lexer-decodes-an-escape-once.loft` is the worked example.
 
+⚠ **A third shape scores, and its green still covers only ONE defect: a control that ABORTS
+before the program runs.**  An internal compiler error, a parse refusal, a panic in codegen —
+any of these stops the control at the exit channel, so `falsify` reports a clean `falsified`
+while `asserts` reads `0|0` because no assertion in the file ever executed.  That verdict is
+true of the abort and says nothing about any cell the abort was standing in front of.
+
+The tell is the same as the no-`main` shape — **zero assertion failures on the CONTROL** —
+but here the cause is the opposite: not that nothing ran, but that something stopped
+everything.  Read the control's EXIT column to tell them apart.
+
+It matters because a crash is the loudest defect in a file and usually not the only one.
+loft#1310's control aborted with an internal compiler error; fixing that alone left four
+cells compiling, running, and yielding NOTHING at exit 0 — two further silent-wrong defects
+the abort had been masking, neither of which `falsify` could see before or after.  So after
+fixing a compile-time abort, re-run the whole matrix on VALUES rather than trusting the
+verdict, and write into `@falsified-at:` which channel the tool actually scored and which
+defects it is blind to.
+
 **Why a record and not just a habit.** Four distinct channels reported success while
 measuring nothing in a single afternoon (QUALITY.md § B6m), and two defects passed a full
 green gate the same day:
@@ -2829,6 +2847,32 @@ that passed on the very build it was written to catch:
 * **a store leak is not reported.** loft#1273 retained one record per inline call; the
   `tests/scripts` guard passes `--tests` on the pre-fix binary while the same shapes as a
   plain program print `Warning: 1 stores not freed at program exit`.
+
+**A probe that FAILS TO PARSE reads as a silent pass, and the "did it run?" check can be
+fooled by the error itself.** Measured 2026-09-02 while crossing the six defended-fault-site
+spellings of `D-op-5`: four cells carried a literal `\n` into the loft source, failed to
+parse, produced no log record — and were scored "ran, and silent", which is the shape of a
+PASS. The guard against that is a RAN column, but the first one did not work either: it
+grepped the output for the program's own marker, and the parse error ECHOES the offending
+source line, so `print("g6")` appeared in the failure text and the cell reported that it had
+run. Score RAN on something the program cannot forge — a `^error` line, or an exit code —
+never on its own output.
+
+**The before/after oracle has to PREDATE the defect, and the released binary often does not.**
+The installed release is the usual before-half (the installed release as the before/after oracle),
+and it answers nothing for a bug introduced after it shipped. Measured 2026-09-02 on
+`D-clo-14`: 2026.8.0 showed no leak and the CURRENT tree showed no leak, which reads as
+"closed" and is really "the oracle predates the bug". What settled it was a second control —
+a DIFFERENT, still-open defect run through the same channel (`D-own-16`'s shape reports
+`kt=81 SN×4`), proving the channel fires. When the before-half and the after-half agree,
+check that the before-half could ever have disagreed.
+
+**And the channel itself can be the wrong one.** `D-clo-14`'s leak is freed at FRAME exit, so
+`Warning: N stores not freed at program exit` says nothing about it; the defect is unbounded
+PEAK growth inside the frame, and `LOFT_ALLOC_SITES=1` shows 389 live stores at N=400 where
+the exit check shows zero. A guard on the exit channel would have been green for the life of
+the defect. Read the entry's own numbers — this one says "peak 4 -> 403 at N=400" — and
+reproduce THAT measurement, not the one your instrument happens to offer.
 
 `make falsify` says INERT for both, and **INERT is the correct answer there** — the harness
 cannot see the channel, so neither tree can differ. Do not widen the guard until you have

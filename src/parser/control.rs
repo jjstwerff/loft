@@ -1400,20 +1400,150 @@ impl Parser {
             if j >= ops.len() {
                 continue;
             }
-            // The first sibling that mentions it must be an `if` TESTING it.
-            let Value::If(test, _, _) = ops[j].unspan() else {
-                continue;
-            };
-            if !test.reads_var(var) {
-                continue;
+            // The first sibling that mentions it must be an `if` TESTING it — or a `match`,
+            // which reaches the value through ONE copy and so needs following.
+            match ops[j].unspan() {
+                Value::If(test, _, _) if test.reads_var(var) => to_rewrite.push(i),
+                Value::Block(bl) if Self::block_null_tests_a_copy(&bl.operators, var) => {
+                    to_rewrite.push(i);
+                }
+                _ => {}
             }
-            to_rewrite.push(i);
         }
         for i in to_rewrite {
             if let Value::Set(_, source) = ops[i].unspan_mut() {
                 Self::rewrite_outer_arith_to_nullable(source, &self.data);
             }
         }
+        // The spelling with no binding at all — `if v[i] == null { … }`.  The loop above
+        // keys on a `Set`, and here the fault site sits INSIDE the test rather than before
+        // it, so there is nothing for it to hook and the site kept reporting a fault the
+        // program had already defended (`D-op-5`).
+        //
+        // This needs no adjacency window and no dataflow: the guard is the SAME expression.
+        for op in ops.iter_mut() {
+            if let Value::If(test, _, _) = op.unspan_mut() {
+                Self::rewrite_direct_null_test(test, &self.data);
+            }
+        }
+    }
+
+    /// Does this block copy `var` into a temp and then NULL-TEST that temp?
+    ///
+    /// `match x { null => … }` has no `Value::Match` in the IR: it lowers to a nested block
+    /// whose first act is `_match_subj_N = x`, after which the arms test the TEMP. So the
+    /// guard names a copy and the adjacency scan above, which looks for an `if` testing the
+    /// variable itself, saw a `Block` and gave up — leaving a defended site reporting
+    /// (`D-op-5`, the half the no-binding fix did not reach).
+    ///
+    /// Exactly ONE copy is followed, and only from the block's own first statement, so this
+    /// stays adjacency rather than becoming dataflow.
+    ///
+    /// ⚠ The arm has to be a NULL test, not merely a test. `match x { 5 => … }` lowers to
+    /// the same copy followed by `OpEqInt(subj, 5)` — the null flows into that comparison as
+    /// an ordinary operand and on into the program, so that site still owes its report.
+    fn block_null_tests_a_copy(ops: &[Value], var: u16) -> bool {
+        let Some(Value::Set(tmp, source)) = ops.first().map(Value::unspan) else {
+            return false;
+        };
+        if !matches!(source.unspan(), Value::Var(v) if *v == var) {
+            return false;
+        }
+        let tmp = *tmp;
+        ops.iter().skip(1).any(
+            |op| matches!(op.unspan(), Value::If(test, _, _) if Self::is_null_test_of(test, tmp)),
+        )
+    }
+
+    /// Is `test` a null check on `var` — in either spelling the IR uses?
+    ///
+    /// `x == null` reaches the IR as an equality against the null literal, and a `match`'s
+    /// `null` arm as `OpNot(OpConvBoolFrom*(x))`. The second reads like a truthiness test and
+    /// is not one: `op_conv_bool_from_long` is `val != i64::MIN`, so it asks precisely
+    /// "is this not the null sentinel" and its negation is precisely "is this null".
+    fn is_null_test_of(test: &Value, var: u16) -> bool {
+        let Value::Call(_, args) = test.unspan() else {
+            return false;
+        };
+        // `OpNot(OpConvBoolFrom*(var))`
+        if args.len() == 1
+            && let Value::Call(_, inner) = args[0].unspan()
+            && inner.len() == 1
+            && matches!(inner[0].unspan(), Value::Var(v) if *v == var)
+        {
+            return true;
+        }
+        // `var == null` / `null == var`, in either order.
+        args.len() == 2
+            && args
+                .iter()
+                .any(|a| matches!(a.unspan(), Value::Var(v) if *v == var))
+            && args
+                .iter()
+                .any(|a| matches!(a.unspan(), Value::Call(_, inner) if inner.is_empty()))
+    }
+
+    /// Swap a fault-prone expression compared DIRECTLY against `null` to its silent
+    /// Nullable peer, and answer whether one was found.
+    ///
+    /// `(E-Report)` gives the null to whatever guards it, and a test of the form
+    /// `<expr> == null` guards `<expr>` completely: the null it produces is consumed by
+    /// this comparison and nothing else can observe it. So the site owes no report.
+    ///
+    /// ⚠ Narrow deliberately, because widening "guarded" SUPPRESSES a diagnostic — an
+    /// over-approximation goes quiet on real faults, while an under-approximation is only
+    /// noisy. The test must be an equality against the null LITERAL (`OpConv*FromNull`,
+    /// which is how a written `null` reaches the IR), so `if v[i] > 3` — which lowers to
+    /// `OpLtInt(3, …)` with no such operand — cannot match it and still reports, as does a
+    /// null that escapes to any other reader before its check.
+    fn rewrite_direct_null_test(test: &mut Value, data: &crate::data::Data) -> bool {
+        // `a || b` and `a && b` SHORT-CIRCUIT, so they reach the IR as a nested `if`
+        // (`if a true else b`) rather than as a call — descend all three limbs, or a null
+        // test in the second operand of an `||` is never seen.
+        if let Value::If(cond, then, els) = test.unspan_mut() {
+            let mut found = Self::rewrite_direct_null_test(cond, data);
+            found |= Self::rewrite_direct_null_test(then, data);
+            found |= Self::rewrite_direct_null_test(els, data);
+            return found;
+        }
+        let Value::Call(def_nr, args) = test.unspan_mut() else {
+            return false;
+        };
+        let name = data.def(*def_nr).original_name();
+        // A condition is a tree, and the null test can sit anywhere in it —
+        // `if v[i] == null || …` puts an `OpOr` on top.  Descend to FIND the comparison,
+        // but rewrite only its DIRECT operand below, so a site whose null is consumed by
+        // something else on the way (`f(v[i]) == null`, where `f` sees it) is not touched.
+        if !(name.starts_with("Eq") || name.starts_with("Ne")) || args.len() != 2 {
+            let mut found = false;
+            for arg in args.iter_mut() {
+                found |= Self::rewrite_direct_null_test(arg, data);
+            }
+            return found;
+        }
+        // A written `null` reaches the IR as a nullary `OpConv<Type>FromNull`, one per
+        // scalar type — matched as the family so a new type joins without a list to update.
+        let is_null_literal = |v: &Value| {
+            matches!(v.unspan(), Value::Call(d, a) if a.is_empty() && {
+                let n = data.def(*d).original_name();
+                n.starts_with("Conv") && n.ends_with("FromNull")
+            })
+        };
+        let guarded = if is_null_literal(&args[1]) {
+            0
+        } else if is_null_literal(&args[0]) {
+            1
+        } else {
+            // An equality that is not against `null` guards nothing, but a null test may
+            // still sit deeper inside its operands.
+            let mut found = false;
+            for arg in args.iter_mut() {
+                found |= Self::rewrite_direct_null_test(arg, data);
+            }
+            return found;
+        };
+        Self::rewrite_outer_arith_to_nullable(&mut args[guarded], data);
+        true
     }
 
     pub(crate) fn un_ref(&mut self, t: &mut Type, code: &mut Value) {
@@ -3107,7 +3237,7 @@ impl Parser {
         self.rewrite_tail_tuple_with_work_ref(synthetic_d_nr, known_type, w, tail);
     }
 
-    fn rewrite_tail_tuple_with_work_ref(
+    pub(crate) fn rewrite_tail_tuple_with_work_ref(
         &mut self,
         synthetic_d_nr: u32,
         known_type: u16,
@@ -3647,6 +3777,9 @@ impl Parser {
             },
             _ => return None,
         };
+        // @FR-O-Proxy asks copy — a non-empty dep list is what marks the arm's yield as a
+        // BORROW, and the answer chooses whether to build the owned `mvcopy`.  It authorises
+        // no free: the copy is a fresh binding, and the borrow keeps its own owner.
         if v >= self.vars.count()
             || !self.vars.skip_free(v)
             || !matches!(self.vars.tp(v), Type::Vector(_, _))
@@ -14354,11 +14487,55 @@ impl Parser {
         // (see `fnref_result_type`): map visible-param deps through the actual
         // argument types; an index naming no visible argument names the closure this slot
         // carries, and only a CAPTURING slot has one (loft#1180).
-        let ret_type = Box::new(Self::fnref_result_type(
+        let mut ret_type = Box::new(Self::fnref_result_type(
             *ret_type,
             types,
             Self::capturing_fnref_var(&self.vars, v_nr),
         ));
+        // loft#1327 — an OPAQUE target's heap return may be one of the arguments, and the fn
+        // TYPE cannot say so.
+        //
+        // `(O-Move)` puts the obligation on the return type: *"if the return borrows a
+        // parameter, the return type records it"*.  A DEFINITION records it — that is what
+        // `fnref_result_type` above maps into the caller's space.  A fn TYPE has nowhere to
+        // write it: `fn(vector<integer>?) -> vector<integer>` is the whole of what the author
+        // may spell, so the deps arrive empty whatever the target does.  Empty deps then read
+        // as *"the callee minted this"*, `u` is typed an owner, and scope exit frees it —
+        // releasing the CALLER's vector on the arm where the closure handed its argument back,
+        // silently, with the next allocation reusing the slot.
+        //
+        // A fn-typed PARAMETER is the case where the target is unknowable from this body: no
+        // assignment in it can be read to resolve one.  So the return borrows what it might
+        // borrow — every heap argument, rooted through the same walk the @P290 bracket uses —
+        // and a non-empty dep is what stops the free.  It costs the MINTING arm its owner (one
+        // store per call, announced at exit); that trade is the standing one, because a leak is
+        // recoverable where a premature free is not.
+        //
+        // Narrow to a parameter deliberately: a fn-ref LOCAL is resolved from its assignment by
+        // `Scopes::fnref_target`, and every route built on that (the lift, the identity free)
+        // reads the empty deps this leaves alone.  A local assigned two different lambdas is
+        // opaque too and is NOT covered here — the parser cannot see that, and the same free
+        // reaches it.
+        if self.vars.is_argument(v_nr)
+            && crate::data::is_dbref(ret_type.base())
+            && ret_type.depend().is_empty()
+        {
+            let borrows: Vec<u16> = list
+                .iter()
+                .zip(types.iter())
+                .filter(|(_, t)| crate::data::is_dbref(t.base()))
+                .filter_map(
+                    |(v, _)| match crate::use_analysis::view_root_slots(&self.data, v) {
+                        Some(roots) => roots.first().copied(),
+                        None => None,
+                    },
+                )
+                .collect();
+            if !borrows.is_empty() {
+                *ret_type = ret_type.with_deps(&Deps::frame(borrows));
+            }
+        }
+        let ret_type = ret_type;
         // P227 — see the zero-argument twin above: the call site pushes the widest
         // candidate's `&text` buffer count and the dispatcher pops the excess, because a
         // `&text` points into the CALLER's frame and only the caller can supply one that

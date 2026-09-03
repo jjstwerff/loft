@@ -28,7 +28,7 @@ fn build(script: &str) -> (State, Data) {
     if !p.diagnostics.is_empty() {
         panic!("parse errors: {:?}", p.diagnostics.lines());
     }
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut data = p.data;
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut data);

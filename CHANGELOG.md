@@ -18,6 +18,16 @@ The **say-what-you-do** release. Two threads, and they turned out to be one: eve
 the language reference was read against the compiler that ships, and most of what came back
 was not a wrong sentence but a promise nothing was keeping.
 
+**A value chosen by `if`, `match` or `??` now binds like any other value.**
+`b = if c { a } else { [0, 0] }` used to alias `a` — a later write to `a` showed through
+`b` — and a branch mixing a fresh value with an existing one could leak the fresh one on
+every pass of a loop, or copy on one backend and alias on the other.  Every arm now binds
+the way a plain `b = a` or `b = f(x)` would, on both backends: a variable copies, a call's
+result is owned, a view stays a view.  The same rule reaches `x = f(v) ?? d`, a local
+re-bound inside a loop from a closure that may hand its argument back, and a local bound at
+two places from two sources.  A closure answering a view of a keyed field is no longer freed
+under its caller — a regression this cycle had introduced.
+
 **The reference is now read end to end — 40 chapters of 40.** The Standard Library section
 was the last and the worst: its generator read three of the seven `default/*.loft` files, so
 the entire JSON and reflection API — `json_parse`, `to_json`, `json_errors`, `reflect_type`,
@@ -43,6 +53,84 @@ however it is written, a keyed parameter's too, a `&` write-back reaches every h
 rather than the two it was written for, and a rebind written inside a CLOSURE — which could
 reach past two frames and silently replace a caller's collection — is refused, because a
 capture has no route back to the binding it would have to rebind.
+
+### Writing `null` into a record or a collection now says so, like a number already did
+
+```loft
+struct Row { v: integer }
+fn find(k: integer) -> Row { if k > 0 { return null; } Row { v: 1 } }
+```
+
+> warning: `null` is stored into the return value of the non-null type `Row` — the slot
+> holds null; declare it `Row?` to make that explicit
+
+The reference has always said you cannot store a `null` into a plain `integer`, `text` **or
+`Row`**, and for the scalars the compiler said so. For a record, a collection or an enum it
+said nothing — at a field, a return, a vector element and a call argument alike — so a
+function could hand back a value whose type promised it was there, and the null travelled on
+with nothing to read. It is the same notice the scalars get, and like theirs it is a warning:
+your program still runs, and the fix is the `?` the message names.
+
+### Copying a value no longer depends on whether it can be empty
+
+```loft
+a: vector<integer>? = [41, 42];
+b = a;          // b is its own vector
+a[1] = 99;      // b[1] is still 42
+```
+
+Giving one variable the value of another COPIES it — that is what `b = a` has always meant,
+and writing to `a` afterwards does not reach `b`. Unless `a` could be `null`: then `b` was
+the *same* vector, and every later write to either one showed up in the other. The same for a
+record. Keyed collections (`hash`, `sorted`, `index`) were unaffected, which is what made it
+hard to see — the rule held everywhere you were likely to check it.
+
+Absence survives the copy too, which is the other half: if `a` is `null`, `b` is `null`, not
+an empty vector. Those are different values, and a copy that quietly turned one into the
+other would have been its own bug.
+
+If you relied on the old behaviour to share a value, `&` is how you say so — `b = &a` links
+the two, and always did.
+
+### A linked list can say its last link is empty
+
+```loft
+struct Node { value: integer, next: reference<Node>? }   // now compiles
+```
+
+`reference<T>` is loft's shared pointer between records, and until now it could not be
+written `reference<T>?`. On a type that points back at itself — a list, a tree, anything with
+a terminator — that spelling did not compile at all, so the last link had to be a `null` in a
+field whose type said it could not be one. Every linked structure in the language was written
+that way because there was nothing else to write.
+
+The `?` had been quietly turning the pointer into a *copy*. `reference<Leaf>?` and `Leaf?`
+were laid out identically, so on a type where it did compile, writing the `?` gave you a
+private copy of the record instead of a link to it — the same program printed `11` where a
+pointer prints `22`, and nothing said the sharing was gone. A `?` on a pointer now means only
+what it says: the pointer may be absent. It keeps its own bytes, `&pool[i]` still binds it, and
+a write through the record is still seen through the field.
+
+Two smaller things fell out. `&` in a struct literal works wherever the field's type asks for
+it, not only when that field is written last — `Trail { link: &pool[0], id: 7 }` was rejected
+for the comma. And the null-into-a-record warning above now reaches the linked-list terminator
+too, naming `reference<Node>?` — the field's own type, where it used to name `Node?`, which is a
+different type and, on a self-referencing struct, not one you can write.
+
+### A `for` loop over your own iterator yields every kind of item
+
+```loft
+fn next(self: Reader) -> Line? { ... }    // Line, text, vector<T>, an enum — any type
+for line in reader { use(line); }
+```
+
+A custom iterator whose `next` answered anything heap-carried — a struct, `text`, a
+collection, a struct-enum — aborted the compiler outright, and the `server` package's own
+documented `for req in srv` was one of them. Where it did compile, two item types ended the
+loop before its first turn and exited cleanly with no output: the loop asked whether the
+item was *falsy* rather than whether it was *null*, so a `boolean` iterator stopped on its
+first `false`. It asks one question now, for every item type — the same one `x == null`
+asks — so a `0`, an `""` and a `false` are ordinary elements and the loop hands them to you.
 
 ### A JSON field that is not a boolean answers null
 

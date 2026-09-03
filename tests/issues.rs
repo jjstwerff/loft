@@ -128,7 +128,7 @@ fn compile_for_production(code: &str) -> (State, loft::data::Data) {
         "Parse errors: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     (state, p.data)
@@ -374,7 +374,9 @@ fn d2_signed_narrowing_i8_to_u8_needs_cast() {
 }"
     )
     .error(
-        "cannot implicitly narrow i8 to u8 (may lose data) — cast explicitly with `as u8` \
+        "cannot implicitly narrow i8 to u8 (may lose data) — \
+give it a fallback with `?? <value>`, take the checked cast `as u8?` (value or null), \
+or make the value provably fit (a mask, or an `if` range check) \
 at d2_signed_narrowing_i8_to_u8_needs_cast:3:15",
     );
 }
@@ -1086,7 +1088,7 @@ fn n4_format_struct_enum_variant_shows_fields() {
 fn n9a_generated_fill_has_ops_import() {
     let mut p = Parser::new();
     p.parse_dir("default", true, false).unwrap();
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let tmp = format!(
         "tests/generated/fill_n9a_{:?}.rs",
         std::thread::current().id()
@@ -1108,7 +1110,7 @@ fn n9a_generated_fill_has_ops_import() {
 fn n9_generated_fill_matches_src() {
     let mut p = Parser::new();
     p.parse_dir("default", true, false).unwrap();
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     // Use a unique path so parallel test runs do not race on the same file.
     let tmp = format!(
         "tests/generated/fill_n9_{:?}.rs",
@@ -1251,7 +1253,7 @@ fn n1_native_pipeline_trivial_program() {
         false,
     );
     assert!(p.diagnostics.is_empty(), "parse errors: {}", p.diagnostics);
-    loft::scopes::check(&mut p.data);
+    loft::scopes::check(&mut p.data, &mut p.database);
     let mut state = loft::state::State::new(p.database);
     loft::compile::byte_code(&mut state, &mut p.data);
     let end_def = p.data.definitions();
@@ -2410,7 +2412,7 @@ fn a8_to_lowercase_in_format() {
 fn fill_rs_up_to_date() {
     let mut p = Parser::new();
     p.parse_dir("default", true, false).unwrap();
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let generated = loft::create::generate_code_to(&p.data, "tests/generated/fill_check.rs")
         .expect("generate_code_to failed");
     let current = std::fs::read_to_string("src/fill.rs").expect("cannot read src/fill.rs");
@@ -2428,7 +2430,7 @@ fn fill_rs_up_to_date() {
 fn regen_fill_rs() {
     let mut p = Parser::new();
     p.parse_dir("default", true, false).unwrap();
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     loft::create::generate_code_to(&p.data, "src/fill.rs").expect("generate_code_to failed");
     println!("src/fill.rs regenerated");
 }
@@ -2441,7 +2443,7 @@ fn regen_fill_rs() {
 fn native_rs_functions_up_to_date() {
     let mut p = Parser::new();
     p.parse_dir("default", true, false).unwrap();
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let native_src = std::fs::read_to_string("src/native.rs").expect("cannot read src/native.rs");
     let mut missing = Vec::new();
     for d_nr in 0..p.data.definitions() {
@@ -9813,7 +9815,7 @@ fn p143_default_struct_return_from_nested_vector_use() {
         "parse errors: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     state.execute("main", &p.data);
@@ -9841,7 +9843,7 @@ fn p144_ref_param_forward_interpreter() {
         "parse errors: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     state.execute("main", &p.data);
@@ -9863,7 +9865,7 @@ fn p144_ref_param_forward_native() {
         "parse errors: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
 
@@ -10248,7 +10250,7 @@ fn p157_native_refvar_forwarding_with_preeval() {
         "parse errors: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let rs_path = std::env::temp_dir().join("loft_p157_native.rs");
@@ -10648,7 +10650,7 @@ fn p145_text_return_multivec_struct_cross_file() {
         "parse errors: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     state.execute("main", &p.data);
@@ -15436,7 +15438,7 @@ fn p379_two_libs_same_struct_name() {
         errors.is_empty(),
         "parse errors loading two libs: {errors:?}"
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     // production logger so an in-loft assert failure sets had_fatal instead of
@@ -15481,7 +15483,7 @@ fn manifest_dep_multifile_use_order() {
         errors.is_empty(),
         "multi-file manifest dep tripped the use-region check: {errors:?}"
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let config = RuntimeLogConfig {
@@ -15529,7 +15531,7 @@ fn forward_module_type_gets_a_slot() {
         errors.is_empty(),
         "a later-declared field type failed to compile: {errors:?}"
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let config = RuntimeLogConfig {
@@ -15577,7 +15579,7 @@ fn module_names_the_entry_type_in_an_expression() {
         errors.is_empty(),
         "a type named only in an expression failed to resolve: {errors:?}"
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let config = RuntimeLogConfig {
@@ -16081,15 +16083,20 @@ fn run() -> integer {
 
 #[test]
 fn issue_328_reference_self_recursive_walk() {
+    // The terminator is a `null`, so the field is declared `reference<Node>?` and the walker
+    // `Node?` — the shapes the language gained in loft#1316.  Both were unwritable before
+    // (`reference<Node>?` failed layout), which is why this walk used to carry an undeclared
+    // null in a non-null slot.  The subject is unchanged: the recursive walk over a
+    // self-referencing pointer field, which is #328's codegen path.
     code!(
-        "struct Node { value: integer, next: reference<Node> }
+        "struct Node { value: integer, next: reference<Node>? }
 fn run() -> integer {
     c = Node { value: 4, next: null };
     b = Node { value: 2, next: c };
     a = Node { value: 1, next: b };
     m = a.next;
     m.value = 20;
-    cur = a;
+    cur: Node? = a;
     total = 0;
     while cur != null {
         total = total + cur.value;
@@ -16108,10 +16115,10 @@ fn run() -> integer {
 #[test]
 fn issue_328_self_reassign_through_reference_field() {
     code!(
-        "struct Node { value: integer, next: reference<Node> }
+        "struct Node { value: integer, next: reference<Node>? }
 fn run() -> integer {
     b = Node { value: 2, next: null };
-    x = Node { value: 1, next: b };
+    x: Node? = Node { value: 1, next: b };
     x = x.next;
     x.value
 }"
@@ -17011,7 +17018,7 @@ fn run_entry_returning(code: &str) -> (State, loft::data::Data) {
         "Parse errors: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     state.execute_argv("main", &p.data, &[]);
@@ -17473,7 +17480,7 @@ fn build664() -> E664 {
         "#664 source must parse clean: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
 
     let d_nr = p.data.def_nr("n_build664");
     assert_ne!(d_nr, u32::MAX, "#664: build664 must be defined");
@@ -17597,7 +17604,7 @@ fn issue_675_cross_library_heap_return_reserves_its_buffer() {
 
     // And it must still run: the buffer is an ABI change, so a wrong one shows up as a
     // caller/callee argument mismatch rather than a wrong number.
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let config = RuntimeLogConfig {
@@ -17719,7 +17726,7 @@ fn issue_682_closure_capture_ownership_marker() {
         "#682 fixture must parse clean: {:?}",
         p.diagnostics.lines()
     );
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
 
     // The lambdas are numbered in source order, so each closure record pairs with
     // the function above that defines it.
@@ -18358,7 +18365,7 @@ fn parse_for_reachability(tag: &str, src: &str) -> loft::data::Data {
     let mut p = Parser::new();
     p.parse_dir("default", true, false).unwrap();
     p.parse(path.to_str().unwrap(), false);
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let _ = std::fs::remove_file(&path);
     p.data
 }

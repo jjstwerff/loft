@@ -83,7 +83,7 @@ pub fn start_reporting(program_src: &str) -> Result<(), String> {
         return Err(p.diagnostics.to_string());
     }
     let program_source = p.data.source;
-    crate::scopes::check(&mut p.data);
+    crate::scopes::check(&mut p.data, &mut p.database);
     let mut state = Box::new(State::new(p.database.clone()));
     crate::compile::byte_code(&mut state, &mut p.data);
     // Stepping mode so a registered breakpoint SUSPENDS (returns) instead of
@@ -403,7 +403,7 @@ fn build_run(
         return None;
     }
     sess.counter += 1;
-    crate::scopes::check(&mut sess.parser.data);
+    crate::scopes::check(&mut sess.parser.data, &mut sess.parser.database);
     let d = sess.parser.data.def_nr(&format!("n_{name}"));
     if d == u32::MAX {
         return None;

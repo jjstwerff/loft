@@ -184,7 +184,7 @@ pub fn run(filename: &str, opts: &Options) -> std::io::Result<()> {
             std::process::exit(1);
         }
     }
-    scopes::check(&mut p.data);
+    scopes::check(&mut p.data, &mut p.database);
     let mut state = State::new(p.database);
     compile::byte_code(&mut state, &mut p.data);
     let end_def = p.data.definitions();

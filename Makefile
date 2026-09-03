@@ -1972,6 +1972,7 @@ ci: ci-guard
 	scripts/check_doc_drift.sh >> result.txt 2>&1 && \
 	$(MAKE) --no-print-directory label-guard-test >> result.txt 2>&1 && \
 	python3 scripts/contract_labels.py --self-test >> result.txt 2>&1 && \
+	python3 scripts/revalidate_matrix.py --self-test >> result.txt 2>&1 && \
 	cargo build --all-targets >> result.txt 2>&1 && \
 	cargo build --release --lib >> result.txt 2>&1 && \
 	cargo build --no-default-features --target-dir target/nodefault >> result.txt 2>&1 && \
@@ -2285,6 +2286,17 @@ label-guard-test:
 .PHONY: contract-labels-test
 contract-labels-test:  ## the `Contract:` trailer parse behind the push workflow's contract: label
 	@python3 scripts/contract_labels.py --self-test
+
+# The revalidate-libs matrix, same argument one gate over: the policy decides which
+# published packages the freeze gate looks at, and BOTH readers — the workflow and
+# the local script — take it from one file now.  A matrix that quietly returns every
+# package looks identical to a correct one on a registry with nothing to exclude,
+# which is the state the index is usually in; the self-test gives each rule an input
+# it has to act on.  Its zero being wrong is what made the local gate read
+# `1 COMPILE-BREAK` on an unchanged tree (loft#1315).
+.PHONY: revalidate-matrix-test
+revalidate-matrix-test:  ## the revalidate-libs matrix policy shared by the workflow and the local gate
+	@python3 scripts/revalidate_matrix.py --self-test
 
 .PHONY: linkcheck linkcheck-external
 linkcheck:
