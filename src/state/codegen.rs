@@ -3207,6 +3207,12 @@ impl State {
             && stack.function.tp(src).depend().is_empty()
             && !stack.function.is_argument(src)
             && !stack.function.is_captured(src)
+            // @FR-O-Override.  The empty dep list above is @FR-O-Proxy, and a move is a free
+            // decision made one binding away: `v` takes `src`'s store and `v`'s scope-exit
+            // `OpFreeRef` releases it.  If the proxy was wrong about `src` that release lands
+            // on a store someone else owns — the same shape as the view this arm already
+            // refuses, reached through the flag instead of through the deps.
+            && !stack.function.is_skip_free(src)
         {
             let src_pos = stack.var_pos(src);
             stack.add_op("OpVarRef", self);

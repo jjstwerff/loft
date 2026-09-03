@@ -544,10 +544,36 @@ permissive one, and put the unnamed shapes on the other side of it.
 `O-Proxy` carries the first checkable obligation in this space: *a site that FREES on the
 empty-deps proxy must also consult `O-Override`.*
 
-### ✅ That obligation is now enforced (2026-08-24)
+### ✅ That obligation is now enforced (2026-08-24, re-measured 2026-09-03)
 
 `scripts/o_proxy_check.py`, gated by `doc_hygiene::o_proxy_frees_consult_the_override` and
-runnable as `make o-proxy-check`. 20 positive proxy sites, 8 negated, **0 violations**.
+runnable as `make o-proxy-check`. **24 positive proxy sites, 5 negated, 6 no-binding,
+0 violations — of which 6 positives actually reach a free.**
+
+⚠ **That last number is the one to read, and for its first week it was ZERO.** The check
+shipped matching only free EMITTERS (`OpFree`, `free_ref`, `emit_free`) inside the region a
+condition gates — but `get_free_vars` is what emits `OpFreeRef`, and these sites conclude
+ownership in one function while the free lands in another. So 25 of 29 verdicts were `ok`
+because nothing in the region matched, not because anything was proved, and a green run
+carried no content. It reported `0 violations` over two sites that had none of the veto:
+`scan_set`'s displaced-owned dep strip and `gen_set_first_ref_var_copy`'s move.
+
+Four discriminations closed that (5-7 below plus an amendment to 1), and the check now
+prints its own control — `N of M reach a free` — so a run where that number collapses says
+so instead of passing quietly. The rule the added ones encode: **a free is REACHED, not only
+emitted.** A site reaches one by WRITING the fact the sweep reads, which is two shapes and
+not the whole writer API — `make_independent` / `without_deps` strip the deps so the sweep
+frees, and `set_skip_free` ON THE PROXIED BINDING is the spelling of a move, where the
+target has taken the store and will free it. Adding a dep is the restrictive direction;
+`mark_inline_ref` and minting a fresh temp touch a different binding. And a writer counts
+only when it NAMES the binding the condition concluded about — without that, a
+`mark_inline_ref(db)` three lines under a proxy read on `vec` reads as a free of `vec`.
+
+⚠ **The `no-binding` class has to keep the emitters.** `O-Override` is per-binding, so a
+site reading `depend()` off a bare Type cannot consult it — but `tuple_owned_elem_frees`,
+this check's original catch, reads `elems[idx].depend()` and frees through `OpFreeRef`
+anyway. Excusing it on the spelling retires the one regression the check exists for;
+verified by deleting its veto and confirming the check goes red.
 
 **Three discriminations, each of which was a false positive first:**
 

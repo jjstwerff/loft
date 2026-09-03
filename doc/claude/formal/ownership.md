@@ -182,7 +182,24 @@ of those three consulted `is_skip_free` — and the corpus never noticed, becaus
 `skip_free` binding currently reaches them (measured over `tests/scripts` and `tests/docs`,
 zero hits). A site that frees on the proxy and happens never to meet a marked binding is
 indistinguishable from one that asks correctly, which is the same invisibility this section
-is about, one level down. The remaining eleven free-deciding sites are in that state now.
+is about, one level down.
+
+⚠ **And the "seventeen decide a free" above is a HAND count the gate could not reproduce.**
+Re-measured 2026-09-03, after `scripts/o_proxy_check.py` was given a decidable predicate for
+*"does this site reach a free?"*: of 24 positive sites **6 reach one, and all 6 discharge the
+veto**. Two of those six were undischarged until that run — `scan_set`'s displaced-owned dep
+strip and `gen_set_first_ref_var_copy`'s move — and both now consult it.
+
+The other **eighteen the gate cannot decide either way**, and that is the honest residual,
+not a clean bill: their free, if they have one, lands in `get_free_vars` outside the region
+their condition gates. Spot-read, several are plainly not free decisions —
+`materialises_element` and `classify_set` classify, `classify_vec_bind` and
+`assign_refvar_vector` choose copy-vs-alias, `ownership_cfg` is the @PLN94 oracle that drives
+no codegen — while others (`parse_field_iteration`, `inline_struct_return`) do reach a free
+by a route no lexical window can follow. What the hand count could not separate, and the gate
+now states per site, is *asking* the proxy from *freeing* on it; what neither can yet settle
+is the eighteen, and the cure for those is the invisibility named above — a site DECLARING
+which of the four facts it reads, rather than a reader inferring it.
 
 ⚠ This does **not** re-open `D-own-1` (CLOSED: *"every free/copy/move reads `deps`"*). That
 remains true in the letter — these sites do read `deps`. What was never true is the
@@ -193,7 +210,7 @@ implication that reading `deps` is *sufficient*.
 ## Deviations
 
 **OPEN: 2.**
-- **D-own-26** — eleven free-deciding proxy sites never consult `O-Override` (measured; three folded onto `Scopes::owns_freeable_store` the day it opened)
+- **D-own-26** — NARROWED 2026-09-03: every proxy site the gate can prove reaches a free now consults `O-Override` (6 of 24, all discharged). The residual is the eighteen it cannot prove either way — a site whose free lands in `get_free_vars`, outside the region its condition gates
 - **D-own-8** — a Join's ownership fact is true on one path only
 
 **D-own-16 CLOSED 2026-09-03.** Every cell that should reach zero does, on both backends, with

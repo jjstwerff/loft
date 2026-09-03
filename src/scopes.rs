@@ -4981,6 +4981,13 @@ impl Scopes {
                 && !publishes_through_ref
                 && self.displaced_owned.contains(&ov)
                 && !function.tp(v).depend().is_empty()
+                // @FR-O-Override vetoes @FR-O-Proxy at every site that frees on it, and
+                // stripping the deps IS such a site: `get_free_vars` reads the dep list, so
+                // emptying it here is what makes the scope-exit sweep emit `OpFreeRef(v)`.
+                // The proxy is read negated — "this still looks like a borrow" — which does
+                // not change the conclusion the strip acts on, only its spelling.  A binding
+                // the parser marked never-free keeps its deps and its store.
+                && !function.is_skip_free(v)
             {
                 let deps: Vec<u16> = function.tp(v).depend().clone();
                 for d in deps {

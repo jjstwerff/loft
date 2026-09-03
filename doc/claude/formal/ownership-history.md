@@ -6,12 +6,16 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **3** (D-own-26, opened 2026-09-01 and narrowed the same day — eleven of the
-seventeen free-deciding proxy sites still do not consult O-Override, measured; D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
+OPEN: **2** (D-own-26, opened 2026-09-01, narrowed the same day and again 2026-09-03, when the
+gate got a decidable free-reach predicate: 6 of 24 positive sites reach a free, all of them now
+consult O-Override, and the residual is the eighteen whose free-reach is not lexically
+decidable — the "eleven of seventeen" this line used to carry was a hand count that could not
+separate asking the proxy from freeing on it; and D-own-8, 2026-08-24, NARROWED 2026-08-25 to a
+single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
-known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; and D-own-16, whose
-BOUNDARY was corrected and whose wider half CLOSED 2026-08-30, with three cures measured and
-ruled out along the way, loft#1200) —
+known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098).  D-own-16 CLOSED
+2026-09-03, its BOUNDARY corrected and its wider half closed 2026-08-30, with three cures
+measured and ruled out along the way, loft#1200 —
 D-own-23 opened and closed 2026-08-29 with loft#1154; D-own-24 the same day with loft#1156, and D-own-21 with
 loft#1150 — the three-faced one, whose entry records that a DEFERRAL is a missing
 measurement rather than a closed question; D-own-22 opened and closed 2026-08-29 with
@@ -456,6 +460,42 @@ which a free-deciding site reads the proxy without the veto — the sites are re
 what produced the numbers above. Until such a check exists, each new free site restates the
 obligation or silently skips it, which is how the count went from the 24 written into
 `ownership.md` to 38.
+
+**NARROWED 2026-09-03 — the check existed and was measuring nothing, and the eleven do not
+survive re-measurement.** `scripts/o_proxy_check.py` had shipped on 2026-08-24, a week before
+this entry was written, and the entry's own sentence *"closing it needs a check"* was true of
+what that check could see rather than of whether one existed. It matched only free EMITTERS
+inside the region a condition gates — but `get_free_vars` is what emits `OpFreeRef`, so these
+sites conclude ownership in one function while the free lands in another. **25 of its 29
+`ok` verdicts came from an empty region, not from a proof**, and it reported `0 violations`
+across two sites that had no veto at all.
+
+Three discriminations closed the gap — a free is REACHED (a write to the fact the sweep
+reads: `make_independent` / `without_deps` strip the deps, `set_skip_free` on the proxied
+binding is a MOVE) rather than only emitted; a writer counts only when it NAMES the binding
+the condition concluded about; and a negated read whose region writes the fact is a positive
+site, not the is-it-a-borrow question. The check now also prints its own control, `N of M
+reach a free`, so the state it shipped in is visible rather than silent.
+
+Re-measured against that predicate: **6 of 24 positive sites reach a free, not seventeen**,
+and all six now discharge the veto. The eleven was a hand count that could not separate
+*asking* the proxy from *freeing* on it; spot-reading the rest finds classifiers
+(`materialises_element`, `classify_set`, `classify_vec_bind`), copy-vs-alias decisions
+(`assign_refvar_vector`) and the @PLN94 oracle, which owe the veto nothing — but also
+`parse_field_iteration` and `inline_struct_return`, which do reach a free by a route no
+lexical window follows, so the eighteen are UNDECIDED and not cleared. Two of the six were
+genuinely undischarged and now consult it: `scan_set`'s displaced-owned dep strip and `gen_set_first_ref_var_copy`'s move,
+where a wrong proxy hands the target an interior pointer that its scope-exit `OpFreeRef`
+then releases — loft#823's shape reached through the flag instead of through the deps.
+Both changes are guards in the withholding direction and were measured INERT: a differential
+probe printing whenever the added conjunct changes the outcome reported **zero hits over
+1119 corpus files** on `--interpret` and a 60-file `--native` sample.
+
+**The residual is the eighteen the gate cannot decide either way** — a site whose free, if it
+has one, lands in `get_free_vars` outside the region its condition gates. The lexical route
+is exhausted there; what would settle them is the invisibility `ownership.md` § The facts
+that answer it already names — each proxy site DECLARING which of the four facts it reads,
+so the choice is checkable instead of inferred.
 
 ### D-own-16 — CLOSED 2026-09-03 (opened 2026-08-27, narrowed 2026-08-30): a value that READS the local it assigns never frees the store it displaces
 
