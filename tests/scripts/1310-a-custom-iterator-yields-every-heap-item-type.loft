@@ -51,12 +51,17 @@
 // @EXPECT_WARNING: non-null scalar type `integer`
 // @EXPECT_WARNING: non-null scalar type `text`
 //
-// @falsified-at: HEAD~1 — of the ten cells, `a_struct_item`, `a_text_item`, `a_nullable_text
-//   _item`, `a_vector_item`, `a_nullable_vector_item` and `a_struct_enum_item` abort the
-//   compiler with "Too few parameters"; with only the call fixed, `a_vector_item`,
-//   `a_nullable_vector_item`, `a_struct_enum_item` and `a_nullable_struct_enum_item` run and
-//   yield NOTHING.  The four scalar/struct/nullable-struct cells pass throughout — they are
-//   the controls that say the fix did not disturb the half that already worked.
+// @falsified-at: 1cbbe864 — interpret exit 1 -> 0, native exit 101 -> 0
+//
+//   ⚠ That is the EXIT channel, and it only sees the first defect: six cells abort the
+//   compiler with "Too few parameters", which stops the file before any assert runs — so
+//   `make falsify` reports asserts 0 on the control and cannot score the other two defects
+//   at all.  Those were measured by hand at the intermediate state, with only the call
+//   fixed: `a_vector_item`, `a_nullable_vector_item`, `a_struct_enum_item` and
+//   `a_nullable_struct_enum_item` compile, run, and yield NOTHING at exit 0, and
+//   `a_boolean_item` yields nothing with all three defects but the last one fixed.  The
+//   scalar, struct and falsy cells pass throughout — they are the controls that say the
+//   cure did not disturb the half that already worked.
 
 struct It1310 { v: integer }
 enum Sh1310 { A { k: integer }, B { k: integer } }
