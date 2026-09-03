@@ -1,10 +1,16 @@
 ==== exit: 1 ====
 ==== stdout ====
 ==== stderr ====
-error: a `&` reference tuple may only hold scalar elements, and this one holds `text` — take the tuple by value and return a new one, or use a struct, whose fields of any type write through a `&` parameter
-  --> <cases>/55_reference_tuple_scalar_only.loft:1:28
+error: a `&` reference tuple cannot hold a `text?` element — a nullable, fn-ref or nested-tuple element has no record form the reference can address; take the tuple by value and return a new one, or use a struct
+  --> <cases>/55_reference_tuple_scalar_only.loft:1:29
   |
-1 | fn swap56(p: &(text, text)) {
-  |                            ^
+1 | fn swap56(p: &(text?, text)) {
+  |                             ^
 
-error: aborting due to 1 previous error
+error: expected &(text?, text), got (text, text) on argument 1 of call to swap56
+  --> <cases>/55_reference_tuple_scalar_only.loft:9:10
+  |
+9 |   swap56(s);
+  |          ^
+
+error: aborting due to 2 previous errors

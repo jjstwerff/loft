@@ -3237,7 +3237,7 @@ impl Parser {
         self.rewrite_tail_tuple_with_work_ref(synthetic_d_nr, known_type, w, tail);
     }
 
-    fn rewrite_tail_tuple_with_work_ref(
+    pub(crate) fn rewrite_tail_tuple_with_work_ref(
         &mut self,
         synthetic_d_nr: u32,
         known_type: u16,

@@ -620,6 +620,12 @@ pub struct Parser {
     /// closure (`717-closure-struct-return.loft`).  Only a return nothing declared can have
     /// missed the earlier slot.
     adopted_ret_defs: std::collections::HashSet<u32>,
+    /// Tuple LOCALS that are the source of a `&` link — bound by `b = &a` / `c: &(…) = a`, or
+    /// passed to a `&(…)` parameter — and carry a heap element, keyed `(function, name)`.
+    /// Such a local is built as a `__tuple<…>` RECORD so the link can name it (tuples.md
+    /// T-Ref); every other tuple local keeps its stack form.  Recorded in pass 1 at the link
+    /// and consulted at the bind in pass 2, the same shape as `adopted_ret_defs`.
+    ref_linked_tuple_locals: std::collections::HashSet<(u32, String)>,
     /// loft#945 — every `(function, variable)` whose vector LITERAL turned out to be the
     /// RECEIVER of a `.map`/`.filter`/`.reduce` chain (`d = [1, 2, 3].map(…)`).
     ///
@@ -1270,6 +1276,7 @@ impl Parser {
             late_text_tails: Vec::new(),
             infer_ret_defs: std::collections::HashSet::new(),
             adopted_ret_defs: std::collections::HashSet::new(),
+            ref_linked_tuple_locals: std::collections::HashSet::new(),
             literal_chain_lhs: std::collections::HashSet::new(),
             bound_method_stubs: Vec::new(),
             stub_origin: std::collections::HashMap::new(),
@@ -2129,6 +2136,7 @@ impl Parser {
         // newly-heap return gets its `__retbuf` in the same breath.
         let adopted = self.data.resolve_adopted_stubs(&mut self.lexer);
         self.refuse_forward_tuple_returns(&adopted);
+        self.refuse_forward_ref_tuple_params(&adopted);
         // @PLN125 — the same class, one step earlier in the chain: a bound-method stub's
         // hidden parameters are decided from the INTERFACE method's return type, which on
         // pass 1 can still be an unresolved forward reference.  Re-derive here, before the
@@ -2291,23 +2299,39 @@ impl Parser {
     /// here rather than repeating the check beside it: a second copy of the admitted list
     /// is the shape loft#1006 already was.
     ///
-    /// The restriction is on the STACK-backed reference tuple this annotation builds.  A
-    /// record-backed one — the `RefVar(Tuple)` a `for` loop binds over a vector of tuples —
-    /// reaches its elements through a real record and admits any element type; it is built
-    /// elsewhere and does not come through here.
+    /// Which representation the `&(…)` names is decided here too (tuples.md T-Ref-Rep): the
+    /// stack for an all-scalar tuple, and a reference to the `__tuple<…>` RECORD — what a `&S`
+    /// is — for anything else.  The remaining refusal is for an element the record cannot
+    /// spell or lay out as a field.
     pub(crate) fn ref_var_type(&mut self, tp: Type) -> Type {
+        // A `&(…)` whose elements are not all scalars is a reference to the synthesized
+        // `__tuple<…>` RECORD — exactly what a `&S` is — rather than a stack link: a heap
+        // element has no stack form the reference ops can address (tuples.md T-Ref).  The
+        // record form already carries every element type a struct field can, which is what
+        // the loop variable over a `vector<(…)>` and a heap-tuple RETURN use.
+        if let Type::Tuple(ref elems) = tp
+            && elems.iter().any(|e| !crate::data::ref_tuple_element_ok(e))
+            && elems.iter().all(crate::data::ref_tuple_record_element_ok)
+        {
+            let elems = elems.clone();
+            let d = self.data.tuple_def(&mut self.lexer, &elems);
+            if d != u32::MAX {
+                return Type::RefVar(Box::new(Type::Reference(d, crate::data::Deps::none())));
+            }
+        }
         if !self.first_pass
             && let Type::Tuple(ref elems) = tp
-            && let Some(bad) = elems.iter().find(|e| !crate::data::ref_tuple_element_ok(e))
+            && let Some(bad) = elems
+                .iter()
+                .find(|e| !crate::data::ref_tuple_record_element_ok(e))
         {
             let bad_name = bad.name(&self.data);
             diagnostic!(
                 self.lexer,
                 Level::Error,
-                "a `&` reference tuple may only hold scalar elements, and this \
-                 one holds `{bad_name}` — take the tuple by value and return a \
-                 new one, or use a struct, whose fields of any type write \
-                 through a `&` parameter"
+                "a `&` reference tuple cannot hold a `{bad_name}` element — a nullable, \
+                 fn-ref or nested-tuple element has no record form the reference can \
+                 address; take the tuple by value and return a new one, or use a struct"
             );
         }
         Type::RefVar(Box::new(tp))
@@ -2350,6 +2374,56 @@ impl Parser {
         }
     }
 
+    /// tuples.md T-Ref — a `&(…)` PARAMETER with a heap element is backed by the synthesized
+    /// `__tuple<…>` record, whose shape the signature must know; an element declared later in
+    /// the file is a stub on pass 1, so the two passes would type the parameter two ways.  The
+    /// same refusal a tuple RETURN gets (`refuse_forward_tuple_returns`), for the same reason.
+    fn refuse_forward_ref_tuple_params(&mut self, adopted: &[(u32, Type)]) {
+        if adopted.is_empty() {
+            return;
+        }
+        for d in 0..self.data.definitions.len() as u32 {
+            if !matches!(self.data.def_type(d), crate::data::DefType::Function) {
+                continue;
+            }
+            let late = self.data.def(d).attributes().iter().find_map(|a| {
+                let Type::RefVar(inner) = &a.typedef else {
+                    return None;
+                };
+                let Type::Tuple(elems) = &**inner else {
+                    return None;
+                };
+                if !elems.iter().any(|e| !crate::data::ref_tuple_element_ok(e)) {
+                    return None;
+                }
+                // `resolve_adopted_stubs` has already pointed the stub at the real type, so a
+                // forward-declared element is recognised by BEING one of the adopted types.
+                elems.iter().find_map(|e| {
+                    adopted
+                        .iter()
+                        .find(|(stub, real)| {
+                            e == real || matches!(e, Type::Unknown(n) if n == stub)
+                        })
+                        .map(|(stub, _)| (a.name.clone(), self.data.def(*stub).name().to_string()))
+                })
+            });
+            let Some((pname, late)) = late else {
+                continue;
+            };
+            let fname = self.data.def(d).name().trim_start_matches("n_").to_string();
+            let pos = self.data.def(d).position.clone();
+            self.lexer.pos_diagnostic(
+                Level::Error,
+                &pos,
+                &format!(
+                    "`{fname}` takes `{pname}: &(…)` containing `{late}`, which is declared later \
+                     in the file — move the declaration of `{late}` above `{fname}`. A `&(…)` \
+                     with a heap element is backed by a record whose shape the signature has \
+                     to know, and it cannot ask a type that does not exist yet"
+                ),
+            );
+        }
+    }
     fn promote_par_worker_tuple_returns(&mut self) {
         let mut workers: Vec<u32> = self.par_worker_defs.iter().copied().collect();
         workers.sort_unstable(); // deterministic `__tuple<…>` def order across runs
@@ -3082,6 +3156,7 @@ impl Parser {
         // newly-heap return gets its `__retbuf` in the same breath.
         let adopted = self.data.resolve_adopted_stubs(&mut self.lexer);
         self.refuse_forward_tuple_returns(&adopted);
+        self.refuse_forward_ref_tuple_params(&adopted);
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
@@ -3141,6 +3216,7 @@ impl Parser {
         // newly-heap return gets its `__retbuf` in the same breath.
         let adopted = self.data.resolve_adopted_stubs(&mut self.lexer);
         self.refuse_forward_tuple_returns(&adopted);
+        self.refuse_forward_ref_tuple_params(&adopted);
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
@@ -3283,6 +3359,7 @@ impl Parser {
         // newly-heap return gets its `__retbuf` in the same breath.
         let adopted = self.data.resolve_adopted_stubs(&mut self.lexer);
         self.refuse_forward_tuple_returns(&adopted);
+        self.refuse_forward_ref_tuple_params(&adopted);
         let lvl = self.lexer.diagnostics().level();
         if lvl == Level::Error || lvl == Level::Fatal {
             self.diagnostics.fill(self.lexer.diagnostics());
@@ -4601,6 +4678,39 @@ impl Parser {
                         self.cl("OpCreateStack", &[Value::Var(wv)]),
                     ]);
                 }
+            }
+            return true;
+        }
+        // tuples.md T-Ref — a tuple LOCAL passed to a `&(…)` parameter whose elements are
+        // not all scalars.  The parameter is a reference to the `__tuple<…>` record, and the
+        // local is a stack tuple on pass 1: record that it must be BUILT as that record, and
+        // let pass 1 through.  On pass 2 the bind has already made it one, so a stack tuple
+        // still arriving here is not a local this function declares (a by-value parameter,
+        // a projection), and a link cannot name it — B-Ref-Reshape's rule: refuse rather
+        // than downgrade to a copy.
+        if let Type::RefVar(ref_tp) = should
+            && let Type::Reference(d, _) = &**ref_tp
+            && self.data.def(*d).name().starts_with("__tuple<")
+            && let Type::Tuple(elems) = is_type
+            && elems.iter().all(crate::data::ref_tuple_record_element_ok)
+        {
+            if let Value::Var(v) = code.unspan() {
+                self.ref_linked_tuple_locals
+                    .insert((self.context, self.vars.name(*v).to_string()));
+            }
+            if !self.first_pass {
+                let what = match code.unspan() {
+                    Value::Var(v) if self.vars.is_argument(*v) => "a by-value parameter",
+                    Value::Var(_) => "a variable this function did not declare",
+                    _ => "not a tuple variable",
+                };
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "a `&(…)` reference tuple with a heap element links to a tuple LOCAL \
+                     of the calling function, and this argument is {what} — bind it to a \
+                     local first and pass that"
+                );
             }
             return true;
         }

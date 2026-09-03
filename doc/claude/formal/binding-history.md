@@ -6,8 +6,8 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **2** (D-bind-11, D-bind-16); D-bind-12, D-bind-13, D-bind-14 and D-bind-15 each
-opened and CLOSED the same day.
+OPEN: **1** (D-bind-16); D-bind-11 CLOSED 2026-09-03 (below); D-bind-12, D-bind-13, D-bind-14
+and D-bind-15 each opened and CLOSED the same day.
 D-const-2 opened and CLOSED the same day (2026-09-01), found by the Store Locks
 reference review.
 B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
@@ -275,6 +275,50 @@ only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
 > that always worked (`p.1 = p.0`, a fresh literal) pass there, which is what made this read
 > as *"writes to `p.1` are fine"*.
 
+> **D-bind-11 — CLOSED (2026-09-03, loft#1006): a `&(τ, …)` holds any element a struct field
+> can, and the two options the entry below named were never a choice.**  The stack form cannot
+> OWN a `text` element — a 16-byte `Str` borrow has no owner of its own in a frame — while the
+> record form already performed this exact swap correctly on both backends through the loop
+> variable over a `vector<(text, text)>`.  So a `&(…)` whose elements are not all scalars is a
+> reference to the synthesized `__tuple<…>` RECORD — precisely what a `&S` is — and the one
+> refusal site, `Parser::ref_var_type`, builds that type instead of refusing.
+>
+> **The whole distance was the LITERAL local.**  A tuple local bound from a heap-tuple RETURN
+> was already that record; a loop variable was already that record; only `a = ("a1", "b1")` was
+> stack-built.  Making EVERY heap-tuple literal local a record was measured and rejected: 17
+> corpus scripts changed exit code, two of them crashes — nullable elements, fn-ref elements,
+> nested and forward-referenced tuples, destructure ownership, none of which a `&` ever touches.
+> The representation moves only for a tuple local that is the SOURCE OF A LINK: recorded in
+> pass 1 at the link (`b = &a`, `c: &(…) = a`) and at the call argument, applied at the bind in
+> pass 2 (`Parser::ref_linked_tuple_locals`, the `adopted_ret_defs` pattern), built by the
+> return path's own `rewrite_tail_tuple_with_work_ref`.  With that scope the corpus answers
+> identically with and without the change — measured script by script against the pre-change
+> binary.
+>
+> ⚠ **Three cuts the matrix caught.**  Pass 1 typed the linked local as the stack tuple, and
+> the record RHS was then UNBOXED back to it (`unboxes_stored_tuple`), so the link saw a stack
+> tuple on pass 2; the unbox is declined for a linked local.  An annotated `c: &(text, text) =
+> a` failed on pass 1, where `a` was still a stack tuple and the link's derived type disagreed
+> with its own annotation; the link derives the record type as soon as the fact is recorded.
+> And `slow-reference-parameter` fired for `&(text, text)` — advice whose premise (a by-value
+> parameter already propagates writes) is FALSE for a tuple, whose by-value form is a copy
+> (`1278-…`); suppressed for a `__tuple<…>` reference.
+>
+> **What stays refused, and each is a cell in `102-…`:** a NULLABLE element (its `?` does not
+> survive the synthetic name), a fn-ref element, a nested tuple — the record cannot spell or
+> lay them out as a field; a by-value tuple PARAMETER or a FIELD as the source (no local to
+> build the record for, `T-Ref-Src`); and a `&(…)` containing a type declared LATER in the
+> file, refused the way a tuple return is (`refuse_forward_ref_tuple_params`, which has to
+> match the RESOLVED type — `resolve_adopted_stubs` has already replaced the stub by then).
+>
+> The rule moved with it: [tuples.md](tuples.md) gains `(T-Ref-Rep)` (which representation a
+> `&(…)` names) and `(T-Ref-El)` now admits what a struct field can.  Measured on both
+> backends, `LOFT_POISON` clean, no native leak: a literal local, a return-bound local, a loop
+> variable, a local link in both spellings, `text` / vector / struct / keyed / three mixed
+> elements, a linked local re-bound, copied, destructured, appended and passed to two callees
+> 500 times.  Guard: `tests/scripts/reference-tuple-heap-elements-link.loft`, seven cells,
+> falsified at 29743c5c.
+>
 > **D-bind-11 — OPEN (2026-08-19) — `&(τ, …)` admits only SCALAR elements, against
 > B-Ref-Alias and B-Ref-Uniform.** `B-Ref-Alias` says the `&τ` annotation makes **ANY**
 > binding — scalar OR heap — a live link, and `B-Ref-Uniform` says a `&τ` variable is used

@@ -2634,6 +2634,35 @@ use a separate collection or add after the loop"
         let prev_target = std::mem::replace(&mut self.assign_target, var_nr);
         let prev_replaces = std::mem::replace(&mut self.assign_replaces, op == "=");
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
+        // tuples.md T-Ref — a tuple LITERAL bound to a local that is the SOURCE OF A `&` LINK
+        // (recorded in pass 1 at the link or the call) and carries a heap element is built as
+        // the `__tuple<…>` RECORD a heap-tuple return and a loop variable already are, so the
+        // link can name it.  Every other tuple local keeps its stack form.  Built by the
+        // return path's own builder.
+        if op == "="
+            && let Value::Var(lhs) = to
+            && matches!(code.unspan(), Value::Tuple(_))
+            && let Type::Tuple(ref types) = s_type
+            && types.iter().any(|t| !crate::data::is_scalar(t.base()))
+            && types.iter().all(crate::data::ref_tuple_record_element_ok)
+            && self
+                .ref_linked_tuple_locals
+                .contains(&(self.context, self.vars.name(*lhs).to_string()))
+        {
+            let types = types.clone();
+            let synth = self.data.tuple_def(&mut self.lexer, &types);
+            if synth != u32::MAX {
+                let synth_ref = Type::Reference(synth, Deps::none());
+                let w = self.vars.work_refs(&synth_ref, &mut self.lexer);
+                let kt = self.data.def(synth).known_type();
+                self.rewrite_tail_tuple_with_work_ref(synth, kt, w, code);
+                s_type = Type::Reference(synth, Deps::frame1(w));
+                // The local was typed from the literal while the RHS parsed; it IS the record
+                // now, and the stack-tuple type would otherwise unbox the record back.
+                self.vars
+                    .set_type(*lhs, Type::Reference(synth, Deps::none()));
+            }
+        }
         self.assign_target = prev_target;
         self.assign_replaces = prev_replaces;
         self.amp_head = AmpHead::No;
@@ -2703,6 +2732,16 @@ use a separate collection or add after the loop"
             //             (`OpGet*(OpGetVector(v,..), 0)` → strip to the inner)
             //   field   — `OpGetField(<base>, fld)`, the record at the field's offset.
             // Bind `c`/`r` to that ref; reads/writes deref it the same as L1/L4.
+            // tuples.md T-Ref — the source of a `&(…)` link with a heap element must be a
+            // record; say so for pass 2's bind (see `ref_linked_tuple_locals`).
+            if let Some(src) = stack_src
+                && let Type::Tuple(elems) = self.vars.tp(src)
+                && elems.iter().any(|e| !is_scalar(e.base()))
+                && elems.iter().all(crate::data::ref_tuple_record_element_ok)
+            {
+                let name = self.vars.name(src).to_string();
+                self.ref_linked_tuple_locals.insert((self.context, name));
+            }
             let heap_ref = if stack_src.is_none() && is_scalar(&s_type) {
                 match code.unspan() {
                     Value::Call(g, gargs) if self.data.def(*g).name().starts_with("OpGet") => {
@@ -2724,7 +2763,21 @@ use a separate collection or add after the loop"
             };
             if let Some(src) = stack_src {
                 amp_unlowered = false;
-                let inner = self.vars.tp(src).clone();
+                let mut inner = self.vars.tp(src).clone();
+                // tuples.md T-Ref — a linked tuple local with a heap element is the
+                // `__tuple<…>` record.  On pass 1 its bind has not been rewritten yet (the fact
+                // was recorded a moment ago), so derive the link's type from the record the
+                // bind WILL build, or an annotated `c: &(…) = a` disagrees with itself.
+                if let Type::Tuple(elems) = &inner
+                    && elems.iter().any(|e| !is_scalar(e.base()))
+                    && elems.iter().all(crate::data::ref_tuple_record_element_ok)
+                {
+                    let elems = elems.clone();
+                    let d = self.data.tuple_def(&mut self.lexer, &elems);
+                    if d != u32::MAX {
+                        inner = Type::Reference(d, Deps::none());
+                    }
+                }
                 let is_ref = matches!(inner, Type::Reference(..));
                 *code = self.cl("OpCreateStack", &[Value::Var(src)]);
                 // @PLN85 D-own-5 — the borrow fact rides `deps` (O-Borrow), not a
@@ -3420,7 +3473,15 @@ use a separate collection or add after the loop"
         // retype so the var-type-change check compares the tuple with itself instead of
         // erroring "cannot change type from (integer, text) to __tuple<integer,text>".
         // Same early-convert shape as the nullable-to-dense assign above.
+        // tuples.md T-Ref — a linked tuple local IS the record now; pass 1 typed it as the
+        // stack tuple, and unboxing the record back to that would undo the representation the
+        // link needs.  `f_type` is pass 1's answer for it.
+        let keeps_record = var_nr != u16::MAX
+            && self
+                .ref_linked_tuple_locals
+                .contains(&(self.context, self.vars.name(var_nr).to_string()));
         if op == "="
+            && !keeps_record
             && self.unboxes_stored_tuple(&s_type, f_type)
             && self.convert(code, &s_type, f_type)
         {

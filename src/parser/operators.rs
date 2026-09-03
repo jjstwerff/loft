@@ -1503,8 +1503,7 @@ impl Parser {
                     // T1.5: element access through a reference-tuple parameter — pair.0, pair.1.
                     let elems = elems.clone();
                     self.parse_ref_tuple_elem(&mut t, code, &elems);
-                } else if let Type::Reference(d_nr, _) = t
-                    && self.data.def(d_nr).name().starts_with("__tuple<")
+                } else if let Some(d_nr) = Self::record_tuple_def(&self.data, &t)
                     && matches!(self.lexer.peek().has, crate::lexer::LexItem::Integer(_, _))
                 {
                     // P189b: vector-of-tuple loop var / index result —
@@ -1779,6 +1778,22 @@ impl Parser {
     /// T1.5: parse a `.N` element index on a `&(T1, T2, ...)` reference-tuple.
     /// Updates `t` to the element type and rewrites `code` to `TupleGet(var, idx)`
     /// when `code` is a plain variable reference.
+    /// The synthesized `__tuple<…>` struct a record-backed tuple receiver names — a plain
+    /// `Reference(__tuple<…>)` (a loop variable, a local bound from a heap-tuple return) or the
+    /// same behind the `&` a `&(…)` with a heap element denotes (tuples.md T-Ref).  Both read
+    /// and write their elements as that struct's fields.
+    fn record_tuple_def(data: &crate::data::Data, t: &Type) -> Option<u32> {
+        let d = match t {
+            Type::Reference(d, _) => *d,
+            Type::RefVar(inner) => match **inner {
+                Type::Reference(d, _) => d,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        data.def(d).name().starts_with("__tuple<").then_some(d)
+    }
+
     fn parse_ref_tuple_elem(&mut self, t: &mut Type, code: &mut Value, elems: &[Type]) {
         if let Some(idx) = self.lexer.has_integer() {
             let idx = idx as usize;
@@ -4168,6 +4183,15 @@ impl Parser {
             if var == u16::MAX
                 || self.vars.uses(var) == 0
                 || !matches!(self.vars.tp(var), Type::RefVar(inner) if matches!(**inner, Type::Reference(_, _)))
+            {
+                continue;
+            }
+            // A `&(…)` with a heap element is a reference to a `__tuple<…>` record, and the
+            // advice's premise does not hold for it: a by-value TUPLE parameter is a copy whose
+            // writes stay in the callee, so the `&` is what makes them land (tuples.md T-Ref).
+            if let Type::RefVar(inner) = self.vars.tp(var)
+                && let Type::Reference(d, _) = **inner
+                && self.data.def(d).name().starts_with("__tuple<")
             {
                 continue;
             }

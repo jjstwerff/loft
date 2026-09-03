@@ -3,13 +3,12 @@
 // A RECORD-backed reference tuple reads AND writes heap elements — the evidence
 // `formal/binding.md` D-bind-11 rests on, which until now nothing guarded.
 //
-// D-bind-11 refuses `fn sw(p: &(text, text))` because a `&(…)` is STACK-backed, where a
-// `text` element is a 16-byte `Str` borrow (`{ptr, len}`) rather than the 4-byte record
-// handle the reference ops speak.  The entry names two ways out, one of them "backing a
-// `&(…)` carrying heap elements with a real record" — and that path is not hypothetical:
-// the loop variable over a `vector<(…)>` IS record-backed, and does the exact swap the
-// refusal declines.  No script exercised it, so the argument for the whole design option
-// was one refactor away from disappearing without a failing test.
+// D-bind-11 used to refuse `fn sw(p: &(text, text))` because a `&(…)` was STACK-backed, where
+// a `text` element is a 16-byte `Str` borrow (`{ptr, len}`) rather than the 4-byte record
+// handle the reference ops speak.  The loop variable over a `vector<(…)>` was always
+// record-backed and did the exact swap the refusal declined — the evidence the close rested
+// on, and which this file guards.  Since 2026-09-03 a `&(…)` with a heap element IS that
+// record at every position (`reference-tuple-heap-elements-link.loft`).
 //
 // Scored against `formal/binding.md`:
 //   (B-Copy)  a plain bind copies a heap WHOLE-VALUE  — the `text` cells

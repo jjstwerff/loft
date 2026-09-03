@@ -88,16 +88,26 @@ integer)`), pass one, and unpack it at the caller. Returning a tuple is the idio
               assignment `p.i = e` writes it, both through the tuple's stored reference at the
               element's own offset — the same `(ref, offset)` pair an ordinary struct FIELD
               uses (binding.md B-Ref).  For a parameter the tuple is the CALLER's; for a local
-              it is the source variable's, and both are stack-backed, so the two positions are
-              one mechanism and not two.
-  (T-Ref-El)  every τᵢ must be one of `integer` (any width), `float`, `single`, `character`,
-              `boolean` — the types laid out for that pair.  Any other element type is a STATIC
-              error naming the offending type; it is never a runtime fault and never an ICE.
-              The rule is asked wherever the `&` is WRITTEN, so a `&(…)` a signature refuses
-              cannot be accepted at a local.
+              it is the source variable's, so the two positions are one mechanism and not two.
+  (T-Ref-Rep) the tuple a `&(…)` names is STACK-backed when every τᵢ is a scalar, and a
+              `__tuple<τ₁, …, τₙ>` RECORD otherwise — the same record a heap-tuple RETURN and
+              the loop variable over a `vector<(…)>` already are.  A tuple LOCAL that is the
+              source of such a link is built as that record; every other tuple local keeps its
+              stack form, so a program with no `&(…)` is unchanged by this rule.
+  (T-Ref-El)  every τᵢ is a scalar (`integer` of any width, `float`, `single`, `character`,
+              `boolean`, a value enum) or a type a struct FIELD can hold — `text`, a struct, a
+              vector, a keyed collection, a struct-enum.  What the record cannot spell or lay
+              out as a field is a STATIC error naming the element type: a NULLABLE element, a
+              fn-ref, a nested tuple.  A `&(…)` containing a type declared LATER in the file is
+              refused the way a tuple return is.  Never a runtime fault and never an ICE, and
+              asked wherever the `&` is WRITTEN, so a `&(…)` a signature refuses cannot be
+              accepted at a local.
   (T-Ref-Src) the source of a `&(…)` local is a tuple VARIABLE.  A tuple ELEMENT or FIELD
               (`b = &v[0]`, `b = &s.pair`) is a STATIC error: a tuple place is read element by
               element into a fresh by-value tuple, so no place survives for the link to name.
+              For a record-backed `&(…)` PARAMETER the argument is likewise a tuple LOCAL of the
+              caller (a return-bound local, a literal local, a loop variable); a by-value tuple
+              parameter passed on, or a field, is a STATIC error saying to bind it first.
               Declining is binding.md B-Ref-Reshape's rule — where the link cannot be honoured
               loft refuses the program rather than downgrading it to a copy.
 ```
@@ -105,9 +115,11 @@ integer)`), pass one, and unpack it at the caller. Returning a tuple is the idio
 **In words.** `fn sw(p: &(integer, integer)) { t = p.0; p.0 = p.1; p.1 = t }` swaps the caller's
 tuple in place — that is what a reference tuple is for. The same annotation on a LOCAL means the
 same thing (`a = (1, 2); b: &(integer, integer) = a; b.0 = 5` leaves `a.0 == 5`), because both
-name a tuple sitting in a frame and reach it the same way. The admitted element types are exactly
-the scalars the element opcodes are laid out for, and the boundary is enforced wherever the `&`
-is written, so a program either compiles and behaves identically on both backends or is refused
+name a tuple sitting in a frame and reach it the same way. `fn sw(p: &(text, text))` swaps a
+`text` pair the same way; what differs is where the tuple lives — a scalar tuple sits on the
+stack, a tuple with a heap element is the `__tuple<…>` record a return of that shape already is —
+and the boundary is enforced wherever the `&` is written, so a program either compiles and
+behaves identically on both backends or is refused
 where it is written.
 
 The restriction belongs to the STACK-backed reference tuple this annotation builds. The

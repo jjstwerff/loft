@@ -330,10 +330,25 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 
 ## Deviations
 
-**OPEN: 2.**
-- **D-bind-11** — `&(τ, …)` admits only SCALAR elements, against
+**OPEN: 1.**
 - **D-bind-16** — `(B-Copy)` does not hold when the right-hand side is a branch JOIN:
   `b = if c { a } else { d }` aliases `a` (loft#1321, both backends, present on 2026.8.0)
+
+> **A zero here is a claim to re-measure, and this is what the oracle covers.** The `&`
+> ladder (`pln87_link_l*`), the const quadrants (`40-const-fields`), the copy-vs-view boundary
+> (`bind-copies-or-views-the-whole-boundary`, whose subjects are all NON-nullable — loft#1319
+> is the row it cannot see), the reference-tuple guards (`reference-tuple-local-binding`,
+> `1006-…`, `reference-tuple-heap-elements-link`).  Held FIXED: every `&(…)` source is a tuple
+> local or a loop variable, and a `&(…)` element is never nullable, a fn-ref or a nested
+> tuple — those three are refused, not unmeasured.
+
+**D-bind-11 CLOSED 2026-09-03** (loft#1006): a `&(τ, …)` holds any element a struct field can.
+The two representations the register named were never a choice — the stack form cannot own a
+`text` element, and the record form already did this exact swap through the loop variable —
+so a `&(…)` whose elements are not all scalars is a reference to the `__tuple<…>` record, a
+linked tuple LOCAL is built as that record, and the rule is written down as `(T-Ref-Rep)` in
+[tuples.md](tuples.md).  A nullable, fn-ref or nested-tuple element stays refused and the
+refusal names it.
 
 The full register — these entries in full, plus every closed one with its dates and
 issue numbers — is the companion [binding-history.md](binding-history.md).

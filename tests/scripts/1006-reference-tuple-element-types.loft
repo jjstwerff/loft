@@ -18,12 +18,12 @@
 // it now, and `data::ref_tuple_element_ok` is the ONE list the guard and both arms read, so
 // the rule and the implementation cannot drift apart again.
 //
-// A `text` element stays REFUSED and that is the rule, not an omission: the opcode pair
-// exists and takes the same `(ref, offset)`, but a reference tuple's storage is not a
-// record with a text slot the way a struct is — wiring it up read out of bounds on the
-// interpreter and would not compile on `--native`.  The refusal names the element type and
-// the cure, which is what loft#1006 asked for.  `102-expected-errors.loft` carries the
-// refusals; this file carries what must WORK.
+// A `text` element was REFUSED here until 2026-09-03: a stack-backed reference tuple holds it
+// as a 16-byte `Str` borrow while the `(ref, offset)` opcodes speak the 4-byte record handle,
+// so wiring them up read out of bounds on the interpreter and would not compile on `--native`.
+// A `&(…)` with a heap element is now a reference to the `__tuple<…>` RECORD instead, and is
+// guarded by `reference-tuple-heap-elements-link.loft`; what stays refused by name — a
+// nullable, a fn-ref, a nested tuple — is pinned in `102-expected-errors.loft`.
 
 fn sw_int1006(p: &(integer, integer)) { t = p.0; p.0 = p.1; p.1 = t; }
 fn sw_float1006(p: &(float, float)) { t = p.0; p.0 = p.1; p.1 = t; }

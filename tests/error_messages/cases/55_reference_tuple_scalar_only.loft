@@ -1,4 +1,4 @@
-fn swap56(p: &(text, text)) {
+fn swap56(p: &(text?, text)) {
   t = p.0;
   p.0 = p.1;
   p.1 = t;
