@@ -2419,9 +2419,19 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 684 | 329 | 5 | **350** |
+| 684 | 328 | 5 | **351** |
 
 The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.
+
+The latest movement is one site going the OTHER way, and it is the screen working. Giving the
+capture-adoption rule one home (`capture_adoption_owns_free`) took the `is_dbref(.base())` call
+out of `check_ref_leaks`' body — and that call was the only peel in it. The function drops from
+"see through the wrapper" to opaque, which is what it always was: the shape test it actually
+performs is a bare `if let Type::Reference(_, dep)`, so the assert never examines a `Vector` or
+a keyed local at all. A peel elsewhere in the body had been standing in front of that, exactly
+the masking B7i's note below describes. The number got worse and the tree did not: the new
+predicate is not counted here (it discriminates through `is_dbref` rather than on a variant of
+its own), so the total holds at 684 while the honest column gains one.
 
 loft#1308 moved two sites off the opaque column, and they are the ones this screen exists to
 catch. `get_free_vars` decided whether a captured local's scope-exit free is suppressed by

@@ -1078,12 +1078,13 @@ fn run_leak_scan(name: &str, body: &Value, data: &Data, d_nr: u32) -> usize {
             // and — since a collection capture names a VIEW — the backing local that actually
             // holds the store.
             //
-            // `scopes::backs_an_adopted_capture` rather than a fourth restatement of the
-            // rule.  This same fact has three consumers (the free emitter, `check_ref_leaks`,
-            // and this oracle), they must agree, and every time one of them has been written
-            // out longhand they have drifted — which is the whole of loft#1308.
-            && !func.is_captured(v)
-            && !crate::scopes::backs_an_adopted_capture(data, func, v)
+            // `scopes::capture_adoption_owns_free` rather than a restatement of the rule.
+            // This same fact has three consumers (the free emitter, `check_ref_leaks`, and
+            // this oracle), they must agree, and every time one of them has been written out
+            // longhand they have drifted — which is the whole of loft#1308.  The shape test
+            // the shared predicate adds is already implied here: `heap_dep().is_some()` above
+            // admits exactly the kinds `is_dbref` does.
+            && !crate::scopes::capture_adoption_owns_free(data, func, v)
         {
             eprintln!(
                 "RED {name}: leak {} (v{v}) Owned heap, unfreed/untransferred",

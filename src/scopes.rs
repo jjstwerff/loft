@@ -3926,6 +3926,29 @@ fn mark_borrowed_captures(data: &mut Data) {
     }
 }
 
+/// Does a closure record's adoption take over the frame-exit free of local `v`?
+///
+/// One home for the question `get_free_vars` asks before emitting a free and
+/// [`check_ref_leaks`] asks before calling an unfreed local a leak. They are the emitter and
+/// its static mirror, so they have to answer identically: a suppression the mirror does not
+/// know about reads as a leak, and a leak the mirror excuses reads as nothing at all.
+///
+/// Both spellings of "reaches the store" are needed. A struct capture names the local that
+/// holds the store outright; a collection capture names a VIEW, and the store lives in the
+/// backing local no closure captured by name — which is what
+/// [`backs_an_adopted_capture`] asks about. `is_dbref(.base())` is the shape test both
+/// halves share: a capture's store may be a `Vector` or a keyed collection, not only a
+/// `Reference`.
+///
+/// ⚠ Restating this rule is how it drifts. loft#1308 was the free emitter and this mirror
+/// disagreeing on the shape test; the mirror then kept the `is_captured` half alone and a
+/// capturing closure over a local vector false-positived the leak assert. Three consumers
+/// now share it — those two and `ownership_cfg`'s leak oracle.
+pub(crate) fn capture_adoption_owns_free(data: &Data, function: &Function, v: u16) -> bool {
+    (function.is_captured(v) || backs_an_adopted_capture(data, function, v))
+        && crate::data::is_dbref(function.tp(v).base())
+}
+
 /// Is `v` the store behind a capture whose closure record ADOPTS it?
 ///
 /// `get_free_vars` suppresses a captured local's scope-exit free by asking `is_captured` of
@@ -6742,8 +6765,7 @@ impl Scopes {
                 // (#323; interp only *appeared* sound through slot-reuse
                 // luck).  Suppress it; the cascade is the sole owner for
                 // escaping AND in-frame captures (in-frame: the fn-ref's
-                // own scope-exit free triggers the cascade).  Mirrored by
-                // the captured-Reference exemption in `check_ref_leaks`.
+                // own scope-exit free triggers the cascade).
                 //
                 // The handover is only sound where this free EXISTS to be
                 // suppressed — `owns` — so the record's cascade must reach
@@ -6754,17 +6776,14 @@ impl Scopes {
                 // caller's store.  `mark_borrowed_captures` recomputes this same
                 // verdict once every function is scanned and marks those captures
                 // borrowed on the record, which is what stops the cascade.
-                // `is_dbref(.base())`, not a bare `Type::Reference` match.  The store a
-                // capture holds lives in whichever heap kind the local is — a struct local
-                // is a `Reference`, but a vector from a call is a `Vector` and a keyed
-                // collection is a `Hash`, and asked bare those two failed the test and were
-                // freed under a live escaped closure (loft#1308).  This is the SIXTH site in
-                // the drifted-list family the loft#1150 note above enumerates (`is_dbref`
-                // here and at D-own-13, `deps_mut`, `is_keyed`, `depend`); `is_dbref`'s own
-                // doc records that it drifts when restated, and this one restated it.
-                let captured_ref = (function.is_captured(v)
-                    || backs_an_adopted_capture(data, function, v))
-                    && crate::data::is_dbref(function.tp(v).base());
+                //
+                // `capture_adoption_owns_free` is where the rule itself lives — this is
+                // its first consumer, `check_ref_leaks` its static mirror, and
+                // `ownership_cfg`'s leak oracle the third.  It is the SIXTH site in the
+                // drifted-list family the loft#1150 note above enumerates (`is_dbref` here
+                // and at D-own-13, `deps_mut`, `is_keyed`, `depend`), which is why it is a
+                // call and not a `matches!` written out again.
+                let captured_ref = capture_adoption_owns_free(data, function, v);
                 // @PLN94 TEST-ONLY over-free injection (never set in production): force the scope-exit
                 // free of a NAMED borrowed var (owns=false) so the over-free check has a firing
                 // true-positive. Subject to the same !in_ret/!skip_free/!captured guards as a real free.
@@ -10186,16 +10205,16 @@ fn check_ref_leaks(
         if function.is_skip_free(v) {
             continue;
         }
-        // #323: a captured heap local is owned by the closure record (the record
-        // stores its 12-byte DbRef; `free_named`'s cascade frees it when the
-        // record dies), so `get_free_vars` emits no frame-exit free for it —
-        // mirror that exemption here or every capturing closure false-positives
-        // this assert.
+        // #323: a heap local a closure record ADOPTS is owned by that record (which
+        // stores its 12-byte DbRef; `free_named`'s cascade frees it when the record
+        // dies), so `get_free_vars` emits no frame-exit free for it and "unfreed" is not
+        // "leaked" here.
         //
-        // `is_dbref(.base())`, matching the suppression it mirrors: a capture's store
-        // may be a `Vector` or a keyed collection, not only a `Reference`, and the two
-        // tests going out of step is exactly how loft#1308 stayed hidden.
-        if function.is_captured(v) && crate::data::is_dbref(function.tp(v).base()) {
+        // The same call the emitter makes, not the rule written out again.  This mirror
+        // going out of step with it is exactly how loft#1308 stayed hidden, and a mirror
+        // that knows only the `is_captured` half calls the BACKING local of a collection
+        // capture a leak — which no closure captured by name.
+        if capture_adoption_owns_free(data, function, v) {
             continue;
         }
         if v == direct_ret_var {
