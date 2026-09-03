@@ -481,13 +481,43 @@ for the store being RELEASED) against a stashed reference.
 flagged. So the selector half works. But the leak is UNCHANGED at `MintOnly×9`: the free is
 emitted and does not release the store.
 
-**The next question, precisely.** Whether `v_set(stash, Value::Var(v))` copies the DbRef or
-deep-copies the RECORD. If it deep-copies, the stash names a fresh store and the guarded free
-releases the copy while the displaced original stays — which fits the evidence (leaks unchanged
-rather than worsened). `ensure_rebind_witness` faces the same need and solves it with
-`set_skip_free` + `mark_inline_ref` and a `Set(orig, param)` its comment calls *"a raw DbRef
-copy"*; both flags were set here and it still did not release, so the difference is elsewhere and
-has to be read, not assumed.
+**ANSWERED: `v_set` deep-copies, and the raw primitive is `OpPutRef`.** Three confirmations:
+`codegen.rs:2294` says a plain `Value::Var` RHS *"falls through to the #306 whole-struct copy"*
+because @FR-B-Copy value semantics require it; empirically `a: M = M{x:1}; b: M = a; b.x = 99`
+gives `a.x=1 b.x=99`; and `ensure_rebind_witness`'s stash — the one whose comment says *"a raw
+DbRef copy"* — is not a `Set` at all but `expressions.rs:723`,
+`cl("OpPutRef", &[Var(orig), Var(param)])`. So the first attempt's stash named a FRESH COPY, the
+guarded free released that, and the displaced original stayed: leaks unchanged rather than worse,
+exactly as a copy predicts. ⚠ `skip_free` + `inline_ref` do NOT rescue it — they govern the
+null-init and free ORDER (`codegen.rs:1819`), not the assignment's copy.
+
+#### Retried with `OpPutRef` — closer, still not landable (2026-09-03). REVERTED.
+
+| | interpreter | native |
+|---|---|---|
+| leaks | 5 types → **1** (`MintOnly×9` only) | — |
+| program output | **empty, exit 0** | `E0425: cannot find value var___lbs_c` |
+
+`JoinSelf×9`, `MaybeBorrow×4`, `ParamBorrow×3` and `Captured×3` all reached **0** — but the
+number is worthless, because the program **produces no output and exits 0**. That is frame
+corruption, not a fix: nothing ran, so nothing leaked. It is the same signature loft#1285
+records (*"NO OUTPUT AT ALL and exited 0"*), and it is why a leak count is never read without a
+value channel beside it.
+
+**A structural rule was violated and naming it did not fix it.** The witness flags are minted
+BEFORE the scan (`scopes.rs:1497`) — *"the first assignment that has to maintain it already needs
+a flag to write"* — and the first attempt created the stash mid-scan. Moving it into that same
+pre-scan pass (`local_stash`, beside `local_owns`) was correct and **changed nothing**: still no
+output, still `E0425`. So the mid-scan mint was A defect, not THE defect.
+
+**Where it actually stands.** Two symptoms, likely one cause: the native generator does not
+declare `var___lbs_*`, and the interpreter's frame is wrong enough to run nothing. Both point at
+the temp not being registered in whatever list sizes the frame and emits declarations —
+`var_scope` + `var_order` are evidently not the whole of it. That is the next thing to READ; the
+existing `__lbo_` flags reach both backends, so the difference between how a `Boolean` temp and a
+`Reference` temp are registered is where the answer is, and it is a comparison, not a search.
+
+Reverted. Nothing from this attempt is on the branch.
 
 Reverted rather than pushed, because a half-understood change to the transition free is precisely
 what this plan exists to avoid — and because a fired gate with an inert free is the shape of a
