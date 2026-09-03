@@ -56,6 +56,15 @@ package already compiles is the break the freeze forbids.  Measured across the 1
 corpus: **4 sites in 2 files**, all true positives, no exit code moved.  Opt out with
 `LOFT_NO_HEAP_NSTORE`.
 
+⚠ **One shape is excused, and it is a language gap rather than a carve-out.**  A `reference<T>`
+field on a reference CYCLE back to its own struct has no nullable spelling at all — the `?` form
+fails layout validation (loft#1316) — so a linked list's terminator must be a bare `null` in a
+non-null slot.  The program really is in the state `(N-Store)` forbids and the author has nothing
+else to write, so reporting it would name a cure that does not compile.  The exclusion is exact:
+it is the CYCLE that excuses the field, not the `reference<…>` spelling and not the type being
+recursive — an acyclic `reference<Leaf>` field warns, and a cyclic type's `-> Node` return warns.
+It lifts when loft#1316 closes, and the guard cells flip with it.
+
 Guarded by `tests/heap_nstore.rs`, which COUNTS notices on both backends — the four positions, the
 four handle kinds including a keyed one, and the negative controls (`τ?` targets, the inline
 `__nullable<S>`, a present value) that a `.loft` guard has no way to express, since it can declare

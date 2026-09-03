@@ -264,6 +264,78 @@ fn a_nullable_target_is_silent() {
     }
 }
 
+/// A `reference<T>` field on a reference CYCLE back to its own struct has no nullable spelling
+/// — `struct Node { next: reference<Node>? }` fails layout validation (loft#1316) — so the
+/// linked-list terminator has to be a bare `null` in a non-null slot and there is nothing the
+/// author can write instead.  Reporting it would name `Node?` as the cure, and that does not
+/// compile; a diagnostic whose cure is rejected is worse than silence.
+///
+/// ⚠ These cells FLIP when loft#1316 closes: the suppression goes, and each of them starts
+/// warning like any other field.  That is the intended outcome, not a regression.
+#[test]
+fn a_field_with_no_nullable_spelling_is_silent() {
+    let cells: [(&str, &str); 2] = [
+        (
+            "direct self-reference",
+            "struct Node { value: integer, next: reference<Node> }
+             fn main() { c = Node { value: 4, next: null }; print(\"{c.value}\\n\"); }
+",
+        ),
+        (
+            "mutual reference",
+            "struct A { v: integer, b: reference<B> }
+             struct B { v: integer, a: reference<A> }
+             fn main() { x = A { v: 1, b: null }; print(\"{x.v}\\n\"); }
+",
+        ),
+    ];
+    for (cell, src) in cells {
+        for backend in BACKENDS {
+            let tag = format!("cyc_{}_{}", cell.replace([' ', '-'], "_"), &backend[2..]);
+            let (ok, _out, err) = run(src, backend, true, &tag);
+            assert_eq!(
+                heap_notices(&err),
+                0,
+                "a {cell} field cannot be declared `τ?` (loft#1316), so the notice would name a \
+                 cure that does not compile ({backend})\n{err}"
+            );
+            assert!(ok, "the {cell} cell must still run on {backend}\n{err}");
+        }
+    }
+}
+
+/// The discrimination that keeps the exclusion above from swallowing the rule: it is the CYCLE
+/// that decides, not the `reference<…>` spelling and not the type being recursive.
+#[test]
+fn the_cycle_is_what_excuses_the_field_nothing_else() {
+    // An ACYCLIC `reference<T>` field: `reference<Leaf>?` is a type that exists, so it warns.
+    let acyclic = "struct Leaf { v: integer }
+                   struct Holder { l: reference<Leaf> }
+                   fn main() { h = Holder { l: null }; print(\"{h.l == null}\\n\"); }
+";
+    // A RETURN of the cyclic type: `-> Node?` compiles fine, so this one warns too — the
+    // exclusion is about the field position on a cycle, not about the type.
+    let cyclic_return = "struct Node { value: integer, next: reference<Node> }
+                         fn f() -> Node { return null; }
+                         fn main() { print(\"{f() == null}\\n\"); }
+";
+    for (cell, src) in [
+        ("acyclic field", acyclic),
+        ("cyclic type's return", cyclic_return),
+    ] {
+        for backend in BACKENDS {
+            let tag = format!("disc_{}_{}", cell.replace([' ', '\''], "_"), &backend[2..]);
+            let (ok, _out, err) = run(src, backend, true, &tag);
+            assert_eq!(
+                heap_notices(&err),
+                1,
+                "the {cell} has a nullable spelling and must still warn ({backend})\n{err}"
+            );
+            assert!(ok, "the {cell} cell must still run on {backend}\n{err}");
+        }
+    }
+}
+
 /// The synthetic `__nullable<S>` is the INLINE spelling of `S?` — a struct held in a vector
 /// element or a field slot rather than behind a handle.  It is a `Type::Enum(_, true, _)` and so
 /// reaches `is_dbref`, which is why the wrapper is excluded explicitly: it is exactly as nullable

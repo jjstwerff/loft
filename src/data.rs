@@ -6134,6 +6134,46 @@ impl Data {
         false
     }
 
+    /// Does a `reference<…>` FIELD of `from` lead back to `target`, directly or through other
+    /// structs?  The reference-edge twin of [`has_value_cycle`], which walks the value edges and
+    /// deliberately skips these — the two together cover the definition graph's two kinds of edge.
+    ///
+    /// It answers one question: *can this field's type be written `τ?`?*  A `reference<T>` field
+    /// standing on a cycle back to its own struct CANNOT — `struct Node { next: reference<Node>? }`
+    /// and the mutual `A`/`B` pair both fail layout validation, while the identical field on an
+    /// acyclic type (`struct Holder { l: reference<Leaf>? }`) is fine.  So this is what tells a
+    /// slot whose nullability is merely undeclared from one the language has no spelling for, and
+    /// `(N-Store)` uses it to keep from naming a cure that does not compile (loft#1316).
+    ///
+    /// The edge test is the share-marker dep, `u16::MAX` (#328) — the same bit `has_value_cycle`
+    /// reads to EXCLUDE these fields, so the two walks cannot disagree about which edge is which.
+    #[must_use]
+    pub fn reference_cycle_back_to(
+        &self,
+        from: u32,
+        target: u32,
+        visiting: &mut std::collections::HashSet<u32>,
+    ) -> bool {
+        if from == target {
+            return true;
+        }
+        if !visiting.insert(from) {
+            return false; // already on this path — a cycle that does not pass through `target`
+        }
+        for a_nr in 0..self.attributes(from) {
+            if let Type::Reference(child_nr, deps) = &self.attr_type(from, a_nr)
+                && deps.contains(&u16::MAX)
+                && self.def_type(*child_nr) == DefType::Struct
+                && self.reference_cycle_back_to(*child_nr, target, visiting)
+            {
+                visiting.remove(&from);
+                return true;
+            }
+        }
+        visiting.remove(&from);
+        false
+    }
+
     /**
     Write the type on an attribute of a definition.
     # Panics

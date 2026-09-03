@@ -62,8 +62,23 @@ shipped package already compiles is the break the freeze forbids.  The scalar wo
 to the byte; the heap half drops the word `scalar` from the same message rather than adding a
 second one.  Opt out with `LOFT_NO_HEAP_NSTORE`.
 
+**One shape is excluded, because the cure does not exist for it.**  A `reference<T>` field
+standing on a reference CYCLE back to its own struct has no nullable spelling — `struct Node {
+next: reference<Node>? }` fails layout validation, and so does the mutual `A`/`B` pair, while the
+same field on an acyclic type is fine (loft#1316).  A linked list's terminator therefore has to
+be a bare `null` in a non-null slot, and reporting it would name `Node?` as the fix, which does
+not compile.  `Parser::field_has_no_nullable_spelling` asks that question through
+`Data::reference_cycle_back_to` — the reference-edge twin of `has_value_cycle`, reading the same
+`u16::MAX` share-marker (#328) that one reads to EXCLUDE these fields, so the two walks cannot
+disagree about which edge is which.  It is the CYCLE that excuses the field, not the
+`reference<…>` spelling and not the type being recursive: an acyclic `reference<Leaf>` field and
+a cyclic type's `-> Node` RETURN both keep their notice.  The exclusion is a workaround for
+loft#1316 and goes when it closes.
+
 Blast radius, measured A/B across the 1083-file script corpus: **4 sites in 2 files**, all true
-positives, no exit code moved.  Both keep their signatures and declare the notice —
+positives, no exit code moved.  ⚠ That scan was INCOMPLETE — it covered `tests/scripts/*.loft`
+and not the inline `code!` sources in `tests/issues.rs`, where the two cyclic-field cases live.
+The full suite is the corpus; a glob over one directory is not.  Both keep their signatures and declare the notice —
 `98-struct-order-in-use.loft`'s subject IS a `return null` under a non-null heap return, and
 `754-tail-place-read-return.loft` guards the non-null RECORD return ABI, which `Section?` does not
 use (no hidden buffer), so "correcting" either signature would have retired the shape it guards.

@@ -4543,6 +4543,35 @@ impl Parser {
     // once and unpacked once and name nothing that these parameters do not — the same trade
     // `tree::range_cursors` records for its own list.
     #[allow(clippy::too_many_arguments)]
+    /// Would `(N-Store)` name a cure this field cannot be given?
+    ///
+    /// A `reference<T>` field standing on a cycle back to its own struct has no nullable
+    /// spelling: `struct Node { next: reference<Node>? }` fails layout validation, and so does
+    /// the mutual `A`/`B` pair, while the same field on an acyclic type is fine.  The
+    /// terminator of a linked list therefore has to be a bare `null` in a non-null slot — the
+    /// program really is in the state `(N-Store)` describes, and there is nothing the author can
+    /// write instead.  Reporting it would name `Node?` as the fix and that does not compile
+    /// (loft#1316 carries the layout gap; when it closes, this goes with it).
+    ///
+    /// Narrow on purpose, in two ways.  It asks only about a BARE `null` — the DN1 case — so the
+    /// DN3 report for a `τ?` flowing into the same field is untouched.  And it is the CYCLE that
+    /// decides, not the `reference<…>` spelling: `struct Holder { l: reference<Leaf> }` keeps its
+    /// notice, because `reference<Leaf>?` is a type that exists.
+    fn field_has_no_nullable_spelling(&self, td_nr: u32, field_tp: &Type, value_tp: &Type) -> bool {
+        if !matches!(value_tp, Type::Null) {
+            return false;
+        }
+        let Type::Reference(child_nr, deps) = field_tp else {
+            return false;
+        };
+        deps.contains(&u16::MAX)
+            && self.data.reference_cycle_back_to(
+                *child_nr,
+                td_nr,
+                &mut std::collections::HashSet::new(),
+            )
+    }
+
     pub(crate) fn handle_field(
         &mut self,
         td_nr: u32,
@@ -4844,7 +4873,9 @@ impl Parser {
                 let dst_name = self.int_type_name(&td);
                 if let Some(hint) = self.nullable_sentinel_hint(value, &td, &dst_name) {
                     diagnostic!(self.lexer, Level::Error, "{hint}");
-                } else if self.n_store_violation(exp_tp, &td, "the field", None) {
+                } else if !self.field_has_no_nullable_spelling(td_nr, &td, exp_tp)
+                    && self.n_store_violation(exp_tp, &td, "the field", None)
+                {
                     // @PLN25 (N-Store): a nullable into a non-null field — diagnostic emitted.
                 } else if !self.convert(value, exp_tp, &td) {
                     // Plan-07 phase 6 (partial) — name the value side first
