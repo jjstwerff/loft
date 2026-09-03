@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 370 | 346 | **24** |
+| 371 | 347 | **24** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -2419,9 +2419,9 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 687 | 331 | 5 | **351** |
+| 689 | 332 | 5 | **352** |
 
-The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.
+The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.  It happened again on the 2026-09-03 join — one side carried `684 | 330 | 5 | 349` and the other `687 | 331 | 5 | 351`, and the tree that holds both measures `689 | 332 | 5 | 352`.  Two branches each adding predicates cannot have their counts added, because the audit classifies FUNCTIONS and a merged body is one function however many branches touched it.
 
 The latest movement is one site going the OTHER way, and it is the screen working. Giving the
 capture-adoption rule one home (`capture_adoption_owns_free`) took the `is_dbref(.base())` call
