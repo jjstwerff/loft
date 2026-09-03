@@ -44,6 +44,21 @@ rather than the two it was written for, and a rebind written inside a CLOSURE �
 reach past two frames and silently replace a caller's collection — is refused, because a
 capture has no route back to the binding it would have to rebind.
 
+### A `for` loop over your own iterator yields every kind of item
+
+```loft
+fn next(self: Reader) -> Line? { ... }    // Line, text, vector<T>, an enum — any type
+for line in reader { use(line); }
+```
+
+A custom iterator whose `next` answered anything heap-carried — a struct, `text`, a
+collection, a struct-enum — aborted the compiler outright, and the `server` package's own
+documented `for req in srv` was one of them. Where it did compile, two item types ended the
+loop before its first turn and exited cleanly with no output: the loop asked whether the
+item was *falsy* rather than whether it was *null*, so a `boolean` iterator stopped on its
+first `false`. It asks one question now, for every item type — the same one `x == null`
+asks — so a `0`, an `""` and a `false` are ordinary elements and the loop hands them to you.
+
 ### A JSON field that is not a boolean answers null
 
 ```loft

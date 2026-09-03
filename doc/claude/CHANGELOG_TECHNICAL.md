@@ -9,6 +9,39 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A custom iterator's loop: a missing return buffer, and a break test that asked the wrong question (2026-09-03)
+
+loft#1310 was filed as an ICE on a non-nullable STRUCT item.  The matrix said the filed scope
+was one cell of six broken ones, and that the filed workaround — declare the item `Item?` —
+fixes two of them.  Three independent defects met in one loop.
+
+**The synthesised call skipped `add_defaults`.**  A `next` answering a heap value takes a
+hidden buffer the CALLER allocates; the for-loop desugaring hand-built its `Value::Call` with
+`self` alone, so the compiler aborted with *"Too few parameters on t_7Counter_next (got 1, need
+2)"*.  This is the third site in the class — loft#945 at the combinator callbacks, loft#1114 at
+a lambda — and the cure is the helper those already share, `callback_call`.
+
+**The break test asked a second spelling of "is this null".**  `null_test` documents itself as
+the ONE place that answers *what is `τ`'s null*, and warns that answering it elsewhere mints
+another spelling — the defect loft#1014 was.  The loop reached for `convert(τ, Boolean)`.  The
+two agree for an `integer`, a `text` and a bare reference, and diverge for a `vector` and a
+struct-enum, whose truthiness rule is written against the NULLABLE form — and the loop variable
+is deliberately typed as the non-null item (@PLN102 D1).  So the test saw the bare type, got no
+conversion at all, and `OpNot` inverted the raw handle.
+
+**And the fallback asked whether the item was FALSY.**  That coincides with "is it null" only
+where the type's null is its only falsy value.  An `integer`'s conversion is `!= i64::MIN` and a
+`text`'s null is out-of-band, so `0` and `""` elements correctly kept iterating; a `boolean`'s
+conversion is the IDENTITY and its null is the three-state `255` (C73), so a `boolean?` iterator
+ended on its first `false`.  The fallback is now `null_test`'s own documented one — compare
+against the TYPED null — so the loop asks `item == null` and nothing else.
+
+Both later defects are **`silent-wrong`**: four of the ten item types yielded zero elements and
+exited 0, with no diagnostic.  The ICE was the only reason the type was looked at.  Fifteen
+cells on both backends in
+`tests/scripts/1310-a-custom-iterator-yields-every-heap-item-type.loft`, each asserting the
+ELEMENTS — a count- or leak-only cell scores a zero-iteration loop as a pass.
+
 ### A keyed `&` write-back does not release the caller's collection (2026-09-02)
 
 loft#1287 settled that a `&` parameter's whole-value write-back may release the store it

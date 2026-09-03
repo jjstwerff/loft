@@ -1651,7 +1651,7 @@ Returning `null` from `next` terminates the loop:
 
 ```
 struct Counter { current: integer, limit: integer }
-fn next(self: Counter) -> integer {
+fn next(self: Counter) -> integer? {
     val = self.current;
     self.current = val + 1;
     if val >= self.limit { return null; }
@@ -1661,6 +1661,16 @@ fn next(self: Counter) -> integer {
 c = new_counter(5);
 for x in c { }    // iterates 0, 1, 2, 3, 4
 ```
+
+`Item` is any type: a scalar, a `text`, a struct, a collection, or an enum.  Whatever it
+is, the loop ends on the null of THAT type and on nothing else — a `0`, an `""` and a
+`false` are ordinary elements, and the loop yields them.
+
+Declare the item `Item?`, not `Item`.  Both run, but a non-null SCALAR return warns when
+`next` hands it `null`, because a scalar's null is a reserved value of its own range.
+
+Inside the body the loop variable is typed as the non-null `Item`: the loop has already
+ended by the time `next` answers null, so the body never binds one.
 
 `#count` and `#first` work; `#index` and `#remove` are not available.
 

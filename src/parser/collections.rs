@@ -691,9 +691,23 @@ impl Parser {
                         self.vars.defined(iter_obj_var);
                         let obj_expr = code.clone();
                         *code = v_set(iter_obj_var, obj_expr);
-                        // The "next" expression is a method call: iter_obj.next()
-                        let next_call = Value::Call(next_d_nr, vec![Value::Var(iter_obj_var)]);
-                        return next_call;
+                        // The "next" expression is a method call: iter_obj.next().
+                        //
+                        // The declared `self` is not the whole call.  A `next` answering a
+                        // HEAP item — a struct, `text`, a collection, a struct-enum — also
+                        // takes a hidden buffer the CALLER allocates, and `callback_call`
+                        // fills those slots the way every ordinary call site does.  Built
+                        // by hand the buffer was missing, so six of the ten item types a
+                        // `next` can declare aborted the compiler outright: *"Too few
+                        // parameters on t_7Counter_next (got 1, need 2)"* (loft#1310).
+                        // Same class as loft#945 at the combinator callbacks and loft#1114
+                        // at a lambda; routing through the one filler is what keeps the
+                        // `for` spelling agreeing with the `while` + `.next()` one.
+                        return self.callback_call(
+                            next_d_nr,
+                            vec![Value::Var(iter_obj_var)],
+                            vec![is_type.clone()],
+                        );
                     }
                     if self.first_pass {
                         return Value::Null;
@@ -3281,9 +3295,45 @@ use #count instead"
                     lp.push(step);
                 }
             } else if !matches!(in_type, Type::Iterator(_, _)) || is_coroutine_loop {
-                let mut test_for = Value::Var(for_var);
-                self.convert(&mut test_for, &var_tp, &Type::Boolean);
-                test_for = self.cl("OpNot", &[test_for]);
+                // "Has the iterator run out?" is the question `x == null` asks, so it is
+                // asked where every other spelling of it is asked — `null_test`, which
+                // documents itself as the ONE place that answers *what is `τ`'s null*.
+                //
+                // Reaching for `convert(τ, Boolean)` instead was a second spelling, and it
+                // silently disagreed for every item type whose truthiness rule is written
+                // against the NULLABLE form.  A custom iterator's loop variable is
+                // deliberately typed as the non-null item (@PLN102 D1 — the body only ever
+                // binds a present value), so the test saw the bare type: `vector` and
+                // struct-enum items got no conversion at all and `OpNot` inverted the raw
+                // handle, ending the loop before its first iteration.  Four of the ten item
+                // types a `next` can declare returned zero elements and exit 0 — no
+                // diagnostic, no crash (loft#1310).
+                //
+                // `None` is the answer for the types that have no dedicated test — an
+                // `integer`, a `text`, a bare `Reference` — and those keep the conversion
+                // path, which is correct for them and is what already worked.
+                let test_for =
+                    if let Some(is_null) = self.null_test(Value::Var(for_var), &var_tp, false) {
+                        is_null
+                    } else {
+                        // `null_test`'s documented fallthrough: the types with no dedicated
+                        // test answer it by comparing against the TYPED null.  Reaching for
+                        // `convert(τ, Boolean)` here instead asked whether the item was FALSY,
+                        // which is a different question that merely coincides for most types —
+                        // an `integer`'s conversion is `!= i64::MIN` and a `text`'s is
+                        // out-of-band, so a `0` and an `""` element correctly kept iterating.
+                        // A `boolean`'s conversion is the IDENTITY, and its null is the
+                        // three-state `255` (C73), so the loop broke on the first `false`
+                        // element it was handed and yielded nothing at all.
+                        let mut t = Value::Var(for_var);
+                        self.call_op(
+                            &mut t,
+                            "==",
+                            &[Value::Var(for_var), Value::Null],
+                            &[var_tp.clone(), Type::Null],
+                        );
+                        t
+                    };
                 lp.push(v_if(
                     test_for,
                     v_block(vec![Value::Break(0)], Type::Void, "break"),
