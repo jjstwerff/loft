@@ -9,6 +9,42 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `=` on a captured KEYED collection replaces it, like its vector twin (2026-09-03)
+
+loft#1326.  A whole-value rebind of a captured keyed collection EMPTIED it — `m = [Row { k: 9,
+v: 9 }]` inside a closure read back `len 0`, both backends, nothing said.  Both axes were
+required: the same rebind of a captured VECTOR was correct (loft#1279 taught that branch this
+lesson), the same keyed collection reached through a captured STRUCT FIELD was correct, and the
+same statement written without a closure was correct.
+
+The cause is the one loft#1279's own commit predicted — *"That selector has now been too narrow
+three times, and the lowering was right every time"* (P261, loft#917, loft#1279).  This is the
+fourth.  A capture resolves to `OpGetDbRef` of the closure-record field rather than to the
+`OpGetField` a struct field gives, so the keyed replace's `self.is_field(to)` answered no and the
+whole clear-then-build branch was skipped.
+
+Two halves, because the literal ARRIVES differently through a capture: it is a `Block` whose ops
+build straight into the destination (@PLN93's build-into-target) where a struct field gets a
+`Value::Insert` of the same ops.  So the gate admits a captured destination, and the clear goes
+in FRONT of that block rather than inside it — putting it inside erases what the block just
+built, which is the mistake loft#1279's first attempt made in the vector arm.
+
+⚠ **Naming the destination is not writing into it.**  A comprehension over the captured
+collection itself (`s = [for x in s { … }]`) names `s` and builds a fresh value; clearing before
+it reads its source is what made seven of loft#1195's cells answer empty.  The gate asks
+`value_writes_into`, the mutating-op question, which is the same one the vector arm asks — and
+the comprehension is a cell in the guard rather than a hope.
+
+Guard `tests/scripts/1326-a-captured-keyed-collection-rebind-replaces.loft`, 10 cells over the
+four right-hand-side sources, all four keyed kinds and five controls (the plain local, the
+captured struct field, the captured vector, `+=`, and the comprehension); falsified at
+`24381205`.  Eight of the thirteen probe-matrix shapes answer wrong on that build.
+
+`formal/closures.md` records what this does NOT settle: a rebind OUTSIDE the closure lets the
+closure read the reassigned value at the keyed kinds and the build-time value at vector and
+struct, because a keyed rebind refills the existing store.  Store lifetime is correct either
+way; which value the closure should see is an open contract question.
+
 ### A closure record suppresses the free of the store it actually holds (2026-09-03)
 
 loft#1324.  A closure record takes over the frame-exit free of its capture's store, and

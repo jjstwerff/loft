@@ -4140,13 +4140,45 @@ use a separate collection or add after the loop"
         // @P307/loft#895 defect this branch exists to fix — on a `spatial` field `=` still
         // meant `+=` (a one-element literal over one element read back as two) and `= []`
         // still did nothing at all.  The keyed-LOCAL path below already lists all five.
+        //
+        // loft#1326 — and a CAPTURED keyed collection is the same lvalue wearing a different
+        // op, which is the fourth time this family's selector has been the narrow part while
+        // the lowering was right (P261, loft#917, loft#1279, this).  A capture resolves to
+        // `OpGetDbRef` of the closure-record field rather than to the `OpGetField` a struct
+        // field gives, so `is_field` alone answered "not a field" and the whole branch was
+        // skipped: `m = [Row { … }]` inside a closure read back EMPTY at every keyed kind,
+        // while the identical rebind of a captured VECTOR was correct (loft#1279 taught the
+        // vector branch above this same difference) and the identical keyed collection
+        // reached through a captured STRUCT FIELD was correct throughout.
+        //
+        // The literal ARRIVES differently through a capture, and that is the second half: it
+        // is a `Block` whose ops build straight into the destination (@PLN93's
+        // build-into-target), where a struct field gets a `Value::Insert` of the same ops.
+        // Both want the clear FIRST — the construction then fills an emptied collection —
+        // and asking "does this right-hand side construct in place?" through
+        // `value_writes_into` is the same question the vector branch asks, for the same
+        // reason: a comprehension that merely NAMES its destination builds a fresh
+        // collection and must not be cleared before it reads its source (loft#1195).
+        let captured_dest = self.is_captured_dbref(to);
+        let builds_into_dest =
+            matches!(&*code, Value::Block(_)) && captured_dest && self.value_writes_into(code, to);
         let keyed_field_write = !self.first_pass
             && op == "="
             && var_nr == u16::MAX
-            && self.is_field(to)
-            && (matches!(&*code, Value::Insert(_)) || matches!(s_type, Type::Null));
+            && (self.is_field(to) || captured_dest)
+            && (matches!(&*code, Value::Insert(_))
+                || builds_into_dest
+                || matches!(s_type, Type::Null));
         if keyed_field_write && let Some(kt) = self.keyed_type_id(f_type) {
             let clear = self.keyed_group_clear(to, kt, &lhs_parent_tp);
+            if builds_into_dest {
+                // The construction is one opaque block: put the clear in front of it rather
+                // than inside it, or the clear erases what the block has just built.
+                let mut ops = clear;
+                ops.push(code.clone());
+                *code = Value::Insert(ops);
+                return Type::Void;
+            }
             match code {
                 // A literal: run the clear FIRST, so the element-construction ops that
                 // follow build into an empty collection instead of appending to the old one.

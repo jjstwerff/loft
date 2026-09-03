@@ -82,7 +82,16 @@ built with. That is what a captured vector and a captured struct do — the clos
 build-time value. It is also the fact that decides which store the record takes over the free of
 ([ownership.md](ownership.md) `O-Latest`, loft#1324).
 
-⚠ **The keyed kinds answer differently, and the rule does not yet say which is right.** `e =
+⚠ **A rebind INSIDE the closure now replaces at every keyed kind too (loft#1326).** `(L-CapHeap)`
+shares the store, so `m = […]` written inside a closure over a captured `hash` / `sorted` /
+`index` / `trie` replaces its contents, exactly as the captured vector spelling does and as the
+same collection reached through a captured struct field always did. It used to EMPTY the
+collection: the keyed replace is selected on the destination being a struct FIELD, and a capture
+is an `OpGetDbRef` rather than an `OpGetField`, so the branch was skipped — the fourth time that
+family of selector has been the narrow part while its lowering was already right.
+
+⚠ **What is still open is the rebind OUTSIDE the closure, and the rule does not yet say which is
+right.** `e =
 [Row { k: 1, v: 51 }]` over a captured `hash` / `sorted` / `index` REFILLS the existing store
 rather than minting one, so the closure reads the reassigned value where the vector and struct
 spellings read the build-time one. Both are "the closure kept its `DbRef`"; what differs is
