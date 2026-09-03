@@ -594,6 +594,24 @@ both sides agree.  `--lib` does not redirect it either: a deliberately corrupted
 run the guard, restore it byte-identically — and record THAT in `@falsified-at` rather than the
 line the tool prints.  `the-lexer-decodes-an-escape-once.loft` is the worked example.
 
+⚠ **A third shape scores, and its green still covers only ONE defect: a control that ABORTS
+before the program runs.**  An internal compiler error, a parse refusal, a panic in codegen —
+any of these stops the control at the exit channel, so `falsify` reports a clean `falsified`
+while `asserts` reads `0|0` because no assertion in the file ever executed.  That verdict is
+true of the abort and says nothing about any cell the abort was standing in front of.
+
+The tell is the same as the no-`main` shape — **zero assertion failures on the CONTROL** —
+but here the cause is the opposite: not that nothing ran, but that something stopped
+everything.  Read the control's EXIT column to tell them apart.
+
+It matters because a crash is the loudest defect in a file and usually not the only one.
+loft#1310's control aborted with an internal compiler error; fixing that alone left four
+cells compiling, running, and yielding NOTHING at exit 0 — two further silent-wrong defects
+the abort had been masking, neither of which `falsify` could see before or after.  So after
+fixing a compile-time abort, re-run the whole matrix on VALUES rather than trusting the
+verdict, and write into `@falsified-at:` which channel the tool actually scored and which
+defects it is blind to.
+
 **Why a record and not just a habit.** Four distinct channels reported success while
 measuring nothing in a single afternoon (QUALITY.md § B6m), and two defects passed a full
 green gate the same day:
