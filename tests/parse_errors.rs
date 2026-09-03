@@ -3575,7 +3575,8 @@ fn binary_minus_under_numeric_is_refused_not_bound_to_the_unary_op() {
 /// vector<integer>) { g = fn() { p = [7,7]; }; g(); }` left the caller's `[1,2]` as `[7,7]`
 /// on both backends with nothing reported.
 ///
-/// Refusing is the call `D-clo-18` makes for the `&`-scalar shape one rule over: making it
+/// Refusing is the call the `&`-scalar shape takes one rule over (DESIGN_DECISIONS C115
+/// carries both halves): making it
 /// mean what it says needs the binding reachable from the closure plus a write-back, which
 /// the cell machinery cannot supply for a heap value.
 ///

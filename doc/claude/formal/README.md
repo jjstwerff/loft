@@ -145,15 +145,34 @@ not duplicate: a deviation entry links to the lens analysis instead of re-explai
 
 ## Areas
 
-The **static** areas are at **0 open deviations** (2026-07-04) except two: **layout.md**
-(2026-07-07), the store byte-layout contract, at **1 open** (`D-layout-1`, the #477 version-guard
-gap, mechanism-shipped pending a durable-store consumer); and **binding.md** briefly (2026-08-05 — `D-bind-9`, opened and closed the same day when `B-Ref-Reshape` gained its other two disturbances). The **operational** area is
-one small-step contract split across files: the scalar core (operational.md) plus the heap,
-iteration, coroutines, concurrency, calls, matching, tuples, closures (2026-07-04), and the last
-two — **text formatting** and **interfaces/generics** (2026-07-05) — so the operational contract is
-now written across the *whole* family. Each sibling holds **0 open deviations of their own** and
-shrinks operational.md's single meta-deviation (D-op-1: conformance is *differential* via the
-@PLN89 oracle, not a second executable definition).
+**Nine deviations are open, in five chapters** (re-measured 2026-09-03): ownership.md 3,
+closures.md 2, operational.md 2, binding.md 1, layout.md 1. Every other chapter is at 0.
+
+Two of the nine are the **meta** entry — `D-op-1`/`D-op-2`, there being no shared operational
+semantics, so the interpreter is the spec and a backend divergence is test-caught rather than
+definition-caught (@PLN89's differential oracle, an open-ended instrument and not a one-shot
+close). One is a **residual**: `D-layout-1`'s mechanism is shipped and opt-in, waiting on a
+persistence consumer to wire `check_beside` into its open path. The remaining six are the code
+behind a sound rule — and three of THOSE (`D-clo-7`, `D-clo-14`, `D-own-16`) are one piece of
+work, a per-execution ownership witness, carried as a cluster in
+[QUALITY.md](../QUALITY.md). No open row is currently a rule that needs changing.
+
+> ⚠ **This paragraph and the table below are a CLAIM to re-measure, exactly like an `OPEN: 0`.**
+> They read `0` for closures.md and ownership.md while each carried three live entries, and `1`
+> for tuples.md two weeks after `D-tup-1` closed — an index summarising eighteen chapters drifts
+> from every one of them at once, and it is the first thing a reader trusts. The chapters are
+> authoritative; this view is derived. Re-measure it with:
+>
+> ```bash
+> t=0; for f in doc/claude/formal/*.md; do
+>   case "$f" in *-history.md|*README.md|*ROADMAP.md) continue;; esac
+>   n=$(awk '/^## Deviations/{d=1} d && /OPEN:/{print; exit}' "$f" | grep -oE '[0-9]+' | head -1)
+>   n=${n:-0}; if [ "$n" != 0 ]; then echo "$(basename "$f") $n"; t=$((t + n)); fi
+> done; echo "TOTAL $t"
+> ```
+>
+> A chapter's own `## Deviations` line is the source of truth; this table restates it, and a
+> restated predicate is one that can disagree.
 
 | doc | area | status |
 |---|---|---|
@@ -168,12 +187,12 @@ shrinks operational.md's single meta-deviation (D-op-1: conformance is *differen
 | [concurrency.md](concurrency.md) | `par` — the one parallel construct | **rules written (2026-07-04), 0 own** — a parallel map consumed in source order; determinism CONDITIONAL on a pure worker; conformance via the oracle |
 | [calls.md](calls.md) | function call & return — args, parameter binding, the frame | **0 open** (2026-08-22) — args left-to-right; scalar params by-value, heap params share (mutate-through visible, whole reassign local, `&` writes back); returns independent. `(F-Drop)` was added and D-call-1 opened and closed the same day: a function DECLARED void whose body ends in a VALUE ran on `--interpret` and would not compile on `--native` (a bare rustc `E0308` about a temporary `.rs` file). Filed as a design call; the IR had already chosen — a void tail is wrapped in `Value::Drop` on both backends — and only the BLOCK's type had not followed it. Gated on the function-body context, which is where two attempts broke: the same `Void` is a decision in a declared-void function and a PLACEHOLDER in a lambda (whose return is inferred from the block type) and in a statement-position block (which may be an enclosing block's value) (loft#1075). `(F-Block)` was written down beside it and D-call-2 opened and closed the same day: a `{ … }` block whose value someone reads dropped its OWN tail, so `fn f() -> integer { { 5 } }` answered null on `--interpret` and `0` on `--native` while the function type-checked — the block's type is its tail's type, and only the value was thrown away (loft#1076) |
 | [matching.md](matching.md) | `match` — enum-variant dispatch + payload binding | **rules written (2026-07-04), 0 own** — an expression; struct-payload patterns bind by name; `_` is the final catch-all; **compile-time exhaustiveness** (a missing variant does not compile) |
-| [tuples.md](tuples.md) | tuples — construct / project / destructure | **1 open** (D-tup-1: no rule for `&(…)`, so the composition of two specified features is unspecified — see D-bind-11) — positional products (n≥2); `.i` a compile-time index; `(a,b) = …` destructuring; tuple returns. ⚠ its differential oracle is all-`(integer, integer)`: the doc read `0 open` through loft#1004 and loft#1005, both `text`-element deviations it could not see |
-| [closures.md](closures.md) | lambdas / closures / fn-refs — capture + apply | **0 open** (2026-08-22) — the `fn(){}` and `\|…\|` forms capture IDENTICALLY (pure sugar, D-clo-1); first-class (store/pass/return/escape); scalar-by-value / heap-shared capture; a stored un-inferrable short lambda in `map` is now a clean diagnostic, not a crash (D-clo-2). `L-Escape`'s STORAGE half is complete (D-clo-3, opened and closed 2026-08-22 by re-measuring the previous zero): a place that already holds a fn-ref — a local, a tuple member, a struct field, a vector element, a `&`-parameter's field — now takes a new one, releasing the closure record the old one owned, and a source the LITERAL refuses is refused identically |
+| [tuples.md](tuples.md) | tuples — construct / project / destructure | **0 open** (2026-08-31) — D-tup-1 closed 2026-08-20 (the reference tuple has a rule; `&(τ,…)`'s SCALAR-only restriction is now binding.md's D-bind-11, not an unspecified composition), and D-tup-4's keyed half closed 2026-08-31 (loft#1230: a keyed collection given to a tuple is COPIED like its vector twin, so `(T-Cons)`'s independence holds for every element type) — positional products (n≥2); `.i` a compile-time index; `(a,b) = …` destructuring; tuple returns. ⚠ its differential oracle is all-`(integer, integer)`: the doc read `0 open` through loft#1004 and loft#1005, both `text`-element deviations it could not see |
+| [closures.md](closures.md) | lambdas / closures / fn-refs — capture + apply | **2 open** (D-clo-7, D-clo-14 — one `??`-default leak in two positions: the borrow arm's witness cannot be NAMED, so the mint arm's store leaks; they are the SAME missing per-execution ownership witness as ownership.md's D-own-16, and QUALITY.md carries them as one cluster. D-clo-18 and D-clo-20 left as REFUSALS, DESIGN_DECISIONS C115) — the `fn(){}` and `\|…\|` forms capture IDENTICALLY (pure sugar, D-clo-1); first-class (store/pass/return/escape); scalar-by-value / heap-shared capture; a stored un-inferrable short lambda in `map` is now a clean diagnostic, not a crash (D-clo-2). `L-Escape`'s STORAGE half is complete (D-clo-3, opened and closed 2026-08-22 by re-measuring the previous zero): a place that already holds a fn-ref — a local, a tuple member, a struct field, a vector element, a `&`-parameter's field — now takes a new one, releasing the closure record the old one owned, and a source the LITERAL refuses is refused identically |
 | [formatting.md](formatting.md) | text formatting — `"{x}"` interpolation + value→text rendering | **rules written (2026-07-05), 0 own** — arbitrary-expression interpolation, `{{`/`}}` escape, per-type render (null → `"null"`, char-0 → nothing), the width/align/pad/precision/radix specs, and fault-safe interpolation (`{a/b}` → `null(/0)`, never a halt); one rendering sink → backend parity; plus `F-Target` (@PLN124, 2026-08-09) — the same template builds a VALUE when checked against a type defining `lit`/`hole_*`; conformance via the oracle |
 | [interfaces.md](interfaces.md) | interfaces (traits) + generics — bounds, satisfaction, monomorphization | **rules written (2026-07-05), 0 own** — `interface I { fn m(self: Self,…) }`, STRUCTURAL satisfaction (no `impl`), bounded `fn f<T: I>(…)`, parser-side monomorphization (one copy per concrete type → both backends identical), static satisfaction check (`'C' does not satisfy interface 'I': missing m`); compile-time only (no dynamic dispatch / inheritance / associated types — decided edges) |
 | [collections.md](collections.md) | collection kinds (`vector`/`hash`/`sorted`/`index`/`spatial`/`trie`), indexing & slicing | **SCOPE (2026-07-10)** — not yet rules: it inventories the shipped behaviour, names each rule with its anchor, and lists what must be both-backends-verified before it graduates to the normal form at 0 deviations. **`Slice-Open`/`Slice-Cap` now HOLD (2026-08-19, loft#1002)** — the open spatial slices answered the Z-order tail against a rule that already said *outward walk*, and open question 4 (`:n` exact-count) is answered: exactly n from any origin |
-| [ownership.md](ownership.md) | the `deps` / borrow **checker** (lifetimes) — distinct from binding.md's surface | **0 open** (2026-07-04) — D-own-1/2/3/4/5 ALL CLOSED; every store-lifetime decision reads the one total `deps` fact. The soundness proof heap.md's free rules rest on |
+| [ownership.md](ownership.md) | the `deps` / borrow **checker** (lifetimes) — distinct from binding.md's surface | **3 open** — RE-OPENED after the 2026-07-04 zero: D-own-26 (eleven free-deciding proxy sites never consult `O-Override`; three folded onto `Scopes::owns_freeable_store` the day it opened), D-own-16 (a value that READS the local it assigns never frees the store it displaces — the cluster above), D-own-8 (a Join's ownership fact is true on one path only). The ORIGINAL five stay resolved: D-own-1/2/3/4/5 ALL CLOSED; every store-lifetime decision reads the one total `deps` fact. The soundness proof heap.md's free rules rest on |
 | [capabilities.md](capabilities.md) | sandbox **admission** — what a restricted caller may do (call / parameter / field / mutation rights) | **0 open** (2026-07-04) — the 6-rule judgment `P;ctx ⊢ e ✓` fully enforced; D-cap-1/2/3 CLOSED, each with a RED/GREEN adversarial pair. Cites ownership.md/heap.md for the owned-vs-host fact |
 
 ## Roadmap

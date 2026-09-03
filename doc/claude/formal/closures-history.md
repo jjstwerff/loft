@@ -15,6 +15,12 @@ leaks its mint arm because declining the unguarded lift was the only cure correc
 backends (D-clo-14; its cost is now measured on the PEAK, and both frees a cure must guard
 are named — see the entry).
 
+**D-clo-18 left the register on 2026-09-03 without being fixed**, which is why the count fell to
+2 with no code change: a `&` scalar parameter written from inside a closure is permanently
+REFUSED, so per [ROADMAP.md](ROADMAP.md) it is a decided edge
+([DESIGN_DECISIONS C115](../DESIGN_DECISIONS.md)) rather than distance from the spec. Its record,
+and `D-clo-20`'s, are below.
+
 ⚠ **A rebind is not a mutation, and a capture is the one place the code could not tell them
 apart (D-clo-20, loft#1281, closed 2026-09-02).** `(L-CapHeap)` shares a captured heap value
 so a mutation-through is visible both ways; `(F-ParamRebind)` makes a whole-value REPLACE of
@@ -30,8 +36,8 @@ fix, and the one the keyed kinds appear to model — does not work HERE, because
 reads its own slot directly (`t_6vector_len(p(0))`, not a read through the closure record).
 Two readers, one binding: a repoint moves the wrong answer from the caller to the callee
 rather than removing it. Making it mean what it says needs the binding reachable from inside
-the closure plus a write-back, which is precisely what `D-clo-18` records as unavailable for
-the `&`-scalar shape — the cell machinery that gives a mutated captured SCALAR that channel
+the closure plus a write-back, which is precisely what `D-clo-18` (now a decided edge,
+[DESIGN_DECISIONS C115](../DESIGN_DECISIONS.md)) records as unavailable for the `&`-scalar shape — the cell machinery that gives a mutated captured SCALAR that channel
 cannot serve a heap value, because reads in the enclosing body would then see the cell while
 the caller still sees its own slot. Same wall, one rule over, so the same answer.
 
@@ -114,6 +120,73 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > short lambda through `map`/`any`/`all`/`sort_by`/`filter` (D-clo-2's fix named
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
+
+> **D-clo-18 — RECLASSIFIED as a decided edge (2026-09-03, loft#1276): a `&` SCALAR parameter
+> written from inside a closure is REFUSED, and no code change closes it.**
+>
+> `(L-CapRef)` + `(F-ParamRef)` read together say the write should reach the caller. It does not,
+> and the reason is one rule further in: the value lives in the caller's slot and `(L-CapScalar)`
+> gives the closure a COPY of it, so there is no shared record for the write to land in. Before
+> the refusal existed the program COMPILED and answered quietly wrong —
+> `fn bump(p: &integer) { g = fn() { p += 1; }; g(); p = p + 10; }` on `n = 5` answered **15**
+> where 16 is correct, the closure's increment dropping through a parameter whose whole purpose
+> is the write-back.
+>
+> Making it mean what it says needs the REF itself in the closure record plus a write-back, and
+> the cell machinery — the mechanism that gives a mutated captured LOCAL scalar exactly that
+> channel — cannot supply it: reads in the enclosing body would then see the cell while the
+> caller still sees its own slot.
+>
+> **Why it left the register rather than closing.** It was carried as an OPEN deviation for two
+> days while the refusal it describes was already permanent, so the count read one higher than
+> the distance actually was. [ROADMAP.md](ROADMAP.md) already says what to do with that: a row
+> that turns out **spec-may-adjust** leaves `formal/` and becomes a decided edge. It is
+> [DESIGN_DECISIONS C115](../DESIGN_DECISIONS.md), which carries both halves — this one and
+> `D-clo-20`, the heap twin below, whose refusal is the same answer one rule over. The rule keeps
+> the carve-out in its own text: `(L-CapRef)` now states the refusal and cites C115 instead of a
+> deviation number.
+>
+> Guard `tests/scripts/1276-reject-a-ref-parameter-a-closure-cannot-write.loft`
+> (*"Cannot write to the `&` parameter 'p' from a closure"*), whose read-only cells are the
+> control saying that widening the write-walk to credit a lambda's WRITES did not also credit
+> its READS.
+
+> **D-clo-20 — OPENED AND CLOSED (2026-09-02, loft#1281), as a REFUSAL: a whole-value rebind of
+> a captured heap PARAMETER reached the caller.**
+>
+> `(F-ParamHeap)` makes a whole-value rebind of a heap parameter local to the callee, and a
+> rebind written inside a CLOSURE that captures that parameter reached the CALLER instead:
+> `fn repl(p: vector<integer>) { g = fn() { p = [7,7]; }; g(); }` left the caller's `[1,2]` as
+> `[7,7]`, on both backends, with nothing reported, while the identical rebind written without
+> the closure correctly left it alone. Every heap kind did it — vector, keyed and struct alike —
+> and every right-hand side: a literal, a call, another local.
+>
+> The two rules meet here and the code followed only one. `(L-CapHeap)` is right that the closure
+> and the callee body see one collection; what does not follow is that the CALLER does. The
+> closure record holds a COPY of the parameter's DbRef, so the rebind lowered to a clear plus a
+> refill of the store that copy names — and `(F-ParamHeap)` makes that store the caller's. A
+> capture has no route back to the parameter SLOT, which is the binding `(F-ParamRebind)`
+> rebinds.
+>
+> It is REFUSED, which is the call `D-clo-18` makes for the `&`-scalar shape and for the same
+> reason: making it mean what it says needs the binding reachable from inside the closure PLUS a
+> write-back, and the cell machinery that gives a mutated captured SCALAR exactly that cannot
+> serve a heap value. Measured rather than assumed: repointing the capture slot alone does not
+> fix it, because the callee reads its own slot directly (`t_6vector_len(p(0))`, not a read
+> through the record), so a repoint moves the wrong answer from the caller to the callee instead
+> of removing it.
+>
+> The refusal is narrow, and each exclusion still works: a captured LOCAL (no caller to reach
+> past), a `&` parameter (`(L-CapRef)`, where the write-back is the point), a scalar or text
+> parameter (the cell machinery), and every mutation-THROUGH — `p += [x]`, `p[i] = v`,
+> `p.clear()`, a field write — which `(L-CapHeap)` and `(F-ParamGrow)` require to reach the
+> caller.
+>
+> Reject twin `tests/parse_errors.rs::a_closure_cannot_replace_a_captured_heap_parameter` (all
+> three right-hand sides × vector, hash, struct); the shapes it must NOT reach are
+> `tests/scripts/1281-a-closure-cannot-replace-a-captured-parameter.loft`, which cannot hold the
+> refused spelling because the fixed compiler will not parse it. Both halves are recorded as one
+> decided edge, [DESIGN_DECISIONS C115](../DESIGN_DECISIONS.md).
 
 > **D-clo-19 — OPENED AND CLOSED (2026-09-01, loft#1279): `=` on a captured collection was two
 > other operations, decided by the SOURCE of the right-hand side.**

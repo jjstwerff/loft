@@ -11,7 +11,8 @@
 // `fn f(p: vector<integer>) { g = fn() { p = [7,7]; }; g(); }` left the caller's `[1,2]` as
 // `[7,7]`, on both backends, with nothing reported (loft#1281, `D-clo-20`).
 //
-// It is REFUSED now rather than lowered, which is the call `D-clo-18` makes one rule over
+// It is REFUSED now rather than lowered, which is the call taken one rule over
+// (DESIGN_DECISIONS C115 records the two halves as ONE decided edge)
 // for the `&`-scalar shape and for the same reason: making it mean what it says needs the
 // binding reachable from inside the closure plus a write-back, and the cell machinery that
 // gives a mutated captured SCALAR exactly that cannot serve a heap value — reads in the

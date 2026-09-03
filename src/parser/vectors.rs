@@ -1146,7 +1146,8 @@ impl Parser {
     /// `fn f(p: vector<integer>) { g = fn() { p = [7,7]; }; g(); }` left the caller's
     /// `[1,2]` as `[7,7]`, on both backends, with nothing reported.
     ///
-    /// Refusing rather than lowering it is the same call `D-clo-18` makes one rule over,
+    /// Refusing rather than lowering it is the same call the `&`-scalar shape makes one
+    /// rule over (DESIGN_DECISIONS C115 records both halves as one decided edge),
     /// and for the same reason: making it MEAN what it says needs the binding reachable
     /// from inside the closure plus a write-back, and the cell machinery that gives a
     /// mutated captured SCALAR exactly that cannot serve a heap value — reads in the
@@ -2083,7 +2084,8 @@ or build a local and use that."
             // the pairing `finalize_capture_storage` keeps in step (#687).
             // A DECLARED `&` SCALAR parameter written from inside a closure is the one
             // capture shape that cannot be made to mean what it says, and it is refused HERE
-            // rather than allowed to compute quietly (loft#1276, `D-clo-18`).
+            // rather than allowed to compute quietly (loft#1276; the decision and why no code
+            // change closes it are DESIGN_DECISIONS C115).
             //
             // Everything else about a `&` capture works, because `closure_attr_type` captures
             // the POINTEE: a `&S` / `&vector<τ>` shares its DbRef, so a field write, an
@@ -2493,9 +2495,9 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
         //
         // ⚠ What this does NOT give back is the `&` itself.  A write THROUGH the capture
         // to the caller's slot — a scalar write, or a whole-value rebind of a heap
-        // capture — needs the ref in the record and a write-back, which is
-        // `D-clo-18`; `reject_ref_capture_write` refuses those at the capture site
-        // rather than letting them land in a copy.
+        // capture — needs the ref in the record and a write-back, which the language does
+        // not have (DESIGN_DECISIONS C115); `reject_ref_capture_write` refuses those at the
+        // capture site rather than letting them land in a copy.
         let tp = match tp {
             Type::RefVar(inner) => inner.as_ref(),
             other => other,
