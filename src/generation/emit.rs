@@ -987,12 +987,20 @@ impl Output<'_> {
         // one, and that silently matched NO candidate once a call appended two (the arm
         // collapsed to `_ => unreachable!()` and rustc answered E0282 rather than naming
         // anything about loft).
-        let user_arg_match = if matches!(ret_type, Type::Text(_)) && args.len() > param_types.len()
-        {
-            param_types.len()
-        } else {
-            args.len()
-        };
+        //
+        // Through `base()`, because the `?` does not change how a text return is DELIVERED:
+        // `Parser::text_return` peels `Optional` before it converts the body, so a `-> text?`
+        // call site appends exactly the same hidden buffers.  Reading the raw type here asked
+        // for a user-visible arity that counted them, so a `-> text?` lambda matched NO
+        // candidate and the dispatch collapsed to `_ => unreachable!()` — which is the very
+        // failure the paragraph above records, one wrapper out.  One question, one spelling:
+        // `is_text_return` below is the same read and both must move together.
+        let user_arg_match =
+            if matches!(ret_type.base(), Type::Text(_)) && args.len() > param_types.len() {
+                param_types.len()
+            } else {
+                args.len()
+            };
         // Collect all definitions with a matching signature.
         // Only include native-callable functions (n_ / t_ prefix) in the reachable set;
         // bytecode ops (Op* prefix) are never callable via fn-refs in native mode.
@@ -1095,7 +1103,11 @@ impl Output<'_> {
         // returned `Str` borrows a buffer that lives long enough for
         // the outer assignment / format consumer to read it — no
         // block-scope buffer, no per-arm `.to_string()` clone.
-        let is_text_return = matches!(ret_type, Type::Text(_));
+        // The same read as `user_arg_match` above, and it peels for the same reason — a
+        // `-> text?` return is delivered through the caller's work buffer exactly as `-> text`
+        // is.  Splitting the two spellings is what let the filter reject a candidate the
+        // argument list had already been built for.
+        let is_text_return = matches!(ret_type.base(), Type::Text(_));
         let user_arg_count = if is_text_return && args.len() > param_types.len() {
             args.len() - 1
         } else {

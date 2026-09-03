@@ -9,6 +9,38 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A `-> text?` lambda called through a fn-ref compiles on `--native` (2026-09-04)
+
+Found while sweeping the nullable-return spellings beside loft#1329, and it is the same
+mistake on the TEXT axis: one question read with two spellings, one of which forgot the
+wrapper.
+
+`Parser::text_return` peels `Optional` before it converts a body, so a `-> text?` call site
+appends exactly the same hidden `&text` work buffers a `-> text` one does.  The native fn-ref
+dispatch's candidate filter asked whether this was a text return of the RAW type, so for
+`Optional(Text)` it counted those buffers as user-visible arguments.  No candidate matched the
+arity, the dispatch collapsed to `_ => unreachable!()`, and a `match` with no value-producing
+arm has no type — so rustc answered `error[E0282]: type annotations needed` pointing at
+generated Rust.  A whole class of loft program did not compile, reported as a rustc diagnostic
+naming nothing about loft.
+
+The filter's own doc comment already records this exact failure for the arity it fixed
+earlier (loft#1116, where a call appending two buffers matched nothing).  This is the same one
+a wrapper out, which is why both reads are now the single `is_text_return` and peel together
+rather than being two `matches!` that agree by habit.
+
+⚠ **The interpreter is not a control for it** — it answered correctly on every cell
+throughout, so the whole defect is in what `--native` emits and a cell scored on the
+interpreter reads green on the broken build.  What scores it is the native run's EXIT.
+
+⚠ **And `null` was the cell that could have been traded away.**  Treating a `text?` return as
+a text return also wraps each dispatch arm in `.to_string()`, which is the shape that turns an
+absent text into `""`.  Measured: it does not — a null arm still reads `== null` and an EMPTY
+string still reads `!= null`, identically to the named-function twin on both backends.
+
+Guard `tests/scripts/fnref-text-optional-return-dispatches.loft`, 5 cells; falsified at
+`f437c1f2` (native exit 1 → 0, interpret INERT).
+
 ### A vector local rebound from a fn-ref call frees the store it displaces (2026-09-04)
 
 loft#1329, and it is loft#1328's sibling: the same question asked of a VECTOR destination
