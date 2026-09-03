@@ -15,6 +15,18 @@
 // buffer as well leaks one record per call, which `ret_promo_base` records as measured.  So
 // every call mints, and the caller must release what it displaces.
 //
+// ⚠ **The release the work-ref itself takes is the same question one step earlier.**  A
+// nullable local built from an inline LITERAL mints into a `__ref_N` and aliases it in, so
+// `c` and that buffer hold one store — and the buffer's scope-exit free is FORCED, so it ran
+// where `in_ret` had suppressed the local's own.  `fn f() -> S? { c: S? = S { x: 5 }; c }`
+// handed the caller a released store with NO displacement anywhere in the frame, on both
+// backends, and answered the right value on an ordinary build.  The dense twin never gets
+// there: `OpDatabase` builds straight into `c` and there is no buffer at all.  The cure is
+// the one the repo's own overlay names — `loft introspect --show-ownership` reports
+// *"`__ref_p2_1` is a RETURN SOURCE freed by a plain `OpFreeRef` … use OpFreeRefIfDistinct"* —
+// and pairing the buffer with the local is what makes the free consult the alias at run time.
+// `test_a_literal_initialised_local_is_returned_whole` is that cell.
+//
 // ⚠ **The free cannot be STATIC, and the cell that proves it is
 // `test_the_surviving_store_is_still_returned`.**  A first attempt placed a plain
 // `OpFreeRef` before the reassignment.  It closed every leak below and introduced a DOUBLE
@@ -42,6 +54,13 @@
 // both backends, so a run that scores only values learns nothing here.  ⚠ The native leg
 // needs `LOFT_NATIVE_LEAK_CHECK=1` — a bare `--native` run prints no leak report at all, and
 // reads clean on a build carrying every one of these leaks.
+//
+// @falsified-at: b1ccf0e9 — the literal-return cell, and it needs a THIRD channel again.  On
+// that build, under `LOFT_POISON=1`, both backends answer
+// `assertion failed: literal-only return: got -2401053088876216593` (0xDEADBEEFDEADBEEF); the
+// same build with poison OFF prints `… ok`, and the leak count is 0 -> 0.  So neither of the
+// two channels the line above scores can see it: the store IS freed, exactly once, and simply
+// too early.  `scripts/falsify.sh` runs neither tree under poison and reports this half INERT.
 //
 // ⚠ **Two shapes are still OUT of reach, and they are deliberately NOT cells here.**  The
 // corpus leak gate hard-fails any script that leaks, so a cell for either would turn this
@@ -185,6 +204,24 @@ fn test_a_dense_local_is_unchanged() {
   assert(c.x == 9, "dense local: got {c.x}");
 }
 
+fn build_from_a_literal_only() -> S? { c: S? = S { x: 5 }; c }
+fn build_from_a_literal_then_reassign() -> S? { c: S? = S { x: 5 }; c = mk(7); c }
+fn build_an_enum_from_a_literal_only() -> E? { e: E? = A { n: 5 }; e }
+
+fn test_a_literal_initialised_local_is_returned_whole() {
+  // The SAME control one displacement earlier, and the shape that showed the release is not
+  // about displacement at all.  `c: S? = S { x: 5 }` mints into a `__ref_N` work-ref and
+  // aliases it into `c`, so both names hold one store; the work-ref's scope-exit free is
+  // FORCED and ran even here, where `in_ret` had suppressed the local's own.  Nothing in the
+  // frame displaces anything, and the caller still read a released store.
+  r = build_from_a_literal_only();
+  assert((r?.x ?? -1) == 5, "literal-only return: got {r?.x ?? -1}");
+  q = build_from_a_literal_then_reassign();
+  assert((q?.x ?? -1) == 7, "literal then one reassignment: got {q?.x ?? -1}");
+  e = build_an_enum_from_a_literal_only();
+  assert((e?.n ?? -1) == 5, "enum literal-only return: got {e?.n ?? -1}");
+}
+
 fn main() {
   test_a_nullable_struct_local_reassigned_in_a_loop();
   test_a_nullable_record_enum_local_reassigned_in_a_loop();
@@ -196,6 +233,7 @@ fn main() {
   test_nested_loops();
   test_the_local_is_read_between_reassignments();
   test_the_surviving_store_is_still_returned();
+  test_a_literal_initialised_local_is_returned_whole();
   test_a_single_assignment_frees_nothing();
   test_the_other_nullable_formers_are_unchanged();
   test_a_dense_local_is_unchanged();

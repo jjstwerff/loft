@@ -3926,6 +3926,41 @@ fn mark_borrowed_captures(data: &mut Data) {
     }
 }
 
+/// The `__ref_N` work-ref an inline record LITERAL built, when the literal's value is that
+/// buffer itself — the shape `c: S? = S { x: 5 }` lowers to.
+///
+/// `None` for every other right-hand side, which is what keeps this narrow: a block whose
+/// value is a work-ref it did not `OpDatabase` into is someone else's store, and a dense
+/// local has no buffer at all.
+fn inline_literal_work_ref(rhs: &Value, function: &Function, data: &Data) -> Option<u16> {
+    let Value::Block(bl) = rhs.unspan() else {
+        return None;
+    };
+    let last = bl
+        .operators
+        .iter()
+        .rev()
+        .find(|o| !matches!(o.unspan(), Value::Line(_)))?;
+    let Value::Var(av) = last.unspan() else {
+        return None;
+    };
+    let av = *av;
+    if av >= function.count() {
+        return None;
+    }
+    let name = function.name(av);
+    if !name.starts_with("__ref_") && !name.starts_with("__rref_") {
+        return None;
+    }
+    // The store has to be MINTED here, not merely named: `OpDatabase(av, …)` is the mint.
+    let db = data.def_nr("OpDatabase");
+    let built_here = bl.operators.iter().any(|o| {
+        matches!(o.unspan(), Value::Call(d, args) if *d == db
+            && matches!(args.first().map(Value::unspan), Some(Value::Var(t)) if *t == av))
+    });
+    built_here.then_some(av)
+}
+
 /// Does a closure record's adoption take over the frame-exit free of local `v`?
 ///
 /// One home for the question `get_free_vars` asks before emitting a free and
@@ -5140,6 +5175,45 @@ impl Scopes {
                         self.paired_witness.entry(av).or_insert(ov);
                     }
                 }
+            }
+        }
+        // loft#1317 — an inline record literal bound to a NULLABLE local mints into a
+        // `__ref_N` work-ref and then ALIASES it into the local: `c: S? = S { x: 5 }` lowers
+        // to `c = { OpDatabase(__ref_1); OpSetInt(__ref_1, …); __ref_1 }`, so the two names
+        // hold ONE store.  The dense twin never gets here — `OpDatabase` builds straight into
+        // `c` and there is no buffer — which is why only the nullable spelling had the fault.
+        //
+        // A work-ref's scope-exit free is FORCED (`is_work_ref` in `get_free_vars`), so it
+        // runs even where `in_ret` suppressed the local's own.  A returned nullable record was
+        // therefore handed back through a store this frame had already released:
+        // `fn f() -> S? { c: S? = S { x: 5 }; c }` answered `0xDEADBEEF` under `LOFT_POISON=1`
+        // on both backends, and the right value on an ordinary build, which is why it stood.
+        //
+        // Pairing the buffer with the local turns that free into
+        // `OpFreeRefIfDistinct(__ref_1, c)`, and the run-time comparison answers all four
+        // combinations — the same trade the call-shaped pairings above take:
+        //
+        //   returned, local still names the store  -> alias  -> decline; the caller owns it
+        //   returned, local reassigned since       -> differ -> free; the literal store is dead
+        //   not returned, still named              -> alias  -> decline; `OpFreeRef(c)` above
+        //                                                       it already released the store
+        //   not returned, reassigned since         -> differ -> free
+        //
+        // So it frees exactly where the plain free did whenever the stores differ, and only
+        // declines where the plain free was releasing a store someone else still owns.
+        if matches!(
+            function.tp(v).base(),
+            Type::Reference(_, _) | Type::Enum(_, true, _)
+        ) && let Some(av) = inline_literal_work_ref(unspanned_value, function, data)
+            && av != v
+        {
+            // The witness must outlive the buffer, or native's `let` for it has fallen out
+            // of scope by the time the buffer's free runs — the same condition the
+            // call-shaped pairing above states at length.
+            let av_scope = self.var_scope.get(&av).copied().unwrap_or(u16::MAX);
+            let v_scope = self.var_scope.get(&v).copied().unwrap_or(u16::MAX);
+            if v_scope != u16::MAX && v_scope <= av_scope {
+                self.paired_witness.entry(av).or_insert(v);
             }
         }
         // @PLN130 F2 — an element view that is live across a RESHAPE of its container cannot
