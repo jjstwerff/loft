@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 371 | 347 | **24** |
+| 376 | 352 | **24** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -1466,7 +1466,7 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 43 | **9** | 34 |
+| 45 | **9** | 36 |
 
 (`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
 so the row cannot go stale — the same arrangement the `unspan` table has.)
@@ -2419,7 +2419,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 689 | 332 | 5 | **352** |
+| 693 | 332 | 5 | **356** |
 
 The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.  It happened again on the 2026-09-03 join — one side carried `684 | 330 | 5 | 349` and the other `687 | 331 | 5 | 351`, and the tree that holds both measures `689 | 332 | 5 | 352`.  Two branches each adding predicates cannot have their counts added, because the audit classifies FUNCTIONS and a merged body is one function however many branches touched it.
 
@@ -2488,6 +2488,16 @@ them is a whole FUNCTION discriminating on a `Type`, they are arms inside larger
 is the B7i masking this screen already warns about, seen from the other side: the unit is the
 function, so a defective arm inside a body that peels somewhere else is invisible here. The
 count is a queue of predicates, not a census of the shapes a `τ?` can reach.
+
+⚠ **loft#1321 moves the opaque column UP by four, and all four are the screen counting
+something it cannot see the point of.** The join predicates (`Value::is_branch_join` and the
+per-backend `join_arm_keeps_its_view`) each test `bl.result` against `Type::Void | Type::Null`
+to decide whether a block yields a value. That is a bare `Type` match, so the audit counts
+it — and `Void` and `Null` are not shapes a `τ?` can wrap, so there is nothing to peel and
+peeling would be meaningless. It is the same "a site whose question IS the wrapper" case the
+paragraph above admits, arriving from the other direction: here the question is whether there
+is a VALUE at all. The column is a queue to read, not a number to drive down, and four
+entries on it are already answered.
 
 loft#1319 moves it again, to `684 | 330 | 5 | 349`, and every step is in the good direction:
 two more functions see through the wrapper and one fewer is opaque. The CALLER half of the
