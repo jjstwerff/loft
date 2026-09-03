@@ -230,10 +230,15 @@ implication that reading `deps` is *sufficient*.
   a binding joined from TWO arms carries both arms' deps, reads as a borrow, and the MINTING
   arm's store is owned by nobody — is CLOSED 2026-09-03 (loft#1320): each qualifying arm tail
   is given its own binding, so `(O-Complete)`'s *per binding, per path* holds structurally
-  for that shape.  What stays open is the FACT: `Function::change_var_type` still collapses N
-  deps to the last one at six sites, a named local bound at two sites from two different
-  bases and a base reassigned in the function are DECLINED rather than answered, and a NAMED
-  call's record arm still accumulates records in its `__ref_N` buffer (loft#1323).
+  for that shape.  ⚠ Not the dep COLLAPSE — that was fixed 2026-08-26 (`depend_on_all`, six
+  sites and three siblings, asserted on the predicate in `variables/mod.rs`), and a line here
+  said otherwise for an afternoon.  What stays open is narrower: the fact for a value branch
+  whose arm MINTS A LITERAL beside an arm that borrows (loft#1098 closed its symptom, not the
+  fact — the arm rewrite lifts a CALL tail, not a literal), a named local bound at two sites
+  from two different bases and a base reassigned in the function are DECLINED rather than
+  answered, and a NAMED call's record arm still accumulates records in its `__ref_N` buffer
+  (loft#1323).  loft#1321 (the join binding's COPY face) is the same binding from the other
+  side; whichever lands first narrows the other.
   [ownership-history.md](ownership-history.md) has the matrix
 
 **D-own-26 CLOSED 2026-09-03**, against the bar its own entry set: *"the honest cure is a way
