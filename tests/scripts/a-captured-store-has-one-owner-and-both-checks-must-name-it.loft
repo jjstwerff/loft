@@ -20,7 +20,8 @@
 // Reaching it takes the second half, `backs_an_adopted_capture`.  The mirror kept only the
 // first half, so every captured vector below reported its backing local as an unfreed leak.
 //
-// Axes it MOVES: capture heap kind (vector / hash / sorted / index / spatial / struct / text),
+// Axes it MOVES: capture heap kind (vector / hash / sorted / index / spatial / struct / text /
+//   record enum),
 //   how the collection was built (literal, empty-then-appended, call result), closure fate
 //   (kept local, returned, stored in a struct field, relayed through a nested lambda), scope
 //   (function body, `if` arm, loop body), record count over one store (one, two), and
@@ -42,6 +43,15 @@
 //     and the walk is per attribute, so a second capture repeats the first question rather
 //     than composing with it.
 //
+// **A second rule meets the first at the bottom of the file, and it is here because the two
+// answer the same question about one store.**  A local built from an inline record LITERAL
+// mints into a `__ref_N` work-ref and is aliased to it, so the buffer's forced scope-exit free
+// and the local's own free are two claims on one store.  loft#1317 made that free conditional
+// where the local is RETURNED; a CAPTURED local is the opposite case, because its own free is
+// already suppressed by the rule above and the buffer's is all that is left.  The two capture
+// cells for it are marked, and `810-method-return-buffer` / `1181-a-captured-struct-…` are
+// where the corpus scores the same boundary.
+//
 // TWO channels, and neither alone is enough:
 //
 //   1. The file COMPILES.  `check_ref_leaks` is `#[cfg(debug_assertions)]`, which
@@ -61,11 +71,20 @@
 //   `--interpret` and `--native`, and all 18 are clean with the fix restored.  The exit-leak
 //   channel is scored separately and is clean in both states, which is why the compile
 //   channel had to be measured at all.
+//
+// @falsified-at: the capture cells at the bottom score the LEAK channel instead, and were
+//   measured by making the loft#1317 buffer free unconditional rather than return-only:
+//   `NEVER FREED: 1 stores … kt=91 Circle×1` on `a_captured_enum_built_from_a_literal`, clean
+//   with the condition restored.  The struct cell beside it stays clean either way, which is
+//   the fact it is there to record.
 
 struct R { k: text, n: integer }
 struct Cell3 { x: integer, y: integer, n: integer }
 struct Counter { hits: integer }
 struct Holder { f: fn() -> integer }
+// Both variants declare `size`, so the capture reads one shared slot and the
+// `variant-field-unchecked` warning stays quiet — the subject here is the store, not the tag.
+enum Shape { Circle { size: integer }, Square { size: integer } }
 
 // --- The defect: a capture whose store lives in a BACKING local -------------------------
 
@@ -189,6 +208,30 @@ fn a_kept_call_result_capture() {
   assert(total() == 12, "call result: {total()}");
 }
 
+// Where this rule meets the OTHER free the same store can attract.  A local built from an
+// inline literal mints into a `__ref_N` work-ref and aliases it in, and when that local is
+// RETURNED the buffer's free has to consult the alias at run time or the caller reads a
+// released store (loft#1317).  A CAPTURED local is not returned, so it must keep the PLAIN
+// free: its own frame-exit free is already suppressed because the record adopted the store,
+// and a conditional buffer free then declines and strands it — measured here as a `Circle`
+// nobody frees, and in `1181-a-captured-struct-is-not-the-callers-to-take.loft` as the same
+// leak in the corpus.
+//
+// Only the record ENUM has a buffer to strand, and the struct beside it says why rather than
+// leaving the asymmetry unexplained: a dense struct local is built straight into its own slot
+// by `OpDatabase` and mints no buffer at all.
+fn a_captured_enum_built_from_a_literal() {
+  cap: Shape = Circle { size: 5 };
+  read = fn() -> integer { cap.size };
+  assert(read() == 5, "captured literal enum: {read()}");
+}
+
+fn a_captured_struct_built_from_a_literal() {
+  c = Counter { hits: 7 };
+  read = fn() -> integer { c.hits };
+  assert(read() == 7, "captured literal struct: {read()}");
+}
+
 // --- The over-firing side: what must still be freed --------------------------------------
 
 // Two records over ONE store.  Only the store's single owner may hand it over, however many
@@ -244,6 +287,8 @@ fn main() {
   a_kept_struct_capture();
   a_kept_text_capture();
   a_kept_call_result_capture();
+  a_captured_enum_built_from_a_literal();
+  a_captured_struct_built_from_a_literal();
   two_closures_over_one_vector();
   an_uncaptured_sibling_is_still_freed();
   a_captured_parameter_leaves_the_caller_whole();

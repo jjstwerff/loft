@@ -705,3 +705,42 @@ the pair that makes it a guard rather than a snapshot. On `2026.8.0` the LOCALIT
 the caller reads 20 after twenty rebinds, so the rebind was reaching past the callee; @PLN87 P2.1
 fixed that and broke the order; both pass now. So the P2.1 work was a real fix that carried a
 real regression, and the guard pins both halves.
+
+## Still open on the branch: a nullable record TEMPORARY takes a stale free (poison-only)
+
+Measured 2026-09-03, after the D-own-16 close, against a pristine `origin/main` (b1ccf0e9)
+worktree.
+
+```loft
+struct Pt { x: float, y: float }
+fn l4(c: boolean) -> Pt? { if c { Pt { x: 4.0, y: 4.0 } } else { null } }
+fn main() { n = 0; if l4(true) != null { n += 1 } if l4(false) != null { n += 1 } }
+```
+
+```
+$ LOFT_POISON=1 loft --interpret p.loft
+loft: BUG (#405): refused free of out-of-range store #48879 (rec=3735928559, pos=3735928559,
+      var='') — wrong/stale ref; further such frees are silently refused this run
+```
+
+Absent on `main`; present here. **No gate fails on it** — the #405 net refuses the free, the
+values are right on both backends, `LOFT_STRICT_STORES=1` reports nothing, and the poison sweep
+is green over the whole corpus. It is recorded because the refusal means a freed record's bytes
+were read back as a `DbRef` and handed to a free, which is the class this plan is about.
+
+What the probes narrow it to, one axis at a time:
+
+| shape | #405 |
+|---|---|
+| the call's result used DIRECTLY (`if l4(x) != null`) | **fires** |
+| the same result BOUND to a local first (`p = l4(x); if p != null`) | quiet |
+| both arms minting, no `null` arm | fires |
+| the same function returning the DENSE `Pt` | quiet |
+| a loop around it | not the axis — the two-call straight line fires |
+
+So it is the nullable-record TEMPORARY — the `__lift_N` the condition lifts the call into — and
+not the null arm, the loop, or the comparison. `1085-ret-buffer-passthrough-free.loft::l4_null_arm`
+is where it shows in the corpus.
+
+Not filed as an issue: it does not reproduce on `main`, which is this repo's rule for
+branch-internal breakage.

@@ -84,6 +84,12 @@ struct Scopes {
     /// runtime store-nr check) instead of the unconditional `OpFreeRef`
     /// — see the comment block around `scan_set`'s witness-pairing branch.
     paired_witness: HashMap<u16, u16>,
+    /// loft#1317 — the `__ref_N` an inline record LITERAL minted, mapped to the local it was
+    /// then aliased into.  Separate from [`Scopes::paired_witness`] because the free it
+    /// governs is conditional on a fact only `get_free_vars` holds: whether that local is
+    /// RETURNED.  Where it is not, the buffer's plain free is the store's only release and
+    /// has to stay plain.
+    literal_buffer: HashMap<u16, u16>,
     /// @P378(a) — INVERSE of `paired_witness` for the case where the
     /// witness `v` is INNER-scoped relative to the `__ref_N` buffer
     /// `av` (e.g. `bs = alloc_bag(ci, __ref_1)` inside a `for` loop,
@@ -1468,6 +1474,7 @@ fn run_scan_phase(
         lift_texts: Vec::new(),
         ret_temp_counter: 0,
         paired_witness: HashMap::new(),
+        literal_buffer: HashMap::new(),
         witness_buffer: HashMap::new(),
         owned_refs: HashMap::new(),
         rbuf_witness: None,
@@ -5224,7 +5231,7 @@ impl Scopes {
             let av_scope = self.var_scope.get(&av).copied().unwrap_or(u16::MAX);
             let v_scope = self.var_scope.get(&v).copied().unwrap_or(u16::MAX);
             if v_scope != u16::MAX && v_scope <= av_scope {
-                self.paired_witness.entry(av).or_insert(v);
+                self.literal_buffer.entry(av).or_insert(v);
             }
         }
         // @PLN130 F2 — an element view that is live across a RESHAPE of its container cannot
@@ -6918,6 +6925,33 @@ impl Scopes {
                     let is_buffer = is_work_ref && self.paired_witness.contains_key(&v)
                         || self.witness_buffer.values().any(|&b| b == v);
                     if is_work_ref && let Some(&witness) = self.paired_witness.get(&v) {
+                        ls.push(Value::Call(
+                            data.def_nr("OpFreeRefIfDistinct"),
+                            vec![Value::Var(v), Value::Var(witness)],
+                        ));
+                    } else if is_work_ref
+                        && let Some(&witness) = self.literal_buffer.get(&v)
+                        && (witness == ret_var || return_sources.contains(&witness))
+                    {
+                        // loft#1317 — the buffer an inline record literal minted, whose store
+                        // the local it was aliased into is now HANDING TO THE CALLER.  This
+                        // free is forced (`is_work_ref`) and so ran even though `in_ret`
+                        // suppressed the local's own: `fn f() -> S? { c: S? = S { x: 5 }; c }`
+                        // returned a released store on both backends, right by luck on an
+                        // ordinary build and `0xDEADBEEF` under `LOFT_POISON=1`.
+                        //
+                        // Conditional on the local being a RETURN source, and that condition is
+                        // the whole of the rule.  Where the local is NOT returned, this plain
+                        // free is the store's only release — the local may be captured (the
+                        // record adopted it and the frame emits nothing), or carry no free of
+                        // its own at all — and making it conditional strands the store.
+                        // Measured both ways: `1181-a-captured-struct-…` leaks a `Circle` and
+                        // `810-method-return-buffer` an `M` when this arm fires unconditionally.
+                        //
+                        // `OpFreeRefIfDistinct` then answers the two return shapes at run time:
+                        // the local still names the buffer's store (alias -> decline, the caller
+                        // owns it), or it was reassigned since (differ -> free, the literal
+                        // store is dead).
                         ls.push(Value::Call(
                             data.def_nr("OpFreeRefIfDistinct"),
                             vec![Value::Var(v), Value::Var(witness)],
