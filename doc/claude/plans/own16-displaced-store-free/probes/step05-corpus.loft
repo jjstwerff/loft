@@ -1,0 +1,42 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Step 0.5 corpus — one function per path through the native adopt-vs-copy guard
+// (`src/generation/dispatch.rs`).  Run on BOTH backends; the interpreter is the reference.
+struct M { x: integer }
+
+fn cond(s: M, i: integer) -> M { if i % 2 == 0 { M { x: i } } else { s } }
+fn always_borrow(s: M, i: integer) -> M { s }
+fn always_mint(s: M, i: integer) -> M { M { x: i } }
+
+// A — the defect: conditional borrow, assigned back to the binding passed in.
+fn a_self_reassign() -> integer { c: M = M{x:5}; c = cond(c,2); c = cond(c,3); c.x }
+
+// B — the RISK case for the obvious fix: a DIFFERENT local that shares c's store first.
+//     If adopting on `_src.store_nr == _dst.store_nr` is wrong anywhere, it is here —
+//     `d` would come to alias `c` while the IR types `d` as an owner.
+fn b_other_local_sharing_store() -> integer {
+  c: M = M{x:5};
+  d: M = c;
+  d = cond(c,3);
+  d.x + c.x
+}
+
+// C — fresh destination (clean today; must stay clean).
+fn c_fresh_destination() -> integer { a: M = M{x:5}; b = cond(a,3); b.x }
+
+// D — unconditional borrow (clean today).
+fn d_always_borrow() -> integer { c: M = M{x:5}; c = always_borrow(c,3); c.x }
+
+// E — unconditional mint (clean today; the displaced store must still be freed).
+fn e_always_mint() -> integer { c: M = M{x:5}; c = always_mint(c,3); c.x }
+
+// F — the borrow arm returns a DIFFERENT store than the destination.
+fn f_borrow_of_another(t: M) -> integer { c: M = M{x:5}; c = cond2(c,t,3); c.x }
+fn cond2(s: M, t: M, i: integer) -> M { if i % 2 == 0 { M { x: i } } else { t } }
+
+fn main() {
+  print("A={a_self_reassign()} B={b_other_local_sharing_store()} C={c_fresh_destination()}\n");
+  o: M = M{x:77};
+  print("D={d_always_borrow()} E={e_always_mint()} F={f_borrow_of_another(o)}\n");
+}

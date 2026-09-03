@@ -1,0 +1,100 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A callee that returns its argument on ONE path and a fresh record on the other, assigned
+// back into the binding it was passed, answered `0` on `--native` and the right value on the
+// interpreter — silently, on the shipped 2026.8.0 release.
+//
+// `@FR-O-Move` makes the caller COPY only to obtain its OWN store.  Where the returned value
+// already lives in the destination's own store the caller HAS that store, so the rule asks
+// for nothing — and copying is not merely redundant but destructive, because the copy leg
+// clears the destination in place (`OpDatabase`) and so wipes the record it is about to read.
+// The native emitter's adopt condition carries that passthrough in its plain-return form and
+// LOST it in the `??`/JOIN-witnessed form, which replaced the whole condition instead of
+// refining it.
+//
+// One function per path through that guard, so a future edit to the condition cannot move one
+// arm without this file naming which.  The load-bearing cell is `b_other_local_sharing_store`:
+// it is the shape that would break if the passthrough were widened into an ALIAS rather than
+// a no-op, because there the destination is a different local bound from the witness.
+//
+// @falsified-at: 9528ddc4 — `loft --tests --native` on the pre-fix binary reports 7 failed /
+//   0 passed, against 7 passed after.  The whole file goes red rather than the one cell,
+//   because native compiles a test file into ONE binary and the first failing assertion takes
+//   its siblings with it; `doc/claude/plans/own16-displaced-store-free/probes/step05-corpus.loft`
+//   is the isolating form and moves A=0 -> 2 with B..F unmoved.  The VALUE channel is the only
+//   one that moves — both builds are leak-free here, so a run scored on leaks learns nothing —
+//   and the interpreter stays at 2 throughout, which is what says the fix did not "agree" the
+//   backends by breaking the reference one.
+
+struct M { x: integer }
+
+fn cond(s: M, i: integer) -> M { if i % 2 == 0 { M { x: i } } else { s } }
+fn cond2(s: M, t: M, i: integer) -> M { if i % 2 == 0 { M { x: i } } else { t } }
+fn always_borrow(s: M, i: integer) -> M { s }
+fn always_mint(s: M, i: integer) -> M { M { x: i } }
+
+// The defect: the borrow arm hands back the destination's own store.
+fn test_a_conditional_borrow_assigned_into_its_own_binding() {
+  c: M = M { x: 5 };
+  c = cond(c, 2);            // mints x=2
+  c = cond(c, 3);            // borrows it straight back
+  assert(c.x == 2, "the borrow arm must hand back what the mint arm made: got {c.x}, want 2");
+}
+
+// The same over a loop: the mint iterations were always right, so a spot check of one
+// iteration would have passed while every borrow iteration read 0.
+fn test_every_borrow_iteration_keeps_the_previous_value() {
+  c: M = M { x: 5 };
+  seen = 0;
+  for i in 0..10 { c = cond(c, i); seen = seen + c.x; }
+  // 0,0,2,2,4,4,6,6,8,8
+  assert(seen == 40, "sum over ten rounds: got {seen}, want 40");
+}
+
+// THE CONTROL — the destination is a DIFFERENT local from the witness, and it already owns a
+// store the call must displace.  A passthrough that adopted here instead of materialising
+// would leave `d` naming `c`'s store while the IR types `d` as an owner, so both would free
+// one store; the surviving values are what says it materialised.
+//
+// ⚠ `d` is given its own value rather than `d: M = c`, and is READ before the call.  Written
+// the other way the compiler reports `dead-assignment — 'd' is overwritten before being read`
+// and the bind can go, which would leave the cell with no prior store to displace — a control
+// that no longer controls anything.  (`d: M = c` would not have shared `c`'s store either:
+// `@FR-B-Copy` makes that bind a COPY.)
+fn test_a_different_local_from_the_witness_still_materialises() {
+  c: M = M { x: 5 };
+  d: M = M { x: 99 };
+  assert(d.x == 99, "d owns a store of its own before the call: got {d.x}");
+  d = cond(c, 3);
+  assert(d.x + c.x == 10, "d takes c's value and c keeps it: got {d.x + c.x}, want 10");
+}
+
+// The borrow arm returns a store that is NOT the destination's — the copy leg is correct
+// here and must stay reached.
+fn test_a_borrow_of_another_local_is_still_copied() {
+  c: M = M { x: 5 };
+  t: M = M { x: 77 };
+  c = cond2(c, t, 3);
+  assert(c.x == 77, "the borrowed OTHER local: got {c.x}, want 77");
+}
+
+// A fresh destination — clean before the fix, and must stay clean.
+fn test_a_fresh_destination_is_unaffected() {
+  a: M = M { x: 5 };
+  b = cond(a, 3);
+  assert(b.x == 5, "fresh destination: got {b.x}, want 5");
+}
+
+// The two unconditional shapes, which take the plain-return arm rather than the witnessed one.
+fn test_an_unconditional_borrow_passes_through() {
+  c: M = M { x: 5 };
+  c = always_borrow(c, 3);
+  assert(c.x == 5, "unconditional borrow: got {c.x}, want 5");
+}
+
+fn test_an_unconditional_mint_still_displaces() {
+  c: M = M { x: 5 };
+  c = always_mint(c, 3);
+  assert(c.x == 3, "unconditional mint: got {c.x}, want 3");
+}

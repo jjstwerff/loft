@@ -698,9 +698,34 @@ impl Output<'_> {
             // a same-store NRVO alias, else deep-copy. JOIN (witnessed): adopt a
             // null/fresh `_src` that does NOT alias the borrowed arg `witness`, else
             // (it aliases the witness) materialise — the join's owned/borrow split.
+            // The passthrough both arms share: a NULL return has no store to copy, and a
+            // return already living in the destination's own store IS the destination's
+            // store.  Spelled once because the witnessed arm is a REFINEMENT of the default
+            // and not a second opinion — writing it twice is how the witnessed form came to
+            // omit it.
+            const PASSTHROUGH: &str = "_src.store_nr == u16::MAX || _src.store_nr == _dst.store_nr";
             let adopt = match &join_witness {
+                // @FR-O-Move — the caller COPIES only to obtain its OWN store.  When `_src`
+                // already lives in the destination's own store the caller HAS that store, so
+                // the rule asks for nothing and the copy is not merely redundant but
+                // destructive: the COPY arm clears `_dst` in place via `OpDatabase`, which
+                // wipes the record `_src` names before `OpCopyRecord` reads it.  That is the
+                // same-store passthrough the `None` arm below carries and the @P290 comment
+                // above requires ("clearing that store would wipe the very data we copy, so
+                // pass the reference through unchanged"); the witnessed form REPLACED the
+                // whole condition instead of refining it and so dropped it.  Measured:
+                // `c = cond(c, 3)` where `cond` returns its argument on one path answered
+                // `x = 0` on `--native` against `2` on the interpreter, silently, on the
+                // shipped 2026.8.0 release.  Guard
+                // `tests/scripts/1017b-a-conditional-borrow-into-its-own-binding.loft`.
+                //
+                // It is a strict widening of the ADOPT arm: the extra disjunct fires only
+                // where the destination's old store and the returned value are one store, so
+                // the adopt arm's own displaced-free (`_dst.store_nr != _src.store_nr`) is
+                // false there and nothing is freed — the assignment becomes the no-op it
+                // always was.
                 Some(witness) => {
-                    format!("_src.store_nr == u16::MAX || _src.store_nr != var_{witness}.store_nr")
+                    format!("{PASSTHROUGH} || _src.store_nr != var_{witness}.store_nr")
                 }
                 // loft#974 — a callee that returns a VIEW hands back a pointer into a
                 // store the CALLER already owns, so the destination ALIASES it: that is
@@ -720,7 +745,7 @@ impl Output<'_> {
                 // So the alias follows the destination's ownership, not the callee's
                 // return alone.
                 None if is_borrowed_view && variables.skip_free(var) => "true".to_string(),
-                None => "_src.store_nr == u16::MAX || _src.store_nr == _dst.store_nr".to_string(),
+                None => PASSTHROUGH.to_string(),
             };
             // @PLN85 (the adopt-arm placeholder leak) — the ADOPT arm replaces
             // `var_{name}`'s slot with `_src`, orphaning `_dst` when it is a

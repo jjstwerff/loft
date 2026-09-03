@@ -1,0 +1,34 @@
+Step 0.5 — the adopt-vs-copy guard, before and after.
+Source: probes/step05-corpus.loft, via `loft introspect`.  Only the ADOPT CONDITION of
+each emitted call-return site is kept; the full dumps are 212K of stdlib boilerplate and
+carry absolute paths, so they are regenerable rather than committed:
+    loft introspect doc/claude/plans/own16-displaced-store-free/probes/step05-corpus.loft
+
+=============================== BEFORE (9528ddc4) ===============================
+if _src.store_nr == u16::MAX || _src.store_nr == _dst.store_nr
+if _src.store_nr == u16::MAX || _src.store_nr != var_a.store_nr
+if _src.store_nr == u16::MAX || _src.store_nr != var_c.store_nr
+if _src.store_nr == u16::MAX || _src.store_nr != var_t.store_nr
+
+=============================== AFTER ===========================================
+if _src.store_nr == u16::MAX || _src.store_nr == _dst.store_nr
+if _src.store_nr == u16::MAX || _src.store_nr == _dst.store_nr || _src.store_nr != var_a.store_nr
+if _src.store_nr == u16::MAX || _src.store_nr == _dst.store_nr || _src.store_nr != var_c.store_nr
+if _src.store_nr == u16::MAX || _src.store_nr == _dst.store_nr || _src.store_nr != var_t.store_nr
+
+The witnessed sites (`|| _src.store_nr != var_<witness>.store_nr`) each GAINED the
+`|| _src.store_nr == _dst.store_nr` passthrough the plain-return form already carried.
+Every plain-return site is byte-identical, which is what confines the change to the
+witnessed arm.  Five sites changed; the diff is 10 lines.
+
+=============================== VALUES ==========================================
+                     A    B    C    D    E    F
+  before interpret:  2   10    5    5    3   77
+  before native   :  0   10    5    5    3   77      <- A is the defect
+  after  interpret:  2   10    5    5    3   77
+  after  native   :  2   10    5    5    3   77
+
+A = conditional borrow assigned back into its own binding (the defect)
+B = a different local that already owns a store  (the control: must still materialise)
+C = fresh destination   D = unconditional borrow   E = unconditional mint
+F = borrow arm returns a DIFFERENT store than the destination
