@@ -14487,11 +14487,55 @@ impl Parser {
         // (see `fnref_result_type`): map visible-param deps through the actual
         // argument types; an index naming no visible argument names the closure this slot
         // carries, and only a CAPTURING slot has one (loft#1180).
-        let ret_type = Box::new(Self::fnref_result_type(
+        let mut ret_type = Box::new(Self::fnref_result_type(
             *ret_type,
             types,
             Self::capturing_fnref_var(&self.vars, v_nr),
         ));
+        // loft#1327 — an OPAQUE target's heap return may be one of the arguments, and the fn
+        // TYPE cannot say so.
+        //
+        // `(O-Move)` puts the obligation on the return type: *"if the return borrows a
+        // parameter, the return type records it"*.  A DEFINITION records it — that is what
+        // `fnref_result_type` above maps into the caller's space.  A fn TYPE has nowhere to
+        // write it: `fn(vector<integer>?) -> vector<integer>` is the whole of what the author
+        // may spell, so the deps arrive empty whatever the target does.  Empty deps then read
+        // as *"the callee minted this"*, `u` is typed an owner, and scope exit frees it —
+        // releasing the CALLER's vector on the arm where the closure handed its argument back,
+        // silently, with the next allocation reusing the slot.
+        //
+        // A fn-typed PARAMETER is the case where the target is unknowable from this body: no
+        // assignment in it can be read to resolve one.  So the return borrows what it might
+        // borrow — every heap argument, rooted through the same walk the @P290 bracket uses —
+        // and a non-empty dep is what stops the free.  It costs the MINTING arm its owner (one
+        // store per call, announced at exit); that trade is the standing one, because a leak is
+        // recoverable where a premature free is not.
+        //
+        // Narrow to a parameter deliberately: a fn-ref LOCAL is resolved from its assignment by
+        // `Scopes::fnref_target`, and every route built on that (the lift, the identity free)
+        // reads the empty deps this leaves alone.  A local assigned two different lambdas is
+        // opaque too and is NOT covered here — the parser cannot see that, and the same free
+        // reaches it.
+        if self.vars.is_argument(v_nr)
+            && crate::data::is_dbref(ret_type.base())
+            && ret_type.depend().is_empty()
+        {
+            let borrows: Vec<u16> = list
+                .iter()
+                .zip(types.iter())
+                .filter(|(_, t)| crate::data::is_dbref(t.base()))
+                .filter_map(
+                    |(v, _)| match crate::use_analysis::view_root_slots(&self.data, v) {
+                        Some(roots) => roots.first().copied(),
+                        None => None,
+                    },
+                )
+                .collect();
+            if !borrows.is_empty() {
+                *ret_type = ret_type.with_deps(&Deps::frame(borrows));
+            }
+        }
+        let ret_type = ret_type;
         // P227 — see the zero-argument twin above: the call site pushes the widest
         // candidate's `&text` buffer count and the dispatcher pops the excess, because a
         // `&text` points into the CALLER's frame and only the caller can supply one that

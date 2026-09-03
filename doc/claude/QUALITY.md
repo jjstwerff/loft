@@ -2419,11 +2419,16 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 692 | 333 | 5 | **354** |
+| 692 | 334 | 5 | **353** |
 
-The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.  It happened again on the 2026-09-03 join — one side carried `684 | 330 | 5 | 349` and the other `687 | 331 | 5 | 351`, and the tree that holds both measures `689 | 332 | 5 | 352`; the 2026-09-03 evening join (D-bind-11 onto the #1318 tree) measures `692 | 333 | 5 | 354`.  Two branches each adding predicates cannot have their counts added, because the audit classifies FUNCTIONS and a merged body is one function however many branches touched it.
+The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.  It happened again on the 2026-09-03 join — one side carried `684 | 330 | 5 | 349` and the other `687 | 331 | 5 | 351`, and the tree that holds both measures `689 | 332 | 5 | 352`; the 2026-09-03 evening join (D-bind-11 onto the #1318 tree) measured `692 | 333 | 5 | 354`, and loft#1327's opaque-fn-ref clause moved one function off the opaque column to `692 | 334 | 5 | 353`.  Two branches each adding predicates cannot have their counts added, because the audit classifies FUNCTIONS and a merged body is one function however many branches touched it.
 
-The latest movement is one site going the OTHER way, and it is the screen working. Giving the
+The most recent movement is loft#1327's, and it goes the right way for the ordinary reason: the
+new clause asks `is_dbref(ret_type.base())` of a fn-ref call's return, so the function it sits in
+peels the `Optional` wrapper instead of matching a bare variant. The total holds at 692 — the
+clause adds no new discriminating function, it changes what an existing one asks.
+
+An earlier movement went the OTHER way, and it was also the screen working. Giving the
 capture-adoption rule one home (`capture_adoption_owns_free`) took the `is_dbref(.base())` call
 out of `check_ref_leaks`' body — and that call was the only peel in it. The function drops from
 "see through the wrapper" to opaque, which is what it always was: the shape test it actually

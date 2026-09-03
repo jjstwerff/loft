@@ -58,6 +58,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
                 caller's binding; the callee never frees what it transfers.  If the return
                 *borrows* a parameter, the return type records it (`{Attr(param)}`) and the
                 caller COPIES to obtain its own store.
+  (O-Opaque)    A RETURN TYPE THAT CANNOT RECORD.  O-Move puts the obligation on the return
+                type, which presumes a type able to carry it.  A fn TYPE cannot: `fn(τ) -> σ`
+                is the whole of what an author may spell, so a call through a fn-typed
+                PARAMETER arrives with empty deps whatever its target does.  Empty deps are
+                then read as *"the callee minted this"* — the one reading that licenses a
+                free — and the caller releases its own argument on the arm where the closure
+                handed it back.  Where the type cannot record, the caller assumes the return
+                BORROWS every heap argument it passed.
   (O-Borrow)    BORROW TRACKING.  A value aliasing another (param / field / element / `&τ`)
                 carries the source in its `deps`; the borrower is skip-free; the single
                 owner frees once.
@@ -400,6 +408,19 @@ runtime-witness discharge (a separate `OpFreeRefIfDistinct` lemma); proving the 
 analysis directly (the certifier sidesteps it).
 
 ## Conformance
+
+- **An opaque fn-ref return borrows its arguments (`O-Opaque`, loft#1327)** — a closure called
+  through a fn-typed PARAMETER leaves the caller's vector intact over 300 calls with a filler
+  allocation between them, at the nullable and dense parameter spellings and across a branch
+  over both arms, while the same call in the frame that OWNS the closure and a named function
+  passed through the same parameter are unchanged. Both backends. Guard
+  `tests/scripts/1327-an-opaque-fn-ref-return-may-be-its-argument.loft`, 6 cells.
+  ⚠ Declining a free normally trades an over-free for a leak; here it costs nothing, because
+  the fn-ref call's own runtime buffer already owns what the closure minted. Measured at 70 000
+  default-arm calls past the store table, both backends — not assumed.
+  ⚠ Still open, and the parser cannot see it: a fn-ref LOCAL assigned two DIFFERENT lambdas is
+  opaque in the same way, and the same free reaches it. `Scopes::fnref_target` is where that
+  fact lives, one pass later than the typing this fixes.
 
 - **A rebind from a call frees what it displaces, in BOTH call spellings (`O-NoDiverge`,
   loft#1328)** — `x = m(i)` in a loop over a fn-ref `m` completes at 70 000 iterations on both

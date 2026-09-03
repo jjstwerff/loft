@@ -9,6 +9,43 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### An opaque fn-ref return borrows its arguments (2026-09-03)
+
+loft#1327.  A closure called through a fn-TYPED PARAMETER may hand back its argument, and the
+caller freed it anyway: `fn plain(a, g) { u = g(a); u[1] }` released the CALLER's vector on the
+borrow arm, on both backends, silently — the next allocation reused the slot and the caller's
+vector then read that allocation's contents (`some[1]` answered 299 where 42 was written).
+Present on released 2026.8.0.
+
+`@FR-O-Move` puts the obligation on the return TYPE — *"if the return borrows a parameter, the
+return type records it"* — and that presumes a type able to carry it.  A DEFINITION carries it,
+which is what `fnref_result_type` maps into the caller's space.  A fn TYPE has nowhere to write
+it: `fn(vector<integer>?) -> vector<integer>` is the whole of what an author may spell.  So the
+deps arrived empty whatever the target did, `u` was typed an owner, and scope exit freed it.
+
+A fn-typed PARAMETER is the case where the target is unknowable from the body being compiled: no
+assignment in it resolves one.  So the return now borrows what it MIGHT borrow — every heap
+argument, rooted through `view_root_slots`, the same walk the @P290 bracket uses — and a
+non-empty dep is what stops the free.  The rule gains a clause for it, `(O-Opaque)`.
+
+⚠ **The mint arm costs nothing, and that was measured rather than assumed.**  Declining a free
+normally trades the over-free for a leak; here the fn-ref call's own runtime buffer already owns
+what the closure minted, so 70 000 default-arm calls past the 65 535-store table complete on both
+backends.
+
+⚠ **A fn-ref LOCAL is untouched.**  A local is resolved from its assignment
+(`Scopes::fnref_target`), and the lift and identity-free routes built on that read the empty deps
+this leaves alone — the same-frame cell is the control.  A local assigned two DIFFERENT lambdas
+is opaque in the same way and is NOT covered: the parser cannot see that, and the same free
+reaches it.  That fact lives one pass later.
+
+Guard `tests/scripts/1327-an-opaque-fn-ref-return-may-be-its-argument.loft`, 6 cells; falsified
+at `c3da7fce` (interpret 3 assertion failures -> 0, native 1 -> 0).  The VALUE channel is what
+moves: a freed-then-reused slot answers wrong rather than faulting, so neither the leak nor the
+panic channel sees it.
+
+Found by loft-b9 while measuring D-own-8's parameter-base cells.
+
 ### A rebind from a fn-ref call frees the store it displaces (2026-09-03)
 
 loft#1328.  `x: P? = null; for i in 0..N { x = m(i) }` over a fn-ref `m` held one store per
