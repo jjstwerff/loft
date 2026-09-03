@@ -34,6 +34,45 @@ annotation: it declares a `#native` fn with no registered implementation, so the
 `compile_error!` into the Rust and the macro fails the build wherever it is expanded.  The gate
 reads that refusal, which also covers a file carrying no annotation at all.
 
+### `(N-Store)` reaches the heap half of the rule it was always written for (2026-09-03)
+
+loft#1313.  `formal/types.md` `(N-Opt)` states the default for every type — *"Storage is non-null
+by default: a binding, field, or `vector` element of type `τ` never holds `null`"* — and
+`(N-Store)` carries no type restriction.  @PLN25's DN1 landed the model and gated the enforcement
+on `Parser::is_non_null_scalar`, so a bare `null` into a non-null reference, collection or
+struct-enum passed in silence at the four positions where the scalar twin warns: a field, a
+return, a vector element, a call argument.  A heap LOCAL was never in the gap — `change_var`
+refuses `x: It = null` on its own — which is why the hole read as deliberate.
+
+Two other homes had already specified the heap half.  `LOFT.md` § Types says *"you cannot store a
+`null` into a plain `integer` / `text` / `Row`"*, and `Row` is a struct; `keys::callarg_nstore_
+enabled` describes its own split as *"a non-narrow scalar/heap param WARNS"*.  Only
+`is_non_null_scalar`'s doc comment said otherwise, and it stated the carve-out as though it were
+the model — which is what made the deviation survive a reading of the code.
+
+The predicate is `data::is_dbref`, called rather than respelled: its own doc records how a
+hand-written copy drifts short of the five KEYED collections, which do not look like references at
+the call site.  The synthetic `__nullable<S>` is excluded exactly as the DN3 branch excludes it —
+it is the inline spelling of `S?`.
+
+**Warning, never an error**, and that is `(N-Store)`'s existing Phase-1 split rather than a new
+call: there is no narrow heap width to run out of room the way a `u8` does, and loft#1232 settled
+the compatibility half — reporting where there was silence is a strict gain, refusing what a
+shipped package already compiles is the break the freeze forbids.  The scalar wording is unchanged
+to the byte; the heap half drops the word `scalar` from the same message rather than adding a
+second one.  Opt out with `LOFT_NO_HEAP_NSTORE`.
+
+Blast radius, measured A/B across the 1083-file script corpus: **4 sites in 2 files**, all true
+positives, no exit code moved.  Both keep their signatures and declare the notice —
+`98-struct-order-in-use.loft`'s subject IS a `return null` under a non-null heap return, and
+`754-tail-place-read-return.loft` guards the non-null RECORD return ABI, which `Section?` does not
+use (no hidden buffer), so "correcting" either signature would have retired the shape it guards.
+
+`tests/heap_nstore.rs` COUNTS notices on both backends, because the negative half has no corpus
+channel: a `.loft` guard can declare a notice it expects and cannot assert one that must not fire.
+Falsified by reverting the predicate — the two positive tests go to 0 notices, the five controls
+stay green, which is the correct signature for a change that only adds a report.
+
 ### A custom iterator's loop: a missing return buffer, and a break test that asked the wrong question (2026-09-03)
 
 loft#1310 was filed as an ICE on a non-nullable STRUCT item.  The matrix said the filed scope

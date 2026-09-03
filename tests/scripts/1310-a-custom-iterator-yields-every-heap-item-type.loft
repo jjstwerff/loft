@@ -43,13 +43,18 @@
 //   `false` first.  A test that only ever yields truthy elements passes under either
 //   question, which is why the original probes did.
 //
-// The two scalar cells declare a non-null return and hand it `null`, which is off-protocol
-// (`LOFT.md` states `fn next(self: T) -> Item?`) and already warned about.  The heap cells
-// deliberately do NOT warn: a heap null is out-of-band, so it is the one representation the
-// protocol's terminator can take, and warning there would fire on correct code.
+// Every non-null cell declares a return and hands it `null`, which is off-protocol — `LOFT.md`
+// states `fn next(self: T) -> Item?` — so each is expected to say so.  The scalar half always
+// did; the heap half does since loft#1313 closed the same `(N-Store)` rule for reference,
+// collection and struct-enum targets.  The notices are declared below rather than silenced,
+// because a cell whose signature was "corrected" to `τ?` would stop exercising the non-null
+// return ABI (the hidden buffer) that this file is about.
 //
 // @EXPECT_WARNING: non-null scalar type `integer`
 // @EXPECT_WARNING: non-null scalar type `text`
+// @EXPECT_WARNING: non-null type `It1310`
+// @EXPECT_WARNING: non-null type `vector<integer>`
+// @EXPECT_WARNING: non-null type `Sh1310`
 //
 // @falsified-at: 1cbbe864 — interpret exit 1 -> 0, native exit 101 -> 0
 //

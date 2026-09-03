@@ -61,12 +61,18 @@ and can emit Rust code for host integration.
 | `character` | A single Unicode character                       |
 | `text`      | A UTF-8 string; `len()` counts bytes             |
 
-A type is **non-null by default**: you cannot *store* a `null` into a plain
-`integer` / `text` / `Row` — the compiler stops the write and asks you to discharge
-it (`??`, `?`, `match`) or to declare the slot `integer?`. Add `?` to make it
-nullable: `integer?` holds a value or `null`. (The old `not null` modifier is now
-the default and is **deprecated** — it parses as a no-op and warns; delete it.
-See "Fields" below.)
+A type is **non-null by default**: a plain `integer` / `text` / `Row` is not a slot for
+`null`, and the compiler says so wherever one is written — discharge it (`??`, `?`,
+`match`) or declare the slot `integer?`. Add `?` to make it nullable: `integer?` holds a
+value or `null`. (The old `not null` modifier is now the default and is **deprecated** —
+it parses as a no-op and warns; delete it. See "Fields" below.)
+
+How loudly depends on whether the slot has room for a null. Declaring a **local** `x: Row
+= null` is refused outright. A **field**, a **return**, a **vector element** and a **call
+argument** get a warning and the store proceeds, because the slot does reserve a null it
+can hold and read back — with one exception: a narrow width (`u8`…`u32`) spends its whole
+range on real values, so a null there is an error too. This applies to every type, records
+and collections alongside the scalars.
 
 **Non-null is a rule about writes, not a guarantee about reads.** A *fault* can still
 leave the reserved pattern in a non-null slot: an integer overflow writes the sentinel

@@ -44,6 +44,23 @@ rather than the two it was written for, and a rebind written inside a CLOSURE �
 reach past two frames and silently replace a caller's collection — is refused, because a
 capture has no route back to the binding it would have to rebind.
 
+### Writing `null` into a record or a collection now says so, like a number already did
+
+```loft
+struct Row { v: integer }
+fn find(k: integer) -> Row { if k > 0 { return null; } Row { v: 1 } }
+```
+
+> warning: `null` is stored into the return value of the non-null type `Row` — the slot
+> holds null; declare it `Row?` to make that explicit
+
+The reference has always said you cannot store a `null` into a plain `integer`, `text` **or
+`Row`**, and for the scalars the compiler said so. For a record, a collection or an enum it
+said nothing — at a field, a return, a vector element and a call argument alike — so a
+function could hand back a value whose type promised it was there, and the null travelled on
+with nothing to read. It is the same notice the scalars get, and like theirs it is a warning:
+your program still runs, and the fix is the `?` the message names.
+
 ### A `for` loop over your own iterator yields every kind of item
 
 ```loft

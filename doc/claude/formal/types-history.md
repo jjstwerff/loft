@@ -13,6 +13,54 @@ exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, reta
 record.  Per-situation mitigation catalogue:
 [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
 
+### D-Null-Heap — OPENED AND CLOSED (2026-09-03, loft#1313): `(N-Store)` was enforced for the SCALARS only
+
+`(N-Opt)` states the default for every type — *"Storage is non-null by default: a binding, field,
+or `vector` element of type `τ` never holds `null` — `τ?` is the only way a slot admits it"* — and
+`(N-Store)` gives the store rule with no type restriction in it.  DN1 landed that model, and the
+enforcement it landed was gated on `Parser::is_non_null_scalar`.  So a bare `null` reaching a
+non-null REFERENCE, collection or struct-enum was neither refused nor reported, at four positions
+where the scalar twin warns:
+
+```loft
+struct It { v: integer }
+fn f(k: integer) -> It { if k > 0 { return null; } It { v: 1 } }   // silent
+fn g(k: integer) -> integer { if k > 0 { return null; } 1 }        // warned
+```
+
+A heap LOCAL was never part of it — `change_var` refuses `x: It = null` on its own — which is why
+the gap read as deliberate: the shape a reader is most likely to try is the one already covered.
+
+The falsifying program is the pair above: obeying the rule reports both, obeying the code reports
+one.  The caller's half is what makes it a deviation rather than a missing nicety — `f(9)` hands
+back a value the type says is non-null and the null then propagates, so a promise the type system
+makes does not hold, with nothing said.
+
+⚠ **The code stated the carve-out as though it were the rule.**  `is_non_null_scalar`'s doc read
+*"Heap-nullable types (reference / vector / enum / keyed) are NOT here — they stay nullable"*, and
+a reader checking the code against the model would find a coherent story there.  Two other homes
+disagreed with it: `LOFT.md` § Types has always said *"you cannot store a `null` into a plain
+`integer` / `text` / `Row`"* — `Row` being a struct — and `keys::callarg_nstore_enabled` described
+its own split as *"a non-narrow scalar/heap param WARNS"*.  The heap half was specified in two
+places and implemented in none.
+
+Closed by extending the DN1 branch to `data::is_dbref` — the full handle set, called rather than
+respelled, because its own doc records how a hand-written copy drifts short of the five keyed
+collections.  The synthetic `__nullable<S>` is excluded, as it is in the DN3 branch: it is the
+inline spelling of `S?` and is exactly as nullable as the `?` it stands for.
+
+WARNING, never an error, and the tier is `(N-Store)`'s own Phase-1 split rather than a new call:
+there is no narrow heap width to run out of room the way a `u8` does, and D-Null-Elem settled the
+compatibility half — reporting where there was silence is a strict gain, refusing what a shipped
+package already compiles is the break the freeze forbids.  Measured across the 1083-file script
+corpus: **4 sites in 2 files**, all true positives, no exit code moved.  Opt out with
+`LOFT_NO_HEAP_NSTORE`.
+
+Guarded by `tests/heap_nstore.rs`, which COUNTS notices on both backends — the four positions, the
+four handle kinds including a keyed one, and the negative controls (`τ?` targets, the inline
+`__nullable<S>`, a present value) that a `.loft` guard has no way to express, since it can declare
+a notice it expects but not one that must not fire.
+
 ### D-Narrow-Res — OPENED AND CLOSED (2026-08-31, loft#1249): `(N-Reserve)` held for a packed slot and not a register one
 
 `(N-Reserve)` says a reserved null is a value OF THE TYPE and is excluded from `τ?`'s range

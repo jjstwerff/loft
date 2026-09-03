@@ -1010,6 +1010,28 @@ pub fn steer_enabled() -> bool {
 /// non-narrow scalar/heap param WARNS and the null binds; a narrow width hard-errors). The escape
 /// hatch exists because it is a compile-time tightening of a previously-accepted (unsound) program;
 /// it must land before the 1.0 freeze (rejecting later would break compat).
+/// `LOFT_NO_HEAP_NSTORE=1` (loft#1313 — `(N-Store)` for the HEAP half) — DEFAULT ON, opt OUT.
+///
+/// `formal/types.md` states the rule for every type: *"Storage is non-null by default: a
+/// binding, field, or `vector` element of type `τ` never holds `null` — `τ?` is the only way a
+/// slot admits it."*  DN1 landed that for the SCALARS and `n_store_violation` gated the whole
+/// branch on `is_non_null_scalar`, so a bare `null` into a non-null REFERENCE, collection or
+/// struct-enum passed in silence at four positions — a field, a return, a vector element and a
+/// call argument.  The scalar twin warns at all four.
+///
+/// Heap locals were never part of the gap: `change_var` already refuses `x: Item = null` with
+/// its own message.  What was missing is the four positions that go through this check.
+///
+/// It only ever WARNS, never escalates.  There is no narrow heap width to run out of room the
+/// way a `u8` does, and loft#1232 settled the compatibility half: reporting where there was
+/// silence is a strict gain, while refusing what a shipped package already compiles is the
+/// break the freeze forbids.  Raising a tier later is COMPATIBILITY.md's process.
+#[must_use]
+pub fn heap_nstore_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| !env_set("LOFT_NO_HEAP_NSTORE"))
+}
+
 #[must_use]
 pub fn callarg_nstore_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();

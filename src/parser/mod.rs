@@ -4087,9 +4087,30 @@ impl Parser {
         // The stdlib is held to the SAME rule (no STD_SOURCE exemption): F1b(b)'s `min`/`max`/`clamp`
         // non-null bodies are now clean (nullable args — including DN3-typed division results —
         // route to the `τ?` overload), so no trusted-source `return null` remains to exempt.
+        //
+        // The HEAP half of the same rule (loft#1313).  `(N-Opt)` is written for every `τ`, and
+        // DN1 landed it for the scalars only — so a bare `null` into a non-null reference,
+        // collection or struct-enum passed in silence at a field, a return, a vector element and
+        // a call argument, the four positions where the scalar twin warns.  A heap LOCAL was
+        // never in the gap: `change_var` refuses `x: Item = null` with its own message.
+        //
+        // `is_dbref` rather than a spelled list, because its own doc records how that list
+        // drifts — the three obvious kinds get written and the five keyed collections are
+        // forgotten, and a short list here would route a handle down the scalar path.  The
+        // synthetic `__nullable<S>` is excluded for the reason the DN3 branch excludes it: it is
+        // the INLINE spelling of `S?` and is exactly as nullable as the `?` it stands for.
+        //
+        // Gated on `nullflow_enabled` as well, so `LOFT_NO_NULLFLOW` restores the pre-@PLN102
+        // model EXACTLY: the scalars back to the uniform hard error below, and the heap half
+        // back to silence.  Letting it fall through to that error instead would hand the opt-out
+        // a refusal this branch never had — the one outcome the freeze forbids here.
+        let heap_target = crate::keys::heap_nstore_enabled()
+            && crate::keys::nullflow_enabled()
+            && crate::data::is_dbref(target_tp)
+            && !self.data.is_nullable_wrapper(target_tp);
         if crate::keys::pln25_dn1_enabled()
             && matches!(value_tp, Type::Null)
-            && Self::is_non_null_scalar(target_tp)
+            && (Self::is_non_null_scalar(target_tp) || heap_target)
         {
             let nm = target_tp.name(&self.data);
             // @PLN102 (N-Store) Phase 1 — same warn/error split as the DN3 branch: a bare `null`
@@ -4097,11 +4118,19 @@ impl Parser {
             // holds null and reads back null); a NARROW width keeps the hard error (no room).
             let narrow =
                 !never_error && matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
-            if crate::keys::nullflow_enabled() && !narrow {
+            // A heap target never escalates.  There is no narrow heap width to run out of room
+            // the way a `u8` does, and loft#1232 settled the rest: reporting where there was
+            // silence is a strict gain, while refusing what a shipped package already compiles is
+            // the break the freeze forbids.  Raising the tier later is COMPATIBILITY.md's process.
+            if heap_target || (crate::keys::nullflow_enabled() && !narrow) {
+                // The scalar wording is unchanged to the byte — `scalar ` is what the heap half
+                // drops, not a second message.  Two spellings of one diagnostic is how the
+                // fixtures that pin this text would start disagreeing with the rule behind it.
+                let kind = if heap_target { "" } else { "scalar " };
                 let msg = diagnostic_format(
                     Level::Warning,
                     format_args!(
-                        "`null` is stored into {what} of the non-null scalar type `{nm}` — the slot holds null; declare it `{nm}?` to make that explicit"
+                        "`null` is stored into {what} of the non-null {kind}type `{nm}` — the slot holds null; declare it `{nm}?` to make that explicit"
                     ),
                 );
                 self.nstore_diag(at, Level::Warning, &msg);
