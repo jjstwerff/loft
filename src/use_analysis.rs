@@ -2860,6 +2860,44 @@ pub fn callref_join_first_bind(
     Some((*rec, base))
 }
 
+/// The caller variable a fn-ref's COLLECTION `??` return may still be aliasing — the base a
+/// bind of that call frees by store IDENTITY against (loft#1257, loft#1320).
+///
+/// The collection sibling of [`callref_join_first_bind`], and it answers the OPPOSITE way:
+/// that one strips the local's deps so a plain free is emitted and `OpBindOrCopy` makes the
+/// local own a store either way; a collection has no per-execution copy, so here the dep is
+/// KEPT — it names the witness — and the free is `OpFreeRefIfDistinct(local, base)`.  Same
+/// store as the base ⇒ still borrowing ⇒ decline; distinct ⇒ the closure minted ⇒ free.
+///
+/// Narrow for the same reasons: a `Join` with a NAMEABLE base only, and never through a
+/// fn-ref that captures a store — a capture reaches the return through `__closure`, which
+/// no caller variable names, so the identity test would have nothing true to compare with.
+#[must_use]
+pub fn callref_collection_join_base(
+    data: &Data,
+    d_nr: u32,
+    tp: &Type,
+    value: &Value,
+) -> Option<u16> {
+    if !crate::keys::join_own_enabled() {
+        return None;
+    }
+    let base_tp = tp.base();
+    if !(matches!(base_tp, Type::Vector(_, _)) || crate::parser::vectors::is_keyed(base_tp)) {
+        return None;
+    }
+    if !matches!(value.unspan(), Value::CallRef(_, _)) {
+        return None;
+    }
+    if callref_captures(data, d_nr, value) {
+        return None;
+    }
+    let Own::Join { base } = ownership_of(data, d_nr, value) else {
+        return None;
+    };
+    (base != u16::MAX).then_some(base)
+}
+
 /// Does this call go through a fn-ref that captures something a RETURN COULD BORROW FROM?
 ///
 /// The question matters wherever a site is about to decide that a returned store is the

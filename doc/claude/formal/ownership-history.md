@@ -1291,6 +1291,40 @@ are freed at FRAME exit and need `LOFT_ALLOC_SITES=1` at the peak.  ⚠ It reads
 interpreter-only defect and is not: `--native`'s leak check is OFF by default, and
 `LOFT_NATIVE_LEAK_CHECK=1` reports the identical 250 records.  Present in released 2026.8.0.
 
+**FACE A's SYMPTOM CLOSED (2026-09-03, loft#1320) — by giving each path a binding, not by an
+N-witness free.**  Every qualifying arm tail `g(x)` of a value branch is rewritten into the BOUND
+spelling on a temp homed where the joined binding lives — `{ __lift_N = g(x); __lift_N }` — so
+the join borrows from the temps and each temp answers for ONE arm with ONE base: a collection
+temp keeps that base as its dep and is freed by store identity against it (loft#1257's route,
+`OpFreeRefIfDistinct`), a record temp owns unconditionally through `OpBindOrCopy` (loft#1248).
+Three arms need nothing N-ary.  The same rule, applied at the bind, also closed the BOUND vector
+spelling in a loop (`t = g(none)`, 470 stores at N=500), which `1257b-…` had recorded as covered
+and had measured only on the borrow arm.  Reached in three statement positions, each its own
+site: a `Set` RHS (`scan_set`, temps homed in the BINDING's scope — homed in the statement's
+they were freed under a binding declared outside the loop, a use-after-free the poisoned build
+named), a keyed branch (`OpReplaceKeyed(if …, r, tp)`, seen in `scan`) and a branch consumed as
+a call ARGUMENT (`scan_args`).  Flat at 3 stores on both backends for `vector`, every keyed
+kind, a struct, text / struct / nested elements, a field and an element argument, an argument
+base one frame up; `LOFT_POISON` and `LOFT_STRICT_STORES` clean on every borrow-direction cell.
+
+Two shapes are DECLINED on purpose and each is a cell asserting the value only.  A named local
+bound at two sites from two DIFFERENT bases gets no witness — one static witness cannot answer
+for a store the OTHER site handed it, and freeing on the wrong one released a caller's store
+(measured: sum 4034 for 12500 before the gate).  And a base assigned at more than one site in
+the function is not offered as a witness, because at scope exit it may name a store already
+gone.  Both keep the leak they had.  ⚠ The `callref_join_bases` gate is computed off the RAW
+body before the scan, because a conflict found at the second Set cannot retract the free the
+first Set already emitted.
+
+⚠ **Under `LOFT_STRICT_STORES=1` the outer-declared cell fills the store table at 70 000 with no
+violation reported.**  Not a defect in the free: the callee frees its own mint under two names
+(`_vec_1` and `__vdb_1` are one store — loft#1322, pre-existing, a no-op in every mode), and
+strict's slot reuse then differs from the plain allocator's on that one shape.  Plain and
+poisoned runs are flat, and the corpus is never run under strict.
+
+Guard: `tests/scripts/1320-a-branch-joined-binding-frees-the-arm-that-minted.loft`, 11 cells,
+falsified at e949f943 (interpret exit 101 -> 0, native exit 1 -> 0, both panicked -> clean).
+
 **What closing it needs.**  @FR-O-Proxy's *"empty deps means owned"* has a runtime form that is
 sound for exactly this shape — *free iff the store is distinct from EVERY variable the deps
 name* — which is @FR-O-Oracle's own per-execution sentence for a `Join`, generalised from one

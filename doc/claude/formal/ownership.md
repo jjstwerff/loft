@@ -226,13 +226,15 @@ implication that reading `deps` is *sufficient*.
 ## Deviations
 
 **OPEN: 1.**
-- **D-own-8** — a Join's ownership fact is true on one path only.  Its Face A had *"no
-  demonstrated consequence"* until 2026-09-03; it has one now, and it is a LEAK: a binding
-  joined from TWO arms carries both arms' deps, so @FR-O-Proxy reads it as a borrow and the
-  MINTING arm's store is owned by nobody (246 stores at N=500, both backends, `vector` and
-  struct alike).  Where the join names ONE base the existing machinery already answers — the
-  failure starts at two.  Matrix and the two candidate cures in
-  [ownership-history.md](ownership-history.md)
+- **D-own-8** — a Join's ownership fact is true on one path only.  Its Face A's SYMPTOM —
+  a binding joined from TWO arms carries both arms' deps, reads as a borrow, and the MINTING
+  arm's store is owned by nobody — is CLOSED 2026-09-03 (loft#1320): each qualifying arm tail
+  is given its own binding, so `(O-Complete)`'s *per binding, per path* holds structurally
+  for that shape.  What stays open is the FACT: `Function::change_var_type` still collapses N
+  deps to the last one at six sites, a named local bound at two sites from two different
+  bases and a base reassigned in the function are DECLINED rather than answered, and a NAMED
+  call's record arm still accumulates records in its `__ref_N` buffer (loft#1323).
+  [ownership-history.md](ownership-history.md) has the matrix
 
 **D-own-26 CLOSED 2026-09-03**, against the bar its own entry set: *"the honest cure is a way
 to fail a build in which a free-deciding site reads the proxy without the veto."* That gate

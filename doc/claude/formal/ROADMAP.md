@@ -52,7 +52,8 @@ closed), and they are not seven problems:
   `__closure` and so offers no base to compare against.  The sharper question is not *"is there
   a witness"* but *"is there a NAMEABLE base"*, and D-clo-7 is where the answer is no.
 - **2 alone** — `D-bind-11` (`&(τ,…)` scalar-only) and `D-own-8` (a Join's ownership fact true
-  on one path only).  ⚠ `D-own-26` closed 2026-09-03 and its lesson is about GATES, not about
+  on one path only — its Face A SYMPTOM closed 2026-09-03 by giving each branch arm its own
+  binding, loft#1320; the fact's collapse and two declined shapes keep it open).  ⚠ `D-own-26` closed 2026-09-03 and its lesson is about GATES, not about
   ownership: the check meant to enforce it had shipped a week BEFORE the deviation was opened
   and was measuring nothing — it looked for free EMITTERS inside the region a condition gates,
   while the free is emitted by `get_free_vars` one function away, so 25 of 29 verdicts were

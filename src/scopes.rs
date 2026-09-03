@@ -99,6 +99,23 @@ struct Scopes {
     /// Set by `callref_owned_return` on that path, consumed by the next `new_lift_var`.
     /// `u16::MAX` = none.
     pending_join_witness: std::cell::Cell<u16>,
+    /// Variables assigned at MORE THAN ONE site in this function.  The identity route
+    /// (`lift_join_witness`) compares a local's store against the variable its dep names at
+    /// scope exit; a base reassigned while the local is live could by then name a store that
+    /// is already gone, so such a base is not offered as a witness.  Conservative in the safe
+    /// direction: declining keeps today's leak, never frees a store twice.
+    multi_assigned: HashSet<u16>,
+    /// The loop depth at which each `__lift_N` temp was created.  A temp created INSIDE the
+    /// innermost loop that re-runs its Set has its scope exited — and its slot freed — every
+    /// iteration, so a transition free there would free twice; one created OUTSIDE that loop
+    /// keeps its slot live across iterations and needs one.
+    lift_decl_depth: HashMap<u16, usize>,
+    /// For every local bound from a fn-ref call anywhere in this function, the set of `Join`
+    /// bases those Sets name.  A local with ONE base takes the identity route; one with two
+    /// would compare the store one site handed it against the other site's base, and free a
+    /// caller's store.  Read off the raw body before the scan, because a conflict found at
+    /// the second Set could not retract the free already emitted at the first.
+    callref_join_bases: HashMap<u16, HashSet<u16>>,
     /// @P378(a) — INVERSE of `paired_witness` for the case where the
     /// witness `v` is INNER-scoped relative to the `__ref_N` buffer
     /// `av` (e.g. `bs = alloc_bag(ci, __ref_1)` inside a `for` loop,
@@ -1486,6 +1503,9 @@ fn run_scan_phase(
         literal_buffer: HashMap::new(),
         lift_join_witness: HashMap::new(),
         pending_join_witness: std::cell::Cell::new(u16::MAX),
+        multi_assigned: multi_assigned_in(orig_code),
+        lift_decl_depth: HashMap::new(),
+        callref_join_bases: callref_join_bases_in(orig_code, data, d_nr),
         witness_buffer: HashMap::new(),
         owned_refs: HashMap::new(),
         rbuf_witness: None,
@@ -2134,6 +2154,42 @@ fn collect_loop_body_sets(node: &Value, mapping: &HashMap<u16, u16>, out: &mut V
         return;
     }
     node.for_each_child(&mut |c| collect_loop_body_sets(c, mapping, out));
+}
+
+/// For every `Set(v, CallRef)` in `node`, the `Join` base the oracle names for it, grouped by
+/// `v`.  Sets whose value is not a nameable `Join` contribute nothing.
+fn callref_join_bases_in(node: &Value, data: &Data, d_nr: u32) -> HashMap<u16, HashSet<u16>> {
+    fn walk(node: &Value, data: &Data, d_nr: u32, out: &mut HashMap<u16, HashSet<u16>>) {
+        if let Value::Set(v, rhs) = node.unspan()
+            && matches!(rhs.unspan(), Value::CallRef(_, _))
+            && let crate::use_analysis::Own::Join { base } =
+                crate::use_analysis::ownership_of(data, d_nr, rhs)
+            && base != u16::MAX
+        {
+            out.entry(*v).or_default().insert(base);
+        }
+        node.for_each_child(&mut |c| walk(c, data, d_nr, out));
+    }
+    let mut out = HashMap::new();
+    walk(node, data, d_nr, &mut out);
+    out
+}
+
+/// Variables that are the target of two or more `Set` nodes anywhere in `node`.
+fn multi_assigned_in(node: &Value) -> HashSet<u16> {
+    fn count(node: &Value, out: &mut HashMap<u16, usize>) {
+        if let Value::Set(v, _) = node.unspan() {
+            *out.entry(*v).or_insert(0) += 1;
+        }
+        node.for_each_child(&mut |c| count(c, out));
+    }
+    let mut counts = HashMap::new();
+    count(node, &mut counts);
+    counts
+        .into_iter()
+        .filter(|&(_, n)| n >= 2)
+        .map(|(v, _)| v)
+        .collect()
 }
 
 /// Every variable assigned at any depth inside `node`.
@@ -4287,6 +4343,14 @@ impl Scopes {
     }
 
     fn scan(&mut self, val: &Value, function: &mut Function, data: &Data) -> Value {
+        // loft#1320 — a KEYED branch value is not a `Set` RHS: `r = if … { g(hs) } else …`
+        // lowers to `Set(r, Null)` and then `OpReplaceKeyed(if …, r, tp)`, which COPIES the
+        // chosen arm into `r`'s own store and leaves the arm that MINTED with no owner.  The
+        // branch is that op's first argument, so the per-arm rewrite `scan_set` applies to a
+        // vector branch is applied here, with the temps homed where `r` lives.
+        if let Some(rewritten) = self.rewrite_keyed_replace_branch(val, function, data) {
+            return self.scan(&rewritten, function, data);
+        }
         self.scan_depth += 1;
         assert!(
             self.scan_depth <= 1000,
@@ -5315,6 +5379,29 @@ impl Scopes {
                 function.make_independent(v, d);
             }
         }
+        // loft#1320 — a value joined from BRANCH ARMS whose tails are fn-ref `??` calls.  The
+        // joined binding carries every arm's dep and so reads as a borrow, which is right for
+        // the arm that hands back a caller's store and leaves the arm that MINTED with no
+        // owner.  Give each such arm its own owner: rewrite the tail call into the BOUND
+        // spelling on a temp declared in THIS statement's scope, so the branch borrows from
+        // the temp and the temp frees by store identity against its one base (or, for a
+        // record, owns unconditionally through `OpBindOrCopy`).  `(O-Complete)` asks for the
+        // fact per binding, per path; this gives each path a binding.
+        let rewritten_arms;
+        let value: &Value = if Self::is_value_branch(value)
+            && self.arm_tails_have_join_callref(value, data, function)
+        {
+            let mut rw = value.clone();
+            // The temps live where the BINDING lives: a binding declared outside a loop and
+            // re-Set inside it still names the arm's store after the loop, so a temp scoped
+            // to the statement would be freed under it.
+            let home = self.var_scope.get(&v).copied().unwrap_or(self.scope);
+            self.lift_join_arm_tails(&mut rw, home, function, data);
+            rewritten_arms = rw;
+            &rewritten_arms
+        } else {
+            value
+        };
         let scanned = self.scan(value, function, data);
         // Flatten: if the scanned value is Insert([preamble..., final_call]),
         // hoist the preamble out so the IR becomes
@@ -5374,6 +5461,46 @@ impl Scopes {
             let deps: Vec<u16> = function.tp(v).depend().clone();
             for d in deps {
                 function.make_independent(v, d);
+            }
+        } else if let Some(base) = crate::use_analysis::callref_collection_join_base(
+            data,
+            self.d_nr,
+            function.tp(v),
+            &set_value,
+        ) && !self.multi_assigned.contains(&base)
+            && !function.is_skip_free(v)
+            && !function.is_argument(v)
+            && self.callref_join_bases.get(&v).is_none_or(|b| b.len() <= 1)
+        {
+            // loft#1257 / loft#1320 — the COLLECTION twin of the strip above, and it goes
+            // the other way: the dep STAYS, because it names the witness.  A collection has
+            // no `OpBindOrCopy`, so the local may hold the caller's store or one the closure
+            // minted, and only the store number can say which.  `get_free_vars` frees it by
+            // identity at scope exit; a RE-Set of a named local releases the store it is
+            // about to stop naming the same way, before the new value is computed.  A lift
+            // temp gets no transition free: its only Set runs once per scope and the scope's
+            // own exit already freed the slot.
+            // One static witness per local, so a named local bound at TWO sites from two
+            // different bases is declined above (`callref_join_bases`): its transition free
+            // would compare the store the OTHER site handed it against this site's base, and
+            // free a caller's store.  A literal declaration beside one fn-ref Set is fine —
+            // it names no base.
+            let w = function.rebind_orig(base).unwrap_or(base);
+            self.lift_join_witness.insert(v, w);
+            // A re-Set releases the store it displaces, guarded the same way — where the slot
+            // is LIVE.  A named local's earlier Set in the same scope chain left it live; a
+            // lift temp's slot is live only if the temp was created outside the innermost
+            // loop that re-runs this Set, since a temp inside it is freed at that loop body's
+            // exit and would be freed twice.
+            let slot_live = match self.lift_decl_depth.get(&v) {
+                Some(&depth) => depth < self.loops.len(),
+                None => true,
+            };
+            if was_in_scope && transition_free.is_none() && slot_live {
+                transition_free = Some(Value::Call(
+                    data.def_nr("OpFreeRefIfDistinct"),
+                    vec![Value::Var(v), Value::Var(w)],
+                ));
             }
         }
         // Prepend dependency initializations.
@@ -7354,6 +7481,21 @@ impl Scopes {
                     && matches!(cargs.first().map(Value::unspan), Some(Value::Var(_))))
         });
         for (arg_idx, a) in args.iter().enumerate() {
+            // loft#1320 — a branch VALUE consumed by this call (`total(if c { g(a) } else { g(n) })`)
+            // never reaches `scan_set`, so its arms get their owners here, homed in this statement's
+            // scope: the call reads the temp and the scope's exit frees it by identity.
+            let rewritten_branch_arg;
+            let a: &Value = if Self::is_value_branch(a)
+                && self.arm_tails_have_join_callref(a, data, function)
+            {
+                let mut rw = a.clone();
+                let home = self.scope;
+                self.lift_join_arm_tails(&mut rw, home, function, data);
+                rewritten_branch_arg = rw;
+                &rewritten_branch_arg
+            } else {
+                a
+            };
             let scanned = self.scan(a, function, data);
             // #248 — force-lift a trailing inline heap-returning call argument
             // (one NOT already lifted by the `inline_struct_return` arms below
@@ -7960,6 +8102,176 @@ impl Scopes {
         }
     }
 
+    /// `OpReplaceKeyed(<branch>, r, tp)` with per-arm temps lifted out of `<branch>`, or
+    /// `None` where the value is not that op, its branch has no qualifying arm, or it was
+    /// rewritten already (the arms then end in `Insert`s whose tails are temps, not calls).
+    fn rewrite_keyed_replace_branch(
+        &mut self,
+        val: &Value,
+        function: &mut Function,
+        data: &Data,
+    ) -> Option<Value> {
+        let Value::Call(d, args) = val.unspan() else {
+            return None;
+        };
+        if data.def(*d).name() != "OpReplaceKeyed" || args.len() < 2 {
+            return None;
+        }
+        let Value::Var(target) = args[1].unspan() else {
+            return None;
+        };
+        if !Self::is_value_branch(&args[0])
+            || !self.arm_tails_have_join_callref(&args[0], data, function)
+        {
+            return None;
+        }
+        let home = self.var_scope.get(target).copied().unwrap_or(self.scope);
+        let mut branch = args[0].clone();
+        self.lift_join_arm_tails(&mut branch, home, function, data);
+        let mut new_args = args.clone();
+        new_args[0] = branch;
+        let call = Value::Call(*d, new_args);
+        Some(match val {
+            Value::Span(b) => Value::Span(Box::new((b.0.clone(), call))),
+            _ => call,
+        })
+    }
+
+    /// How many loops enclose scope `home` — the loop depth a binding declared THERE sees,
+    /// as opposed to the depth at the current position.  `self.loops` holds the scope ids of
+    /// the loops entered so far and `self.stack` the enclosing scopes outer-to-inner, so the
+    /// loops that enclose `home` are those at or before it on that stack.
+    fn loop_depth_at(&self, home: u16) -> usize {
+        if home == self.scope {
+            return self.loops.len();
+        }
+        match self.stack.iter().position(|&sc| sc == home) {
+            Some(idx) => self
+                .loops
+                .iter()
+                .filter(|&&l| l == home || self.stack[..idx].contains(&l))
+                .count(),
+            None => self.loops.len(),
+        }
+    }
+
+    /// Is this RHS a BRANCH — an `if` expression, or a `match` lowered to a value block whose
+    /// tail is the `if` chain?  Only a branch is rewritten: a bare call is the bound spelling
+    /// already, and rewriting it into a bound temp would scan the same shape forever.
+    fn is_value_branch(node: &Value) -> bool {
+        match node.unspan() {
+            Value::If(_, _, _) => true,
+            Value::Block(bl) if !matches!(bl.result, Type::Void | Type::Null) => {
+                bl.operators.last().is_some_and(Self::is_value_branch)
+            }
+            _ => false,
+        }
+    }
+
+    /// Does any arm of this value-yielding branch end in a fn-ref call whose return is a
+    /// `Join` with a nameable base?  The read-only twin of [`Self::lift_join_arm_tails`], so
+    /// the RHS is cloned only when something in it will be rewritten.  A value branch is seen
+    /// through its wrappers: a `Span`, a value `Block` (a plain arm, or a `scalar_match`
+    /// behind its subject binding) and an `Insert` all yield their LAST operator.
+    fn arm_tails_have_join_callref(&self, node: &Value, data: &Data, function: &Function) -> bool {
+        match node.unspan() {
+            Value::If(_, t, f) => {
+                self.arm_tails_have_join_callref(t, data, function)
+                    || self.arm_tails_have_join_callref(f, data, function)
+            }
+            Value::Block(bl) if !matches!(bl.result, Type::Void | Type::Null) => bl
+                .operators
+                .last()
+                .is_some_and(|l| self.arm_tails_have_join_callref(l, data, function)),
+            Value::Insert(ops) => ops
+                .last()
+                .is_some_and(|l| self.arm_tails_have_join_callref(l, data, function)),
+            Value::CallRef(_, _) => self.arm_callref_lift_type(node, data, function).is_some(),
+            _ => false,
+        }
+    }
+
+    /// Rewrite every qualifying arm tail `g(x)` into `{ __lift_N = g(x); __lift_N }`, the temp
+    /// declared in the CURRENT scope — the statement the branch feeds — so it outlives the arm
+    /// and dies with the binding that borrows it.
+    fn lift_join_arm_tails(
+        &mut self,
+        node: &mut Value,
+        home: u16,
+        function: &mut Function,
+        data: &Data,
+    ) {
+        match node {
+            Value::Span(b) => self.lift_join_arm_tails(&mut b.1, home, function, data),
+            Value::If(_, t, f) => {
+                self.lift_join_arm_tails(t, home, function, data);
+                self.lift_join_arm_tails(f, home, function, data);
+            }
+            Value::Block(bl) if !matches!(bl.result, Type::Void | Type::Null) => {
+                if let Some(last) = bl.operators.last_mut() {
+                    self.lift_join_arm_tails(last, home, function, data);
+                }
+            }
+            Value::Insert(ops) => {
+                if let Some(last) = ops.last_mut() {
+                    self.lift_join_arm_tails(last, home, function, data);
+                }
+            }
+            Value::CallRef(_, _) => {
+                if let Some(tp) = self.arm_callref_lift_type(node, data, function) {
+                    let tmp = self.new_lift_var(function, &tp);
+                    self.var_scope.insert(tmp, home);
+                    self.lift_decl_depth.insert(tmp, self.loop_depth_at(home));
+                    let call = std::mem::replace(node, Value::Null);
+                    *node = Value::Insert(vec![v_set(tmp, call), Value::Var(tmp)]);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The type a per-arm temp takes for this fn-ref call, or `None` where the call does not
+    /// qualify: the target must resolve, its return must be a `Join` with a NAMEABLE base that
+    /// is assigned at one site only, and the fn-ref must capture no store.  A record temp is
+    /// typed OWNED — the bound spelling's `OpBindOrCopy` makes it own a store either way; a
+    /// collection temp carries the base as its dep, which is what `scan_set` reads to free it
+    /// by identity.
+    fn arm_callref_lift_type(&self, val: &Value, data: &Data, function: &Function) -> Option<Type> {
+        let Value::CallRef(v_nr, _) = val.unspan() else {
+            return None;
+        };
+        let d_nr = match self.fnref_target.get(v_nr).copied() {
+            Some(d) if d != u32::MAX => d,
+            _ => return None,
+        };
+        let def = data.def(d_nr);
+        if def.code == Value::Null || crate::use_analysis::callref_captures(data, self.d_nr, val) {
+            return None;
+        }
+        let crate::use_analysis::Own::Join { base } =
+            crate::use_analysis::ownership_of(data, self.d_nr, val)
+        else {
+            return None;
+        };
+        if base == u16::MAX || self.multi_assigned.contains(&base) {
+            return None;
+        }
+        let _ = function;
+        let (returned, opt) = def.returned().peel_optional();
+        let tp = match returned {
+            Type::Reference(d, _) => Type::Reference(*d, Deps::none()),
+            Type::Enum(d, true, _) => Type::Enum(*d, true, Deps::none()),
+            Type::Vector(inner, _) => Type::Vector(inner.clone(), Deps::frame1(base)),
+            Type::Hash(d, k, _) => Type::Hash(*d, k.clone(), Deps::frame1(base)),
+            Type::Sorted(d, k, _) => Type::Sorted(*d, k.clone(), Deps::frame1(base)),
+            Type::Index(d, k, _) => Type::Index(*d, k.clone(), Deps::frame1(base)),
+            Type::Radix(d, k, _) => Type::Radix(*d, k.clone(), Deps::frame1(base)),
+            Type::Trie(d, k, _) => Type::Trie(*d, k.clone(), Deps::frame1(base)),
+            _ => return None,
+        };
+        Some(Self::reopt(opt, tp))
+    }
+
     /// Create a `__lift_N` temporary that OWNS an inline call result, so
     /// `get_free_vars` emits its `OpFreeRef` at scope exit.  Registers the
     /// var in the current scope and in `lift_vars` (which drives the
@@ -7975,6 +8287,7 @@ impl Scopes {
         if witness != u16::MAX {
             self.lift_join_witness.insert(tmp, witness);
         }
+        self.lift_decl_depth.insert(tmp, self.loops.len());
         self.var_scope.insert(tmp, self.scope);
         self.var_order.push(tmp);
         self.lift_vars.push(tmp);

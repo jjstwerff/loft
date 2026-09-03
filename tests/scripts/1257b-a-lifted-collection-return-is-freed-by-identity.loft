@@ -23,6 +23,10 @@
 // guarded free per evaluation answers for both.  The two-iteration cells below are what says
 // so — one iteration was correct on that build and two were not.
 //
+// ⚠ AND "BOUND" HERE MEANS THE BORROW ARM.  The bound spelling's MINT arm — `t = g(none)` in a
+// loop — was not a cell in this file and leaked one store per call until loft#1320 applied the
+// same rule at the bind; `1320-…` carries that cell at the ceiling.
+//
 // ⚠ AND THE CONTAINER KIND IS AN AXIS THAT ALREADY BROKE IT ONCE.  The keyed arms were written
 // blind and kept `Deps::none()`, so the pre-Set free survived for them alone: the hash cell
 // emptied its caller's collection on the INTERPRETER while `--native` stayed green.  A cell per
