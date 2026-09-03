@@ -30,10 +30,38 @@ only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
 >
 > The destination ends up DEPENDING on the source (`b: vec<int> deps=[a]`) rather than
 > owning: `classify_vec_bind` recognises a bare `Var` and an owned field read and nothing
-> else, and the record side keys on `Value::Var` in both backends. `OpBindOrCopy` is the
-> runtime adopt-vs-copy guard built for exactly this shape and already carries the CALL-return
-> case, which is why that row is green; widening it to a direct join is a real ownership
-> question — which arm may adopt — rather than the peel D-bind-15 was.
+> else, and the record side keys on `Value::Var` in both backends. That dep is what closes
+> every copy path downstream — `owned_ref` requires `depend().is_empty()`, so the
+> `OpBindOrCopy` arm written for exactly this shape is unreachable. The ownership ORACLE
+> reports the joined binding `Owned` throughout, so the analysis has the right answer and the
+> shipped fact does not.
+>
+> **An attempt was made, measured, and REVERTED (2026-09-03), and what it established is the
+> useful part.** The rule it implemented — a join read ARM BY ARM, copying where every arm
+> would have copied on its own — is right, and three facts the arm walk needs were not
+> obvious:
+>
+> * reading the JOIN rather than its arms is wrong. `v[i]` is `τ?`, so the ordinary element
+>   read is `c = vv[0] ?? [0]` — a branch. Copying it makes `(B-View-Depth)` unreachable for
+>   its own documented spelling, and `bind-copies-or-views-the-whole-boundary.loft` goes red
+>   on the cell that exists to say so.
+> * a `??` HOISTS its subject into a temp (`__ncc_N = vv[0]`), so the arm the walk reaches is
+>   a bare `Var` and the projection is one statement up. The walk has to resolve a temp
+>   against what its block bound.
+> * `use_analysis::is_projection_op` does not name `OpGetVectorNullable`, while
+>   `generation::hoist::ELEMENT_ADDRESS_OPS` pairs it with `OpGetVector` for the same
+>   question. Two one-homes, one notion, and reading only the first answers "not a place" for
+>   every nullable element read.
+>
+> The third is why it was reverted: **a CALL arm may return a BORROW.** `it = get(b) ?? d`,
+> where `get` answers a view of its parameter, has no syntactic projection in any arm, so the
+> walk said "copy" and the caller then freed at scope exit what it had borrowed — loft#974's
+> guarded behaviour, caught by `accessor_borrow::an_accessors_returned_view_names_its_parameter`.
+> Trading a silent alias for a wrong free is not an improvement.
+>
+> So the predicate the next attempt wants is not the syntactic walk but *"does this arm's
+> VALUE borrow?"*, which the return TYPE already answers — loft#974 is the change that put
+> the dep there (`-> Y974?["b"]`).
 
 > **D-bind-15 — CLOSED (2026-09-03, loft#1319) — `(B-Copy)` did not hold for a NULLABLE
 > heap local: a whole-value bind ALIASED its source.**
