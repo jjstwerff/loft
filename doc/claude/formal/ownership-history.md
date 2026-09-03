@@ -1258,6 +1258,54 @@ something downstream keeps the dropped source alive.  The collapse is a real def
 FACT with no demonstrated consequence, which is the same position Face A has always been in,
 now stated one layer deeper and at the right function.
 
+**FACE A NOW HAS A SYMPTOM (2026-09-03, loft#1320), and it is a LEAK rather than a wrong answer.**  The
+entry above says *"a real defect in the FACT with no demonstrated consequence"*; the
+consequence is what a binding joined from TWO arms does with the store the minting arm handed
+it.  `r`'s type carries BOTH arms' deps, so `dep.is_empty()` — @FR-O-Proxy — reads it as a
+borrow, `get_free_vars` emits nothing, and the mint arm's store is owned by nobody.
+
+```loft
+g = fn(q: vector<integer>?) -> vector<integer> { q ?? [7, 8] };
+for i in 0..500 { r = if i % 2 == 0 { g(some) } else { g(none) }; s += r[1]; }
+```
+
+`r(5):vector<integer>["none", "some"]` — the union is right, and being right is what suppresses
+the free.  246 live stores at N=500, both backends.
+
+**The matrix says it is a JOIN-ARITY question, not a container-kind or a call-spelling one.**
+Each row measured on both backends, values correct throughout:
+
+| the call in the arm | `vector` | a struct |
+|---|---|---|
+| fn-ref `q ?? default` | leaks, 246 stores | leaks, 245 stores |
+| NAMED fn, same body | clean | leaks, 250 records in ONE store — at PROGRAM exit |
+| one arm a pure mint (so ONE dep) | clean | — |
+| both arms borrow | clean (nothing to free) | — |
+| value CONSUMED inside the arm, never escaping | clean | — |
+
+Two of those cells are worth their own reading.  **The single-dep row is the boundary**: where
+the join names ONE base the existing machinery already answers, and the failure starts at TWO.
+And the record/NAMED cell is the only one visible on the program-exit leak channel, so it is
+the only one the script corpus's absolute leak gate could ever have caught — the other three
+are freed at FRAME exit and need `LOFT_ALLOC_SITES=1` at the peak.  ⚠ It reads as an
+interpreter-only defect and is not: `--native`'s leak check is OFF by default, and
+`LOFT_NATIVE_LEAK_CHECK=1` reports the identical 250 records.  Present in released 2026.8.0.
+
+**What closing it needs.**  @FR-O-Proxy's *"empty deps means owned"* has a runtime form that is
+sound for exactly this shape — *free iff the store is distinct from EVERY variable the deps
+name* — which is @FR-O-Oracle's own per-execution sentence for a `Join`, generalised from one
+witness to N.  loft#1257 shipped the N=1 case (a lifted collection return, `OpFreeRefIfDistinct`
+against the single base).  N>1 has no op: every free op in `01_code.loft` takes ONE witness.
+The two candidate cures are (a) give a `CallRef` in an arm the caller-side `__ref_N` buffer a
+direct call gets, so the deps name reusable BUFFERS rather than caller variables — which is
+exactly why the vector/named row above is clean — or (b) an N-witness guarded free.  (a)
+follows the precedent already in the tree and is the recommendation; it is also the one that
+changes call-site arity for a resolved fn-ref target, which `parser/mod.rs`'s
+`h5_has_lowered_caller` deliberately avoids today, so it wants a design pass rather than a
+patch.
+
+
+
 **FIXED 2026-08-25 — `Function::depend_all`.**  All six sites now route through one setter
 that keeps every incoming dep instead of the last:
 
