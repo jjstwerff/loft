@@ -9,7 +9,7 @@ the branch-level view of what is still IN FLIGHT. A branch with an **open PR** i
 that is **unmerged with no open PR** is an *orphan* — stranded work to land or delete.
 Source: `scripts/lib-branch-audit.sh` (@PLN112 / @PLN20 lib-health).
 
-**10 unmerged branch(es) across 5 repo(s); 5 orphan(s) (unmerged, no open PR).**
+**6 unmerged branch(es) across 4 repo(s); 1 orphan(s) (unmerged, no open PR).**
 
 ## loft-libs-assets
 
@@ -17,21 +17,14 @@ Source: `scripts/lib-branch-audit.sh` (@PLN112 / @PLN20 lib-health).
 
 ## loft-libs-docs
 
-- `unify-library-ci` — PR #3 merged · (2 files) — ci: adopt the unified reusable workflows (pack  ⚠ orphan
 - `unify-library-ci-fpm` — PR #4 open · (2 files) — ci: adopt the unified reusable workflows (pack
 
 ## loft-libs-game
 
 - `tuxedo-audio-bus` — PR #12 open · (8 files) — audio_bus 0.1.0 — one slider, many sounds
-- `unify-library-ci` — PR #8 merged · (2 files) — ci: adopt the unified reusable workflows (pack  ⚠ orphan
 - `unify-library-ci-fpm` — PR #11 open · (3 files) — ci: adopt the unified reusable workflows (pack
 
 ## loft-libs-graphics
 
-- `examples-index-refresh` — PR #31 closed · (1 files) — Refresh examples-index.tsv — five @GFX rows   ⚠ orphan
 - `tuxedo-android-gl-port` — PR no-PR · (48 files) — The Android backend compiles, and it feeds the  ⚠ orphan
 - `tuxedo-drawing-w4` — PR #46 open · (14 files) — graphics builds and runs under wasm, canvas an
-
-## loft-libs-net
-
-- `ssh-lib` — PR #10 merged · (19 files) — web/ssh/server: finish the C-ABI sweep — eve  ⚠ orphan
