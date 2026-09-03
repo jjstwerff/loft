@@ -1414,7 +1414,7 @@ fn tuple_owned_elem_frees(
 ) -> Vec<Value> {
     let mut out = Vec::new();
     for &(_offset, idx) in crate::data::owned_elements(elems).iter().rev() {
-        // @FR-O-Override vetoes the proxy at every site that frees on it, and this is one:
+        // @FR-O-Proxy asks free, and @FR-O-Override vetoes it at every such site — this is one:
         // the element test concludes "this element owns its store" from an empty dep list,
         // which is @FR-O-Proxy and unsound alone.  `OpFreeRef(TupleGet(v, i))` releases
         // storage reached through `v`, so a binding the parser marked never-free is
@@ -4754,6 +4754,8 @@ impl Scopes {
         if transition_free.is_none()
             && was_in_scope
             && matches!(function.tp(v), Type::Reference(_, _) | Type::Enum(_, true, _))
+            // @FR-O-Proxy asks free — the ownership-TRANSITION free, releasing the store `v`
+            // is about to stop naming.
             && function.tp(v).depend().is_empty()
             // @FR-O-Proxy is unsound alone — a free taken on the empty dep list
             // must consult @FR-O-Override.
@@ -4779,6 +4781,8 @@ impl Scopes {
                 function.tp(v),
                 Type::Reference(_, _) | Type::Enum(_, true, _)
             )
+            // @FR-O-Proxy asks free — the same transition free, emitted GUARDED on the
+            // runtime witness where the static fact is sound but incomplete.
             && function.tp(v).depend().is_empty()
             && !function.is_skip_free(v)
             && displaces_owned_through_fresh_callee(value, v, ov, data)
@@ -4981,8 +4985,8 @@ impl Scopes {
                 && !publishes_through_ref
                 && self.displaced_owned.contains(&ov)
                 && !function.tp(v).depend().is_empty()
-                // @FR-O-Override vetoes @FR-O-Proxy at every site that frees on it, and
-                // stripping the deps IS such a site: `get_free_vars` reads the dep list, so
+                // @FR-O-Proxy asks free.  @FR-O-Override vetoes it at every site that frees
+                // on it, and stripping the deps IS such a site: `get_free_vars` reads the dep list, so
                 // emptying it here is what makes the scope-exit sweep emit `OpFreeRef(v)`.
                 // The proxy is read negated — "this still looks like a borrow" — which does
                 // not change the conclusion the strip acts on, only its spelling.  A binding
@@ -5752,6 +5756,7 @@ impl Scopes {
     /// `tests/scripts` and `tests/docs`, no `skip_free` binding currently reaches any of
     /// these sites, so today the obligation holds by accident. It now holds by
     /// construction.
+    /// @FR-O-Proxy asks free — this IS the free question, asked once for every caller.
     fn owns_freeable_store(
         &self,
         function: &crate::variables::Function,
@@ -8822,6 +8827,8 @@ fn nullable_locals_that_displace(code: &Value, function: &Function, data: &Data)
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     walk(code, &mut seen, &mut out, data);
+    // @FR-O-Proxy asks free — the locals this returns are the ones whose DISPLACED store is
+    // released, so the proxy's answer is what licenses that free.
     out.retain(|&v| {
         v < function.count()
             && matches!(function.tp(v), Type::Optional(_))

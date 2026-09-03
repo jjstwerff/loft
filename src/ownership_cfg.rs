@@ -727,6 +727,9 @@ fn under_free(
     exit_state
         .iter()
         .filter(|&(&v, &_f)| {
+            // @FR-O-Proxy asks oracle — @PLN94's flow-sensitive oracle runs BESIDE the shipped
+            // analysis and drives no codegen (SI-1), so nothing it concludes reaches an emitter.
+            // It also scans for UNDER-free, the opposite direction from the veto's.
             func.tp(v).heap_dep().is_some() // only a HEAP store can leak (not a scalar)
                 && func.tp(v).depend().is_empty() // owns its store (empty dep)
                 && !func.is_argument(v)
@@ -1065,6 +1068,7 @@ fn run_leak_scan(name: &str, body: &Value, data: &Data, d_nr: u32) -> usize {
     closed.extend(consumes); // consumes/captures transfer only the element itself
     let mut reds = 0;
     for (_, v) in func.snapshot_names() {
+        // @FR-O-Proxy asks oracle — the leak scan, which reports UNDER-free and emits nothing.
         if minted.contains(&v)
             && func.tp(v).heap_dep().is_some()
             && func.tp(v).depend().is_empty()

@@ -3777,6 +3777,9 @@ impl Parser {
             },
             _ => return None,
         };
+        // @FR-O-Proxy asks copy — a non-empty dep list is what marks the arm's yield as a
+        // BORROW, and the answer chooses whether to build the owned `mvcopy`.  It authorises
+        // no free: the copy is a fresh binding, and the borrow keeps its own owner.
         if v >= self.vars.count()
             || !self.vars.skip_free(v)
             || !matches!(self.vars.tp(v), Type::Vector(_, _))

@@ -2,9 +2,13 @@
 # Copyright (c) 2026 Jurjen Stellingwerff
 # SPDX-License-Identifier: LGPL-3.0-or-later
 #
-# o_proxy_check.py — enforce `formal/ownership.md`'s @FR-O-Proxy obligation:
+# o_proxy_check.py — enforce `formal/ownership.md`'s two @FR-O-Proxy obligations:
 #
-#     a site that FREES on the empty-`deps` proxy MUST also consult @FR-O-Override.
+#     a site that FREES on the empty-`deps` proxy MUST also consult @FR-O-Override, and
+#     every site that reads the proxy MUST DECLARE which of the four facts it is reading.
+#
+# The second exists because the first is only decidable where a free is lexically reachable
+# from the condition, and for most of these sites it is not.
 #
 # WHY there is an obligation at all.  `tp.depend().is_empty()` is how a site asks "does
 # this binding own its store?", and it is a PROXY, not the oracle: a borrow whose dep list
@@ -14,8 +18,10 @@
 # inside a loop body, where it landed on the NEXT iteration's store — stale bytes without
 # `LOFT_POISON`, SIGSEGV with it (loft#723).
 #
-# WHAT IS AND IS NOT A VIOLATION — the three discriminations this check makes, each of
-# which was a false positive before it made them:
+# WHAT IS AND IS NOT A VIOLATION — the eight discriminations this check makes: 1-7 here, and
+# the eighth, the declaration obligation, beside `DECL` below.  Each of 1-4 was a false
+# positive before it was made; 5-8 came from the measurement that found this check green over
+# its own violations, and each is falsified at the end rather than argued.
 #
 #   1. `!tp.depend().is_empty()` is USUALLY a DIFFERENT QUESTION — "is this a borrow?" —
 #      and needs no veto, because a borrow is not freed either way.  But the SYNTAX does
@@ -78,6 +84,11 @@
 #   scopes.rs `tuple_owned_elem_frees`      direct emitter, read off a tuple element (no `tp(v)`)
 #   scopes.rs `scan_set` displaced strip    negated read + `make_independent` on the same binding
 #   codegen.rs `gen_set_first_ref_var_copy` `set_skip_free` on the proxied binding (a move)
+# and the declaration obligation the same way:
+#   deleting `vector_needs_db`'s declaration           -> reported undeclared
+#   re-declaring `scan_set`'s transition free as `copy` -> reported as a contradiction
+#   two synthetic sites five lines apart, first declared -> the second reported undeclared
+#     (and accepted, wrongly, with the decl_floor clamp removed)
 # A check whose green is never contrasted with a red is the state this one shipped in.
 #
 # A REPORT that exits 1 on a violation, so it can gate.  Verdicts and the rule map live in
@@ -104,6 +115,29 @@ BINDING = re.compile(r"\.tp\(\s*\*?\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*(?:\.base\
 # the bare `skip_free`, and `jo_copy_borrowed_arm_yield` uses the second — or by the one home
 # that asks it for you.
 DISCHARGE = re.compile(r"skip_free|owns_freeable_store")
+# Discrimination 8 — every positive site DECLARES which of the four facts it reads.
+#
+# The obligation the rest of this check enforces is decidable only where a free is lexically
+# reachable from the condition.  For the rest it is not, and no amount of widening fixes that:
+# a site can conclude ownership in the parser and have its free emitted by `get_free_vars`.
+# What `ownership.md` § The facts that answer it says about those is that the CHOICE is
+# invisible — "some legitimately want the proxy, some memo the oracle, and some free.  Nothing
+# in the source distinguishes them, and both compile."  So the site says which:
+#
+#   @FR-O-Proxy asks copy    chooses copy-vs-alias / materialise-vs-view.  Authorises no free;
+#                            a wrong answer costs a copy, never a release.
+#   @FR-O-Proxy asks alloc   decides whether to ALLOCATE or null-init a store.  The opposite
+#                            direction from a free.
+#   @FR-O-Proxy asks oracle  an independent derivation that drives no emission — @PLN94's
+#                            flow-sensitive oracle, or witness accounting that consults
+#                            @FR-O-Oracle for the real answer.
+#   @FR-O-Proxy asks free    concludes ownership and a free follows, wherever it is emitted.
+#                            This one ALSO requires @FR-O-Override, exactly as a lexically
+#                            visible free does.
+#
+# A declaration is a claim, so the check contradicts it where it can: a site declaring
+# anything but `free` while a free IS visible in the region it gates is reported, not trusted.
+DECL = re.compile(r"@FR-O-Proxy\s+asks\s+(copy|alloc|oracle|free)\b")
 FN = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?fn\s")
 LET = re.compile(r"let\s+(?:mut\s+)?([a-z_][a-z0-9_]*)\s*=")
 
@@ -167,15 +201,57 @@ def fallthrough_region(lines, n, fn_end, kind):
     return "\n".join(lines[n:j])
 
 
-def gated_region(lines, n, fn_end):
-    """Discrimination 2: the statement, and the region its result actually gates."""
-    a = n
-    while a > 0 and not re.search(r"[;{}]\s*$", lines[a - 1]) and n - a < 14:
+def _comment_only(line):
+    """A line that carries no code — it must not consume the statement window's budget."""
+    return not code_only(line).strip()
+
+
+def gated_region(lines, n, fn_end, decl_floor=0):
+    """Discrimination 2: the statement, and the region its result actually gates.
+
+    The 14-line budget counts CODE lines.  Counting raw lines instead spends the window on
+    prose: `output_set_body` explains each conjunct of one boolean in a comment, so its
+    `is_skip_free` sits fifteen lines under the proxy read and fell outside a statement it
+    is part of — the check then asked a site for a declaration it had already discharged.
+    """
+    a, budget = n, 14
+    while a > 0 and budget:
+        if _comment_only(lines[a - 1]):
+            a -= 1  # prose is stepped over, and is neither a boundary nor a cost
+            continue
+        if re.search(r"[;{}]\s*$", code_only(lines[a - 1]).rstrip()):
+            break
         a -= 1
-    b = n
-    while b + 1 < fn_end and not re.search(r"[;{]\s*$", lines[b]) and b - n < 14:
+        budget -= 1
+    b, budget = n, 14
+    while b + 1 < fn_end and budget:
+        code = code_only(lines[b]).rstrip()
+        if re.search(r"[;{]\s*$", code):
+            if not code.endswith("{") or code.count("(") == code.count(")"):
+                break
+            # An inline block INSIDE the expression — `… || {` with a paren still open —
+            # does not end the statement, and reading it as the gated block truncates one:
+            # `output_set_body`'s `is_skip_free` sits past such a block, so the check asked
+            # a site to declare what it had already discharged.  Step over to the matching
+            # `}` and keep walking the same condition.
+            depth, k = 0, b
+            while k < fn_end:
+                depth += lines[k].count("{") - lines[k].count("}")
+                k += 1
+                if depth <= 0:
+                    break
+            b = k - 1
+            budget -= 1
+            continue
         b += 1
+        if not _comment_only(lines[b]):
+            budget -= 1
     stmt = "\n".join(lines[a : b + 1])
+    # The declaration window reaches back over the comment block above the statement — but
+    # never past the PREVIOUS proxy site in this file, or two sites closer than ten lines
+    # would share one declaration and the second would be accepted undeclared.  No pair is
+    # that close today (measured); the clamp is what keeps that from being load-bearing.
+    decl = "\n".join(lines[max(decl_floor, a - 10) : b + 1])
     if lines[b].rstrip().endswith("{"):
         depth, j = 0, b
         while j < fn_end:
@@ -183,7 +259,7 @@ def gated_region(lines, n, fn_end):
             j += 1
             if depth <= 0:
                 break
-        return stmt, "\n".join(lines[b:j])
+        return stmt, decl, "\n".join(lines[b:j])
     m = LET.search(code_only(stmt))
     if m:
         # A `let NAME = <proxy cond>;` gates whatever the `if NAME …` blocks contain — the
@@ -207,23 +283,28 @@ def gated_region(lines, n, fn_end):
                     j = k
                     continue
             j += 1
-        return stmt, "\n".join(out)
-    return stmt, ""
+        return stmt, decl, "\n".join(out)
+    return stmt, decl, ""
 
 
 verbose = "-v" in sys.argv
 pos = neg = nobind = reaching = 0
 viol = []
+undecl = []
+contra = []
+census = {}
 for path in sorted(glob.glob(os.path.join(ROOT, "src", "**", "*.rs"), recursive=True)):
     lines = open(path, encoding="utf-8").read().split("\n")
     starts = [i for i, l in enumerate(lines) if FN.match(l)] + [len(lines)]
     rel = os.path.relpath(path, ROOT)
+    last_proxy = -1
     for n, line in enumerate(lines):
         if line.lstrip().startswith(("//", "///")):
             continue
         for m in PROXY.finditer(code_only(line)):
             fn_end = next((s for s in starts if s > n), len(lines))
-            stmt, region = gated_region(lines, n, fn_end)
+            stmt, decl, region = gated_region(lines, n, fn_end, decl_floor=last_proxy + 1)
+            last_proxy = n
             bm = BINDING.search(code_only(line), max(0, m.start() - 90))
             binding = bm.group(1) if bm is not None and bm.end() >= m.start() else None
             if negated(line, m.start()):
@@ -255,7 +336,14 @@ for path in sorted(glob.glob(os.path.join(ROOT, "src", "**", "*.rs"), recursive=
             reaches = frees(region, binding)
             if reaches:
                 reaching += 1
-            if reaches and not DISCHARGE.search(code_only(stmt)):
+            dm = DECL.search(decl)
+            verdict = dm.group(1) if dm else None
+            census[verdict] = census.get(verdict, 0) + 1
+            if dm is None:
+                undecl.append((f"{rel}:{n + 1}", line.strip()[:74]))
+            elif reaches and verdict != "free":
+                contra.append((f"{rel}:{n + 1}", verdict))
+            if (reaches or verdict == "free") and not DISCHARGE.search(code_only(stmt)):
                 viol.append((f"{rel}:{n + 1}", line.strip()[:74]))
             elif verbose:
                 # Say WHICH green this is.  "discharged" is a proof — the site reaches a free
@@ -274,17 +362,51 @@ print(
 # state this check shipped in.  Print the split so a reader can never mistake the second
 # kind of green for the first.
 print(f"  {reaching} of {pos} reach a free (emitted or written); {pos - reaching} do not")
-if not viol:
-    print("  ok — every site that frees on the proxy also consults @FR-O-Override")
+# The census is the point of the declarations: which fact each site reads, countable.
+print(
+    "  declared: "
+    + ", ".join(f"{v or 'UNDECLARED'} {n}" for v, n in sorted(census.items(), key=lambda kv: (kv[0] or "~")))
+)
+if not (viol or undecl or contra):
+    print("  ok — every site that frees on the proxy also consults @FR-O-Override,")
+    print("       and every site declares which of the four facts it reads")
     sys.exit(0)
-print(f"\n  {len(viol)} site(s) FREE on the empty-deps proxy without consulting the override:\n")
-for site, text in viol:
-    print(f"    {site}\n      {text}")
-print("""
+
+if viol:
+    print(f"\n  {len(viol)} site(s) FREE on the empty-deps proxy without consulting the override:\n")
+    for site, text in viol:
+        print(f"    {site}\n      {text}")
+    print("""
   An empty dep list does not mean "owner" — it means "nothing recorded a dep here", which
   is also true of a borrow nobody populated.  Freeing on it releases a store someone else
   owns.  Add `&& !<vars>.is_skip_free(v)` to the condition, or read @FR-O-Oracle
-  (`use_analysis::ownership_of`) instead of the proxy.
+  (`use_analysis::ownership_of`) instead of the proxy.""")
 
-  formal/ownership.md § The facts that answer it.""")
+if undecl:
+    print(f"\n  {len(undecl)} site(s) read the proxy without declaring which fact they read:\n")
+    for site, text in undecl:
+        print(f"    {site}\n      {text}")
+    print("""
+  Say so in a comment on or above the condition, with the question it asks:
+
+      // @FR-O-Proxy asks copy   — chooses copy-vs-alias; authorises no free
+      // @FR-O-Proxy asks alloc  — decides whether to ALLOCATE, not whether to release
+      // @FR-O-Proxy asks oracle — an independent derivation that drives no emission
+      // @FR-O-Proxy asks free   — a free follows; then @FR-O-Override is required too
+
+  The empty dep list answers all four questions and means something different in each.
+  Without the declaration a reader cannot tell a site that legitimately wants the proxy
+  from one that reached for the wrong fact, and both compile — which is how the count of
+  these sites grew from 24 to 38 unnoticed.""")
+
+if contra:
+    print(f"\n  {len(contra)} site(s) DECLARE a non-free question while a free is visible:\n")
+    for site, verdict in contra:
+        print(f"    {site}  declares `{verdict}`, but the region it gates reaches a free")
+    print("""
+  A declaration is a claim about the site, not a way past this check.  Either the question
+  is `free` — and @FR-O-Override is required with it — or the free in that region belongs
+  to some other binding and the condition should not be gating it.""")
+
+print("\n  formal/ownership.md § The facts that answer it.")
 sys.exit(1)

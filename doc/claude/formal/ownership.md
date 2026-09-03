@@ -190,16 +190,32 @@ Re-measured 2026-09-03, after `scripts/o_proxy_check.py` was given a decidable p
 veto**. Two of those six were undischarged until that run — `scan_set`'s displaced-owned dep
 strip and `gen_set_first_ref_var_copy`'s move — and both now consult it.
 
-The other **eighteen the gate cannot decide either way**, and that is the honest residual,
-not a clean bill: their free, if they have one, lands in `get_free_vars` outside the region
-their condition gates. Spot-read, several are plainly not free decisions —
-`materialises_element` and `classify_set` classify, `classify_vec_bind` and
-`assign_refvar_vector` choose copy-vs-alias, `ownership_cfg` is the @PLN94 oracle that drives
-no codegen — while others (`parse_field_iteration`, `inline_struct_return`) do reach a free
-by a route no lexical window can follow. What the hand count could not separate, and the gate
-now states per site, is *asking* the proxy from *freeing* on it; what neither can yet settle
-is the eighteen, and the cure for those is the invisibility named above — a site DECLARING
-which of the four facts it reads, rather than a reader inferring it.
+**The seventeen the gate cannot decide lexically now DECLARE what they ask**, which is the
+cure the ⚠ above names — the choice is written at the site instead of inferred from it. Each
+proxy site carries one of four verdicts, and the census is countable:
+
+| declares | sites | what the empty dep list decides there |
+|---|---|---|
+| `free`   | 9 | ownership, and a free follows — **@FR-O-Override is required with it** |
+| `copy`   | 8 | copy-vs-alias / materialise-vs-view; a wrong answer costs a copy, never a release |
+| `alloc`  | 4 | whether to ALLOCATE or null-init a store — the opposite direction from a free |
+| `oracle` | 3 | an independent derivation that drives no emission (@PLN94, witness accounting) |
+
+A declaration is a claim, so the gate contradicts it where it can: a site declaring anything
+but `free` while a free IS visible in the region it gates is reported rather than trusted.
+What it cannot do is catch a site that declares `copy` and frees somewhere the region cannot
+see — that residual risk is real, and it is a much smaller one than *"nothing in the source
+distinguishes them, and both compile."*
+
+⚠ **The pass corrected one of its own conclusions, which is why it is worth writing down.**
+`parse_field_iteration` looked like a `free` site and its own prose said so — *"a
+borrow/skip_free binding owns no allocation"* — so it was first declared `free` and given the
+veto. The differential probe then reported **8 of 1119 corpus files** reaching it with a
+`skip_free` binding, i.e. a live behaviour change rather than a latent guard. Reading the
+mechanism settled it: the frees that follow are of FRESH per-field bindings
+(`copy_variable` + `remap_var_deep`), never of the binding tested — so the veto does not
+belong there, and the site is `copy`. **A site's own comment is not a measurement**, and the
+prose there still overstates its filter.
 
 ⚠ This does **not** re-open `D-own-1` (CLOSED: *"every free/copy/move reads `deps`"*). That
 remains true in the letter — these sites do read `deps`. What was never true is the
@@ -209,9 +225,17 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-**OPEN: 2.**
-- **D-own-26** — NARROWED 2026-09-03: every proxy site the gate can prove reaches a free now consults `O-Override` (6 of 24, all discharged). The residual is the eighteen it cannot prove either way — a site whose free lands in `get_free_vars`, outside the region its condition gates
+**OPEN: 1.**
 - **D-own-8** — a Join's ownership fact is true on one path only
+
+**D-own-26 CLOSED 2026-09-03**, against the bar its own entry set: *"the honest cure is a way
+to fail a build in which a free-deciding site reads the proxy without the veto."* That gate
+now exists, is falsified on five separate paths, and passes — 9 sites declare `free` and all
+9 consult `O-Override`; the other 15 declare which of the other three facts they read. The
+"eleven of seventeen" it opened with was a hand count that could not separate *asking* the
+proxy from *freeing* on it. What the close does NOT cover: a site that declares a non-free
+question and frees somewhere the gate cannot see. The full record is in
+[ownership-history.md](ownership-history.md).
 
 **D-own-16 CLOSED 2026-09-03.** Every cell that should reach zero does, on both backends, with
 every value unchanged: a minting call that reads the local, the self-referential join

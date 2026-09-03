@@ -5525,8 +5525,17 @@ use #count instead"
             .filter(|&v| {
                 (v as usize) < self.vars.count() as usize
                     && matches!(self.vars.tp(v).base(), Type::Text(_))
-                    // OWNED text (empty deps) — a payload-copy binding, not a
-                    // borrow view (a `["mf"]`-typed view owns no allocation).
+                    // @FR-O-Proxy asks copy — which bindings get a FRESH per-field copy
+                    // (`copy_variable` + `remap_var_deep` below).  The frees that follow are
+                    // of those new bindings, each allocating its own text, and never of the
+                    // binding tested here — so @FR-O-Override is not this site's question.
+                    //
+                    // ⚠ The prose above overstates the filter: it says "a borrow/skip_free
+                    // binding owns no allocation", but only the BORROW half is asked.  A
+                    // `skip_free` binding does reach here — measured on 8 of the 1119 corpus
+                    // files — so adding the veto is a live behaviour change, not a guard, and
+                    // it belongs with a leak measurement rather than with a rule citation.
+                    // OWNED text (empty deps) — a payload-copy binding, not a borrow view.
                     && self.vars.tp(v).depend().is_empty()
                     && !self.vars.is_argument(v)
                     // ONLY the match-payload binding (`_mv_<field>`): its free

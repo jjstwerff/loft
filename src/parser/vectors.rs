@@ -3542,6 +3542,10 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
         // and guarding it would turn a rebuild into an append.  `assign_replaces` is that
         // distinction and it is already threaded; `assign_target` pins the pair to THIS
         // variable, so a literal in some other position cannot read a stale flag.
+        // @FR-O-Proxy asks alloc — an empty dep list stands in for *does this variable
+        // already hold a store?*, and the answer decides whether to MINT one (and whether the
+        // mint is guarded).  Nothing here releases; the loft#1219 note above is about a mint
+        // that runs too often, not a free.
         if !substituted && self.vars.tp(vec).depend().is_empty() {
             let db_ops = self.vector_db(in_t, vec);
             let guarded_mint = !self.first_pass
@@ -3858,6 +3862,9 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
         })
     }
 
+    /// @FR-O-Proxy asks alloc — whether this vector needs a local `__vdb_N` backing store.
+    /// The proxy narrows it to locals that own their storage; the answer allocates or does
+    /// not, and the argument carve-out below exists to avoid an allocation, not a free.
     pub(crate) fn vector_needs_db(&self, vec: u16, in_t: &Type, is_var: bool) -> bool {
         is_var
             && *in_t != Type::Void

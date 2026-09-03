@@ -6,14 +6,13 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **2** (D-own-26, opened 2026-09-01, narrowed the same day and again 2026-09-03, when the
-gate got a decidable free-reach predicate: 6 of 24 positive sites reach a free, all of them now
-consult O-Override, and the residual is the eighteen whose free-reach is not lexically
-decidable — the "eleven of seventeen" this line used to carry was a hand count that could not
-separate asking the proxy from freeing on it; and D-own-8, 2026-08-24, NARROWED 2026-08-25 to a
+OPEN: **1** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a
 single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
-known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098).  D-own-16 CLOSED
+known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098).  D-own-26 CLOSED
+2026-09-03: its gate existed all along and was measuring nothing, and every proxy site now
+declares which of the four facts it reads — the "eleven of seventeen" was a hand count.
+D-own-16 CLOSED
 2026-09-03, its BOUNDARY corrected and its wider half closed 2026-08-30, with three cures
 measured and ruled out along the way, loft#1200 —
 D-own-23 opened and closed 2026-08-29 with loft#1154; D-own-24 the same day with loft#1156, and D-own-21 with
@@ -431,7 +430,7 @@ and the owning shape does not.  Guard:
 `tests/scripts/1121-a-backed-default-does-not-allocate-a-store-it-overwrites.loft`, which scores
 that 0 beside the leak.
 
-### D-own-26 — OPEN (2026-09-01): eleven free-deciding sites never consult O-Override, and the corpus cannot tell
+### D-own-26 — CLOSED 2026-09-03 (opened 2026-09-01, narrowed twice): eleven free-deciding sites never consult O-Override, and the corpus cannot tell
 
 `O-Proxy` states an obligation in so many words: *"A site that FREES on the proxy MUST also
 consult O-Override — otherwise it frees a store someone else owns."* Measured in the 2026-09
@@ -491,11 +490,31 @@ Both changes are guards in the withholding direction and were measured INERT: a 
 probe printing whenever the added conjunct changes the outcome reported **zero hits over
 1119 corpus files** on `--interpret` and a 60-file `--native` sample.
 
-**The residual is the eighteen the gate cannot decide either way** — a site whose free, if it
-has one, lands in `get_free_vars` outside the region its condition gates. The lexical route
-is exhausted there; what would settle them is the invisibility `ownership.md` § The facts
-that answer it already names — each proxy site DECLARING which of the four facts it reads,
-so the choice is checkable instead of inferred.
+**CLOSED the same day by the declaration pass**, which is the cure that entry named. The
+lexical route is exhausted at the seventeen sites whose free-reach cannot be decided from the
+region a condition gates, so those sites now SAY which of the four facts they read, in a
+fixed vocabulary the gate parses: `free` (9 sites — and @FR-O-Override is required with it),
+`copy` (8), `alloc` (4), `oracle` (3). A declaration is a claim, so the gate contradicts one
+it can disprove: declaring anything but `free` while a free is visible in the gated region is
+reported, not trusted. Five falsifications, each run by breaking one thing at a time and
+confirming red — the three veto sites, a deleted declaration, and a free site re-declared
+`copy`.
+
+**What the close does not cover, stated plainly:** a site that declares `copy` and frees
+somewhere no lexical window reaches. That risk is real and much smaller than the one it
+replaces, which was *"nothing in the source distinguishes them, and both compile."*
+
+⚠ **The pass corrected one of its own verdicts, and that is the transferable lesson.**
+`parse_field_iteration` reads like a free site and its own comment asserts the veto belongs
+there — *"a borrow/skip_free binding owns no allocation"* — so it was declared `free` and
+given `!is_skip_free(v)`. The differential probe then reported **8 of 1119 corpus files**
+arriving with a `skip_free` binding: a live behaviour change, not the latent guard the other
+sites were. The mechanism settled it — `copy_variable` + `remap_var_deep` give each field
+block a FRESH binding, and the frees that follow are of those, never of the binding tested,
+which is the same reason discrimination 6 excludes minting. The site is `copy`, the veto was
+removed, and the comment now records that its own prose overstates its filter. **A site's own
+comment is not a measurement**, and a rule citation is not a licence to change behaviour
+without one.
 
 ### D-own-16 — CLOSED 2026-09-03 (opened 2026-08-27, narrowed 2026-08-30): a value that READS the local it assigns never frees the store it displaces
 

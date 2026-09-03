@@ -151,6 +151,9 @@ impl Output<'_> {
     fn materialises_element(&self, var: u16, to: &Value) -> bool {
         let variables = self.data.def(self.def_nr).variables();
         variables.tp(var).heap_def_nr().is_some()
+            // @FR-O-Proxy asks copy — the arm this selects ALLOCATES a record and deep-copies
+            // into it, so a proxy that answered "owner" for a borrow costs a materialisation
+            // and never a release.
             && variables.tp(var).depend().is_empty()
             && crate::generation::container_element_base(self.data, to.unspan()).is_some()
     }
@@ -217,7 +220,7 @@ impl Output<'_> {
                         && variables.is_argument(d[0])
                         && !variables.is_argument(var)
                 })
-                // @FR-O-Proxy — the empty dep list is only a PROXY for ownership, so a
+                // @FR-O-Proxy asks free — the empty dep list is only a PROXY for ownership, so a
                 // free taken on it must consult @FR-O-Override.  The interpreter's twin
                 // (`state/codegen.rs`'s `owned_ref`) already does; this one did not, which
                 // made the two backends read different facts for the same decision — the

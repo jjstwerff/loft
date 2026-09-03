@@ -575,6 +575,40 @@ this check's original catch, reads `elems[idx].depend()` and frees through `OpFr
 anyway. Excusing it on the spelling retires the one regression the check exists for;
 verified by deleting its veto and confirming the check goes red.
 
+### Every proxy site declares which of the four facts it reads (2026-09-03)
+
+The obligation above is decidable only where a free is lexically reachable from the
+condition. For the rest it is not, and widening the window does not fix it: a site can
+conclude ownership in the parser and have its free emitted by `get_free_vars`. That is the
+invisibility `ownership.md` names — *"some legitimately want the proxy, some memo the oracle,
+and some free. Nothing in the source distinguishes them, and both compile."*
+
+So the site says which, in a vocabulary the gate parses:
+
+| declaration | sites | what the empty dep list decides there |
+|---|---|---|
+| `// @FR-O-Proxy asks free` | 9 | ownership, and a free follows wherever it is emitted — **`O-Override` is required with it** |
+| `// @FR-O-Proxy asks copy` | 8 | copy-vs-alias / materialise-vs-view; a wrong answer costs a copy, never a release |
+| `// @FR-O-Proxy asks alloc` | 4 | whether to ALLOCATE or null-init a store — the opposite direction from a free |
+| `// @FR-O-Proxy asks oracle` | 3 | an independent derivation that drives no emission (@PLN94's oracle, witness accounting) |
+
+**A declaration is a claim, so the gate disproves what it can**: a site declaring anything
+but `free` while a free IS visible in the region it gates is reported as a contradiction
+rather than trusted. What no gate here can catch is a site that declares `copy` and frees
+where the region cannot see — a much smaller residual than the one it replaces, and the
+honest limit of the close.
+
+⚠ **The pass corrected one of its own verdicts, and that is the part worth carrying.**
+`parse_field_iteration` reads like a free site and its own comment asserts the veto belongs
+there — *"a borrow/skip_free binding owns no allocation"* — so it was declared `free` and
+given `!is_skip_free(v)`. A differential probe then reported **8 of 1119 corpus files**
+arriving with a `skip_free` binding: a live behaviour change, where every other veto added
+that day was inert. The mechanism settled it — `copy_variable` + `remap_var_deep` hand each
+field block a FRESH binding, so the frees that follow are of those and never of the binding
+tested, which is exactly why discrimination 6 excludes minting. The site is `copy`.
+**A site's own comment is not a measurement, and a rule citation is not a licence to change
+behaviour without one.**
+
 **Three discriminations, each of which was a false positive first:**
 
 1. **`!tp.depend().is_empty()` is a different question** — "is this a borrow?" — and needs

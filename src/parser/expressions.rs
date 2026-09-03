@@ -755,6 +755,9 @@ impl Parser {
                         self.vars.is_caller_hidden_buf(r),
                     );
                 }
+                // @FR-O-Proxy asks alloc — this decides which work-refs get a null-init in
+                // the preamble, which is the opposite direction from a free: it puts a slot
+                // in a known-absent state, and releases nothing.
                 if !self.vars.is_argument(r)
                     && !self.vars.is_inline_ref(r)
                     // @PLAN51 Cluster IV: also null-init caller-side hidden-
@@ -796,6 +799,9 @@ impl Parser {
                 if fallback < ls.len() {
                     fallback += 1;
                 }
+                // @FR-O-Proxy asks alloc — the same null-init question as above, for the
+                // inline-ref temporaries, placed at each temp's first use rather than in the
+                // preamble.  It chooses where an init lands, never whether a store is freed.
                 for r in &inline_refs {
                     if !self.vars.is_argument(*r) && self.vars.tp(*r).depend().is_empty() {
                         let pos = ls
@@ -1604,6 +1610,9 @@ use a separate collection or add after the loop"
         // The bare-Var test is deliberately NOT unspanned (a Span-wrapped RHS
         // lowers elsewhere); the field-read and self-assign tests are.
         let is_bare_var = matches!(code, Value::Var(_));
+        // @FR-O-Proxy asks copy — the verdict is a `VecBind` (`CopyVar` / `CopyOwnedField` /
+        // `SelfAssign`), and every arm of it copies or does nothing.  A wrong answer picks the
+        // wrong lowering, not a release.
         let owned_field_read = if let Value::Call(d, args) = code.unspan()
             && *d == self.data.def_nr("OpGetField")
             && let Some(Value::Var(bv)) = args.first().map(Value::unspan)
@@ -3948,6 +3957,9 @@ use a separate collection or add after the loop"
                 //   clear+append emptied the field).  A borrow is visible in
                 //   the var's type deps; only a dep-free (owned) var is
                 //   provably alias-free and may take the direct fast path.
+                // @FR-O-Proxy asks copy — an ALIASING question: only a dep-free var is
+                // provably independent of the destination, so only it may take the direct
+                // clear+append.  The other arm materialises into a temp; neither frees.
                 let owned_var_rhs = matches!(
                     code.unspan(),
                     Value::Var(rv) if self.vars.tp(*rv).depend().is_empty()
@@ -6980,6 +6992,8 @@ use a separate collection or add after the loop"
         // provably independent of `v`; a borrow (`w = v; v = w`) and any expression
         // (`v = tail(v)`) are not.  Same three-way split as the struct-field vector
         // replacement above, which is the same invariant one level down.
+        // @FR-O-Proxy asks copy — the same aliasing question one level down, for a `&`-bound
+        // vector rather than a struct field.  It chooses direct-append vs materialise.
         let owned_var_rhs = matches!(
             code.unspan(),
             Value::Var(rv) if self.vars.tp(*rv).depend().is_empty()

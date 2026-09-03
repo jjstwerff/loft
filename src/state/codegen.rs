@@ -2259,6 +2259,7 @@ impl State {
                     && stack.function.is_argument(d[0])
                     && !stack.function.is_argument(v)
             };
+            // @FR-O-Proxy asks free — the pre-Set free of the store `v` is displacing.
             let owned_ref = (matches!(
                 stack.function.tp(v).base(),
                 Type::Reference(_, _) | Type::Enum(_, true, _)
@@ -2840,6 +2841,9 @@ impl State {
             // give d its own independent record by allocating storage and copying c's data.
             self.gen_set_first_ref_var_copy(stack, v, *src, d_nr);
         } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+            // @FR-O-Proxy asks copy — whether to MATERIALISE an element read into a store `v`
+            // owns rather than bind the interior pointer.  The materialise is what PREVENTS
+            // the container-wide free described below; it emits no free of its own.
             && stack.function.tp(v).depend().is_empty()
             && crate::generation::container_element_base(stack.data, value).is_some()
         {
@@ -2861,6 +2865,10 @@ impl State {
             self.gen_set_first_ref_elem_copy(stack, v, value, d_nr);
         } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
             && let Value::TupleGet(_, _) = value
+            // @FR-O-Proxy asks copy — whether a tuple-element bind deep-copies the record
+            // instead of aliasing it.  A binding whose deps say BORROW is skip-free, so
+            // copying for one would leave an owner nobody frees; the guard is against a
+            // stranded allocation, and the arm releases nothing.
             && stack.function.tp(v).depend().is_empty()
         {
             // T1.8c: tuple destructuring `(q1, q2) = expr` — when an element
@@ -3207,7 +3215,7 @@ impl State {
             && stack.function.tp(src).depend().is_empty()
             && !stack.function.is_argument(src)
             && !stack.function.is_captured(src)
-            // @FR-O-Override.  The empty dep list above is @FR-O-Proxy, and a move is a free
+            // @FR-O-Proxy asks free, so @FR-O-Override applies.  A move is a free
             // decision made one binding away: `v` takes `src`'s store and `v`'s scope-exit
             // `OpFreeRef` releases it.  If the proxy was wrong about `src` that release lands
             // on a store someone else owns — the same shape as the view this arm already
