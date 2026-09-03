@@ -566,9 +566,44 @@ than a guess.
 ⚠ **D-own-16 did NOT move: still 9/9/4/3/3.** The speculation that fixing the belief at its
 source would collapse it was wrong, and the rule text says why — `codegen.rs` already OBEYS
 `(O-Detach)`, by *declining* the free when the RHS reads the binding, and the rule calls that
-trade non-resolving rather than compliant. So D-own-16 keeps its own step, and the open question
-it now faces is sharper than "does it need a runtime witness": **does the same hoist close it?**
-That is a measurement, not an inference, and it has not been taken.
+trade non-resolving rather than compliant.
+
+#### The measurement, taken 2026-09-03: the HOIST is not what is missing — the PEEL is
+
+The question *"does the same hoist close D-own-16?"* was mis-framed, and running it said so.
+D-own-16's cells never REACH the hoist: `owned_ref` is false for a nullable heap-record local,
+so the whole free path — pre-free, stash and post-free alike — is skipped. Applying the peel as a
+throwaway experiment (reverted; `Vector` deliberately left unpeeled) and re-measuring:
+
+| cell | baseline | under the peel | reading |
+|---|---|---|---|
+| `MintOnly` — `c = bump(c, i)` | 9 | **0** | closed |
+| `JoinSelf` — `c = mk(i) ?? c` | 9 | **0** | closed |
+| `MaybeBorrow` — conditional borrow | 4 | **0** | closed |
+| `ParamBorrow` — local borrows a param first | 3 | 3 | untouched, correctly: its deps read `["p"]` |
+| `Captured` — a lambda captures the local | control | **BREAKS**: `g()` answers 2, want 1 | the peel is unsound alone |
+
+Three findings, and each changes the plan:
+
+1. **The existing ordering already suffices.** Once a shape reaches the free path, `codegen.rs`'s
+   stash + `OpFreeRefIfDistinct` — which is `(O-Detach)`-compliant — releases the displaced store
+   correctly. Nothing new has to be built for the ORDER; D-own-16 is a REACHABILITY defect, not
+   an ordering one. That is the opposite of what this plan assumed when it was written.
+2. **The witness is confirmed necessary, by the control rather than by argument.** Cell 6 exists
+   for exactly this and fired on the first run: with the peel, the closure reads `2` where it
+   must read its capture-time `1`. `OpFreeRefIfDistinct` cannot rescue that — the displaced store
+   IS distinct from the new value and must still not be released, because distinctness is not
+   ownership.
+3. **⚠ The peel is needed in TWO places, not one.** It moved nothing on `--native`: the leaks
+   stayed at 9/9/3/3, because `src/state/codegen.rs` generates BYTECODE and the native backend
+   reads its own gate in `src/generation/`. The plan predicted step 4 would be "two conditions at
+   one site"; it is two conditions at **one site per backend**, which the both-backends rule
+   makes expected rather than a collapse of step 2's fold — but the prediction was wrong as
+   written and is corrected here rather than quietly widened.
+
+So step 4 stands as designed — peel behind the witness — with its scope now measured rather than
+estimated, and with `ParamBorrow` known to need the witness's first-iteration half rather than
+the peel.
 
 ⚠ **The guard is red on the builds either side of the defect, for opposite reasons**, which is
 the pair that makes it a guard rather than a snapshot. On `2026.8.0` the LOCALITY cell fails —
