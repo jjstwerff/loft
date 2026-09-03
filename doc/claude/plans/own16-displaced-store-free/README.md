@@ -410,9 +410,15 @@ written.
 **Revised plan for step 2**, per `CODEGEN_METHOD` § *When a refactor SURFACES a real behaviour
 change* — the two gates run together, they do not replace each other:
 
-1. Settle whether the regression reproduces on `main`. Branch-internal breakage stays in this
-   doc; a `main` reproduction is a GitHub issue. This needs a worktree build and was deferred
-   only to keep one `cargo` gate on the box at a time.
+1. ~~Settle whether the regression reproduces on `main`.~~ **DONE — it does, and it is
+   [loft#1312](https://github.com/loft-lang/loft/issues/1312).** Narrowed by building each
+   candidate in a git worktree (`git bisect` is forbidden here): clean at `v2026.8.0` and at
+   indices 22 / 11 / 6 / 3 / 2 of the 44-commit range, red at **`b1ccf0e9`** — the squashed
+   #1307 join. That squash is 106 commits over 40 source files (+3100 lines) and the PR branch
+   was REBASED after the merge, so the individual commits are unreachable and history cannot
+   narrow it further. Its `codegen.rs` diff is 32 lines (loft#1285 fn-ref pushes, loft#1292
+   keyed `&` write-back) and neither touches this path, so the cause is in one of the other 39
+   files and has to be found by reading, not by bisecting.
 2. Understand the regression on its own terms and fix it deliberately. Absorbing it silently into
    a predicate fold would leave nobody able to say which change closed it.
 3. Only then fold — with the byte-identical corpus proving the untouched paths and a boundary
