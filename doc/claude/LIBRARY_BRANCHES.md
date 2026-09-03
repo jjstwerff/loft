@@ -9,17 +9,11 @@ the branch-level view of what is still IN FLIGHT. A branch with an **open PR** i
 that is **unmerged with no open PR** is an *orphan* — stranded work to land or delete.
 Source: `scripts/lib-branch-audit.sh` (@PLN112 / @PLN20 lib-health).
 
-**21 unmerged branch(es) across 7 repo(s); 9 orphan(s) (unmerged, no open PR).**
+**10 unmerged branch(es) across 5 repo(s); 5 orphan(s) (unmerged, no open PR).**
 
 ## loft-libs-assets
 
 - `tuxedo-assets-w6` — PR #11 open · (4 files) — A sprite reaches a page without becoming a fil
-- `worked-examples` — PR #5 open · (11 files) — Worked examples for mesh3d and glb (@PLN141) �
-
-
-## loft-libs-core
-
-- `tuxedo-drop-examples-index` — PR #33 open · (1 files) — Stop committing examples-index.tsv — CI buil
 
 ## loft-libs-docs
 
@@ -31,26 +25,13 @@ Source: `scripts/lib-branch-audit.sh` (@PLN112 / @PLN20 lib-health).
 - `tuxedo-audio-bus` — PR #12 open · (8 files) — audio_bus 0.1.0 — one slider, many sounds
 - `unify-library-ci` — PR #8 merged · (2 files) — ci: adopt the unified reusable workflows (pack  ⚠ orphan
 - `unify-library-ci-fpm` — PR #11 open · (3 files) — ci: adopt the unified reusable workflows (pack
-- `worked-examples` — PR #10 open · (12 files) — Worked examples for time and input (@PLN141) �
-
 
 ## loft-libs-graphics
 
-- `ci/test-native-packages` — PR #7 closed · (1 files) — ci: test graphics + imaging too (the native pa  ⚠ orphan
-- `examples-index-refresh` — PR #31 open · (1 files) — Refresh examples-index.tsv — five @GFX rows 
-- `gap01-input-events` — PR #12 closed · (20 files) — C3: drop unnecessary `&` on read/field-mutate-  ⚠ orphan
-- `reconcile-graphics-0.3.0` — PR #13 closed · (9 files) — reconcile: merge graphics-v0.3.0 into main  ⚠ orphan
+- `examples-index-refresh` — PR #31 closed · (1 files) — Refresh examples-index.tsv — five @GFX rows   ⚠ orphan
 - `tuxedo-android-gl-port` — PR no-PR · (48 files) — The Android backend compiles, and it feeds the  ⚠ orphan
-- `tuxedo-canvas-writable-ref` — PR #10 closed · (1 files) — fix(canvas): use `&self.data` in the Canvas dr  ⚠ orphan
 - `tuxedo-drawing-w4` — PR #46 open · (14 files) — graphics builds and runs under wasm, canvas an
-- `tuxedo-drop-examples-index` — PR #36 open · (1 files) — Stop committing examples-index.tsv — CI buil
 
 ## loft-libs-net
 
 - `ssh-lib` — PR #10 merged · (19 files) — web/ssh/server: finish the C-ABI sweep — eve  ⚠ orphan
-- `tuxedo-drop-examples-index` — PR #22 open · (1 files) — Stop committing examples-index.tsv — CI buil
-
-## loft-libs-world
-
-- `tuxedo-drop-examples-index` — PR #18 open · (1 files) — Stop committing examples-index.tsv — CI buil
-- `worked-examples` — PR #15 merged · (3 files) — hex_shape: the AIM idiom — a controller has   ⚠ orphan
