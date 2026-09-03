@@ -1741,9 +1741,7 @@ use a separate collection or add after the loop"
             };
             let name = self.data.def(*d).name();
             if !crate::use_analysis::is_projection_op(&self.data, *d)
-                && !crate::generation::hoist::ELEMENT_ADDRESS_OPS
-                    .iter()
-                    .any(|o| *o == name)
+                && !crate::generation::hoist::ELEMENT_ADDRESS_OPS.contains(&name)
             {
                 return false;
             }
