@@ -101,8 +101,28 @@ with the closure's environment in scope.
 
 ## Deviations
 
-**OPEN: 1.**
-- **D-clo-7** — a lambda's `??`-default store leaks one store per call where the borrow arm's witness cannot be NAMED and the call has nothing to witness either: TWO store-bearing captures, whose return dep names `__closure` and not which slot; that entry's value half, its BOUND-return leak half, its ARGUMENT-witness half, its single-CAPTURE witness and its literal-`null` argument are all closed (loft#1248, loft#1245)
+**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
+[closures-history.md](closures-history.md).
+
+> **An `OPEN: 0` is a claim to re-measure, and this is what its oracle covers.** The closing
+> guards are `1248-…` (a fn-ref `??` join's argument witness and single capture witness),
+> `1248b-…` (the capture SLOT: two store-bearing captures, a captured collection, a capture
+> beside a pure mint, a capture returned directly), `1257b-…` (a collection return freed by
+> identity, every kind and spelling) and `1320-…` (a branch-joined binding).  What they hold
+> FIXED: every closure is built in the frame that calls it, every witness variable is assigned
+> once, and no closure is stored in a container or in a struct a container holds (a decided
+> refusal, C115/#247).  Two shapes are DECLINED and asserted by value only — `c ?? d`, where
+> either capture may come back, and a capture variable reassigned after the build — and each
+> keeps the leak it had.
+
+**D-clo-7 CLOSED 2026-09-03.**  The last open half — a `??` whose borrow arm hands back a
+capture the caller could not NAME — resolved by reading the SLOT off the callee's body: the
+subject's `OpGetDbRef(__closure, off)` and the build's `OpSetDbRef(___clos_N, off, var)` share
+an offset, so one offset over a variable assigned once is a witness as good as an argument's
+(`use_analysis::capture_return_offsets`, `closure_capture_base`).  A collection `??` over a
+capture turned out never to hand the capture back at all — its chosen arm is COPIED into the
+caller's `__retbuf` — and is separated from a capture returned DIRECTLY by whether the return's
+dep names `__closure` (`callref_capture_blocks`).
 
 **D-clo-14 CLOSED 2026-09-03** (loft#1257, and its bound-spelling mint arm with loft#1320): a
 closure's collection `??` return is freed by store IDENTITY against the `Join` base the temp's

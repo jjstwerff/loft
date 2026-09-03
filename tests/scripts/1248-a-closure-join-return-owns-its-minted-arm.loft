@@ -132,11 +132,10 @@ fn test_a_capture_borrow_arm_leaves_the_caller_its_own_record() {
 }
 
 fn test_two_heap_captures_decline_and_still_answer() {
-  // The AMBIGUITY, and it is a cell rather than a caveat.  The return's dep names `__closure`
-  // and not which SLOT, so with two store-bearing captures the borrow arm may be either and
-  // comparing against the wrong one would adopt a store the caller still holds.  The witness
-  // is declined, which costs this shape the leak it already had — the VALUE is what is
-  // asserted, so a later fix that names the slot has to keep it.
+  // This cell was the AMBIGUITY when it was written: the return's dep named `__closure` and
+  // not which SLOT, so with two store-bearing captures the witness was declined and the
+  // shape kept its leak.  The slot is read off the body now (`capture_return_offsets`) and
+  // `1248b-…` carries this shape at the 65535 ceiling; the VALUE cells stay here unchanged.
   c: P1248? = null;
   d: P1248 = P1248 { n: 3 };
   g = fn(k: integer) -> P1248 { c ?? P1248 { n: 7 + d.n - 3 } };

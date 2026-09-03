@@ -1380,9 +1380,9 @@ pub(crate) fn collect_fnref_captures(
     code: &Value,
     function: &Function,
     data: &Data,
-) -> HashMap<u16, Vec<u16>> {
+) -> HashMap<u16, Vec<(i32, u16)>> {
     let set_dbref = data.def_nr("OpSetDbRef");
-    let mut out: HashMap<u16, Vec<u16>> = HashMap::new();
+    let mut out: HashMap<u16, Vec<(i32, u16)>> = HashMap::new();
     code.walk(&mut |v| {
         let Value::Set(var, rhs) = v else { return };
         if !matches!(function.tp(*var).base(), Type::Function(_, _, _)) {
@@ -1415,7 +1415,7 @@ pub(crate) fn collect_fnref_captures(
             }
         });
         slots.sort_by_key(|(slot, _)| *slot);
-        out.insert(*var, slots.into_iter().map(|(_, v)| v).collect());
+        out.insert(*var, slots);
     });
     out
 }
@@ -2176,7 +2176,7 @@ fn callref_join_bases_in(node: &Value, data: &Data, d_nr: u32) -> HashMap<u16, H
 }
 
 /// Variables that are the target of two or more `Set` nodes anywhere in `node`.
-fn multi_assigned_in(node: &Value) -> HashSet<u16> {
+pub(crate) fn multi_assigned_in(node: &Value) -> HashSet<u16> {
     fn count(node: &Value, out: &mut HashMap<u16, usize>) {
         if let Value::Set(v, _) = node.unspan() {
             *out.entry(*v).or_insert(0) += 1;
@@ -8245,7 +8245,9 @@ impl Scopes {
             _ => return None,
         };
         let def = data.def(d_nr);
-        if def.code == Value::Null || crate::use_analysis::callref_captures(data, self.d_nr, val) {
+        if def.code == Value::Null
+            || crate::use_analysis::callref_capture_blocks(data, self.d_nr, val)
+        {
             return None;
         }
         let crate::use_analysis::Own::Join { base } =
@@ -8515,10 +8517,15 @@ impl Scopes {
         // attribute, and a hidden-only dep otherwise reads as *"the callee minted this"*.
         // A complete witness set says nothing there either — it reads complete VACUOUSLY for
         // a call whose arguments are all scalars, having witnessed nothing.
-        let captures = crate::use_analysis::callref_captures(data, self.d_nr, val);
+        // loft#1248's decline, narrowed to the capture that cannot be RESOLVED: the callee's
+        // body names the offset its `??` subject reads, and one offset over a variable assigned
+        // once is a witness as good as an argument's (D-clo-7).  A collection's chosen arm is
+        // COPIED into `__retbuf`, so a capture-reading collection closure returns an owned
+        // store and takes the witnessed route like any other.
+        let blocks = crate::use_analysis::callref_capture_blocks(data, self.d_nr, val);
         let witnessed_lifts =
-            !captures && crate::use_analysis::protectable_ref_args(data, self.d_nr, val).1;
-        if captures && !join_lifts {
+            !blocks && crate::use_analysis::protectable_ref_args(data, self.d_nr, val).1;
+        if blocks && !join_lifts {
             return None;
         }
         if def.returns_borrowed_view() && !join_lifts && !witnessed_lifts {

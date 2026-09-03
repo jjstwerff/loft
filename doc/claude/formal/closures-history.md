@@ -650,6 +650,42 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > @PLN93 shapes the tuple row fell outside of, and a fix that took one of them down would be
 > worse than the defect.
 
+> **D-clo-7 — CLOSED (2026-09-03): the witness was a SLOT, and the slot was in the body.**  The
+> open half read *"the return's dep names `__closure` and never which slot"*, and that was the
+> whole of it: `closure_capture_base` answered only for a closure with ONE capture
+> (`Some([only])`), because the callee's base is the `__closure` variable and the mapping the
+> build writes — `OpSetDbRef(___clos_N, off, var)` — was collected with its offsets thrown away.
+> The callee's `??` subject reads `OpGetDbRef(__closure, off)` at exactly one of those offsets.
+> `capture_return_offsets` collects the offsets a return can hand back, skipping a read whose
+> result is consumed on the spot by an op that answers no store (`OpGetInt(OpGetDbRef(__closure,
+> 12), 0)` is a field of another capture, not the capture); `fnref_captures` keeps `(off, var)`;
+> one offset resolves to one caller variable, and the routes already shipped take it from there
+> — `OpBindOrCopy` for a record (loft#1248), store identity for a collection (loft#1257).
+>
+> Measured, both backends, every value unchanged, `LOFT_POISON` and `LOFT_STRICT_STORES` clean:
+> two store-bearing captures with a record return 499 stores at N=500 → 3 and 70 000 calls
+> under the ceiling; a captured collection 65535 (abort) → 3; two captured collections 499 →
+> 3; a store-bearing capture beside a pure mint 500 → 3; the borrow arms leave both captures
+> intact and the bound spelling is a copy.
+>
+> ⚠ **Three things the matrix caught, each a wrong cut before it shipped.**  (1) Answering
+> `Borrowed { u16::MAX }` from `classify` for an unnameable base — instead of the `Owned`
+> fallback the readers were gating around — broke the direct nullable-capture return
+> (`fn(n) -> P? { return c; }`, guard 1114); the fallback stays, and the free-deciding sites ask
+> the predicate below instead.  (2) A collection `??` over a capture never hands the capture
+> back — its chosen arm is COPIED into the caller's `__retbuf` — but a first cut read that as
+> *every* collection return, and `fn(k) -> vector { c }` plus 1180's captured field were then
+> freed under the closure.  The callee's own ownership verdict cannot separate them either: it
+> answers a callee LOCAL (`__vdb_1`, the mint's backing).  What does is the return's DEP LIST:
+> it names `__closure` only where the capture can come back.  (3) A capture variable assigned
+> again after the build keeps naming the NEW store while the closure holds the build-time one
+> (`L-CapHeap`), so `Defs::multi_assigned` refuses it as a witness — and reassigning such a
+> variable leaks a store at exit today regardless (loft#1324, pre-existing).
+>
+> Declined on purpose: `c ?? d`, where either capture may come back and one witness cannot
+> answer for two.  Guard: `tests/scripts/1248b-a-capture-witness-is-the-slot-the-return-reads.loft`,
+> six cells, falsified at c6239cbf.
+
 > **D-clo-14 — the traded leak CLOSED, one spelling residual (2026-09-03, loft#1257).** The
 > decline above cost the mint arm one store per call — 389 live at N=400, a store-table abort
 > at scale. It no longer does, on both backends, with every borrow-arm value unchanged.

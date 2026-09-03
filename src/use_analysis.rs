@@ -1848,7 +1848,13 @@ pub(crate) struct Defs {
     fnref_targets: HashMap<u16, u32>,
     /// The CALLER variables each fn-ref's closure record holds, in capture-slot order — what
     /// lets a return that borrows the hidden `__closure` attribute name a witness at all.
-    fnref_captures: HashMap<u16, Vec<u16>>,
+    /// Per fn-ref variable, the closure record's captures as `(field offset, caller var)`,
+    /// in offset order — what the closure BUILD's `OpSetDbRef(___clos_N, off, var)` wrote.
+    fnref_captures: HashMap<u16, Vec<(i32, u16)>>,
+    /// Caller variables assigned at more than one site.  A closure captures the store its
+    /// variable held at BUILD time (`L-CapHeap`), so a variable reassigned afterwards no longer
+    /// names what the closure hands back and cannot witness for it.
+    multi_assigned: HashSet<u16>,
 }
 
 /// The ops that establish a var's CONTENTS without re-binding it — see [`Defs::filled`].
@@ -2142,6 +2148,12 @@ impl<'a> Ownership<'a> {
                 if base == u16::MAX {
                     base = self.closure_capture_base(d, callee_base, *fn_var, defs);
                 }
+                // ⚠ An UNNAMEABLE base answers `Owned` here, and that is a fallback readers
+                // must not take at face value: every site that would free on it gates on
+                // `callref_capture_blocks`, which asks the CALLEE's own verdict
+                // (`return_ownership`) rather than this one.  Answering `Borrowed { u16::MAX }`
+                // instead was measured to break the direct nullable-capture return
+                // (`fn(n) -> P? { return c; }`, guard 1114), whose delivery reads this arm.
                 match callee_own {
                     Own::Join { .. } if base != u16::MAX => Own::Join { base },
                     _ => Own::Owned,
@@ -2242,10 +2254,28 @@ impl<'a> Ownership<'a> {
         if self.data.def(callee_d).variables().name(callee_base) != "__closure" {
             return u16::MAX;
         }
-        match defs.fnref_captures.get(&fn_var).map(Vec::as_slice) {
-            Some([only]) => *only,
-            _ => u16::MAX,
+        let Some(captures) = defs.fnref_captures.get(&fn_var) else {
+            return u16::MAX;
+        };
+        // Which capture the return can hand back is written in the callee's body: the offset
+        // its `??` subject (or tail) reads through `OpGetDbRef(__closure, off)`.  One offset
+        // names one caller variable; two is `c ?? d` and no single witness answers for it.
+        let offsets = capture_return_offsets(self.data, callee_d);
+        let var = match (captures.as_slice(), offsets.as_slice()) {
+            ([(_, only)], _) => *only,
+            (many, [off]) => match many.iter().find(|(o, _)| o == off) {
+                Some((_, v)) => *v,
+                None => return u16::MAX,
+            },
+            _ => return u16::MAX,
+        };
+        // The closure holds the store the variable had at BUILD time; a variable assigned again
+        // since may name a different store, and comparing against that would adopt or free the
+        // closure's own capture.
+        if defs.multi_assigned.contains(&var) {
+            return u16::MAX;
         }
+        var
     }
 
     /// The owned-slot reassignments in function `d_nr`: for each var with more than
@@ -2889,13 +2919,102 @@ pub fn callref_collection_join_base(
     if !matches!(value.unspan(), Value::CallRef(_, _)) {
         return None;
     }
-    if callref_captures(data, d_nr, value) {
+    if callref_capture_blocks(data, d_nr, value) {
         return None;
     }
     let Own::Join { base } = ownership_of(data, d_nr, value) else {
         return None;
     };
     (base != u16::MAX).then_some(base)
+}
+
+/// The closure-record offsets a callee's return may hand back — every `OpGetDbRef(__closure,
+/// off)` in its body whose result is not consumed on the spot by an op that answers no store
+/// (`OpGetInt(OpGetDbRef(__closure, 12), 0)` reads a field of a capture; it cannot hand the
+/// capture back).  Empty means the return borrows no capture at all.
+#[must_use]
+pub fn capture_return_offsets(data: &Data, callee_d: u32) -> Vec<i32> {
+    let get_dbref = data.def_nr("OpGetDbRef");
+    let def = data.def(callee_d);
+    let vars = def.variables();
+    let closure_read = |v: &Value| -> Option<i32> {
+        let Value::Call(d, args) = v.unspan() else {
+            return None;
+        };
+        if *d != get_dbref || args.len() < 2 {
+            return None;
+        }
+        let (Value::Var(base), Value::Int(off)) = (args[0].unspan(), args[1].unspan()) else {
+            return None;
+        };
+        (vars.name(*base) == "__closure").then_some(*off)
+    };
+    fn walk(
+        node: &Value,
+        data: &Data,
+        closure_read: &dyn Fn(&Value) -> Option<i32>,
+        out: &mut Vec<i32>,
+    ) {
+        if let Some(off) = closure_read(node) {
+            if !out.contains(&off) {
+                out.push(off);
+            }
+            return;
+        }
+        if let Value::Call(d, args) = node.unspan()
+            && !crate::data::is_dbref(data.def(*d).returned().base())
+            && let Some(first) = args.first()
+            && closure_read(first).is_some()
+        {
+            // A capture read consumed by a non-store op: skip it, walk the rest.
+            for a in &args[1..] {
+                walk(a, data, closure_read, out);
+            }
+            return;
+        }
+        node.for_each_child(&mut |c| walk(c, data, closure_read, out));
+    }
+    let mut out = Vec::new();
+    walk(&def.code, data, &closure_read, &mut out);
+    out
+}
+
+/// Must a site that would FREE this fn-ref call's result decline?  True where the callee may
+/// hand back a capture and no caller variable can witness which store that is — the
+/// unresolved half of `formal/closures.md` D-clo-7.  False where the return borrows no
+/// capture, or where the oracle names the capture's variable (one slot, assigned once), which
+/// the identity and `OpBindOrCopy` routes then treat exactly like an argument witness.
+#[must_use]
+pub fn callref_capture_blocks(data: &Data, d_nr: u32, call: &Value) -> bool {
+    let Value::CallRef(v_nr, _) = call.unspan() else {
+        return false;
+    };
+    if !callref_captures(data, d_nr, call) {
+        return false;
+    }
+    let targets =
+        crate::scopes::collect_fnref_targets(&data.def(d_nr).code, data.def(d_nr).variables());
+    let Some(callee) = targets.get(v_nr).copied().filter(|d| *d != u32::MAX) else {
+        return true;
+    };
+    // The callee's return summary says whether what comes back can BE a capture: its deps
+    // name `__closure` when the return hands a capture's store back (a record's `??` subject,
+    // a capture returned directly, a captured struct's collection field), and only hidden
+    // buffers when the chosen arm was COPIED into the caller's `__retbuf` — which is how a
+    // `??` over a captured collection is delivered, so nothing there is borrowed.
+    let def = data.def(callee);
+    let closure_attr = def
+        .attributes()
+        .iter()
+        .position(|a| a.name == "__closure")
+        .map_or(u16::MAX, |i| i as u16);
+    if !def.returned().depend().contains(&closure_attr) {
+        return false;
+    }
+    if capture_return_offsets(data, callee).is_empty() {
+        return true;
+    }
+    !matches!(ownership_of(data, d_nr, call), Own::Join { base } if base != u16::MAX)
 }
 
 /// Does this call go through a fn-ref that captures something a RETURN COULD BORROW FROM?
@@ -3123,6 +3242,7 @@ pub(crate) fn function_defs(data: &Data, d_nr: u32) -> Defs {
     collect_defs(&def.code, &FillOps::of(data), &mut defs);
     defs.fnref_targets = crate::scopes::collect_fnref_targets(&def.code, &def.variables);
     defs.fnref_captures = crate::scopes::collect_fnref_captures(&def.code, &def.variables, data);
+    defs.multi_assigned = crate::scopes::multi_assigned_in(&def.code);
     defs
 }
 
