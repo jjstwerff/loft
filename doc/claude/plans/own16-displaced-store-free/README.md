@@ -450,6 +450,51 @@ unchanged; `LOFT_STRICT_STORES=1` and `LOFT_POISON=1` clean on both; the capture
 answers `1`. Then flip the step-0 file into the runner and record `@falsified-at:` against the
 pre-step commit.
 
+#### Step 4a ATTEMPTED and REVERTED (2026-09-03) — the gate now fires; the free does not release
+
+Built, measured, reverted. The tree is back at the 9/9/4/3/3 baseline. What was learned is worth
+more than the diff, so it is recorded here rather than left in a branch.
+
+**The right site is `scopes.rs`, not the two backend gates.** The earlier measurement concluded
+the peel was needed once per backend. That is true of `owned_ref`, but `owned_ref` is the wrong
+lever: `scopes.rs` inserts the transition free into the **IR**, which both backends consume, so
+the change belongs there and is ONE site. This corrects the previous entry's third finding.
+
+**The exclusion is a stale premise, and it is written down.**
+`mints_a_store_the_target_does_not_hold` — the selector that decides which locals get a witness —
+carries this in its own doc:
+
+> The target must not be READ anywhere in the call: *the free is emitted before the assignment*,
+> so a call that still reads the old value would be handed a freed store.
+
+That is `(O-Detach)`'s decline, encoded as a filter. The premise is about WHERE the free is
+placed, not about the shape, so the shape is admissible once the free is sequenced after the
+assignment.
+
+**What was built:** a sibling predicate `mints_a_store_while_reading_the_target`, the selector
+widened to accept either ordering, the witness update recording SOLE ownership for both, and a
+`post_free` slot emitted after the `Set` (before `witness_update`, so the gate reads the verdict
+for the store being RELEASED) against a stashed reference.
+
+**What it achieved, and where it stopped.** Traced, the gate now passes on the target statement —
+`tf_none=true in_scope=true has_flag=true mints_reads=true` — where before the local was not even
+flagged. So the selector half works. But the leak is UNCHANGED at `MintOnly×9`: the free is
+emitted and does not release the store.
+
+**The next question, precisely.** Whether `v_set(stash, Value::Var(v))` copies the DbRef or
+deep-copies the RECORD. If it deep-copies, the stash names a fresh store and the guarded free
+releases the copy while the displaced original stays — which fits the evidence (leaks unchanged
+rather than worsened). `ensure_rebind_witness` faces the same need and solves it with
+`set_skip_free` + `mark_inline_ref` and a `Set(orig, param)` its comment calls *"a raw DbRef
+copy"*; both flags were set here and it still did not release, so the difference is elsewhere and
+has to be read, not assumed.
+
+Reverted rather than pushed, because a half-understood change to the transition free is precisely
+what this plan exists to avoid — and because a fired gate with an inert free is the shape of a
+guard that reads green while the defect stands.
+
+---
+
 ### Step 5 — sink the Set into the join's arms (optional, and separable)
 
 Rewrite `Set(v, ncc(arms))` where an arm is `Var(v)` into a form that frees inside the minting
