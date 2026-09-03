@@ -2847,6 +2847,24 @@ impl State {
             // says a whole-value bind is INDEPENDENT (`c2 = ns; ns.v = 99` then read 99
             // through `c2`, loft#1319).
             self.gen_set_first_ref_var_copy(stack, v, *src, d_nr);
+        } else if let Type::Reference(d_nr, _) = stack.function.tp(v).base().clone()
+            && value.is_branch_join()
+            && !Self::join_arm_keeps_its_view(stack.data, value)
+        {
+            // A record bound from a branch JOIN.  `@FR-B-Copy` governs it: the view rules are
+            // about a right-hand side that NAMES an interior place, and a branch names one of
+            // two VALUES chosen at run time, so no arm's own reading carries through to the
+            // binding (loft#1321).  A FIRST bind had no arm for this shape and fell through
+            // to a plain adopt, which aliased whichever arm ran.
+            //
+            // The copy is UNCONDITIONAL, which is the vector path's answer to the same
+            // question (`OpReplaceVector` deep-copies whichever arm ran) and costs a copy on
+            // the arm that minted.  `OpBindOrCopy`'s runtime adopt-vs-copy would save that,
+            // and cannot be used here: it needs a WITNESS, and the oracle answers `Owned` for
+            // a joined record value rather than naming a `Join` base — measured, not assumed.
+            // Adopting the minting arm while copying the borrowing one needs a fact nobody
+            // carries yet, so the copy that is right on both arms is the one emitted.
+            self.gen_set_first_ref_join_copy(stack, v, value, d_nr);
         } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
             // @FR-O-Proxy asks copy — whether to MATERIALISE an element read into a store `v`
             // owns rather than bind the interior pointer.  The materialise is what PREVENTS
@@ -3302,6 +3320,64 @@ impl State {
         }
         // @PLN130 — recorded HERE, past the last-use-move return above, so the manifest
         // claims a copy only where one is actually written.
+        crate::copy_manifest::record(
+            stack.def_nr,
+            v,
+            tp_nr,
+            crate::copy_manifest::Origin::InterpRecordBind,
+        );
+    }
+
+    /// Does some arm of this join name a place the VIEW rules exempt?
+    ///
+    /// A record's answer is simpler than a collection's: `@FR-B-View` makes EVERY struct-typed
+    /// projection a view — `s = o.inner`, `e = v[i]` — so any projection arm keeps its view
+    /// and only a non-projection arm (a literal, a call result, a fresh record) may be copied.
+    /// The discharge `x ?? d` lowers to a branch and `v[i]` is `τ?`, so without this the
+    /// ordinary spelling of an element read would stop being a view.
+    fn join_arm_keeps_its_view(data: &Data, node: &Value) -> bool {
+        match node.unspan() {
+            Value::If(_, t, f) => {
+                Self::join_arm_keeps_its_view(data, t) || Self::join_arm_keeps_its_view(data, f)
+            }
+            Value::Block(bl) if !matches!(bl.result, Type::Void | Type::Null) => bl
+                .operators
+                .last()
+                .is_some_and(|l| Self::join_arm_keeps_its_view(data, l)),
+            Value::Insert(ops) => ops
+                .last()
+                .is_some_and(|l| Self::join_arm_keeps_its_view(data, l)),
+            arm => crate::generation::container_element_base(data, arm).is_some(),
+        }
+    }
+
+    /// First-assignment of a record bound from a branch JOIN — copy the arm that ran.
+    ///
+    /// The binding owns its record whichever arm produced it, which is what `@FR-B-Copy` asks
+    /// for and what the joined binding did not do: it adopted the arm's own store and so
+    /// aliased a source the other arm never touched (loft#1321).
+    fn gen_set_first_ref_join_copy(&mut self, stack: &mut Stack, v: u16, value: &Value, d_nr: u32) {
+        let tp_nr = stack.data.def(d_nr).known_type();
+        let ref_size = size_of::<crate::keys::DbRef>() as u16;
+        let slot_end = stack.function.stack(v).saturating_add(ref_size);
+        if stack.position < slot_end {
+            let bump = stack.step(slot_end) - stack.position;
+            stack.add_op("OpReserveFrame", self);
+            self.code_add(bump);
+            stack.position += bump;
+        }
+        let slot_offset = stack.var_pos(v);
+        stack.add_op("OpInitRef", self);
+        self.code_add(slot_offset);
+        stack.add_op("OpDatabase", self);
+        self.code_add(slot_offset);
+        self.code_add(tp_nr);
+        let copy_nr = stack.data.def_nr("OpCopyRecord");
+        let copy_val = Value::Call(
+            copy_nr,
+            vec![value.clone(), Value::Var(v), Value::Int(i32::from(tp_nr))],
+        );
+        self.generate(&copy_val, stack, false);
         crate::copy_manifest::record(
             stack.def_nr,
             v,

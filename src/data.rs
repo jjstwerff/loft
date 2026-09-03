@@ -842,6 +842,31 @@ impl Value {
     /// `Span` may nest in principle (e.g. a nested struct field
     /// access wrapped at multiple parser layers); the recursion
     /// flattens any depth.  In practice depth is 1.
+    /// Is this value a branch JOIN — one of two or more values chosen at run time?
+    ///
+    /// ONE home, because three sites ask it and each would otherwise spell it itself: the
+    /// parser's bind selector, the interpreter's first-set dispatch, and the native
+    /// generator's whole-record bind.  `??`, `if`/`else` and `match` all reach a bind as an
+    /// `If` under some combination of `Span`, a value `Block` and an `Insert`, so the peel is
+    /// the answer's substance rather than a detail — a site that peels one wrapper fewer
+    /// silently answers `false` for one of the three spellings.
+    ///
+    /// It reads the SHAPE, not a type: what makes a join a join is that it has arms, and its
+    /// type is the same one either arm has.  `@FR-B-Copy` is what asks the question — a
+    /// branch names one of two VALUES rather than an interior place, so the view rules do not
+    /// reach it and the bind copies (loft#1321).
+    #[must_use]
+    pub fn is_branch_join(&self) -> bool {
+        match self.unspan() {
+            Value::If(_, _, _) => true,
+            Value::Block(bl) if !matches!(bl.result, Type::Void | Type::Null) => {
+                bl.operators.last().is_some_and(Value::is_branch_join)
+            }
+            Value::Insert(ops) => ops.last().is_some_and(Value::is_branch_join),
+            _ => false,
+        }
+    }
+
     #[must_use]
     pub fn unspan(&self) -> &Value {
         if let Value::Span(b) = self {

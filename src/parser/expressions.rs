@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{
-    AmpHead, Level, LexItem, Parser, Parts, Type, Value, diagnostic_format, v_block, v_if, v_loop,
-    v_set,
+    AmpHead, HashMap, Level, LexItem, Parser, Parts, Type, Value, diagnostic_format, v_block, v_if,
+    v_loop, v_set,
 };
 use crate::data::Deps;
 
@@ -495,6 +495,17 @@ enum VecBind {
     /// incrementally-maintained deps because the oracle's whole-body
     /// `Defs` walk does not exist mid-parse.
     CopyOwnedField,
+    /// `b = if c { a } else { d }` — a JOIN right-hand side, read ARM BY ARM (`@FR-B-Join`).
+    /// It copies where every arm would have copied on its own; where some arm NAMES a place
+    /// a view rule exempts, the join keeps that view and this verdict is not reached.  Left
+    /// as a borrow it aliased whichever arm ran (loft#1321), which the ownership ORACLE
+    /// already disagreed with — it reports the joined binding `Owned` while its deps said
+    /// borrowed.
+    ///
+    /// Qualified by the destination having INHERITED a dep, not by the branch alone: a join
+    /// of two literals owns its value already, and copying it would allocate a second store
+    /// to hold what nothing else names.  The dep IS the defect, so it is also the gate.
+    CopyJoin,
     /// Not a whole-value vector bind: vector INDEX reads (`a = vv[0]`)
     /// and NESTED field reads (`c = o.inner.v`) stay ALIASED until the
     /// store-reuse substrate is fixed (#426 routed forward — widening
@@ -1641,7 +1652,119 @@ use a separate collection or add after the loop"
         if owned_field_read {
             return VecBind::CopyOwnedField;
         }
+        // A JOIN right-hand side that left the destination BORROWING one of its arms.  See
+        // `VecBind::CopyJoin` for why the branch alone does not qualify it.
+        if code.is_branch_join()
+            && !self.vars.tp(var_nr).depend().is_empty()
+            && !self.join_arm_keeps_its_view(code)
+        {
+            return VecBind::CopyJoin;
+        }
         VecBind::NotABind
+    }
+
+    /// Does some arm of this join name a place the VIEW rules exempt?
+    ///
+    /// The discharge `x ?? d` lowers to a branch, and `v[i]` is `τ?` — so the ordinary way to
+    /// read an element is `c = vv[0] ?? [0]`, which arrives here shaped exactly like a
+    /// two-arm `if`.  Treating that as a join would make `@FR-B-View-Depth` unreachable for
+    /// its own documented spelling, which is why the ARMS are asked and not the shape alone:
+    /// a join copies only where every arm would have copied on its own.
+    ///
+    /// The split is the one `VecBind` already draws.  A bare variable copies (`@FR-B-Copy`);
+    /// a ONE-LEVEL field read off an OWNED base copies (`@FR-B-View-Base`'s collection half);
+    /// an INDEX read, a NESTED read and any read off a BORROWED base stay views
+    /// (`@FR-B-View-Depth`, `@FR-B-View-Base`).  Anything that is not a projection at all — a
+    /// literal, a call result — names no place and so cannot be a view.
+    fn join_arm_keeps_its_view(&self, node: &Value) -> bool {
+        self.join_arm_keeps_its_view_in(node, &HashMap::new())
+    }
+
+    /// The recursive half, carrying what the enclosing block BOUND.
+    ///
+    /// A `??` does not leave its subject in the arm: it hoists it into a temp first —
+    /// `{ __ncc_N = vv[0]; if !isnull(__ncc_N) { __ncc_N } else { d } }` — so the arm the
+    /// walk reaches is a bare `Var` and the projection is one statement up.  Reading the arm
+    /// alone therefore answered "not a projection" for the one spelling this test exists to
+    /// protect, and `c = vv[0] ?? [0]` stopped being a view.  The map is what the block bound
+    /// on the way in, so a temp resolves to the value it holds.
+    fn join_arm_keeps_its_view_in(&self, node: &Value, bound: &HashMap<u16, Value>) -> bool {
+        match node.unspan() {
+            Value::If(_, t, f) => {
+                self.join_arm_keeps_its_view_in(t, bound)
+                    || self.join_arm_keeps_its_view_in(f, bound)
+            }
+            Value::Block(bl) if !matches!(bl.result, Type::Void | Type::Null) => {
+                let inner = Self::bindings_in(&bl.operators, bound);
+                bl.operators
+                    .last()
+                    .is_some_and(|l| self.join_arm_keeps_its_view_in(l, &inner))
+            }
+            Value::Insert(ops) => {
+                let inner = Self::bindings_in(ops, bound);
+                ops.last()
+                    .is_some_and(|l| self.join_arm_keeps_its_view_in(l, &inner))
+            }
+            Value::Var(w) => bound
+                .get(w)
+                .is_some_and(|rhs| self.join_arm_keeps_its_view_in(rhs, bound)),
+            arm => {
+                if !self.names_a_place(arm) {
+                    return false; // not a projection — it names no place
+                }
+                // The one projection that COPIES: a one-level field read off an owned base.
+                let owned_one_level = matches!(arm, Value::Call(d, args)
+                    if *d == self.data.def_nr("OpGetField")
+                        && matches!(args.first().map(Value::unspan), Some(Value::Var(bv))
+                            if matches!(self.vars.tp(*bv), Type::Reference(_, _))
+                                && self.vars.tp(*bv).depend().is_empty()));
+                !owned_one_level
+            }
+        }
+    }
+
+    /// Does this expression NAME a place — a projection chain rooted at a variable?
+    ///
+    /// [`crate::generation::container_element_base`] is the shared walk and answers this for
+    /// every op [`crate::use_analysis::is_projection_op`] lists.  That list does not name
+    /// `OpGetVectorNullable`, the element read a `?`-yielding index lowers to, while
+    /// `generation::hoist::ELEMENT_ADDRESS_OPS` pairs it with `OpGetVector` for exactly the
+    /// question *"does this address an element?"*.  The two one-homes disagree, so this reads
+    /// BOTH rather than spelling a third list: widening `is_projection_op` itself would move
+    /// the ownership analysis and the materialise decisions at eight other sites, which is
+    /// its own change with its own matrix (recorded on loft#1321).
+    fn names_a_place(&self, value: &Value) -> bool {
+        let mut cur = value;
+        loop {
+            let Value::Call(d, args) = cur.unspan() else {
+                return false;
+            };
+            let name = self.data.def(*d).name();
+            if !crate::use_analysis::is_projection_op(&self.data, *d)
+                && !crate::generation::hoist::ELEMENT_ADDRESS_OPS
+                    .iter()
+                    .any(|o| *o == name)
+            {
+                return false;
+            }
+            match args.first().map(Value::unspan) {
+                Some(Value::Var(_)) => return true,
+                Some(inner) => cur = inner,
+                None => return false,
+            }
+        }
+    }
+
+    /// What a statement list BINDS, for [`Self::join_arm_keeps_its_view_in`] to resolve a
+    /// temp against.  Inherits the enclosing scope's bindings, since a `??` nests.
+    fn bindings_in(ops: &[Value], outer: &HashMap<u16, Value>) -> HashMap<u16, Value> {
+        let mut out = outer.clone();
+        for op in ops {
+            if let Value::Set(v, rhs) = op.unspan() {
+                out.insert(*v, (**rhs).clone());
+            }
+        }
+        out
     }
 
     /// Is the next thing in the source the struct literal `<name> { … }`, without
@@ -4231,6 +4354,29 @@ use a separate collection or add after the loop"
                 *code = Value::Insert(stmts);
             }
             return Type::Void;
+        }
+        // The RECORD half of `VecBind::CopyJoin`.  A struct destination has no `VecBind`
+        // selector — its copy is emitted in codegen — and the reason a joined one aliased is
+        // the same dep: `owned_ref` in `generate_set` requires `depend().is_empty()`, so the
+        // inherited borrow closed the whole owned block, including the `Own::Join`
+        // `OpBindOrCopy` arm that exists for exactly this shape.  Stripping the dep is what
+        // makes that arm reachable, and it is the same strip the whole-variable bind above
+        // already performs, one right-hand-side shape over (loft#1321, `@FR-B-Copy`).
+        //
+        // Pass 2 only, matching the var-copy case: the destination owns an independent store
+        // from the moment the copy is emitted, and stripping on pass 1 as well would drift
+        // the `__ref_N` numbering the way #415 records for the field read.
+        if op == "="
+            && !self.first_pass
+            && var_nr != u16::MAX
+            && matches!(f_type.base(), Type::Unknown(_) | Type::Reference(_, _))
+            && matches!(s_type.base(), Type::Reference(_, _))
+            && code.is_branch_join()
+            && !self.vars.tp(var_nr).depend().is_empty()
+        {
+            for d in self.vars.tp(var_nr).depend() {
+                self.vars.make_independent(var_nr, d);
+            }
         }
         // @P295 — `local_s = keyed_expr` where the LHS is a KEYED-collection
         // LOCAL (`sorted`/`hash`/`index`).  The standard Set path emits
