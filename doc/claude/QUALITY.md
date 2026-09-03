@@ -2419,7 +2419,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 682 | 329 | 5 | **348** |
+| 684 | 329 | 5 | **350** |
 
 The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.
 
@@ -2444,6 +2444,22 @@ that site across with every capture guard, the ownership oracle and the leak swe
 Two callers now share it — `mark_borrowed_captures`, deciding which captures get a verdict, and
 `capture_is_adopted`, deciding whether a frame-exit free may be suppressed — and a capture the
 first skips must not be one the second adopts, or the store is freed twice.
+
+loft#1313 adds two to the total and both to the OPAQUE column, and here that is the right
+answer rather than a debt.  `Parser::field_has_no_nullable_spelling` asks whether a field is the
+`reference<T>` back-pointer of a cycle, and `Data::reference_cycle_back_to` walks those edges;
+both read `Type::Reference` bare.  Peeling would be WRONG in both.  The first exists to separate
+a slot whose nullability is merely undeclared from one that HAS no nullable spelling, so the
+absence of the wrapper is the whole question — an `Optional(Reference)` field is already the
+declaration the screen would be telling the author to write.  The second cannot meet a peeled
+edge at all: a cycle containing an `Optional` reference edge is unconstructible, because that is
+exactly the field loft#1316 reports a layout error for, so `.base()` would widen the walk to
+edges no program can build.
+
+So this is the screen answering rather than accusing: two new discriminating functions, both
+opaque, both with the argument for it written at the site.  The column counts sites that decide a
+shape without peeling; it is not a defect list, and a site whose question IS the wrapper belongs
+there.
 
 loft#1291 moved one site OFF the opaque column — the first entry here that does.
 `Type::is_amp_rebindable_heap` is the one home for *"is this a `&` parameter whose whole-value
