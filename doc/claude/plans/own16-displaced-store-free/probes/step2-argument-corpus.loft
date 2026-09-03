@@ -1,0 +1,44 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Step 2 corpus — the rows on which `owned_ref` (src/state/codegen.rs) and
+// `Scopes::owns_freeable_store` (src/scopes.rs) DISAGREE.  They share the first two conjuncts
+// verbatim; the argument clause is spelled `!is_hidden_buf_arg` at one site and
+// `(!is_argument(v) || is_promoted_ret_buffer(..))` at the other, and those are not the same
+// predicate.  One function per row, so a fold that moves the emit names WHICH row moved.
+struct S { x: integer }
+struct Big { a: integer, b: integer, c: text }
+
+// A non-argument local — the row where both predicates agree.  The control.
+fn a_local_reassigned() -> integer { c: S = S{x:1}; c = S{x:2}; c.x }
+
+// A by-value heap PARAMETER, reassigned whole.  `(F-ParamRebind)` makes the rebind LOCAL to
+// the callee, so the caller keeps its store; the question is whether the displaced one — the
+// caller's — is freed here.  `owned_ref` calls a plain argument owned; `owns_freeable_store`
+// says an argument belongs to the caller.
+fn b_param_rebound(p: S) -> integer { p = S{x:9}; p.x }
+
+// The same, mutated through rather than rebound — must reach the caller either way.
+fn c_param_mutated(p: S) -> integer { p.x = 7; p.x }
+
+// A TEXT-returning fn gets hidden `__work_*`/`__ref_*` buffers, which is where
+// `is_promoted_ret_buffer` and `is_hidden_buf_arg` both look.
+fn d_text_return(n: integer) -> text { "value {n}" }
+
+// A struct-returning fn gets the `__retbuf` that `is_promoted_ret_buffer` excludes BY NAME.
+fn e_struct_return(n: integer) -> Big { Big{a: n, b: n*2, c: "n{n}"} }
+
+// Reassigning a local from a call that returns a record — the S1 in-place-reuse shape
+// `s1_substituted` exists to detect.
+fn f_local_from_call() -> integer { g: Big = e_struct_return(1); g = e_struct_return(2); g.a }
+
+// A parameter reassigned from a call that reads it — the stash/post-free path.
+fn g_param_from_call_reading_it(p: Big) -> integer { p = e_struct_return(p.a + 1); p.a }
+
+fn main() {
+  o: S = S{x:5};
+  q: Big = Big{a:1,b:2,c:"q"};
+  print("A={a_local_reassigned()} B={b_param_rebound(o)} C={c_param_mutated(o)}\n");
+  print("D={d_text_return(3)} E={e_struct_return(4).a} F={f_local_from_call()} G={g_param_from_call_reading_it(q)}\n");
+  print("caller kept: o.x={o.x} q.a={q.a}\n");
+}

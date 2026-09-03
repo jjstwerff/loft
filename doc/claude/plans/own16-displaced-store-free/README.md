@@ -335,6 +335,24 @@ same question. Zero behaviour change.
 **Exit:** `rule_tags.py check` ok; `@FR-O-Proxy` reports **15** sites. This makes the count above
 honest rather than a lower bound, and it is the step that survives even if the rest is abandoned.
 
+#### Step 1 RESULTS (2026-09-03) — DONE
+
+`@FR-O-Proxy` reports **15**, `rule_tags.py check` ok. The corpus is unchanged on both backends
+(`A=2 B=10 C=5 D=5 E=3 F=77`), the `D-own-16` leak numbers are unchanged (9/9/4/3/3), and the
+emitted adopt conditions are byte-identical to the committed after-image — which is the whole
+claim of a cite-only step.
+
+⚠ **It first read 16, and the reason is worth knowing before quoting any of these counts:
+`rule_tags.py` counts tag OCCURRENCES, not sites.** The comment named `@FR-O-Proxy` twice — once
+as its citation and once in prose explaining why the peel is unsound — and the second mention
+counted as a second site. So "N citation sites" is really "N citation lines", and prose that
+names a rule inflates that rule's own count. The prose mention was rephrased to say *"the empty
+dep list the rule above calls a PROXY"*, so one site contributes one citation.
+
+That also means the **14** this plan started from was a line count, and the site count behind it
+could be lower — but not higher, so § Re-assertion sites is an upper bound on distinct sites and
+a lower bound on the work, which is the direction that keeps its argument intact.
+
 ### Step 2 — fold the predicate onto its one home, no peel
 
 Replace `owned_ref`'s `depend().is_empty() && !is_skip_free(v) && !is_hidden_buf_arg` with a call
@@ -347,6 +365,62 @@ record, not a diff to wave through.
 **Exit:** emitted IR *and* generated native are **byte-identical** before/after across
 `tests/scripts` + `tests/docs` (`loft introspect` diff, per
 [CODEGEN_METHOD.md](../../CODEGEN_METHOD.md)). Any divergence stops the step.
+
+#### Step 2 HALTED (2026-09-03) — the corpus found a BRANCH REGRESSION on the disagreeing row
+
+Building the corpus first is what caught this, before any fold was attempted.
+
+```loft
+fn mk(n: integer) -> Big { Big{a: n, b: n*2, c: "n{n}"} }
+fn param_rebound_from_call(p: Big) -> integer { p = mk(p.a + 1); p.a }   // -> null
+```
+
+`null`, on BOTH backends, with no diagnostic. The two neighbours are correct: the same rebind
+from a LITERAL (`p = Big{a: p.a + 1, …}`) answers 2, and the same shape on a LOCAL rather than a
+parameter answers 2.
+
+**It is a regression on this branch, not a shipped bug** — the installed `loft 2026.8.0` answers
+**2**. It is also not from this session's edits: `dispatch.rs` is native-only and `codegen.rs`
+took a comment-only change whose emit was proven byte-identical, yet the INTERPRETER regressed
+too. So it entered between the 2026.8.0 release and `9528ddc4`.
+
+**Mechanism — the same class as step 0.5.** An operation on the destination is emitted before the
+RHS that reads it:
+
+```
+OpPutRef(__ref_2, p);                            // stash the old ref
+OpFreeRefIfDistinct(p, __ref_2);                 // same store, so a no-op
+OpInitRefSentinel(p);                            // ⚠ p := the null sentinel
+p = n_mk(OpAddInt(OpGetInt(p, 0), 1), __ref_1);  // …and only NOW is the RHS evaluated,
+                                                 //    reading the p that was just nulled
+```
+
+Step 0.5 was a free before the RHS; this is a SENTINEL before the RHS. Same wrong shape, and
+`formal/ownership.md` D-own-16's open half is a third instance of it. That is three sites holding
+one belief — *the destination may be prepared before the value is computed* — which per
+`CODEGEN_METHOD` is the signal to search for the belief rather than patch the site.
+
+**Why this halts step 2 rather than being a side note.** `p` has EMPTY deps and is a plain,
+non-hidden argument — exactly the row where the two predicates disagree (`owned_ref` says owned,
+`owns_freeable_store` says an argument belongs to the caller). So the fold this step proposes
+would very likely change this path, possibly closing the bug as a side effect. That makes step 2
+**not** a byte-identical refactor, and its "empty diff is the proof" exit criterion invalid as
+written.
+
+**Revised plan for step 2**, per `CODEGEN_METHOD` § *When a refactor SURFACES a real behaviour
+change* — the two gates run together, they do not replace each other:
+
+1. Settle whether the regression reproduces on `main`. Branch-internal breakage stays in this
+   doc; a `main` reproduction is a GitHub issue. This needs a worktree build and was deferred
+   only to keep one `cargo` gate on the box at a time.
+2. Understand the regression on its own terms and fix it deliberately. Absorbing it silently into
+   a predicate fold would leave nobody able to say which change closed it.
+3. Only then fold — with the byte-identical corpus proving the untouched paths and a boundary
+   matrix proving the changed one, on both backends.
+
+Corpus: `probes/step2-argument-corpus.loft`, one function per disagreeing row.
+
+---
 
 ### Step 3 — extend the witness, still gated shut
 

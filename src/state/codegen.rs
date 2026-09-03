@@ -2214,6 +2214,26 @@ impl State {
             // NULLABLE one: a dense keyed local cannot be assigned the sentinel at all.  The
             // `is_keyed` half only; `Vector` keeps its bare spelling, since a nullable vector
             // already releases through its own path and widening that one would free twice.
+            // Enforces @FR-O-Proxy, and is a SECOND home for the question
+            // `Scopes::owns_freeable_store` already answers — *may this function free the
+            // store this binding names?*  The last three conjuncts are that predicate
+            // restated: `depend().is_empty() && !is_skip_free(v)` verbatim, and
+            // `!is_hidden_buf_arg` where it spells the argument carve-out
+            // `(!is_argument(v) || is_promoted_ret_buffer(..))`.  Two spellings of one rule
+            // is what lets them disagree, and they do: the shape test in front of them does
+            // not peel `Optional`, so a NULLABLE heap-record local (`c: S?` is
+            // `Optional(Reference(S))`) matches no arm and skips this whole free path —
+            // pre-free, stash and post-free alike — while its dense twin gets all three.
+            // That is `formal/ownership.md` D-own-16's open half, and folding this onto
+            // `owns_freeable_store` is where the peel belongs, so it lands once rather than
+            // at whichever site a leak was noticed
+            // (doc/claude/plans/own16-displaced-store-free/, step 2).
+            //
+            // ⚠ The peel is NOT sound on its own, which is why this comment is not a TODO to
+            // widen the `matches!`: the empty dep list the rule above calls a PROXY reads
+            // `OWNS` for a local a lambda has CAPTURED, and freeing there is a use-after-free
+            // against the closure's capture-time DbRef.  The licence has to come from a
+            // per-run witness.
             let owned_ref = (matches!(
                 stack.function.tp(v),
                 Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
