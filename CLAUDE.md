@@ -621,3 +621,12 @@ step for a wrong answer in a function that reassigns a local across sibling bloc
 soundness condition is `store_dead_after_block`, NOT the flag: a local READ after the blocks
 does not confine, because freeing a confined store while the local still holds it returns the
 wrong element on the branch NOT taken. QUALITY.md § Cluster III Route 2.
+
+**Owner witness for a mixed-ownership local (loft#1336, default-ON, both backends):** a
+heap-record local that OWNS after one assignment (a copy, a minting call) and VIEWS after
+another carries a hidden `__own_<name>` naming the store it minted while it still holds it;
+the IR releases it by store identity at the rebind or at scope exit, and the local itself is
+never-free (`formal/ownership.md` @FR-O-Witness). **`LOFT_NO_OWNER_WITNESS=1`** emits the
+pre-witness form: the first bisect step for a leak or a wrong answer in a local that is both
+copy-bound and view-bound (a walker `cur: Node? = a; cur = cur.next`), and what the
+`LOFT_NO_JOIN_OWN` positive controls set beside their own switch.

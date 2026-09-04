@@ -164,13 +164,33 @@ and a decision that reads the wrong one is wrong in the silent direction:
                 cannot hoist defers the detach past the assignment.  Detaching before the
                 reads is never admissible, and DECLINING the detach to avoid the hazard
                 trades the wrong answer for a retained store rather than resolving it.
+  (O-Witness)   A LOCAL WHOSE ASSIGNMENTS MIX OWNERSHIP CARRIES A RUNTIME OWNER WITNESS.
+                A binding carries ONE dep list, flow-insensitively, and it records
+                whichever assignment parsed LAST — so where one assignment hands a
+                heap-record local a store of its own (a whole-value copy, a minting call)
+                and another hands it a VIEW, no static reading is right for both.  Such a
+                local is given a hidden witness `__own_<name>` naming the store it minted
+                for as long as it still holds it, and the sentinel otherwise.  The witness
+                is maintained in the IR at every assignment — a mint points it; a view
+                releases it by STORE IDENTITY (`OpDistinctStore`) after the value is
+                computed, per O-Detach; a mint that reads the local releases the same way
+                — and released at scope exit.  The local itself is never-free
+                (O-Override), and both backends translate the one fact (O-NoDiverge).  A
+                projection bound into such a local is always a VIEW: binding.md's
+                materialise clause does not apply to it, and a binding that clause names
+                is never witnessed.  Every copy into it lands in a FRESH store, never in
+                place — the slot may hold a view.
 ```
 
 **In words.** There is a real oracle, and it is not the dep list. `deps` is a cheap
 stand-in for it that is right most of the time and wrong for a borrow nobody recorded a dep
 for; `is_skip_free` is the patch that makes the stand-in safe at a free site; and
 `owned_refs` carries the two things a type cannot — *which* assignment, and *how deep in
-loops* it happened.
+loops* it happened.  And where even that is not enough — a local that OWNS after one
+assignment and VIEWS after another, in a loop that runs both — the ownership is a per-RUN
+fact, and `O-Witness` carries it in a slot beside the local: the walker `cur: Node? = a;
+while cur != null { cur = cur.next }` frees the copy it started from at the first rebind
+and nothing at the last, whichever iteration that is (loft#1336).
 
 ⚠ **`(O-Oracle)`'s interprocedural half has a failure mode of its own: it can lose the
 callee's answer on the way back to the caller.** The summary is stated in the CALLEE's
@@ -299,6 +319,23 @@ The one shape that still retains a store is a lambda-CAPTURED local, and that is
 free is the right answer and its right answer keeps a store.  Guard:
 `tests/scripts/1085b-a-nullable-local-frees-what-it-displaces.loft`; the full record, including
 the two mechanisms that were tried and reverted, is in
+[ownership-history.md](ownership-history.md).
+
+**D-own-27 OPENED AND CLOSED 2026-09-04** (loft#1336): a heap-record local bound by COPY
+and later rebound to a VIEW released the copy nowhere — `cur: Node? = a; cur = cur.next`
+leaked one store on both backends, a call-minted local and a plain nested-field view leaked
+identically, and the inverse order (`s = a.next; s = a`) wrote the second copy INTO the
+viewed record on `--native` and ALIASED the source on the interpreter, so `b == 1` on one
+backend and a write through `s` reaching `a` on the other.  The `?` was never the axis: the
+dense twin `x: Pair = a; x = x.other` released the copy at the rebind AND freed `x` at exit,
+which landed on `b`'s store and read clean only because nothing read `b` afterwards.  Closed
+by `(O-Witness)` above — the native emitter already carried this tracker privately
+(`_own_store_<name>`, for a dense deps-empty local); it now lives in the IR for every mixed
+local, both backends translate it, and native's private tracker is left to the hidden
+temporaries it was built for.  Guard:
+`tests/scripts/1336-a-local-with-mixed-ownership-releases-through-its-owner-witness.loft`,
+fifteen cells on both backends, falsified at `c25b444c`; the full record, including the
+four measurements that shaped the mechanism, is in
 [ownership-history.md](ownership-history.md).
 
 The full register — these entries in full, plus every closed one with its dates and

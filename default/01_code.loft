@@ -1086,6 +1086,17 @@ fn OpVectorIsNull(r: vector) -> boolean;
 // `enum == null` (OpEqRef's rec==0 test misreads native enums as null).
 fn OpRefIsNull(r: reference) -> boolean;
 #rust"@r.store_nr == u16::MAX"
+// The store-identity test behind a local's runtime OWNER WITNESS (`__own_<name>`,
+// `scopes::owner_witness_locals`): true when the two references name DIFFERENT stores.
+// Two sentinels compare EQUAL (`u16::MAX == u16::MAX`), so a witness that never took a
+// store and a local that holds none read as one and release nothing.
+fn OpDistinctStore(a: reference, b: reference) -> boolean;
+#rust"@a.store_nr != @b.store_nr"
+// A reference as a VALUE: `w = OpRefAlias(v)` makes `w` name the store `v` names, where
+// the plain bind `w = v` COPIES the record (@FR-B-Copy).  Emitted only for the compiler's
+// own owner witness, which has to point at the local's store rather than own a second one.
+fn OpRefAlias(r: reference) -> reference;
+#rust"@r"
 // Number of elements in the vector. Use in loop bounds: for i in 0..v.len().
 pub fn len(both: vector) -> integer {
   OpLengthVector(both)

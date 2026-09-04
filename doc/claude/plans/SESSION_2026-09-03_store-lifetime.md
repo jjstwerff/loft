@@ -100,3 +100,31 @@ leaked the store in `1248b`. The two cures that failed before it are on the issu
   outside the closure lets it read the reassigned value at `hash`/`sorted`/`index` and the
   build-time value at vector and struct, because a keyed rebind refills the existing store rather
   than minting. Store lifetime is correct either way; `formal/closures.md` records it as open.
+
+## 2026-09-04 — loft#1336: the owner witness (`(O-Witness)`, D-own-27 opened and closed)
+
+**What landed.** A heap-record local whose assignments MIX ownership (a copy or a minting call
+on one, a view on another) now carries a hidden `__own_<name>` in the IR that names the store
+it minted while it still holds it; `scopes::owner_witness_locals` picks the locals,
+`scan_set` maintains the witness at every `Set` (`witness_set_kind`: release before a mint,
+release by `OpDistinctStore` after a view or a mint that reads the local), `get_free_vars`
+releases at scope exit, and the local is never-free. Two ops: `OpDistinctStore`, `OpRefAlias`.
+Both emitters copy into such a local FRESH and decline the materialise arms for it; native's
+private `_own_store_` tracker (the reference route) now serves only hidden temporaries.
+`LOFT_NO_OWNER_WITNESS=1` is the A/B; the two `LOFT_NO_JOIN_OWN` controls set it too.
+
+**The filed scope was wrong three ways** — the `reference` field, the copy-bind and the `?` were
+each shown not to be the axis (`ownership-history.md` D-own-27 has the cells). The dense twin
+was over-freeing at exit on the interpreter, masked by `free_named`'s idempotence.
+
+**Four wrong first cuts, each a measurement** (D-own-27's list): the `= null` entry init is a
+stack placeholder; `OpDatabase` consumes the `null_named` placeholder at a first bind; native's
+`skip_free → adopt` rule read a witnessed local as a `__ncc_` hoist; loft#778's `k = a[0]; k =
+x` materialises off deps a LATER copy stripped.
+
+**Guard-authoring trap:** a `reference<T>?` field pointing at a callee's local dangles at its
+return — five cells of the first guard reported use-after-free from the test's own chain
+helper. Build the chain in the frame that walks it.
+
+**Filed apart:** loft#1337 — a view of a local returned through a `-> S?` return is not
+materialised (the dense return leg copies into its buffer; the nullable one has no buffer).

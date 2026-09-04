@@ -338,6 +338,8 @@ dumps read the RAW shapes via the opt-out; the synthesis's observable effect has
 two-leg discriminator). Each site validated on BOTH backends:
 
 - **`local_source`** — ✅ both backends (scope-pass dep-strip of the displaced-owned slot).
+  Since loft#1336 the same shape is ALSO closed by `(O-Witness)` (`LOFT_NO_OWNER_WITNESS`
+  opts out), so the join-own A/B holds both switches off on its control leg.
 - **`elem_accumulate`** — ✅ both backends (interp `OpBindOrCopy` + native inline guard, both
   reading the oracle's `base` as the runtime witness).
 - **`match_return`** — ⏳ NATIVE done; INTERP pending. `ref_return` materialises a borrowed-view
