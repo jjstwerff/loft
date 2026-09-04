@@ -128,3 +128,13 @@ helper. Build the chain in the frame that walks it.
 
 **Filed apart:** loft#1337 — a view of a local returned through a `-> S?` return is not
 materialised (the dense return leg copies into its buffer; the nullable one has no buffer).
+
+## 2026-09-04 — loft#1337: a view of a local through a `-> S?` return (D-call-8)
+
+Found as loft#1336's held-fixed cell.  Two gaps in `classify_reference_delivery` for the
+buffer-less return: `return_views_local` skipped a SELF-dep (the walker's `cur = cur.next`),
+and `return_projects_into_local` never looked inside an `if` arm.  Closed by the selector's
+own `MaterializeView` cell, per ARM where there is no buffer (`materialize_view_arms`), with a
+null guard for a nullable local source.  The dense route is untouched.  The null arm was a
+red herring: every other arm kind beside `null` was already right; the direct projection in
+an arm was the axis.  Guard `tests/scripts/1337-…`, falsified at `c0a09c95`.

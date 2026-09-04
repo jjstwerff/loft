@@ -6,8 +6,56 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — `D-call-7` closed 2026-09-02, the last one standing. `D-call-6` was opened
-and closed the same day by the reference review of chapter 31.
+OPEN: **0** — `D-call-8` opened and closed 2026-09-04 (loft#1337); before it `D-call-7`
+closed 2026-09-02 and `D-call-6` was opened and closed the same day by the reference review of
+chapter 31.
+
+### D-call-8 — OPENED AND CLOSED (2026-09-04, loft#1337): a view of a local escaped through a nullable return
+
+`(F-Ret)` says a whole heap value is handed out OWNED, never a view of a local.  A dense
+return has a delivery buffer and `ref_return`'s copy leg lands every arm in it; a nullable
+record return has none — a `-> S?` is delivered as the DbRef its tail yields — so what escapes
+is exactly what `classify_reference_delivery` decides, and two shapes got past it on both
+backends:
+
+```loft
+fn walked() -> Node? { …; cur: Node? = a; cur = cur.next; cur }        // views b, a local
+fn arm(take: boolean) -> Leaf? { t = Tree{…}; if take { t.l } else { null } }
+```
+
+The first: `cur = cur.next` leaves the local a SELF-dep, and `return_views_local` walks the
+deps of the return sources with the sources already in its `seen` set — so the one dep it
+should have read as *a record reached through my own field, which may be any store this frame
+frees* was skipped and the local read as an owner.  The caller received `b`'s record after
+`b`'s exit free; `LOFT_STRICT_STORES` names it, a plain run answers the stale value or the
+next allocation's.  The second: `return_projects_into_local` stopped at the `if`, the arm's
+projection was never seen, the selector chose `Rename` on a function with nothing to rename
+onto, and the tail was demoted to a discarded statement plus `return null` — `--native`
+printed `null`, the interpreter a reused record — with a literal on the other arm as much as
+with a `null`.  Every other arm kind beside a `null` was already right (a literal, an owned
+local, a parameter, a view BOUND to a local first), which is what located the gap at the
+direct projection.
+
+**Closed at the selector, by its own `MaterializeView` cell.**  A self-dep on a user local
+(never on a work-ref, whose self-dep is the ownership marker) reads as a view; an `if` arm is
+a tail where there is no buffer; and the buffer-less materialise is made PER ARM
+(`materialize_view_arms`): every arm that is not PROVABLY owned or null is copied into one
+work-ref (`return_leaf_is_owned_or_null` — a `null`, an argument, an owned local, a struct
+literal, a callee that mints its own store are handed up as they are; a projection, a keyed
+lookup, a lifted temporary's element, a join are copied), and a nullable LOCAL source copies
+only where present — both emitters' `OpCopyRecord` leaves an allocated EMPTY record for a
+null source, presence standing in for absence.  The leaf rule is stated in that direction
+on purpose: the first cut copied what LOOKED like a view (a field or vector projection, a
+viewing local), which is narrower than the criterion that had selected `MaterializeView`,
+and a keyed element of an inline call's temporary went out raw again — the `882` poison
+cells caught it.  The dense route is untouched: its arm walk and copy leg already satisfy
+the rule, and the `if` recursion is gated on the buffer's absence so the dense IR is
+byte-identical.
+
+Guard: `tests/scripts/1337-a-view-of-a-local-returned-through-a-nullable-return-is-copied.loft`
+— the two shapes, the walk that ends at null, eight nullable controls and the two dense twins,
+each read after a filler allocation so a handed-up view would read the filler; both backends;
+falsified at `c0a09c95`.  Found while widening loft#1336's matrix, and held fixed there.
 
 ### D-call-6 — OPENED AND CLOSED (2026-09-01, loft#1286): the `&` lint could not see a forward
 
