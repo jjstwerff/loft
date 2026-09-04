@@ -22,6 +22,10 @@
 #     emitter registry — reads as possibly lost at exit; measured at 179 records on a clean
 #     run.  `--errors-for-leak-kinds=definite` is that decision, spelled where valgrind
 #     reads it.
+#   * the one suppression (scripts/valgrind.supp) is the deliberate interning of a declared
+#     text field default — bounded, one block per field, the same frame the ASan leak gate
+#     names.  It suppresses nothing else on purpose: see the file for the text-buffer class
+#     LSan hides and this sweep does not.
 #   * loft's own store arena is INVISIBLE to memcheck (DEBUG.md § Debugging store-ownership
 #     bugs): a leaked or over-freed STORE is a wrong answer, never a valgrind error.  That
 #     half of the memory gate is `M-leaks` under `LOFT_STRICT_STORES=1`, not this one.
@@ -41,7 +45,7 @@ command -v valgrind >/dev/null || { echo "valgrind is not installed — the gate
 OUT=${VG_OUT:-target/vg}
 rm -rf "$OUT"; mkdir -p "$OUT"
 JOBS=${VG_JOBS:-$(( $(nproc) * 5 / 6 ))}; [ "$JOBS" -lt 1 ] && JOBS=1
-VG="valgrind --error-exitcode=77 --leak-check=full --errors-for-leak-kinds=definite"
+VG="valgrind --error-exitcode=77 --leak-check=full --errors-for-leak-kinds=definite --suppressions=scripts/valgrind.supp"
 export VG OUT
 
 # The population: every argument (a file or a directory), or the two shipped corpora.

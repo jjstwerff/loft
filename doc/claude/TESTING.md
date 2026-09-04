@@ -2473,6 +2473,11 @@ Two decisions are built in, and both are measurements rather than taste:
   `Data`, the native emitter registry — reads as "possibly lost" at exit: 179 such records on
   a run with no defect in it.  `--errors-for-leak-kinds=definite` is that decision spelled
   where valgrind reads it; a possibly-lost record is still in the log for anyone who wants it.
+  The one suppression, `scripts/valgrind.supp`, is the deliberate interning of a declared
+  text field default — bounded, one block per field — and nothing else: the LSan file also
+  hides the four text-construction frames on the premise that they leak only on a fault
+  path, and this sweep measured that premise false (a text returned from a call on two arms,
+  or read straight out of a vector element, loses one buffer PER CALL with no fault at all).
 - **A leaked or over-freed STORE is not a valgrind error.**  The store arena is one valid
   allocation (DEBUG.md § Debugging store-ownership bugs), so that half of the release's
   memory gate is `M-leaks` under `LOFT_STRICT_STORES=1`, and this sweep does not pretend to
