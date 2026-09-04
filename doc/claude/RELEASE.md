@@ -1028,27 +1028,59 @@ the release notes why it stays.
 - Read the first sentence of each page and verify the sequencing makes sense for a reader progressing top-to-bottom (introductory concepts before advanced ones).
 - If a topic added in this release landed at the end of the sequence but logically belongs earlier, renumber and update all cross-links.
 
-### 8 — Validate coding standards and clean up clippy suppressions
+### 8 — Validate coding standards and review clippy suppressions
 
 ```bash
 cargo clippy -- -D warnings
+make clippy-review                        # which suppressions are dead, which are live but unexplained
+make clippy-review ARGS="--legs all"      # + the warnings CI never lints (debug assertions ON, wasm32)
 ```
 
-All warnings must be errors-free.  Additionally, review every `#[allow(clippy::...)]`
-annotation in the codebase and attempt to remove it by fixing the underlying code:
+All warnings must be errors-free.  `make clippy-review` then measures every
+`#[allow(clippy::…)]` under `src/` instead of grepping for them: in a throwaway
+worktree each one becomes an `#[expect]`, clippy runs CI's three lines, and the
+compiler names each expectation nothing fulfilled — the function that shrank under
+the line limit, the parameter that was removed — beside whether anything on or
+above the line says why it is there.  A report, never a gate; it edits nothing.
 
-```bash
-grep -rn "#\[allow(clippy::" src/
-```
-
-For each suppression found:
-- If the function has been refactored or shortened since the annotation was added, remove
-  the `#[allow]` and verify clippy still passes.
-- If the suppression covers a genuine structural constraint (e.g. a dispatch function that
-  cannot be split without losing clarity), keep it and add a brief comment explaining why.
+For each suppression the report says which of three things it is:
+- **dead** — remove the `#[allow]`; clippy stays silent, and the report is the proof.
+- **live and unjustified** — keep it, and add a brief comment saying which structural
+  constraint it covers (a dispatch function that cannot be split without losing clarity).
+- **redundant with a crate-root `#![allow]`** — `src/lib.rs` / `src/main.rs` already switch
+  the lint off for the whole crate, so the attribute is an intent marker at best.
 
 The goal is to keep suppressions intentional and minimal, not to accumulate them as a
 release-over-release debt.
+
+> **Measured 2026-09-04 (`e4366d4d`) — a census, not a cleanup.**  257 attributes name
+> a clippy lint (244 on items, 13 file-scope, 3 via `cfg_attr`), 329 lint mentions over
+> 54 lints.  A grep counts 22 more: `#![allow]` text inside string literals that a
+> generator emits into another file (`src/create.rs`, `src/generation/mod.rs`,
+> `src/android.rs`), which the tool excludes.
+> **Justification:** 150 of the 244 item-level attributes have a comment on the line
+> or on the line above; 94 do not (159 if the item's own `///` doc line does not count).
+> **Dead:** 51 attributes outright and 7 in part (one of several lints named) — 66 of
+> the 329 mentions: `too_many_lines` 16 (the function is now under 100 lines),
+> `too_many_arguments` 15 (7 parameters or fewer now), `unused_self` 5,
+> `cast_precision_loss` 3, the rest 1–2 each.  34 of the 54 dead item-level attributes
+> carry a justification comment, so the comment describes a constraint that no longer
+> exists; 3 were dead when written (2026-09-02, seven-parameter functions).
+> **Redundant with a crate root:** 80 (`too_many_lines` 57, the three `cast_*` lints
+> 29, `type_complexity` 2).  The crate-root lists themselves: `src/main.rs`'s
+> `match_same_arms`, `redundant_closure`, `implicit_hasher`, `unnecessary_wraps` and
+> `must_use_candidate` fire nowhere in the bin; every entry of `src/lib.rs`'s list is
+> live.
+> **What CI never lints:** with debug assertions ON (`[profile.dev.package.loft]`
+> strips them) 10 pedantic warnings hide — `ptr_as_ptr` ×4, `ref_as_ptr` ×2,
+> `borrow_as_ptr` ×2, `useless_borrows_in_formatting`, `missing_panics_doc`; in the
+> browser wasm rlib 7 — `needless_return` ×2, `format_push_string` ×2,
+> `drop_non_drop` ×2, `unnested_or_patterns`.  Either configuration fails `-D warnings`
+> today if it is ever gated.
+> **Outside the census:** 167 `#[allow]` naming only rustc lints (`dead_code` …), 111 of
+> them dead in every compiled leg.
+> The per-suppression table is the tool's output; `make clippy-review ARGS="--legs all"`
+> regenerates it in about two minutes on a warm target.
 
 ### 9 — Generate HTML and PDF
 
