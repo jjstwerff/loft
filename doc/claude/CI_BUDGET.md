@@ -391,6 +391,50 @@ does not belong on a PR, however cheap it is.**
 | **Mondays 06:00** | `repro-build` — reproducible-build check (weekly, not nightly) | `schedule` |
 | **library repos** | one `library-ci` per repo, all callers of `library-ci-reusable.yml`, and **`ci / <package>` is a REQUIRED check on every repo's `main`** (41 contexts, one per package; `strict` off, so a PR need not be rebased onto a moved `main`, and `enforce_admins` off, so the owner's direct pushes to `main` still land — the way every library fix reaches it today): the per-package test matrix, plus a repo-level **`unreleased work`** job — a branch ahead of the default branch with no PR, a PR nobody has touched, or a `loft.toml` version the registry has never seen, each red after 14 days without activity (`scripts/unreleased-work.py`, `stale-days` to tune) | `push: main`, `pull_request` |
 | **on demand only** | `ci-probe` (where CI time goes) and `gate-probe` (re-runs the debug-assertions sweep and the browser UI gate on a real 4-vCPU runner, each beside a cell proving it can still FAIL). Measurement, never gates, never on a PR | `workflow_dispatch`, or push to the `ci-probe` / `gate-probe` branch |
+| **on demand — the release evidence** | `release-gate` — every row above that is a nightly (`ci.yml` full matrix incl. Windows + round-trip + oracle, `miri.yml` all gates, `registry-validation`, `revalidate-libs`, `browser-threads`, `repro-build`) called as reusable workflows against ONE commit, ending in one `verdict` job that is red if any leg is not `success` — advisory PR jobs included. `make release-gate` dispatches and waits; `make release-checklist` reads the run for HEAD's sha. Never on a PR, never scheduled, never tags (§ The schedule is not a clock) | `workflow_dispatch`, or push to the `release-gate-probe` branch |
+
+## The schedule is not a clock — the release gate (2026-09-04)
+
+Two measurements, both from `gh run list`, decided this:
+
+- **A scheduled run starts when GitHub gets to it.** The `ci.yml` daily is `cron: 0 3`
+  and its last twenty runs STARTED between 03:34 and 14:45 UTC — 07:34, 08:45, 09:36,
+  13:24, 14:45 on consecutive days. It also tests whatever `main` is at that moment.
+  So "wait for tonight's nightly" is a wait of unknown length for an answer about an
+  unknown commit.
+- **The nightly-only legs are where a merge is found red.** The required checks on
+  `main` are `Test (ubuntu/macos/windows)`, `Clippy` and `Format`, and on a PR the
+  macOS and Windows legs are placeholders; the round-trip pair, the oracle and the
+  browser asyncify/render tests are off the PR path by design (§ The rule that decides
+  placement). Push-to-main's full matrix was red on each of the last eight merges, the
+  daily on twenty of twenty, and the reds were macOS/Windows-only tests plus a codegen
+  invariant in the debug-assertions gate — deep-internals changes that pass the ubuntu
+  PR gate and fail on the legs that only run after the merge.
+
+The **release gate** (`release-gate.yml`) is the deliberate counterpart: the six
+nightlies called as reusable workflows (`workflow_call`, the pattern
+`library-ci-reusable.yml` already uses) against one commit, with a `verdict` job that
+reads every leg's result from `needs` and is red on anything that is not `success`.
+Three properties are load-bearing:
+
+- **It cannot drift from the nightly**, because it does not restate the nightly — it
+  calls it. A gate added to `miri.yml` is in the release gate the same commit.
+- **A called workflow sees its CALLER's event**, so each nightly takes the path its own
+  `workflow_dispatch` takes (full matrix, non-PR extras) with no `mode` plumbing through
+  its conditions. The one input that exists, `miri.yml`'s `from_gate`, keeps `notify`
+  and `daily-status` with the schedule: a candidate run must neither open nor
+  auto-CLOSE the nightly's tracking issue. The concurrency groups of `ci.yml`,
+  `revalidate-libs.yml` and `browser-threads.yml` carry `github.workflow` (the caller's
+  name) so a gate leg neither queues behind nor cancels a standalone run on the same ref.
+- **What a PR shows as advisory is blocking here.** A called workflow's result is
+  `success` only if every job in it succeeded, so the seven advisory `ci.yml` jobs count
+  without a list of names to keep in step.
+
+It is the release's evidence (`A-release-gate` on `make release-checklist`, keyed by
+HEAD's commit), not a replacement for the schedule: a red nightly is still fixed the
+day it appears, or the gate finds a month of them at once. Cost is the nightlies' own
+— `ci.yml` 37–82 min, `miri.yml` 22–34 min, the rest under 15 — in parallel, so about
+an hour and a half of wall clock for a release that happens monthly.
 
 ## Where the time goes — measured
 

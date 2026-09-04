@@ -467,22 +467,41 @@ directions, so neither substitutes for the other:
   failing*, not a workflow that reported failure.
 - **A green nightly run does NOT discharge the bar either.**  It proves the
   tests that RAN passed on the tree they ran against, which is neither this
-  tag's tree nor necessarily the whole suite.
+  tag's tree nor necessarily the whole suite.  And the schedule is not a clock:
+  the 03:00 UTC daily has started anywhere between 03:34 and 14:45 (measured
+  2026-08-16..09-04), on whatever `main` was at that moment.
 
-So the release evidence is a **current, deliberate run**, not a historical
-result: re-run each nightly suite against the tag candidate and record the
-outcome.  Where a nightly cannot run here (a hosted-runner dependency, a
-platform we do not have), say so explicitly and name what was substituted —
-an unrunnable suite is an unproven one, not a passing one.
+So the release evidence is a **current, deliberate run on the candidate's
+commit**, not a historical result — and it is one command:
 
-The three cases that clear the bar, all of which end in evidence rather than a
-badge:
+```
+make release-gate          # every nightly, THIS commit, one CI run, one verdict
+make release-checklist     # `A-release-gate` reads the newest run for HEAD's sha
+```
 
-| the nightly | what clears it |
+`release-gate.yml` calls the six nightlies as reusable workflows — the full
+`ci.yml` matrix incl. Windows with the stdlib round-trip and the differential
+oracle, every `miri.yml` sanitizer and invariant gate, `registry-validation`,
+`revalidate-libs`, `browser-threads`, `repro-build` — and a `verdict` job goes
+red if any leg did not succeed, `cancelled` and `skipped` included.  It also
+counts the jobs a PR shows as **advisory**: informational on a diff, blocking
+on a release.  It is keyed by commit on purpose — a green run on any other
+commit, last night's `main` included, is not evidence for this one — and it
+dispatches only on a pushed ref, so what it tests is what GitHub holds.
+
+The gate is the release's evidence; it is **not** a licence to leave the nightly
+red.  The schedule keeps running and a red nightly is still fixed the day it
+appears: a gate at release time is where a month of deferred reds would pile
+up, and one per day is a fix while six at once is a slip.
+
+The three cases that a red LEG can be, all of which end in evidence rather than
+a badge:
+
+| the leg | what clears it |
 |---|---|
-| **red for an environment reason** (missing ALSA/GL, expired token, registry unreachable, toolchain bump) | run the suite here and show it green; record the reason for the red — that is a real CI finding, and the release proceeds |
-| **red for a REAL failure that we then FIXED** (e.g. Windows was genuinely broken) | the proof of the fix IS the evidence.  Do **not** wait a cycle for the next nightly to agree — a release is not gated on the CI cadence catching up.  Record the failure, the fix, and the run that shows it green |
-| **green** | still name what it covered, since a green run also covers whatever skipped itself |
+| **red for an environment reason** (missing ALSA/GL, expired token, registry unreachable, toolchain bump) | fix the environment or run that suite here and show it green; record the reason for the red — that is a real CI finding, and the release proceeds on a re-run of the gate |
+| **red for a REAL failure that we then FIXED** (e.g. Windows was genuinely broken) | the fix lands, the gate is re-run on the fixed commit, and THAT run is the evidence.  Do **not** wait a cycle for the next nightly to agree — a release is not gated on the CI cadence catching up |
+| **green** | still name what it covered: a green run also covers whatever skipped itself, which is why the `verdict` job treats a skipped leg as not green |
 
 The second row is the one worth stating out loud, because the instinct is to
 wait for a green nightly before tagging.  That instinct trades a day for no new
@@ -1161,6 +1180,7 @@ adds an item that needs a new tool, add the tool here.
 | `objdump` | DWARF inspection for NDB.0 (`-h` lists debug sections) | OS package manager (GNU binutils) |
 | `node` | JS-glue probes for browser quality gate; `vsce` runtime | https://nodejs.org (20.x+) |
 | `python3` | JSON validation (`python3 -m json.tool`); generic scripting | OS package manager |
+| `gh` | `make release-gate` (dispatch + watch) and the checklist's CI-reading items (`A-release-gate`, `A-draft`, `A-smoke`) | https://cli.github.com (needs the `workflow` scope) |
 | `chromium` / `google-chrome` | WASM HTML build verification (already used by `make wasm-html-test`) | OS package manager |
 
 ### The per-release checklist — `make release-checklist`
@@ -1210,7 +1230,9 @@ apply (e.g. NDB.0 in [`plans/34-native-debug/`](plans/34-native-debug)).
 file calls a release blocker is an item: the safety gate's valgrind, zero-leak,
 zero-ignore and skip-list rows (`M-valgrind`, `M-leaks`, `M-ignores`, with
 `A-ignores` checking the rationales mechanically), the WASM endpoint gate
-(`M-wasm`), the nightlies (`M-nightly-1`…`6`), step 9's artefacts, step 10's
+(`M-wasm`), the nightlies (`A-release-gate`: one deliberate run of all six against
+HEAD's commit, measured — it replaced six hand-dispatched, hand-ticked items), step 9's
+artefacts, step 10's
 binaries and registry entry, and the monthly reviews the cadence makes
 per-release work (`M-monthly-docs`, `M-monthly-bugs`, `M-close-plans`).
 

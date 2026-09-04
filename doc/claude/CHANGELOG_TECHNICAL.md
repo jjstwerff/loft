@@ -9,6 +9,22 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The release gate: every nightly against one commit, one verdict (2026-09-04)
+
+`release-gate.yml` calls the six nightlies — `ci.yml` (full matrix incl. Windows, the
+stdlib round-trip, the differential oracle), `miri.yml`, `registry-validation`,
+`revalidate-libs`, `browser-threads`, `repro-build` — as reusable workflows against ONE
+commit, and a `verdict` job is red on any leg that is not `success`, advisory PR jobs
+included.  `make release-gate` dispatches it on the pushed branch and waits; the release
+checklist's six hand-dispatched `M-nightly-*` items become one measured `A-release-gate`,
+keyed by HEAD's commit.  Measured cause: the 03:00 daily started between 03:34 and 14:45
+UTC over three weeks, on whatever `main` was, and push-to-main's full matrix was red on
+each of the last eight merges — the nightly-only legs are where a merge is found red, so
+a release needs them run deliberately on the candidate.  Each nightly gains a
+`workflow_call` trigger; `miri.yml`'s `from_gate` keeps its issue filer and digest with
+the schedule, and three concurrency groups now carry the caller's workflow name.
+CI_BUDGET.md § The schedule is not a clock; RELEASE.md § The nightlies.
+
 ### A fn-ref that FORWARDS is witnessed by the dep its callee declares (2026-09-04)
 
 Branch-internal, never on `main`: loft#1329 made a captured fn-ref resolvable, which first

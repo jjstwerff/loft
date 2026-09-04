@@ -41,13 +41,27 @@ on:
         default: 'all'
         type: choice
         options: [all, ubuntu-latest, macos-latest, windows-latest]
+  # Called by `release-gate.yml`: one deliberate run of every nightly against ONE
+  # commit, ending in one verdict (the release evidence — RELEASE.md § The nightlies).
+  # A called workflow sees its CALLER's event, which is a dispatch or a probe push and
+  # never `pull_request`, so it takes the same full path the schedule takes.
+  # `os` mirrors the dispatch input so the gate can narrow to one platform's answer.
+  workflow_call:
+    inputs:
+      os:
+        description: 'Which runners: all, or one of ubuntu-latest / macos-latest / windows-latest'
+        required: false
+        default: 'all'
+        type: string
 
 # A new push to the same PR/branch obsoletes the running matrix — cancel it
 # instead of letting both compete for runners (three stacked full runs in one
 # evening turned a 20-minute matrix into an hour of queueing).  Never cancel
-# main builds.
+# main builds.  The group carries the CALLER's workflow name: under
+# `release-gate.yml` this file runs as a leg of that run, and its group must not
+# collide with — or cancel — a standalone run on the same ref.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
@@ -150,8 +164,9 @@ jobs:
           # they cut ACROSS this group, putting a serial slot in every shard; cutting
           # ALONG it is the untried axis.  Only the PR path is split — push/nightly
           # keeps one job per OS, so its three required contexts are unchanged.
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] \
-            && [ -n "${{ inputs.os }}" ] && [ "${{ inputs.os }}" != "all" ]; then
+          # `inputs.os` is set by a dispatch or by the release gate's call and is
+          # empty on every other event, so the test needs no event name.
+          if [ -n "${{ inputs.os }}" ] && [ "${{ inputs.os }}" != "all" ]; then
             echo 'legs=[{"os":"${{ inputs.os }}"}]' >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event_name }}" = "pull_request" ]; then
             echo 'legs=[{"os":"ubuntu-latest","shard":"heavy"},{"os":"ubuntu-latest","shard":"rest-a"},{"os":"ubuntu-latest","shard":"rest-b"}]' >> "$GITHUB_OUTPUT"

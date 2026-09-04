@@ -54,6 +54,20 @@ on:
   schedule:
     - cron: '0 4 * * *'        # nightly 04:00 UTC
   workflow_dispatch:
+  # Called by `release-gate.yml`: one deliberate run of every nightly against ONE
+  # commit, ending in one verdict (the release evidence — RELEASE.md § The nightlies).
+  # A called workflow sees its CALLER's event, which is a dispatch or a probe push and
+  # never `pull_request`, so it takes the same full path the schedule takes.
+  # `from_gate` keeps `notify` and `daily-status` with the SCHEDULE: a candidate run
+  # must neither open nor auto-close the nightly's tracking issue, and the digest
+  # describes the nightlies, not the gate.
+  workflow_call:
+    inputs:
+      from_gate:
+        description: 'Set by release-gate.yml: skip the issue filer and the daily digest'
+        required: false
+        default: false
+        type: boolean
   # @CI_BUDGET — the memory-safety gates run PER PR as well as nightly.  The rule
   # is placement by CAUSE: the PR gate tests what THIS DIFF can break, the nightly
   # tests what THE WORLD can break.  UB, a store UAF, a data race, a violated
@@ -954,7 +968,9 @@ jobs:
     # "the language is broken", add it here in the same commit.
     needs: [miri, asan, poison, debug-asserts]
     # Never from a PR: a pull request must not be able to open an issue on the repo.
-    if: always() && github.event_name != 'pull_request'
+    # Never from the release gate either: its run is evidence for a candidate, and a
+    # green candidate must not auto-CLOSE an issue main's nightly opened.
+    if: always() && github.event_name != 'pull_request' && !inputs.from_gate
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -1029,7 +1045,7 @@ jobs:
   daily-status:
     name: Daily status (the one place to look)
     needs: [miri, asan, asan-leak-gate, poison, tsan, native-asan, debug-asserts, toolchain-matrix, index-hygiene, library-health]
-    if: always() && github.event_name != 'pull_request'
+    if: always() && github.event_name != 'pull_request' && !inputs.from_gate
     runs-on: ubuntu-latest
     permissions:
       contents: read

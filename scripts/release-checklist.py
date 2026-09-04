@@ -663,6 +663,52 @@ def check_smoke_ran(version: str, network: bool):
     return OK, f"bundle smoke ran and passed on all {len(ran)} legs"
 
 
+def check_release_gate(network: bool):
+    """The newest completed `release-gate.yml` run for HEAD's commit, and its verdict.
+
+    The gate is every nightly, run deliberately against ONE commit and ending in one
+    verdict (`make release-gate`).  It is keyed by COMMIT on purpose: the release evidence
+    RELEASE.md asks for is a run on the tag candidate, and a run on any other commit --
+    last night's `main`, the branch before its final fix -- is not that, however green.
+    A run still in flight is UNKNOWN, not a pass, for the same reason a check that could
+    not run is.
+    """
+    if not network:
+        return UNKNOWN, "skipped (--no-network)"
+    code, sha = sh("git", "rev-parse", "HEAD")
+    if code != 0:
+        return UNKNOWN, "could not read HEAD"
+    short = sha[:12]
+    code, out = sh(
+        "gh", "run", "list", "--workflow", "release-gate.yml", "--commit", sha,
+        "--json", "databaseId,conclusion,status,createdAt,url", "--limit", "10",
+        timeout=90,
+    )
+    if code != 0:
+        if "404" in out:
+            # A dispatchable workflow has to be on the default branch; until this one has
+            # merged, GitHub answers as if it did not exist.
+            return UNKNOWN, "release-gate.yml is not on GitHub's default branch yet — merge it, then `make release-gate`"
+        return UNKNOWN, f"could not list release-gate runs: {out.splitlines()[-1] if out else code}"
+    try:
+        runs = json.loads(out or "[]")
+    except json.JSONDecodeError:
+        return UNKNOWN, "could not parse `gh run list`"
+    if not runs:
+        return UNKNOWN, f"no release-gate run for {short} — `make release-gate` (the branch must be pushed)"
+    run = max(runs, key=lambda r: r.get("createdAt", ""))
+    when = run.get("createdAt", "")[:16].replace("T", " ")
+    if run.get("status") != "completed":
+        return UNKNOWN, f"run for {short} still {run.get('status')} (started {when}) — {run.get('url')}"
+    if run.get("conclusion") == "success":
+        return OK, f"GREEN for {short} at {when} — {run.get('url')}"
+    return (
+        FAIL,
+        f"{run.get('conclusion')} for {short} at {when} — the `verdict` job names the red "
+        f"legs: {run.get('url')}",
+    )
+
+
 def changed_since_last_tag(version: str, paths: list[str]) -> bool:
     """Did any of `paths` change since the previous release?
 
@@ -841,23 +887,17 @@ def build_items(version: str, network: bool) -> list[tuple[str, list[Item]]]:
         ),
     ]
 
-    nightlies = [
-        ("ci.yml (full matrix, incl. Windows)", "gh workflow run ci.yml --ref <tag>"),
-        ("miri.yml (UB / ASan / TSan / poison)", "gh workflow run miri.yml --ref <tag>"),
-        ("registry-validation.yml", "gh workflow run registry-validation.yml"),
-        ("revalidate-libs.yml", "gh workflow run revalidate-libs.yml"),
-        ("browser-threads.yml", "gh workflow run browser-threads.yml"),
-        ("repro-build.yml", "gh workflow run repro-build.yml"),
-    ]
+    # Every nightly, run deliberately against THIS commit in one CI run with one verdict
+    # (`release-gate.yml`).  This used to be six manual items, one per nightly, each
+    # dispatched by hand and ticked by a person; keyed by HEAD's commit it is now
+    # measured, and a run on any other commit does not count (RELEASE.md § The nightlies).
     nightly_items = [
         Item(
-            f"M-nightly-{i}",
-            f"Nightly proven green ON THE TAG CANDIDATE: {name}",
-            cmd,
-            "a deliberate run against this tree — not last night's badge.  If it cannot "
-            "run here, say so and name what was substituted (RELEASE.md § The nightlies)",
-        )
-        for i, (name, cmd) in enumerate(nightlies, 1)
+            "A-release-gate",
+            "The release gate is GREEN on this commit (every nightly, one run, one verdict)",
+            "make release-gate    # dispatches release-gate.yml on the pushed branch and waits",
+            check=lambda: check_release_gate(network),
+        ),
     ]
 
     after_tag = [

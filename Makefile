@@ -859,7 +859,7 @@ examples-preflight:  ## Would a PR report anything on worked-example tags? (REPO
 # REPO defaults to this repo; point it at a library checkout to drive that repo's
 # rollout: make examples-progress REPO=../loft-libs-graphics
 REPO ?= .
-.PHONY: test-fast examples-index examples-preflight examples-progress features-review libraries-review bug-review release-checklist reference-review
+.PHONY: test-fast examples-index examples-preflight examples-progress features-review libraries-review bug-review release-checklist release-gate reference-review
 examples-progress:  ## Worked-example rollout REPORT: which packages still owe a verdict (never a gate)
 	@EXAMPLES_REPO_ROOT=$(REPO) bash scripts/check_doc_drift.sh examples-progress
 
@@ -912,6 +912,18 @@ bug-review:  ## Monthly bug-review aid: which mechanism classes are still produc
 # render as a broken target.  A report says what it found; it does not stop the build.
 release-checklist:  ## Per-release checklist: what CI proved, and what is left for a human
 	@python3 scripts/release-checklist.py $(ARGS) || true
+
+# Every nightly, run deliberately against THIS commit in one CI run that ends in one
+# verdict — the release evidence RELEASE.md § The nightlies asks for, on demand instead
+# of on GitHub's schedule (whose 03:00 daily has started anywhere from 03:34 to 14:45
+# UTC, on whatever `main` was at that moment).  Dispatches `release-gate.yml` on the
+# current branch, which must be PUSHED with HEAD at its tip — a dispatch runs the commit
+# GitHub holds, and `release-checklist` accepts only a run for HEAD's sha — then waits
+# (~60–90 min).  Exit status is the verdict.  Never tags, drafts or publishes.
+#   make release-gate
+#   make release-gate ARGS=--no-wait      # dispatch and return
+release-gate:  ## Run every nightly against this commit in one CI run (the release evidence)
+	@bash scripts/release-gate.sh $(ARGS)
 
 # The pass that validates what the reference PROMISES — the half `A-pdf*` cannot reach.
 # Those checks establish the document is whole, current and correctly versioned; all

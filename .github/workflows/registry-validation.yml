@@ -18,6 +18,11 @@ on:
   schedule:
     - cron: '30 4 * * *'
   workflow_dispatch:
+  # Called by `release-gate.yml`: one deliberate run of every nightly against ONE
+  # commit, ending in one verdict (the release evidence — RELEASE.md § The nightlies).
+  # A called workflow sees its CALLER's event, which is a dispatch or a probe push and
+  # never `pull_request`, so it takes the same full path the schedule takes.
+  workflow_call:
 
 permissions:
   contents: read

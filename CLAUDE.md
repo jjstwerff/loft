@@ -57,6 +57,11 @@ make check-rlib                          # 1s pre-flight: is libloft.rlib curren
 ./scripts/find_problems.sh --bg|--peek|--wait   # background full-suite run + inspect/block
 make ci-roundtrip                        # the exhaustive stdlib round-trip pair, which `make ci`
                                          #   excludes; run it before an IR-schema/serialiser change
+make release-gate                        # every nightly against THIS commit in ONE CI run, one
+                                         #   verdict — the release evidence (`release-checklist`
+                                         #   reads it by HEAD's sha).  The 03:00 daily starts
+                                         #   03:34–14:45 UTC on whatever main was; this does not
+                                         #   excuse a red nightly — fix those the day they appear
 make falsify GUARD=<guard.loft> REF=<commit>   # does this guard FAIL on the build it was
                                          #   written to catch?  Compares exit/asserts/leak/
                                          #   panic apart and names the channel that moved.
