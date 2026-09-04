@@ -11,6 +11,10 @@
     "at": "2026-09-04 19:39",
     "note": "step 1: PROBLEMS.md is the closed archive by design, PLANNING.md carries one struck WITHDRAWN row and no done-in-place item; step 2: scripts/linkcheck.sh 368 links OK; step 3: 5 orphans found by scan \u2014 SESSION_354_HANDOFF, SPLIT, GAME_TESTING, GAPS removed (a June handoff, an April function audit with 7 of 8 cited fns gone, a GL-testing guide whose 4 scripts no longer exist and whose subject TESTING.md now owns, an April coverage table the Makefile target supersedes), GALLERY_CI and BRITTLE linked from the CLAUDE.md index; step 4/5b: doc_history_report run \u2014 the top entries stay with the reason recorded in RELEASE.md \u00a7 2026-09; step 8: make clippy-review run, dead suppressions struck in its output"
   },
+  "M-ignores": {
+    "at": "2026-09-04 22:22",
+    "note": "Owner, 2026-09-04: 'acceptable to me when it is documented well enough' \u2014 validated on e77ef442+: 33 #[ignore]s, each in tests/ignored_tests.baseline with a reason naming the run it rides (17 measurements by hand, 13 sweeps nightly or by hand, 2 Windows cfg_attr, 1 maintenance), held by doc_hygiene::{ignored_tests_baseline_is_current, every_ignore_reason_says_how_it_runs}; every suite skip list EMPTY; the four html_wasm platform limits (server, hex_world, imaging, input) each state the missing host facility, which gates still run the package, and what removes it; TESTING.md \u00a7 Every skip says why, how it runs instead, and when it ends is the rule; the record's M-ignores paragraph carries the same"
+  },
   "M-leaks": {
     "at": "2026-09-04 22:10",
     "note": "TAG CANDIDATE e77ef442: LOFT_STORES=warn over 1123 tests/scripts files: 0 leaking; LOFT_LOG=stores on 22-threading and 80-parallel-block: nothing unfreed (target/m-leaks-candidate.log)"
