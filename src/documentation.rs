@@ -2058,7 +2058,10 @@ fn main() {
     /// The tag shape is deliberately narrow so it cannot swallow loft's tracker families.
     #[test]
     fn the_example_tag_shape_excludes_the_tracker_families() {
-        assert!(is_example_tag("STD-001"), "three letters, hyphen, three digits");
+        assert!(
+            is_example_tag("STD-001"),
+            "three letters, hyphen, three digits"
+        );
         assert!(is_example_tag("FTR-037 — trailing prose is fine"));
         assert!(!is_example_tag("PLN3"), "@PLN3 is a plan, not an example");
         assert!(!is_example_tag("P259"), "@P259 is a P-issue");
