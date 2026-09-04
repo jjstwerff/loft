@@ -818,10 +818,11 @@ def build_items(version: str, network: bool) -> list[tuple[str, list[Item]]]:
         Item(
             "M-valgrind",
             "Valgrind-clean on the TAG CANDIDATE",
-            "valgrind target/release/loft <script> over tests/scripts/ + tests/docs/",
-            "`ERROR SUMMARY: 0 errors from 0 contexts` AND `definitely lost: 0 bytes` "
-            "— RELEASE.md § Memory safety says run it on the candidate, not last week",
-        ),
+            "scripts/valgrind-sweep.sh   # interpreter + native, every script and document",
+            "GREEN — no invalid access and nothing definitely lost on either backend.  A "
+            "possibly-lost record is Rust's interior pointers, not a leak, and a leaked STORE is "
+            "M-leaks' question (TESTING.md § Occasional valgrind pass)",
+),
         Item(
             "M-leaks",
             "Zero-leak gate re-verified on the TAG CANDIDATE",

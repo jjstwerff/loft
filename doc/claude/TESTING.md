@@ -2455,19 +2455,28 @@ allocator behaviour.
 ### Recipe
 
 ```bash
-# 1. Build test binaries (debug profile keeps the boundary checks for
-#    crates other than loft, but the real value is valgrind's redzones).
-cargo test --no-run
-
-# 2. Run unit + integration tests under valgrind.  Skip threading-heavy
-#    tests if they are too slow under instrumentation; valgrind is
-#    typically 5-10x slower than a normal run.
-for t in target/debug/deps/loft-*; do
-    [ -x "$t" ] || continue
-    valgrind --error-exitcode=1 --leak-check=no \
-             --track-origins=yes "$t" --test-threads=1 || exit 1
-done
+scripts/valgrind-sweep.sh              # every script + document, interpreter AND native
+scripts/valgrind-sweep.sh tests/docs   # one tree, or a list of files
 ```
+
+One command, one verdict, per-file logs in `target/vg/`.  It runs `loft --interpret` on every
+file (`--tests` for `tests/scripts`, whose files have no `main`) and, for `tests/docs`, builds
+each document with `loft --native` and hands the cached binary in `<dir>/.loft/cache/` to
+memcheck directly — the compiled program is where the native runtime's `unsafe` runs, and
+`--trace-children` cannot reach it without also tracing rustc.  About fifteen minutes on
+24 cores; `VG_JOBS` bounds the parallel memchecks (each takes ~200 MB).
+
+Two decisions are built in, and both are measurements rather than taste:
+
+- **Only an invalid access or a DEFINITELY lost block is red.**  Rust's hashbrown tables and
+  boxed strings keep interior pointers, so every process-lifetime table — the parser's
+  `Data`, the native emitter registry — reads as "possibly lost" at exit: 179 such records on
+  a run with no defect in it.  `--errors-for-leak-kinds=definite` is that decision spelled
+  where valgrind reads it; a possibly-lost record is still in the log for anyone who wants it.
+- **A leaked or over-freed STORE is not a valgrind error.**  The store arena is one valid
+  allocation (DEBUG.md § Debugging store-ownership bugs), so that half of the release's
+  memory gate is `M-leaks` under `LOFT_STRICT_STORES=1`, and this sweep does not pretend to
+  cover it.
 
 ### When to run
 
