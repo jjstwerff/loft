@@ -832,7 +832,7 @@ differently and only a cell could ever have caught the claim.
 
 | chapter source | reviewed through | commit |
 |---|---|---|
-| `default` | 2026-09-04 | `32700867` |
+| `default` | 2026-09-05 | `b10ef6d6` |
 | `doc/00-vs-python.html` | 2026-09-03 | `b1ccf0e9` |
 | `doc/00-vs-rust.html` | 2026-09-03 | `b1ccf0e9` |
 | `doc/install.html` | 2026-09-03 | `b1ccf0e9` |
@@ -851,18 +851,18 @@ differently and only a cell could ever have caught the claim.
 | `tests/docs/12-hash.loft` | 2026-09-01 | `e9643ff6` |
 | `tests/docs/13-file.loft` | 2026-09-01 | `e9643ff6` |
 | `tests/docs/15-lexer.loft` | 2026-09-01 | `e9643ff6` |
-| `tests/docs/16-parser.loft` | 2026-09-04 | `2abce623` |
+| `tests/docs/16-parser.loft` | 2026-09-05 | `b10ef6d6` |
 | `tests/docs/17-libraries.loft` | 2026-09-01 | `e9643ff6` |
 | `tests/docs/18-locks.loft` | 2026-09-01 | `e9643ff6` |
 | `tests/docs/19-threading.loft` | 2026-09-01 | `e9643ff6` |
-| `tests/docs/20-logging.loft` | 2026-09-04 | `2abce623` |
+| `tests/docs/20-logging.loft` | 2026-09-05 | `b10ef6d6` |
 | `tests/docs/22-time.loft` | 2026-09-01 | `e9643ff6` |
-| `tests/docs/23-safety.loft` | 2026-09-04 | `7c6a945c` |
+| `tests/docs/23-safety.loft` | 2026-09-05 | `b10ef6d6` |
 | `tests/docs/24-json.loft` | 2026-09-03 | `b1ccf0e9` |
-| `tests/docs/25-generics.loft` | 2026-09-04 | `2abce623` |
-| `tests/docs/26-closures.loft` | 2026-09-04 | `7c6a945c` |
-| `tests/docs/27-coroutines.loft` | 2026-09-04 | `2abce623` |
-| `tests/docs/28-tuples.loft` | 2026-09-04 | `2abce623` |
+| `tests/docs/25-generics.loft` | 2026-09-05 | `b10ef6d6` |
+| `tests/docs/26-closures.loft` | 2026-09-05 | `b10ef6d6` |
+| `tests/docs/27-coroutines.loft` | 2026-09-05 | `b10ef6d6` |
+| `tests/docs/28-tuples.loft` | 2026-09-05 | `b10ef6d6` |
 | `tests/docs/29-match.loft` | 2026-09-03 | `b1ccf0e9` |
 | `tests/docs/30-formatting.loft` | 2026-09-03 | `b1ccf0e9` |
 | `tests/docs/31-ref-forward.loft` | 2026-09-03 | `b1ccf0e9` |
