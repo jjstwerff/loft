@@ -206,6 +206,14 @@ shell idiom there is.
 
 ### Smaller things you may notice
 
+- A struct or vector yielded from a generator's LOOP body compiles on `--native`, and the
+  consumer reads the value as it was at the yield; the statements after the loop run too
+  (they were silently dropped).
+- `yield from` a record generator inside an `if` no longer reports a wrong free on the
+  interpreter.
+- A capturing closure in a collection is refused with the struct-field route named, not a
+  plan that never landed: a collection takes non-capturing lambdas, a struct field holds a
+  capturing one.
 - `loft check` prints `ok`, not an absolute path and an internal cache entry.
 - `yield from` passes its arguments, and a parameterised sub-generator compiles on
   `--native`.

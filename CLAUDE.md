@@ -55,8 +55,9 @@ make check-rlib                          # 1s pre-flight: is libloft.rlib curren
                                          #   idle — two checkouts running gates at once doubles
                                          #   it (CI_BUDGET.md § A LOCAL `make ci`).
 ./scripts/find_problems.sh --bg|--peek|--wait   # background full-suite run + inspect/block
-make ci-roundtrip                        # the exhaustive stdlib round-trip pair, which `make ci`
-                                         #   excludes; run it before an IR-schema/serialiser change
+cargo test --release --test ir_schema_roundtrip   # the IR codec over the whole stdlib + every
+                                         #   tests/scripts file; run it after an IR-schema/
+                                         #   serialiser change (`make ci` runs it in the pool)
 make release-gate                        # every nightly against THIS commit in ONE CI run, one
                                          #   verdict — the release evidence (`release-checklist`
                                          #   reads it by HEAD's sha).  The 03:00 daily starts
@@ -286,11 +287,15 @@ the rules: [formal/README.md](doc/claude/formal/README.md) § When to reach for 
 ## Bug-filing policy — MANDATORY
 
 **Default is FIX, not file** — bugs surfaced while fixing another are the cheapest to fix (paths
-loaded, repro warm). **An open issue is a debt, not a resolution: the owner wants NO open
-issues, and a clean slate outranks a release** — so filing is only ever the hand-off to a
-peer who is fixing it now, never a resting place, and "ship with #N open" is never the
-recommendation. In **stability work** the file-instead-of-fix escape hatches do NOT apply: fix
-in the same session with a regression test. Record scope + root cause, never origin commit.
+loaded, repro warm). **An open issue is DEFERRED work, and the owner does not defer: filing is
+fine as the record, but an open issue is never ignored for a release and rarely for a PR** — so
+it is fixed before the release (normally before the PR) by the filer or a named peer, and
+"ship with #N open" is never the recommendation. **Inside an INVESTIGATION plan, filing is not
+correct at all**: a bug met while digging into why something is broken is fixed on the spot,
+because leaving it in the way hides the full picture (such a plan is itself a last resort, for
+when the ordinary tools no longer work). In **stability work** the file-instead-of-fix escape
+hatches do NOT apply either: fix in the same session with a regression test. Record scope + root
+cause, never origin commit.
 
 **File only when NOT fixing now:** it blocks the current task (bookmark + workaround), or it's
 genuinely M+/needs-design (route to its canonical home). When you file: a **GitHub Issue**

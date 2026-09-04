@@ -9,6 +9,30 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The warm cache carries its import tables, an eager generator owns its snapshots and runs its tail, and every ignore says how it runs instead (2026-09-04)
+
+loft#1359: the IR root (`tools/ir_schema/ir.loft` `Data`, cache format **4**) now carries
+`imports` (the retained `AppliedImport`s `rebuild_indices` replays) and `use_names`; a warm
+load of a multi-source program used to lose every `use lib::*` binding and the module map,
+because neither is derivable from the definitions.  `DATA_ROOT_WORDS` / `BUNDLE_ROOT_WORDS`
+size the root claims from the schema — `Store::claim` counts 8-byte words INCLUDING the
+record header, and a claim sized from the stride alone put the last field in the next block
+(the hang that cost an hour).  The JSON snapshot carries both tables too, and the guard
+`multi_source_round_trip_preserves_derived_indices` is un-ignored; `g2_m6_warm_store` gains
+a real multi-source warm run.  loft#1356: the native eager factory pushes every handle as a
+SNAPSHOT (`coroutine_snapshot`, one store per generator, freed at exhaustion and from
+`drop_stores`) instead of refusing struct/vector loop-body yields, and it now emits the
+generator's TAIL — it had dropped every statement after the last yield, which leaked each
+persistent heap local of an eager generator and lost a `print` after the loop.  The
+`yield from` desugar binds `__yf_item` as a borrow of `__yf_sub` (the loft#481 dep), so an
+enclosing `if` arm no longer frees the sub-generator's frame through it (BUG #306 on the
+interpreter).  loft#1358: closed as C116 — one refusal home
+(`Parser::refuse_capturing_closure_in_collection`), the canary converted to its guard.
+`tests/ignored_tests.baseline` shrinks to 33 and `doc_hygiene::every_ignore_reason_says_how_it_runs`
+requires each reason to name the run it rides (`--ignored` by hand, a nightly job, a platform);
+the two `web/http.loft` skips were inert (the file lives in `tests-network/`, which no suite
+walks) and are gone.
+
 ### A lambda's lifetime tuple is boxed like a named function's, a tuple result joins a tuple literal, and a nullable record from a fn-ref copies on the interpreter (2026-09-04)
 
 loft#1349: a lambda declared `-> (vector<integer>, text)` stored its annotation verbatim,
