@@ -816,7 +816,7 @@ differently and only a cell could ever have caught the claim.
 
 | chapter source | reviewed through | commit |
 |---|---|---|
-| `default` | 2026-09-03 | `b1ccf0e9` |
+| `default` | 2026-09-04 | `db66076b` |
 | `doc/00-vs-python.html` | 2026-09-03 | `b1ccf0e9` |
 | `doc/00-vs-rust.html` | 2026-09-03 | `b1ccf0e9` |
 | `doc/install.html` | 2026-09-03 | `b1ccf0e9` |

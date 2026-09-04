@@ -198,9 +198,9 @@ as a STALE ROW rather than ignored.
 
 | library | reviewed through | at commit | notes |
 |---|---|---|---|
-| `default` | 2026-08 | `7786d28c` | @STD-001..012 authored across text / collections / JSON / files-IO; docs read while tagging |
-| `lib/git` | 2026-08 | `7786d28c` | @GIT-001..005 tagged to live uses in `scan.loft` + `refresh.loft`; 13 pub fns read while tagging |
-| `lib/lexer.loft` | 2026-08 | `7786d28c` | @LEX-001 (matches/test/identifier), @LEX-002 (anchor/revert backtracking) — both tagged to live uses in `parser.loft` (`function`, `object`), exercised by the `16-parser` doc test; format-protocol/comment fns still owe examples (need a non-rendered demo) |
+| `default` | 2026-09 | `2966e9b5` | @STD-001..012 authored across text / collections / JSON / files-IO; docs read while tagging. 2026-09: the only change since is two compiler-internal ops (`OpDistinctStore`, `OpRefAlias`), non-`pub` and undocumented by design — the reference chapter's promises are unchanged |
+| `lib/git` | 2026-09 | `2966e9b5` | @GIT-001..005 tagged to live uses in `scan.loft` + `refresh.loft`; 13 pub fns read while tagging. 2026-09: a query that cannot be ASKED now halts instead of answering `""` (loft#1061) and the doc above `git_query` and `branch` moved with the code |
+| `lib/lexer.loft` | 2026-09 | `2966e9b5` | @LEX-001 (matches/test/identifier), @LEX-002 (anchor/revert backtracking) — both tagged to live uses in `parser.loft` (`function`, `object`), exercised by the `16-parser` doc test; format-protocol/comment fns still owe examples (need a non-rendered demo). 2026-09: `Anchor.start` (a revert can land at a token's START), `split_token` (maximal munch undone for a nested `>>`) and `offset` (a stalled-loop guard) — each documented with its reason and with live callers in `lib/parser.loft` |
 | `lib/audience_crystal` | 2026-08 | `7786d28c` | @ACR-001..003 tagged to the `01-editor-helpers` test (picking inverse, incr editor loop, erase) |
 | `lib/engine_host` | 2026-08 | `7786d28c` | @EHK-001..004 tagged to CI-spawned audience-demo kernels (run loop, broadcast, sync lanes, run_client drain); 37 pub fns read while tagging |
 

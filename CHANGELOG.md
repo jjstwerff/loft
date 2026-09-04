@@ -180,6 +180,15 @@ shell idiom there is.
 - A format hole holding an escaped quote — `"{shout("a\"b")}"` — no longer ends the
   enclosing item early.
 - A `par` worker over nested vectors is handed its own row rather than every second one.
+- A walker over a self-referencing record — `cur: Node? = a; while cur != null { cur =
+  cur.next }` — no longer leaks the copy it starts from, and copying a value into a variable
+  that currently views another record no longer writes into that record on `--native`.
+- A value handed back through a nullable return (`-> S?`) that is a view of a local is
+  copied before it leaves the function; it used to hand back a record the function had
+  already released.
+- On Windows, a `log.conf` `[levels]` key ending in `/` raises a file's level as documented,
+  and `loft check`'s machine-readable line names the source in the spelling the live host
+  compares against.
 
 ---
 
