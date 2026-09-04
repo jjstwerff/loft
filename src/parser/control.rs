@@ -1699,6 +1699,9 @@ impl Parser {
             // work-ref, exactly as a function tail is, and let `parse_if` join two records.
             // Only a tuple whose element types spell the SAME synthetic name is boxed; a
             // different shape keeps the refusal, which is then about the elements.
+            // The work-ref an `else` arm was boxed into (loft#1350) — the arm's own
+            // ownership fact, read where the arm's type is settled below.
+            let mut boxed_arm_w: Option<u16> = None;
             let tuple_rewritten = !self.first_pass
                 && (context == "return from block" || context == "else")
                 && matches!(t, Type::Tuple(_))
@@ -1729,7 +1732,7 @@ impl Parser {
                                 w,
                                 &mut l[last],
                             );
-                            tp = Type::Reference(synthetic_d_nr, Deps::frame1(w));
+                            boxed_arm_w = Some(w);
                         }
                         same_shape
                     } else {
@@ -1939,6 +1942,10 @@ impl Parser {
                 // one — which is also what lets `parse_if` see that the two differ.
                 let honest = if sibling_variant {
                     t.clone()
+                } else if let Some(w) = boxed_arm_w {
+                    // The arm was boxed into `w` (loft#1350): its value is that work-ref,
+                    // and naming it is the same mint marker a struct-literal arm carries.
+                    result.with_deps(&Deps::frame1(w))
                 } else {
                     result.with_deps_of(t)
                 };
