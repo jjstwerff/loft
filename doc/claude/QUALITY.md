@@ -4913,6 +4913,77 @@ not the current number — it is that **a reachability count is a measurement wi
 and the thing that moved this one was our own subsequent fix. [[keystone-claim-is-a-measurement]]
 extends to the counts a walk leaves behind, not only the ones it starts from.
 
+#### B7n — `@FR-B-Copy` walked: nineteen sites, two questions, one home short by one shape, and the release that followed the copy (2026-09-04)
+
+Picked by `rule_tags.py dups`: at 19 sites across six files it was the most scattered rule not
+yet walked, and the copy-vs-view class is where this week's six `silent-wrong` issues sat
+(loft#1336/#1337/#1345/#1346/#1349/#1353).  The branch is `tuxedo-quality-2026-09`, cut from
+the 2026.9.0 PR tip `12e58a4d`.
+
+**The split.**  The nineteen citations ask two questions.  *Which binds copy?* — the parser's
+`classify_vec_bind`, the dep-strip in `objects.rs`, the interpreter's first-bind and rebind
+arms, native's record-copy arm, the branch-arm lift's `arm_bind`.  *How is the copy made?* —
+`OpBindOrCopy` with the source as its own witness, `gen_set_first_ref_var_copy`,
+`OpReplaceVector`, the tuple constructor's member copy, a `&`-parameter write-back, native's
+`.clone()`.  The first question has a home: `Type::heap_def_nr` names the two heap-record
+shapes (a struct, a struct-enum), and the interpreter's null-init arm, its call-source arm and
+both native arms already read it.
+
+**The disagreement.**  Three sites of the first question spelled `Type::Reference` bare —
+the interpreter's two variable-source copy arms and the parser's dep-strip — and the arm lift
+declined a struct-enum arm *because* codegen had no copy for it.  Measured on 45 cells
+(`scripts/probe-matrix`, both backends), shallowest first: a struct-enum whole-value bind
+ALIASED on the interpreter at a first bind, a rebind, from a parameter and through a
+`(C-Var)` widening `c: E = s` — while `--native` copied every one (D-op-1, interpreter on the
+wrong side); the `if`-join of two struct-enum variables aliased on BOTH backends; and a
+NULLABLE struct-enum destination kept its source dep while both emitters copied, a copy nobody
+freed.  All three read `heap_def_nr` now, and `Data::copies_as` is the new one home for which
+record PAIRS copy (the same def, or a variant into its enum — native already admitted it, the
+interpreter refused it).  Beside it the field resolver's struct-enum branch matched the
+receiver bare too: `e.n` on an `e: Sh?` was "Unknown field" on a read and "cannot change type
+from Sh? to integer" on a write (pass 1 re-typed the receiver), while `s.v` on `s: S?` resolved
+through `type_elm`'s peel one line above.
+
+**The negative result, 30 cells.**  Parameters, loop variables, field and element
+destinations, `??` subjects, deep copies of nested vectors and structs, rebinds, text,
+sorted / index, `if`-arm and loop-body contexts, and the destination-write direction all copy
+as `(B-Copy)` says, identically on both backends.  Written into the boundary file as its
+sixteenth and seventeenth cells, and the two guards
+(`a-struct-enum-whole-value-bind-copies-like-a-struct`, 10 cells;
+`a-nullable-struct-enum-payload-field-resolves-like-a-struct-field`, 5) are falsified at
+`12e58a4d` on both backends.
+
+**The defect the fix uncovered, and the rule that settled it.**  The struct-enum arm of
+`139-drop-cascade.loft` c8 went from `alive,30` to `alive,30,30` once the arm copied — and
+its struct twin already read `alive,30,30`: a whole-value copy of a record holding a
+droppable released it once per RECORD.  `h2 = h` twice, `t = s` twice, `t = s; return t`
+THREE times with two of them before the caller had read its copy.  C111's own words name the
+failure (*"two records holding one resource"*) and its answer (move-on-construction), and
+`INTERFACES.md`'s move rule covered a field, a payload and an element but not the plain
+copy that is the same step with no container around it.  `scopes::copy_moves_drop_from` is
+the one home now: the collector's `Set(v, Var(src))` and its `OpCopyRecord` into a `__ref*`
+buffer (a materialised branch arm, a return buffer), the arm lift's `__lift_N = a` (built
+AFTER the collector ran — the third home the walk had to find), and the `double-move` lint,
+which reports `t = s; u = s` as it reported two containers.  A copy off a parameter leaves the
+caller as owner.  Deliberately kept: a multiply-assigned source or copy (the transfer set is
+per variable, the fact per assignment — `@FR-O-Latest`), because a rebind never releases what
+it displaces — measured, pre-existing, filed as **loft#1362** with its cells.  Guard
+`a-whole-value-copy-of-a-droppable-releases-once` (12 cells, two controls), falsified at
+`12e58a4d` on both backends.
+
+**Filed apart.**  A tuple with a heap member is SHARED by a whole-tuple bind, a destructure
+and a projection, and by the literal for a STRUCT member — `(T-Cons)`'s copy lives in
+`tuple_member_owned_copy`, short by the struct member and never reached by the bind
+(**loft#1361**, `tuples.md` D-tup-8, taken by the sibling checkout for the tag).
+
+**Method notes.**  Two of my own probes were truncated by the `head` I piped them through,
+and each cost a wrong hypothesis (*"the block is not in the collector's input"*) before the
+untruncated run showed the collector saw the copy and the DESTINATION's null placeholder was
+what failed the single-assignment test.  Print a diagnostic whole, then filter.  And the
+arm-lift comment said *"a struct-Enum … has no `Var`-copy lowering to hand the temp to"* — a
+carve-out that stated the defect as its reason, exactly the shape
+[[carve-out-comment-can-state-itself-as-the-rule]] warns about.
+
 #### B2 — open, and the owner's call
 
 | decision | evidence | why it is not mine to take |

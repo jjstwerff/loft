@@ -34,6 +34,47 @@ not-a-library set there) — it checks the repo out now; `release-gate.sh`'s run
 `--arg` to `gh --jq`, which takes a bare expression; and the `x86_64-apple-darwin` leg leaves
 `macos-14` (deprecated, brownouts through October, gone November 2nd) for `macos-15`.
 
+### A struct-enum whole-value bind copies on both backends, and a nullable struct-enum's payload field resolves (2026-09-04)
+
+`@FR-B-Copy` walked as a lens (QUALITY.md § B7n).  Three of its nineteen sites spelled
+`Type::Reference` bare where the question is *"is this a heap RECORD?"* — the interpreter's
+first-bind and rebind copy arms (`state/codegen.rs`) and the parser's dep-strip
+(`parser/objects.rs`) — while their siblings (the null-init arm, the call-source arm, both
+native arms) read `Type::heap_def_nr`, which names a struct-enum too.  So `e: Sh = Ci {…};
+c = e; e.n = 9` read 9 through `c` on `--interpret` and 1 on `--native` (D-op-1 with the
+interpreter wrong), the branch-arm lift (`scopes.rs::arm_bind`) declined a struct-enum arm
+because codegen had no copy for it (so the join aliased on BOTH backends), and a NULLABLE
+struct-enum destination kept its source dep while both emitters copied — a copy nobody
+freed.  All three read `heap_def_nr` now, and **`Data::copies_as`** is the one home for which
+record pairs copy: the same def, or a variant into its own enum (`types.md (C-Var)`), which
+native already admitted and the interpreter refused (`c: Sh = ci` aliased).
+`parser/fields.rs`'s struct-enum field branch matched the receiver bare as well, so `e.n` on
+an `e: Sh?` was "Unknown field" on a read and "cannot change type from Sh? to integer" on a
+write (pass 1 re-typed the receiver); it reads through `base()` like `type_elm` beside it.
+Guards: `tests/scripts/a-struct-enum-whole-value-bind-copies-like-a-struct.loft` (10 cells),
+`a-nullable-struct-enum-payload-field-resolves-like-a-struct-field.loft` (5), and two cells
+in `bind-copies-or-views-the-whole-boundary.loft` — all falsified at `12e58a4d` on both
+backends.  The walk's 45 cells also measured 30 negative results (parameters, loop
+variables, field and element destinations, `??` subjects, deep copies, rebinds, text,
+sorted / index, `if`-arm and loop-body contexts, the destination-write direction) and one
+family filed apart: a tuple's heap member is shared by a whole-tuple bind, a destructure and
+a projection, and by the literal for a STRUCT member (loft#1361, `tuples.md` D-tup-8).
+
+The struct-enum copy exposed a second family: a whole-value copy of a DROPPABLE released it
+once per record (`h2 = h`, `t = s`, `t: S? = s`, a struct-enum arm now that it copies, and
+`t = s; return t` — three times, two of them before the caller read its copy).
+`scopes::copy_moves_drop_from` is the one home for the move C111 chose for containers,
+extended to the plain copy: read by `collect_drop_transferred` (the parser's `Set(v,
+Var(src))` and the `OpCopyRecord` into a `__ref*` buffer — a materialised branch arm or a
+return buffer), by `lift_join_arm_tails` for its `__lift_N = a` (built after the collector
+ran), and by the `double-move` lint, which now reports `t = s; u = s`.  The move needs a
+singly-assigned source and destination (a compiler buffer is exempt: its null placeholder is
+its second `Set`, and a return buffer is an argument), and a copy off a parameter suppresses
+the COPY's drop instead — the caller owns.  A rebind still never releases what it displaces
+(loft#1362, pre-existing, filed with cells).  Guard
+`tests/scripts/a-whole-value-copy-of-a-droppable-releases-once.loft` (12 cells, two
+controls); `139-drop-cascade.loft` c8 keeps its `alive,30` with the struct twin c8s beside it.
+
 ### The warm cache carries its import tables, an eager generator owns its snapshots and runs its tail, and every ignore says how it runs instead (2026-09-04)
 
 loft#1359: the IR root (`tools/ir_schema/ir.loft` `Data`, cache format **4**) now carries

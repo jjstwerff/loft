@@ -2171,6 +2171,10 @@ impl Type {
     }
 
     /// The definition number for struct-like heap types (Reference or struct-enum).
+    ///
+    /// The one home for *"is this a heap RECORD?"* — the shape a plain whole-value bind
+    /// copies (`@FR-B-Copy`), on both backends.  A site that spells `Type::Reference` bare
+    /// instead answers "no" for a struct-enum and lets its bind alias.
     #[must_use]
     pub fn heap_def_nr(&self) -> Option<u32> {
         match self {
@@ -8986,6 +8990,21 @@ impl Data {
             Type::Function(_, _, _) => self.def_nr("i32"),
             _ => u32::MAX,
         }
+    }
+
+    /// May a record of def `src` be COPIED into a binding declared as def `dst`?
+    ///
+    /// The same def, or a VARIANT into its own enum: `types.md (C-Var)` licenses
+    /// `Reference(S) ⤳ Enum(E)` for `S ∈ variants(E)`, so `c: E = s` with `s: S` is a
+    /// legal bind, and `@FR-B-Copy` says it is a copy like any other.  One home for the
+    /// three sites that decide the copy — the parser's dep-strip and the interpreter's
+    /// first-bind and rebind arms — so they cannot disagree about which pairs copy; the
+    /// native emitter asks only that both sides be records (`Type::heap_def_nr`), and
+    /// this is the widest pair the checker lets reach it.
+    #[must_use]
+    pub fn copies_as(&self, dst: u32, src: u32) -> bool {
+        dst == src
+            || (matches!(self.def_type(src), DefType::EnumValue) && self.def(src).parent == dst)
     }
 
     #[must_use]

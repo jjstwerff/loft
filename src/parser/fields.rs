@@ -381,9 +381,16 @@ impl Parser {
             }
             if self.first_pass && self.lexer.has_token("(") {
                 self.skip_remaining_args();
-            } else if let Type::Enum(enum_d_nr, true, _) = &t
+            } else if let Type::Enum(enum_d_nr, true, _) = t.base()
                 && let Some((found_d_nr, found_fnr)) = self.find_poly_enum_field(*enum_d_nr, &field)
             {
+                // Through `base()`: `Sh?` is `Optional(Enum(Sh, true))`, the same record behind
+                // a nullability marker (`@FR-L-Null`), and `type_elm` above already peels it
+                // for the struct path.  Asked bare, `e.n` on an `e: Sh?` fell through — pass 1
+                // returned the receiver's own type, so a WRITE re-typed `e` ("cannot change
+                // type from Sh? to integer") and a READ reported "Unknown field Sh.n" — while
+                // `s.v` on an `s: S?` resolved.  The receiver's nullability reaches the read
+                // the way it does for a struct: `receiver_nullable` clears `expr_not_null`.
                 // For polymorphic enums (incl. @PLN25 `__nullable<S>`), this field
                 // lives in a VARIANT struct, not the enum itself.  Resolve in BOTH
                 // passes: the first pass needs the field TYPE so the receiver var

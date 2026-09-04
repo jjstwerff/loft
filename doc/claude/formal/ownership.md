@@ -285,7 +285,9 @@ implication that reading `deps` is *sufficient*.
 > the return position) and `1320-…` (the fn-ref arm that opened it).  Held FIXED, and
 > therefore NOT measured by them: a fn-ref whose TARGET cannot be resolved — a fn-typed
 > parameter or field — which is loft#1327 and reads `Owned` at every site that frees on the
-> oracle; a `&` binding or a struct-`Enum` variable as an arm (they keep the alias they had);
+> oracle; a `&` binding as an arm (it keeps the alias it had — a struct-`Enum` variable arm
+> was in this list until 2026-09-04, when the `@FR-B-Copy` walk gave it the copy lowering
+> a struct's has, `tests/scripts/a-struct-enum-whole-value-bind-copies-like-a-struct.loft`);
 > and the `--native` release of a displaced store on a fn-ref re-bind of a USER local, which
 > is loft#1328 and which the `??` hoist sidesteps by releasing in the IR.
 

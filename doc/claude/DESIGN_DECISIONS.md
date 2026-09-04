@@ -3175,6 +3175,16 @@ sanctioned workaround — `disown` after constructing the container — REQUIRES
 a field, so a declaration-site refusal rejects its own cure, and with the collection case in
 scope it would have to cover `vector<T>` as well.
 
+**Extended to the plain whole-value copy (2026-09-04).** `t = s` is the same step with no
+container around it — `@FR-B-Copy` makes it a second record holding one resource — and the
+same reasoning gives the same answer: the copy owns, the source stops dropping, once per
+resource on both backends.  Measured before the change: `h2 = h` ran the hook twice, `t = s`
+twice, a struct-enum arm once only because it aliased (a bind-copy defect closed the same
+day), `t = s; return t` three times.  `scopes::copy_moves_drop_from` is the one home; the
+`double-move` warning reads it too, so `t = s; u = s` is reported as two owners.  A copy off
+a parameter leaves the caller as the owner.  Guard:
+`tests/scripts/a-whole-value-copy-of-a-droppable-releases-once.loft`.
+
 That leaves one question, and it is a question about the GUARANTEE rather than the mechanism:
 which container deaths run the cascade?
 

@@ -121,9 +121,12 @@ rule `C-Ref` in [types.md](types.md): a `&τ` is accepted wherever a `τ` is.)
 
 ```
   (B-Copy)        a PLAIN bind COPIES the source — a scalar (`d = a`) AND a heap
-                  WHOLE-VALUE (`d = v`, `d = self.data`): the bound variable is
-                  INDEPENDENT, and mutating it does NOT reach the source.  This is
-                  [heap.md](heap.md) H-Copy (`fv = e.items; fv[0]=99` leaves `e.items[0]`).
+                  WHOLE-VALUE (`d = v`, `d = self.data`, a struct-enum `c = e`): the
+                  bound variable is INDEPENDENT, and mutating it does NOT reach the
+                  source.  This is [heap.md](heap.md) H-Copy (`fv = e.items; fv[0]=99`
+                  leaves `e.items[0]`).  A struct-enum value is a heap RECORD exactly as
+                  a struct is — `Type::heap_def_nr` names both — and a `(C-Var)` widening
+                  `c: E = s` from a variant is a copy like any other.
   (B-Ref-Alias)   the `&τ` annotation makes ANY binding — scalar OR heap — a live LINK
                   to the source instead of a copy.  `d = &v` / `d = &self.data` ALIAS the
                   vector: `d[i] = x` (and `d += …`) write THROUGH to the source, which is
@@ -195,8 +198,8 @@ COLLECTION projection off an OWNED base — which is exactly `OWNERSHIP_MODEL §
 `af = bx.v`.
 
 **The whole boundary is pinned in one place:**
-`tests/scripts/bind-copies-or-views-the-whole-boundary.loft`, eleven cells, measured identical on
-both backends.  Ask it rather than re-deriving: the cells existed before, scattered across four
+`tests/scripts/bind-copies-or-views-the-whole-boundary.loft`, seventeen cells, measured identical
+on both backends.  Ask it rather than re-deriving: the cells existed before, scattered across four
 files, and no single one said what the rule was.
 
 Both kinds of alias last exactly as long as the place they name, and the three things

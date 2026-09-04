@@ -467,6 +467,17 @@ and never by the container. That is invisible while both die in the same scope,
 and it is a use-after-free the moment the container outlives the source, which is
 what `open_session` above does.
 
+**A plain whole-value copy is the same step.** `h2 = h`, `t = s` for a struct or a
+struct-enum holding a droppable, `t: S? = s`, the variable an `if` arm yields, and
+`t = s; return t` all copy the record, and the copy takes the release with it: the
+source stops dropping, the copy (or the caller that adopts the returned copy)
+releases once. A copy taken FROM A PARAMETER runs the other way — the caller owns
+the resource, since the parameter aliases it — so it is the callee's copy that never
+drops. Two shapes keep both releases, deliberately: a source or a copy that is
+assigned more than once (the move belongs to one assignment, and a per-variable fact
+cannot carry two), and two copies of one source, which the `double-move` warning
+names.
+
 A container releases in this order:
 
 1. its own `OpDrop`, if it has one — a wrapper may still need what it wraps, the

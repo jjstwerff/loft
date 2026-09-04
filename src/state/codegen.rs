@@ -2686,11 +2686,15 @@ impl State {
                 // `OpBindOrCopy` with itself as witness, exactly as the first bind does: a
                 // present source is copied into a fresh store, an absent one leaves the
                 // destination null rather than holding a record that reads PRESENT.
-                if let Type::Reference(d_nr, _) = stack.function.tp(v).base().clone()
+                // Through `heap_def_nr()` on BOTH sides too: a struct-enum is the same heap
+                // record shape as a struct (`Type::heap_def_nr` is the one home for that
+                // question), and the bare `Reference` spelling left its rebind on the same
+                // alias its first bind took.
+                if let Some(d_nr) = stack.function.tp(v).base().heap_def_nr()
                     && let Value::Var(src) = value.unspan()
                     && *src != v
-                    && let Type::Reference(src_d, _) = stack.function.tp(*src).base()
-                    && d_nr == *src_d
+                    && let Some(src_d) = stack.function.tp(*src).base().heap_def_nr()
+                    && stack.data.copies_as(d_nr, src_d)
                 {
                     let tp_nr = stack.data.def(d_nr).known_type();
                     let ref_size = size_of::<crate::keys::DbRef>() as u16;
@@ -2906,13 +2910,17 @@ impl State {
             // The first assignment of a Reference variable being copied from another:
             // allocate a fresh store, initialize the struct record, then copy the data.
             self.gen_set_first_ref_copy(stack, v, d_nr, value);
-        } else if let Type::Reference(d_nr, _) = stack.function.tp(v).base().clone()
+        } else if let Some(d_nr) = stack.function.tp(v).base().heap_def_nr()
             && let Value::Var(src) = value
-            && let Type::Reference(src_d_nr, _) = stack.function.tp(*src).base()
-            && d_nr == *src_d_nr
+            && let Some(src_d_nr) = stack.function.tp(*src).base().heap_def_nr()
+            && stack.data.copies_as(d_nr, src_d_nr)
         {
-            // First assignment `d = c` where both are owned References to the same struct:
-            // give d its own independent record by allocating storage and copying c's data.
+            // First assignment `d = c` where both hold the same heap RECORD type — a struct
+            // or a struct-enum, the two shapes `Type::heap_def_nr` names: give d its own
+            // independent record by allocating storage and copying c's data.  Asked as a
+            // bare `Reference`, a struct-enum bind fell through to the plain adopt below and
+            // ALIASED (`e: Sh = Ci {…}; c = e; e.n = 9` read 9 through `c`), while `--native`
+            // reads the same question through `heap_def_nr` and copies.
             //
             // Read through `base()`, the peel the `Text` arm at the top of this function
             // already takes and for the same reason: `S?` is `Optional(Reference(S))`, the

@@ -18,6 +18,27 @@ The **say-what-you-do** release. Two threads, and they turned out to be one: eve
 the language reference was read against the compiler that ships, and most of what came back
 was not a wrong sentence but a promise nothing was keeping.
 
+**A struct-enum value binds like a struct.**  `c = e` on an enum-with-fields value now gives
+`c` its own copy on the interpreter, as it already did on `--native` — at a first bind, a
+rebind, from a parameter, through a nullable spelling, from a variant into its enum
+(`c: Shape = circle`), and on each arm of an `if` (where both backends had shared it).  A
+nullable one no longer leaves its copy behind.  And a field every variant declares is
+reachable through a nullable receiver (`e: Shape?; e.n = 9`, `x = e.n`) instead of being
+refused as a type change on the write and an unknown field on the read — exactly as `s.v`
+on an `s: S?` always was.  Found by walking the bind-copies rule across every position a
+struct's bind is measured at; the same walk found that a tuple holding a vector or struct
+member is shared, not copied, by a whole-tuple bind or a destructure (loft#1361, open, with
+a verified workaround).
+
+**A copied droppable is released once.**  `t = s` on a record whose type defines `OpDrop`
+— or holds a field that does — ran the hook for both records, so a copied file handle was
+closed twice; a copy returned from a function ran it three times, the first two before the
+caller had read what it was handed.  The copy now owns the resource and the source stops
+dropping, the same move a struct field or a collection element already made, on both
+backends.  A copy taken from a parameter leaves the caller as the owner.  Two copies of
+one value are reported by the `double-move` warning, as two containers built from it
+already were.
+
 **Every text buffer a frame mints is released.**  A handful of shapes answered the right
 value on both backends while the interpreter left one text buffer behind per call: a
 lambda returning a captured text through `??`, a nullable text local returned, a

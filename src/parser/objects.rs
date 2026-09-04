@@ -554,15 +554,21 @@ impl Parser {
                 // three exceptions — `(B-View)` is a struct PROJECTION, `(B-View-Base)` a
                 // borrowed base, `(B-View-Depth)` an index or nested read — and this is a
                 // whole value off an owned local.
-                if let Type::Reference(d_nr, _) = self.vars.tp(*into).base()
-                    && let Type::Reference(vd_nr, _) = self.vars.tp(v_nr).base()
-                    && d_nr == vd_nr
+                //
+                // And through `heap_def_nr()`, the one home for "is this a heap RECORD":
+                // a struct-enum is the same shape, and spelled as a bare `Reference` this
+                // arm kept a nullable struct-enum destination DEPENDING on its source while
+                // both emitters copied — a copy nobody freed.  `Data::copies_as` admits the
+                // `(C-Var)` widening `c: E = s` with `s` a variant of `E` beside the
+                // same-def pair.
+                if let Some(d_nr) = self.vars.tp(*into).base().heap_def_nr()
+                    && let Some(vd_nr) = self.vars.tp(v_nr).base().heap_def_nr()
+                    && self.data.copies_as(d_nr, vd_nr)
                 {
                     // Don't create OpCopyRecord here: generate_set handles the copy when
                     // value=Var(src). Using Var(v_nr) directly lets method calls like
                     // `d = c.double()` pass c as `self` without the broken CopyRecord-as-self
                     // pattern that was causing garbage store_nr crashes (Issue 1).
-                    let d_nr = *d_nr;
                     let into_var = *into;
                     self.vars.make_independent(into_var, v_nr);
                     *code = Value::Var(v_nr);
@@ -571,7 +577,9 @@ impl Parser {
                     // including the flow-narrowing peel above, so a source proven non-null
                     // in this branch answers the bare type and a `τ?` stays `τ?` — dropping
                     // the marker here would make `bns` non-null and lose the null arm.
-                    let bare = Type::Reference(d_nr, crate::data::Deps::none());
+                    // The destination's own base spelling (`Reference` or struct-`Enum`),
+                    // with no deps: the copy owns.
+                    let bare = self.vars.tp(into_var).base().without_deps();
                     return if matches!(t, Type::Optional(_)) {
                         Type::Optional(Box::new(bare))
                     } else {

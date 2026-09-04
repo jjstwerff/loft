@@ -1193,6 +1193,61 @@ fn established_stores(stmt: &Value, function: &Function, data: &Data) -> HashSet
     out
 }
 
+/// The variable whose scope-end DROP a plain whole-value copy `v = src` takes away, or
+/// `None` where the copy moves nothing.
+///
+/// `t = s` deep-copies (`@FR-B-Copy`) and leaves two records holding one resource — the
+/// failure C111 names for a container and answers with a MOVE — so the copy owns the
+/// resource and the SOURCE stops dropping.  Only the drop moves; both stores are still freed
+/// by the ordinary sweep.  A copy off a PARAMETER runs the other way: the caller owns the
+/// resource (calls.md F-ParamHeap — the parameter aliases it), so it is the callee's copy,
+/// `v`, that never drops.
+///
+/// The move is taken only for a source and a destination that are each assigned ONCE
+/// (`multi` is [`multi_assigned_in`]'s set), because the transfer set is per VARIABLE while
+/// the fact belongs to the assignment (`@FR-O-Latest`): a source rebound later would lose
+/// the drop of its NEW record, and a copy rebound later would drop neither record, since a
+/// rebind does not release what it displaces.  A captured variable is left alone for the
+/// same reason one level out — the closure record shares its slot.
+///
+/// A COMPILER BUFFER destination (`buffer_dst`: a `__ref_N` return buffer, the `__ref_p2_N`
+/// a materialised branch arm is copied into) is exempt from the destination's
+/// single-assignment and not-an-argument tests — its null placeholder at function entry
+/// is its second `Set`, a return buffer IS an argument (the caller's, adopted at the
+/// return), and its record is released with the cascade at its own free or by the caller
+/// that adopts it.  That is how `t = s; return t` releases once, in the caller.
+///
+/// One home for the three sites that see a whole-value copy: [`collect_drop_transferred`]
+/// (the parser's `Set(v, Var(src))` and its `OpCopyRecord` into a buffer), the branch-arm
+/// lift (`__lift_N = a`, built after the collector ran) and the double-move lint, so none
+/// of them can disagree about which copies move the drop.
+pub(crate) fn copy_moves_drop_from(
+    function: &Function,
+    data: &Data,
+    v: u16,
+    src: u16,
+    multi: &HashSet<u16>,
+    buffer_dst: bool,
+) -> Option<u16> {
+    if v == src
+        || (!buffer_dst && function.is_argument(v))
+        || function.is_captured(v)
+        || function.is_captured(src)
+    {
+        return None;
+    }
+    let d = function.tp(v).base().heap_def_nr()?;
+    let sd = function.tp(src).base().heap_def_nr()?;
+    if !data.copies_as(d, sd)
+        || data.drop_cascade_nr(d) == u32::MAX
+        || (!buffer_dst && multi.contains(&v))
+        || multi.contains(&src)
+    {
+        return None;
+    }
+    Some(if function.is_argument(src) { v } else { src })
+}
+
 /// @PLN139 stage C — the vars that HANDED OFF what they hold, so their scope end must not
 /// drop it.  Two ways a value stops being its variable's to release, both an `OpCopyRecord`:
 ///
@@ -1220,9 +1275,24 @@ fn collect_drop_transferred(code: &Value, function: &Function, data: &Data) -> H
     if copy_d == u32::MAX {
         return out;
     }
+    let multi = multi_assigned_in(code);
     code.walk(&mut |n| {
         match n {
             Value::Call(d, args) if *d == copy_d && args.len() >= 3 => {
+                // A whole-value copy into a compiler BUFFER — the per-arm `__ref_p2_N` a
+                // materialised branch arm is copied into, the `__ref_N` a return delivers
+                // through — is the same move as `t = s`: the buffer is freed with its cascade
+                // (or adopted by a caller who runs it), so the source stops dropping.  The
+                // spelling is a parser `OpCopyRecord` rather than a `Set`, which is why the
+                // arm below does not see it.
+                if let (Value::Var(src), Value::Var(dst)) = (args[0].unspan(), args[1].unspan())
+                    && function.name(*dst).starts_with("__ref")
+                    && let Some(moved) =
+                        copy_moves_drop_from(function, data, *dst, *src, &multi, true)
+                {
+                    out.insert(moved);
+                    return;
+                }
                 let moved = matches!(args[2].unspan(), Value::Int(tp) if tp & 0x8000 != 0);
                 if !moved
                     && !copy_hands_off(&args[1], function, data)
@@ -1244,6 +1314,15 @@ fn collect_drop_transferred(code: &Value, function: &Function, data: &Data) -> H
                     && w != *v
                 {
                     out.insert(w);
+                }
+                // A plain WHOLE-VALUE copy between two locals — `t = s`, `h2 = h` — moves the
+                // drop to the copy; see [`copy_moves_drop_from`], which the branch-arm lift
+                // reads for its `__lift_N = a` too.
+                if let Value::Var(src) = rhs.unspan()
+                    && let Some(moved) =
+                        copy_moves_drop_from(function, data, *v, *src, &multi, false)
+                {
+                    out.insert(moved);
                 }
             }
             _ => {}
@@ -8931,6 +9010,16 @@ impl Scopes<'_> {
         let mut copied: Vec<(u16, u16)> = Vec::new();
         let mut viewed: Vec<u16> = Vec::new();
         self.lift_arm_tails_into(node, home, bound, function, data, &mut copied, &mut viewed);
+        // Each `__lift_N = a` is a whole-value copy the collector never saw (the lift is built
+        // after it ran), so the drop moves here by the same rule: the arm's variable stops
+        // dropping, the temp — and through the join, the binding — owns the resource.
+        for &(src, tmp) in &copied {
+            if let Some(moved) =
+                copy_moves_drop_from(function, data, tmp, src, &self.multi_assigned, true)
+            {
+                self.drop_transferred.insert(moved);
+            }
+        }
         if bound == u16::MAX || (copied.is_empty() && viewed.is_empty()) {
             return;
         }
@@ -9054,8 +9143,10 @@ impl Scopes<'_> {
     ///     in its own right, a `__lift_N` is this rewrite's own product, an `_elm_N` a slot
     ///     inside a container.  Not the binding itself (`r = if c { r } else { … }`), whose
     ///     transition free already reads that it is read.  Not a keyed collection, which
-    ///     `OpReplaceKeyed` copies whatever the arm.  Not a struct-`Enum` or a `&` binding,
-    ///     which have no `Var`-copy lowering to hand the temp to.
+    ///     `OpReplaceKeyed` copies whatever the arm.  Not a `&` binding, which has no
+    ///     `Var`-copy lowering to hand the temp to.  A struct-`Enum` variable IS one: it is
+    ///     the same heap record shape as a struct (`Type::heap_def_nr`), and both emitters
+    ///     copy its `Var` bind.
     ///
     /// The fallback `None` is *"the join borrows this arm as it did"*: a literal or a
     /// comprehension owns through its per-site buffer, a projection is a view, and a shape
@@ -9115,6 +9206,12 @@ impl Scopes<'_> {
                     Type::Reference(r, _) => Some(ArmBind::Bind(Self::reopt(
                         opt,
                         Type::Reference(*r, Deps::none()),
+                    ))),
+                    // A struct-enum is the same heap record shape (`Type::heap_def_nr`), and
+                    // codegen copies its `Var` bind exactly as a struct's.
+                    Type::Enum(r, true, _) => Some(ArmBind::Bind(Self::reopt(
+                        opt,
+                        Type::Enum(*r, true, Deps::none()),
                     ))),
                     Type::Vector(inner, _) => {
                         // The buffer's function-entry allocation names the wrapper type by

@@ -103,8 +103,22 @@ fn c7() { for i in 9..11 { s = S { h: mk(i) }; note("alive{s.h.id}"); } }
 // 8 — an ENUM payload (stage D). The value is a record of the VARIANT with a discriminator
 //     at its head, so the cascade reads the discriminator once and releases through whichever
 //     variant is present. This is @PLN138's registry shape.
+//     The arm yields a VARIABLE, and a plain bind of a struct-enum variable COPIES like a
+//     struct's (`@FR-B-Copy`, since 2026-09-04 on the interpreter and at a branch join on both
+//     backends) — and that copy MOVES the payload's release to the copy (C111 extended to the
+//     whole-value copy the same day), so `w` and `a` are two records and the resource is
+//     released ONCE.  Until then the enum arm ALIASED and read the same `alive,30` by
+//     accident, while the struct twin `c8s` below read `alive,30,30`.
 fn c8(k: integer) {
   w: W = if k == 0 { a: W = WH { h: mk(30) }; a } else { b: W = WNone; b };
+  note("alive");
+}
+
+// 8s — the STRUCT twin of c8's shape: the arm variable is copied into the lift temp, and the
+//      copy owns the resource.  The two must read the same; a divergence here is a bind-copy
+//      or a drop-transfer defect, not a cascade one.
+fn c8s() {
+  s: S = if true { a: S = S { h: mk(30) }; a } else { b: S = S { h: mk(31) }; b };
   note("alive");
 }
 
@@ -171,6 +185,9 @@ fn main() {
 
   c8(0); got = drain();
   assert(got == "alive,30", "c8 an enum payload releases through its variant: {got}");
+
+  c8s(); got = drain();
+  assert(got == "alive,30", "c8s the struct twin of a copied arm variable: {got}");
 
   c8(1); got = drain();
   assert(got == "alive", "c8 the payload-free variant releases nothing: {got}");

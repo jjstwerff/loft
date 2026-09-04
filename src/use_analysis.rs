@@ -4153,6 +4153,9 @@ struct DoubleMove<'a> {
     cur: Option<Position>,
     /// `(source var, first hand-off, second hand-off)`, one per var per sequence.
     found: Vec<(u16, Position, Position)>,
+    /// [`crate::scopes::multi_assigned_in`] for this function — the whole-value copy
+    /// predicate reads it.
+    multi: std::collections::HashSet<u16>,
 }
 
 impl DoubleMove<'_> {
@@ -4203,8 +4206,24 @@ impl DoubleMove<'_> {
             // A reassignment replaces the value, so what was handed off is no longer what
             // this variable holds — `s1 = S{h:c}; c = mk(); s2 = S{h:c}` moves two distinct
             // resources into two containers and is correct.
+            //
+            // A plain whole-value copy `t = s` is itself a hand-off (the copy owns the
+            // resource, `scopes::copy_moves_drop_from`), so `t = s; u = s` is the same
+            // double release as two containers built from one droppable.
             Value::Set(v, rhs) => {
                 self.scan(rhs, st);
+                if let Value::Var(src) = rhs.unspan()
+                    && crate::scopes::copy_moves_drop_from(
+                        self.func,
+                        self.data,
+                        *v,
+                        *src,
+                        &self.multi,
+                        false,
+                    ) == Some(*src)
+                {
+                    self.record_source(*src, st);
+                }
                 st.remove(v);
             }
             Value::Call(d, args) if *d == self.copy_d && args.len() >= 3 => {
@@ -4237,6 +4256,22 @@ impl DoubleMove<'_> {
         // The exact predicate the drop suppression uses (`scopes::collect_drop_transferred`),
         // so the lint and the mechanism cannot drift: a hand-off is what makes the source
         // stop dropping, and this asks the same question of the same node.
+        // A whole-value copy into a compiler buffer (a materialised branch arm, a return
+        // buffer) moves the drop the way `t = s` does — the same arm the collector reads.
+        if let (Value::Var(src), Value::Var(dst)) = (args[0].unspan(), args[1].unspan())
+            && self.func.name(*dst).starts_with("__ref")
+            && crate::scopes::copy_moves_drop_from(
+                self.func,
+                self.data,
+                *dst,
+                *src,
+                &self.multi,
+                true,
+            ) == Some(*src)
+        {
+            self.record_source(*src, st);
+            return;
+        }
         let moved = matches!(args[2].unspan(), Value::Int(tp) if tp & 0x8000 != 0);
         if !moved
             && !crate::scopes::copy_hands_off(&args[1], self.func, self.data)
@@ -4247,6 +4282,11 @@ impl DoubleMove<'_> {
         let Some(src) = crate::scopes::drop_bearing_source(&args[0]) else {
             return;
         };
+        self.record_source(src, st);
+    }
+
+    /// Record a hand-off of `src`, and report the SECOND one of the same variable.
+    fn record_source(&mut self, src: u16, st: &mut Handoffs) {
         // Only a variable the AUTHOR wrote can be acted on. A compiler temp handed off twice
         // (`__lift_N`, `__ref_N`, `_elm_N`) is either impossible or our own bug, and either
         // way names nothing the reader can edit.
@@ -4332,6 +4372,7 @@ pub fn warn_double_move(
             copy_d,
             cur: None,
             found: Vec::new(),
+            multi: crate::scopes::multi_assigned_in(&def.code),
         };
         cx.scan(&def.code, &mut Handoffs::new());
         for (src, first, at) in std::mem::take(&mut cx.found) {
@@ -4352,9 +4393,9 @@ pub fn warn_double_move(
                 format!("at line {}", first.line)
             };
             let msg = format!(
-                "`{name}` is handed to a second owner here — a container already took \
-                 ownership of it {earlier}, and each owner releases what it owns, so this \
-                 one {ty} value is released TWICE"
+                "`{name}` is handed to a second owner here — a container or a copy already \
+                 took ownership of it {earlier}, and each owner releases what it owns, so \
+                 this one {ty} value is released TWICE"
             );
             diags.add_at_coded(
                 crate::diagnostics::Level::Warning,
