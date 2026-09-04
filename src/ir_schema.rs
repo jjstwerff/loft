@@ -1371,15 +1371,61 @@ pub fn data_to_json(data: &Data) -> String {
         }
         write_definition(&mut out, data.def(d_nr));
     }
+    // The import tables (loft#1359): a load replays `imports` into `def_names`
+    // and restores `use_names` verbatim — neither derives from the definitions.
+    out.push_str("],\"imports\":[");
+    for (i, imp) in data.applied_imports().iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let (name, bind) = imp
+            .name
+            .as_ref()
+            .map_or(("", ""), |(n, b)| (n.as_str(), b.as_str()));
+        let _ = write!(
+            out,
+            "{{\"lib\":{},\"into\":{},\"name\":",
+            imp.lib_source, imp.into_source
+        );
+        write_str(&mut out, name);
+        out.push_str(",\"bind\":");
+        write_str(&mut out, bind);
+        out.push('}');
+    }
+    out.push_str("],\"use_names\":[");
+    for (i, (name, source)) in data.use_name_pairs().iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"name\":");
+        write_str(&mut out, name);
+        let _ = write!(out, ",\"source\":{source}}}");
+    }
     out.push_str("]}");
     out
 }
 
+/// One retained import from its snapshot object; an empty `name` is a
+/// wildcard `use lib::*`.
+fn import_from_parsed(p: &Parsed) -> Result<crate::data::AppliedImport, TypeDecodeError> {
+    let name = as_str(field(p, "name")?)?;
+    Ok(crate::data::AppliedImport {
+        lib_source: as_u16(field(p, "lib")?)?,
+        into_source: as_u16(field(p, "into")?)?,
+        name: if name.is_empty() {
+            None
+        } else {
+            Some((name, as_str(field(p, "bind")?)?))
+        },
+    })
+}
+
 /// Parse a whole [`Data`] from JSON, rebuilding all derived indices.
 ///
-/// The returned `Data` starts from [`Data::new`], has its `definitions` and
-/// `source` restored, then [`Data::rebuild_indices`] re-derives `def_names` /
-/// `operators` / `op_codes` / `possible` / `use_names`.  Codegen-derived state
+/// The returned `Data` starts from [`Data::new`], has its `definitions`,
+/// `source` and the two import tables restored, then [`Data::rebuild_indices`]
+/// re-derives `def_names` / `operators` / `op_codes` / `possible` and replays
+/// the imports into `def_names`.  Codegen-derived state
 /// (slots, bytecode) is recomputed by the normal compile pass, not here.
 ///
 /// # Errors
@@ -1397,6 +1443,22 @@ pub fn data_from_json(src: &str) -> Result<Data, TypeDecodeError> {
     for it in items {
         let def = definition_from_parsed(it)?;
         data.definitions.push(def);
+    }
+    // Both tables are optional in the document so a snapshot written before
+    // they existed still loads (with no imports, as it had none to give).
+    if let Ok(Parsed::Array(items)) = field(&parsed, "imports") {
+        let mut applied = Vec::with_capacity(items.len());
+        for it in items {
+            applied.push(import_from_parsed(it)?);
+        }
+        data.set_applied_imports(applied);
+    }
+    if let Ok(Parsed::Array(items)) = field(&parsed, "use_names") {
+        let mut pairs = Vec::with_capacity(items.len());
+        for it in items {
+            pairs.push((as_str(field(it, "name")?)?, as_u16(field(it, "source")?)?));
+        }
+        data.set_use_names(pairs);
     }
     data.rebuild_indices();
     Ok(data)

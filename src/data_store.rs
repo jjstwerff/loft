@@ -321,6 +321,26 @@ pub(crate) const DEF_C_SIG: u32 = 160; // @PLN24 the declared C signature; "" = 
 /// `Data` record (the root).
 pub(crate) const DATA_SOURCE: u32 = 0;
 pub(crate) const DATA_DEFINITIONS: u32 = 8; // vector<Definition>
+pub(crate) const DATA_IMPORTS: u32 = 12; // vector<AppliedImport> (loft#1359)
+pub(crate) const DATA_USE_NAMES: u32 = 16; // vector<UseName> (loft#1359)
+/// The root record's size in bytes.
+pub(crate) const DATA_STRIDE: u32 = 20;
+/// What a `Data` root CLAIMS: `Store::claim` counts 8-byte words and the block
+/// starts with an 8-byte header (the root's fields begin at byte 8), so a claim
+/// sized from the stride alone leaves the last field in the next block.
+pub(crate) const DATA_ROOT_WORDS: u32 = (8 + DATA_STRIDE).div_ceil(8);
+
+/// `AppliedImport` record — one retained import, replayed by `rebuild_indices`.
+pub(crate) const IMPORT_LIB_SOURCE: u32 = 0;
+pub(crate) const IMPORT_INTO_SOURCE: u32 = 8;
+pub(crate) const IMPORT_NAME: u32 = 16; // "" = wildcard
+pub(crate) const IMPORT_BIND: u32 = 20;
+pub(crate) const IMPORT_STRIDE: u32 = 24;
+
+/// `UseName` record — a `use` short name or alias and its source number.
+pub(crate) const USENAME_NAME: u32 = 8;
+pub(crate) const USENAME_SOURCE: u32 = 0;
+pub(crate) const USENAME_STRIDE: u32 = 12;
 
 /// Well-known location of the `Data` root record in a saved IR store
 /// (@PLN11 arc D).  A freshly-opened file-backed store's first `claim(16)`
@@ -420,7 +440,11 @@ pub(crate) const DBTYPE_LINKED: u32 = 33;
 /// `Bundle { data: Data, types: vector<DbType> }` — the saved-bundle store root
 /// (D2a step 4): `Data` inlined at offset 0, the schema vector at `BUNDLE_TYPES`.
 pub(crate) const BUNDLE_DATA: u32 = 0;
-pub(crate) const BUNDLE_TYPES: u32 = 12;
+pub(crate) const BUNDLE_TYPES: u32 = 20; // right after the inlined 20-byte `Data`
+/// The bundle root's size in bytes, and its claim in words (see `DATA_ROOT_WORDS`).
+pub(crate) const BUNDLE_STRIDE: u32 = 24;
+#[cfg(feature = "mmap")] // only `save_bundle` claims a bundle root
+pub(crate) const BUNDLE_ROOT_WORDS: u32 = (8 + BUNDLE_STRIDE).div_ceil(8);
 
 /// The bit mask loft uses for a stored `boolean` field (`generation` emits
 /// `get_boolean(rec, off, 1)`).
@@ -1461,6 +1485,17 @@ mod tests {
         // Data record (root).
         assert_eq!(pos(ids.data, "source"), DATA_SOURCE);
         assert_eq!(pos(ids.data, "definitions"), DATA_DEFINITIONS);
+        assert_eq!(pos(ids.data, "imports"), DATA_IMPORTS);
+        assert_eq!(pos(ids.data, "use_names"), DATA_USE_NAMES);
+        assert_eq!(u32::from(stores.size(ids.data)), DATA_STRIDE);
+        assert_eq!(pos(ids.applied_import, "lib_source"), IMPORT_LIB_SOURCE);
+        assert_eq!(pos(ids.applied_import, "into_source"), IMPORT_INTO_SOURCE);
+        assert_eq!(pos(ids.applied_import, "name"), IMPORT_NAME);
+        assert_eq!(pos(ids.applied_import, "bind"), IMPORT_BIND);
+        assert_eq!(u32::from(stores.size(ids.applied_import)), IMPORT_STRIDE);
+        assert_eq!(pos(ids.use_name, "name"), USENAME_NAME);
+        assert_eq!(pos(ids.use_name, "source"), USENAME_SOURCE);
+        assert_eq!(u32::from(stores.size(ids.use_name)), USENAME_STRIDE);
 
         assert_eq!(u32::from(stores.size(ids.node)), NODE_STRIDE);
 
@@ -1553,7 +1588,7 @@ mod tests {
         assert_eq!(pos(ids.db_type, "linked"), DBTYPE_LINKED);
 
         // Bundle root (Data inlined at 0 + the schema vector).
-        assert_eq!(u32::from(stores.size(ids.bundle)), 16);
+        assert_eq!(u32::from(stores.size(ids.bundle)), BUNDLE_STRIDE);
         assert_eq!(pos(ids.bundle, "data"), BUNDLE_DATA);
         assert_eq!(pos(ids.bundle, "types"), BUNDLE_TYPES);
     }

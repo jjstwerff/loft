@@ -398,6 +398,32 @@ fn read_data_with(stores: &Stores, root: DbRef, bodies: bool) -> Data {
         data.definitions
             .push(read_definition(stores, defs.get(i, stores), bodies));
     }
+    // The import tables go in BEFORE the rebuild: `rebuild_indices` replays
+    // them to recreate the cross-source `def_names` bindings (loft#1359).
+    let imports = r.field_recvec(ds::DATA_IMPORTS, ds::IMPORT_STRIDE);
+    let mut applied = Vec::with_capacity(imports.len(stores) as usize);
+    for i in 0..imports.len(stores) {
+        let ir = imports.get(i, stores);
+        let name = ir.field_str(stores, ds::IMPORT_NAME).to_string();
+        applied.push(crate::data::AppliedImport {
+            lib_source: ir.field_int(stores, ds::IMPORT_LIB_SOURCE) as u16,
+            into_source: ir.field_int(stores, ds::IMPORT_INTO_SOURCE) as u16,
+            name: if name.is_empty() {
+                None
+            } else {
+                Some((name, ir.field_str(stores, ds::IMPORT_BIND).to_string()))
+            },
+        });
+    }
+    data.set_applied_imports(applied);
+    let uses = r.field_recvec(ds::DATA_USE_NAMES, ds::USENAME_STRIDE);
+    data.set_use_names((0..uses.len(stores)).map(|i| {
+        let ur = uses.get(i, stores);
+        (
+            ur.field_str(stores, ds::USENAME_NAME).to_string(),
+            ur.field_int(stores, ds::USENAME_SOURCE) as u16,
+        )
+    }));
     data.rebuild_indices();
     data
 }
@@ -1254,26 +1280,16 @@ mod tests {
         );
     }
 
-    /// cache_verify: the stdlib is effectively single-source, so it cannot
-    /// exercise the cross-source class that bit us.  This parses a MULTI-source
-    /// program (an importing `main` + a `use`d lib) and asserts both the
-    /// serialized definitions AND the rebuilt derived indices survive a
-    /// materialize→read round-trip — the warm-cache contract.
-    ///
-    /// KNOWN-GAP SPEC (ignored): this currently FAILS, surfacing two more
-    /// members of the same round-trip-completeness class the wrapper bug
-    /// belonged to — both flagged by `rebuild_indices`' own "cross-source import
-    /// bindings are NOT reproduced here … a later extension" comment.  (a) a
-    /// `use lib::*` import binding — `def_names[(imported_name,
-    /// importing_source)]`, e.g. `("Point", src 0)` for a type defined in
-    /// `importlib` (src 1) — is dropped; only `(name, def.source)` survives the
-    /// rebuild.  (b) the `use_names` module map (`{"importlib": 1}`) is not
-    /// serialized, so a warm load loses module short-name → source-id.  Both are
-    /// latent warm-cache faults for any codegen by-name lookup of an imported
-    /// name.  Un-ignore once `rebuild_indices` reproduces cross-source bindings
-    /// (serialize the import graph / `use_names`, then re-derive).
+    /// The warm-cache contract for a MULTI-source program (an importing `main`
+    /// beside a `use`d lib): the serialized definitions AND the rebuilt derived
+    /// indices survive a materialize→read round-trip.  The stdlib alone cannot
+    /// test this — it is effectively single-source.  The cross-source part
+    /// rests on the two import tables the image carries: `rebuild_indices`
+    /// reconstructs `def_names` under each definition's OWN source and then
+    /// replays the imports to recreate the `use lib::*` bindings, and
+    /// `use_names` (`{"importlib": 1}`) is restored verbatim because an alias
+    /// names a source, not a definition. (loft#1359)
     #[test]
-    #[ignore = "loft#1359: the warm cache drops an importing source's `use lib::*` bindings and the use_names map — this test is the guard, un-ignore when rebuild_indices reproduces them"]
     fn multi_source_round_trip_preserves_derived_indices() {
         let s = std::path::MAIN_SEPARATOR;
         let mut p = crate::parser::Parser::new();

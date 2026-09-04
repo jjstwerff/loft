@@ -434,7 +434,7 @@ fn write_definition(stores: &mut Stores, r: &Record, d: &Definition) {
 /// Materialize a whole native `Data` into a fresh `Data` store record and
 /// return its `DbRef` (the root).  Arc B's capstone entry point.
 pub fn materialize_data(stores: &mut Stores, data: &Data) -> DbRef {
-    let root = stores.database(16);
+    let root = stores.database(ds::DATA_ROOT_WORDS);
     materialize_data_at(stores, root, data);
     root
 }
@@ -448,8 +448,8 @@ pub fn materialize_data(stores: &mut Stores, data: &Data) -> DbRef {
 /// D).  The whole IR (records, inline vectors, and interned strings) lives in
 /// `root`'s store, so persisting/mmapping that one store captures everything.
 ///
-/// Only `source` + `definitions` are stored; the derived indices rebuild from
-/// the definitions on load.  Manifest-derived parse state (`native_lib_regs`,
+/// `source`, `definitions` and the two import tables (`imports`, `use_names`)
+/// are stored; every other index rebuilds from those on load.  Manifest-derived parse state (`native_lib_regs`,
 /// the `wasm_bridge_*` tables) is NOT in the bundle — the whole-program cache
 /// carries it on the side via the drift-manifest's `nlib`/`wbroute`/`wbpkg`/
 /// `wbhostjs` lines and replays it in `startup_cache::warm_load_program` (#310,
@@ -457,13 +457,37 @@ pub fn materialize_data(stores: &mut Stores, data: &Data) -> DbRef {
 pub fn materialize_data_at(stores: &mut Stores, root: DbRef, data: &Data) {
     // Clear the root's Data fields (claim/database do not zero) so the
     // `definitions` vector header starts empty.
-    stores.store_mut(&root).zero_range(root.rec, root.pos, 16);
+    stores
+        .store_mut(&root)
+        .zero_range(root.rec, root.pos, ds::DATA_STRIDE);
     let r = Record::new(root);
     r.set_field_int(stores, ds::DATA_SOURCE, i64::from(data.source));
     let defs = r.field_recvec(ds::DATA_DEFINITIONS, ds::DEFINITION_STRIDE);
     for d in &data.definitions {
         let dr = defs.push(stores);
         write_definition(stores, &dr, d);
+    }
+    // The import tables: `rebuild_indices` reconstructs `def_names` under each
+    // definition's OWN source and then REPLAYS these, so an image without them
+    // loads with every `use lib::*` binding missing (loft#1359).
+    let imports = r.field_recvec(ds::DATA_IMPORTS, ds::IMPORT_STRIDE);
+    for imp in data.applied_imports() {
+        let ir = imports.push(stores);
+        ir.set_field_int(stores, ds::IMPORT_LIB_SOURCE, i64::from(imp.lib_source));
+        ir.set_field_int(stores, ds::IMPORT_INTO_SOURCE, i64::from(imp.into_source));
+        // A wildcard import stores an empty name; a selective one never has one.
+        let (name, bind) = imp
+            .name
+            .as_ref()
+            .map_or(("", ""), |(n, b)| (n.as_str(), b.as_str()));
+        ir.set_field_str(stores, ds::IMPORT_NAME, name);
+        ir.set_field_str(stores, ds::IMPORT_BIND, bind);
+    }
+    let uses = r.field_recvec(ds::DATA_USE_NAMES, ds::USENAME_STRIDE);
+    for (name, source) in data.use_name_pairs() {
+        let ur = uses.push(stores);
+        ur.set_field_str(stores, ds::USENAME_NAME, &name);
+        ur.set_field_int(stores, ds::USENAME_SOURCE, i64::from(source));
     }
 }
 
@@ -668,7 +692,7 @@ pub fn save_data(data: &Data, path: &str) -> std::io::Result<()> {
     let fstore = crate::store::Store::open(path);
     let mut stores = Stores::new();
     let nr = stores.adopt_store(fstore);
-    let rec = stores.allocations[nr as usize].claim(16);
+    let rec = stores.allocations[nr as usize].claim(ds::DATA_ROOT_WORDS);
     assert_eq!(
         rec,
         ds::IR_ROOT_REC,
@@ -689,9 +713,13 @@ pub fn save_data(data: &Data, path: &str) -> std::io::Result<()> {
 /// `schema` (`Stores.types`) — into a caller-provided `Bundle` root record
 /// (@PLN11 D2a step 4).  `Data` is inlined at `BUNDLE_DATA` (offset 0, so the
 /// `Data` writer's offsets land correctly); the schema vector goes at
-/// `BUNDLE_TYPES`.  The 16-byte zero in `materialize_data_at` also clears the
-/// schema vector's header.
+/// `BUNDLE_TYPES`.  The whole root is zeroed HERE: `materialize_data_at` clears
+/// only its own `DATA_STRIDE` bytes, and the schema vector's header sits past
+/// them, so an uncleared header is a junk record id on the first push.
 pub fn materialize_bundle(stores: &mut Stores, root: DbRef, data: &Data, schema: &[SchemaType]) {
+    stores
+        .store_mut(&root)
+        .zero_range(root.rec, root.pos, ds::BUNDLE_STRIDE);
     let data_root = DbRef {
         pos: root.pos + ds::BUNDLE_DATA,
         ..root
@@ -726,7 +754,7 @@ pub fn save_bundle(data: &Data, schema: &[SchemaType], path: &str) -> std::io::R
         let fstore = crate::store::Store::open(&tmp);
         let mut stores = Stores::new();
         let nr = stores.adopt_store(fstore);
-        let rec = stores.allocations[nr as usize].claim(16);
+        let rec = stores.allocations[nr as usize].claim(ds::BUNDLE_ROOT_WORDS);
         assert_eq!(
             rec,
             ds::IR_ROOT_REC,

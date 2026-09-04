@@ -27,6 +27,8 @@ pub struct IrSchemaIds {
     pub node: u16,
     /// `known_type` of the `TypeT` enum.
     pub type_t: u16,
+    /// `known_type` of `AppliedImport`.
+    pub applied_import: u16,
     /// `known_type` of `Attribute`.
     pub attribute: u16,
     /// `known_type` of `Block`.
@@ -221,6 +223,8 @@ pub struct IrSchemaIds {
     pub ty_vector: u16,
     /// `known_type` of `TyVoid`.
     pub ty_void: u16,
+    /// `known_type` of `UseName`.
+    pub use_name: u16,
     /// `known_type` of `Variable`.
     pub variable: u16,
 }
@@ -311,34 +315,36 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     let t78 = db.structure("Function", 0);
     let t79 = db.structure("LinkedFieldGroup", 0);
     let t80 = db.structure("Definition", 0);
-    let t81 = db.structure("Data", 0);
-    let t82 = db.structure("DcLong", 1);
-    let t83 = db.structure("DcFloat", 2);
-    let t84 = db.structure("DcSingle", 3);
-    let t85 = db.structure("DcStr", 4);
-    let t86 = db.structure("DbField", 0);
-    let t87 = db.structure("EnumPair", 0);
-    let t88 = db.structure("KeyField", 0);
-    let t89 = db.structure("PtBase", 1);
-    let t90 = db.structure("PtStruct", 2);
-    let t91 = db.structure("PtEnum", 3);
-    let t92 = db.structure("PtEnumValue", 4);
-    let t93 = db.structure("PtByte", 5);
-    let t94 = db.structure("PtShort", 6);
-    let t95 = db.structure("PtInt", 7);
-    let t96 = db.structure("PtShortRaw", 8);
-    let t97 = db.structure("PtVector", 9);
-    let t98 = db.structure("PtArray", 10);
-    let t99 = db.structure("PtSorted", 11);
-    let t100 = db.structure("PtOrdered", 12);
-    let t101 = db.structure("PtHash", 13);
-    let t102 = db.structure("PtIndex", 14);
-    let t103 = db.structure("PtRadix", 15);
-    let t104 = db.structure("PtDbRef", 16);
-    let t105 = db.structure("PtChildRec", 17);
-    let t106 = db.structure("PtTrie", 18);
-    let t107 = db.structure("DbType", 0);
-    let t108 = db.structure("Bundle", 0);
+    let t81 = db.structure("AppliedImport", 0);
+    let t82 = db.structure("UseName", 0);
+    let t83 = db.structure("Data", 0);
+    let t84 = db.structure("DcLong", 1);
+    let t85 = db.structure("DcFloat", 2);
+    let t86 = db.structure("DcSingle", 3);
+    let t87 = db.structure("DcStr", 4);
+    let t88 = db.structure("DbField", 0);
+    let t89 = db.structure("EnumPair", 0);
+    let t90 = db.structure("KeyField", 0);
+    let t91 = db.structure("PtBase", 1);
+    let t92 = db.structure("PtStruct", 2);
+    let t93 = db.structure("PtEnum", 3);
+    let t94 = db.structure("PtEnumValue", 4);
+    let t95 = db.structure("PtByte", 5);
+    let t96 = db.structure("PtShort", 6);
+    let t97 = db.structure("PtInt", 7);
+    let t98 = db.structure("PtShortRaw", 8);
+    let t99 = db.structure("PtVector", 9);
+    let t100 = db.structure("PtArray", 10);
+    let t101 = db.structure("PtSorted", 11);
+    let t102 = db.structure("PtOrdered", 12);
+    let t103 = db.structure("PtHash", 13);
+    let t104 = db.structure("PtIndex", 14);
+    let t105 = db.structure("PtRadix", 15);
+    let t106 = db.structure("PtDbRef", 16);
+    let t107 = db.structure("PtChildRec", 17);
+    let t108 = db.structure("PtTrie", 18);
+    let t109 = db.structure("DbType", 0);
+    let t110 = db.structure("Bundle", 0);
     db.field(t11, "file", t5);
     db.field(t11, "line", 0);
     db.field(t11, "pos", 0);
@@ -395,8 +401,8 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.field(t30, "enum", byte_enum);
     let vec_inner = db.vector(t7);
     db.field(t30, "inner", vec_inner);
-    let t109 = db.vector(t7);
-    let _ = t109; // may be unused
+    let t111 = db.vector(t7);
+    let _ = t111; // may be unused
     let byte_enum = db.byte(0, false);
     db.field(t31, "enum", byte_enum);
     let vec_inner = db.vector(t7);
@@ -419,8 +425,8 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.field(t34, "keys", vec_keys);
     let vec_dep = db.vector(t0);
     db.field(t34, "dep", vec_dep);
-    let t110 = db.vector(t13);
-    let _ = t110; // may be unused
+    let t112 = db.vector(t13);
+    let _ = t112; // may be unused
     let byte_enum = db.byte(0, false);
     db.field(t35, "enum", byte_enum);
     db.field(t35, "n", 0);
@@ -435,8 +441,8 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.field(t36, "names", vec_names);
     let vec_dep = db.vector(t0);
     db.field(t36, "dep", vec_dep);
-    let t111 = db.vector(t14);
-    let _ = t111; // may be unused
+    let t113 = db.vector(t14);
+    let _ = t113; // may be unused
     let byte_enum = db.byte(0, false);
     db.field(t37, "enum", byte_enum);
     db.field(t37, "n", 0);
@@ -480,8 +486,8 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.field(t45, "pos", t11);
     let vec_inner = db.vector(t8);
     db.field(t45, "inner", vec_inner);
-    let t112 = db.vector(t8);
-    let _ = t112; // may be unused
+    let t114 = db.vector(t8);
+    let _ = t114; // may be unused
     let byte_enum = db.byte(0, false);
     db.field(t46, "enum", byte_enum);
     db.field(t46, "n", 0);
@@ -525,8 +531,8 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.field(t56, "var_size", 0);
     let vec_block = db.vector(t56);
     db.field(t55, "block", vec_block);
-    let t113 = db.vector(t56);
-    let _ = t113; // may be unused
+    let t115 = db.vector(t56);
+    let _ = t115; // may be unused
     let byte_enum = db.byte(0, false);
     db.field(t57, "enum", byte_enum);
     let vec_items = db.vector(t8);
@@ -578,8 +584,8 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.field(t67, "enum", byte_enum);
     let vec_keys = db.vector(t12);
     db.field(t67, "keys", vec_keys);
-    let t114 = db.vector(t12);
-    let _ = t114; // may be unused
+    let t116 = db.vector(t12);
+    let _ = t116; // may be unused
     let byte_enum = db.byte(0, false);
     db.field(t68, "enum", byte_enum);
     let vec_items = db.vector(t8);
@@ -651,10 +657,10 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.field(t78, "names", vec_names);
     let vec_inline_refs = db.vector(t0);
     db.field(t78, "inline_refs", vec_inline_refs);
-    let t115 = db.vector(t77);
-    let _ = t115; // may be unused
-    let t116 = db.vector(t15);
-    let _ = t116; // may be unused
+    let t117 = db.vector(t77);
+    let _ = t117; // may be unused
+    let t118 = db.vector(t15);
+    let _ = t118; // may be unused
     db.field(t79, "kind", 0);
     db.field(t79, "instance", 0);
     let vec_field_indices = db.vector(t0);
@@ -696,68 +702,74 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.field(t80, "superseded", t5);
     db.field(t80, "c_symbol", t5);
     db.field(t80, "c_sig", t5);
-    let t117 = db.vector(t76);
-    let _ = t117; // may be unused
-    let t118 = db.vector(t79);
-    let _ = t118; // may be unused
-    let vec_definitions = db.vector(t80);
-    db.field(t81, "definitions", vec_definitions);
-    db.field(t81, "source", 0);
-    let t119 = db.vector(t80);
+    let t119 = db.vector(t76);
     let _ = t119; // may be unused
-    let byte_enum = db.byte(0, false);
-    db.field(t82, "enum", byte_enum);
-    db.field(t82, "v", 0);
-    let byte_enum = db.byte(0, false);
-    db.field(t83, "enum", byte_enum);
-    db.field(t83, "v", t3);
+    let t120 = db.vector(t79);
+    let _ = t120; // may be unused
+    db.field(t81, "lib_source", 0);
+    db.field(t81, "into_source", 0);
+    db.field(t81, "name", t5);
+    db.field(t81, "bind", t5);
+    db.field(t82, "name", t5);
+    db.field(t82, "source", 0);
+    let vec_definitions = db.vector(t80);
+    db.field(t83, "definitions", vec_definitions);
+    db.field(t83, "source", 0);
+    let vec_imports = db.vector(t81);
+    db.field(t83, "imports", vec_imports);
+    let vec_use_names = db.vector(t82);
+    db.field(t83, "use_names", vec_use_names);
+    let t121 = db.vector(t80);
+    let _ = t121; // may be unused
+    let t122 = db.vector(t81);
+    let _ = t122; // may be unused
+    let t123 = db.vector(t82);
+    let _ = t123; // may be unused
     let byte_enum = db.byte(0, false);
     db.field(t84, "enum", byte_enum);
-    db.field(t84, "v", t2);
+    db.field(t84, "v", 0);
     let byte_enum = db.byte(0, false);
     db.field(t85, "enum", byte_enum);
-    db.field(t85, "v", t5);
-    db.field(t86, "name", t5);
-    db.field(t86, "content", 0);
-    db.field(t86, "position", 0);
+    db.field(t85, "v", t3);
+    let byte_enum = db.byte(0, false);
+    db.field(t86, "enum", byte_enum);
+    db.field(t86, "v", t2);
+    let byte_enum = db.byte(0, false);
+    db.field(t87, "enum", byte_enum);
+    db.field(t87, "v", t5);
+    db.field(t88, "name", t5);
+    db.field(t88, "content", 0);
+    db.field(t88, "position", 0);
     let vec_default = db.vector(t9);
-    db.field(t86, "default", vec_default);
+    db.field(t88, "default", vec_default);
     let vec_other_indexes = db.vector(t0);
-    db.field(t86, "other_indexes", vec_other_indexes);
-    db.field(t86, "nullable", t4);
-    let t120 = db.vector(t9);
-    let _ = t120; // may be unused
-    db.field(t87, "nr", 0);
-    db.field(t87, "name", t5);
-    db.field(t88, "nr", 0);
-    db.field(t88, "asc", t4);
-    let byte_enum = db.byte(0, false);
-    db.field(t89, "enum", byte_enum);
-    let byte_enum = db.byte(0, false);
-    db.field(t90, "enum", byte_enum);
-    let vec_fields = db.vector(t86);
-    db.field(t90, "fields", vec_fields);
-    let t121 = db.vector(t86);
-    let _ = t121; // may be unused
+    db.field(t88, "other_indexes", vec_other_indexes);
+    db.field(t88, "nullable", t4);
+    let t124 = db.vector(t9);
+    let _ = t124; // may be unused
+    db.field(t89, "nr", 0);
+    db.field(t89, "name", t5);
+    db.field(t90, "nr", 0);
+    db.field(t90, "asc", t4);
     let byte_enum = db.byte(0, false);
     db.field(t91, "enum", byte_enum);
-    let vec_values = db.vector(t87);
-    db.field(t91, "values", vec_values);
-    let t122 = db.vector(t87);
-    let _ = t122; // may be unused
     let byte_enum = db.byte(0, false);
     db.field(t92, "enum", byte_enum);
-    db.field(t92, "value", 0);
-    let vec_fields = db.vector(t86);
+    let vec_fields = db.vector(t88);
     db.field(t92, "fields", vec_fields);
+    let t125 = db.vector(t88);
+    let _ = t125; // may be unused
     let byte_enum = db.byte(0, false);
     db.field(t93, "enum", byte_enum);
-    db.field(t93, "start", 0);
-    db.field(t93, "nullable", t4);
+    let vec_values = db.vector(t89);
+    db.field(t93, "values", vec_values);
+    let t126 = db.vector(t89);
+    let _ = t126; // may be unused
     let byte_enum = db.byte(0, false);
     db.field(t94, "enum", byte_enum);
-    db.field(t94, "start", 0);
-    db.field(t94, "nullable", t4);
+    db.field(t94, "value", 0);
+    let vec_fields = db.vector(t88);
+    db.field(t94, "fields", vec_fields);
     let byte_enum = db.byte(0, false);
     db.field(t95, "enum", byte_enum);
     db.field(t95, "start", 0);
@@ -768,33 +780,30 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.field(t96, "nullable", t4);
     let byte_enum = db.byte(0, false);
     db.field(t97, "enum", byte_enum);
-    db.field(t97, "content", 0);
+    db.field(t97, "start", 0);
+    db.field(t97, "nullable", t4);
     let byte_enum = db.byte(0, false);
     db.field(t98, "enum", byte_enum);
-    db.field(t98, "content", 0);
+    db.field(t98, "start", 0);
+    db.field(t98, "nullable", t4);
     let byte_enum = db.byte(0, false);
     db.field(t99, "enum", byte_enum);
     db.field(t99, "content", 0);
-    let vec_keys = db.vector(t88);
-    db.field(t99, "keys", vec_keys);
-    let t123 = db.vector(t88);
-    let _ = t123; // may be unused
     let byte_enum = db.byte(0, false);
     db.field(t100, "enum", byte_enum);
     db.field(t100, "content", 0);
-    let vec_keys = db.vector(t88);
-    db.field(t100, "keys", vec_keys);
     let byte_enum = db.byte(0, false);
     db.field(t101, "enum", byte_enum);
     db.field(t101, "content", 0);
-    let vec_fields = db.vector(t0);
-    db.field(t101, "fields", vec_fields);
+    let vec_keys = db.vector(t90);
+    db.field(t101, "keys", vec_keys);
+    let t127 = db.vector(t90);
+    let _ = t127; // may be unused
     let byte_enum = db.byte(0, false);
     db.field(t102, "enum", byte_enum);
     db.field(t102, "content", 0);
-    let vec_keys = db.vector(t88);
+    let vec_keys = db.vector(t90);
     db.field(t102, "keys", vec_keys);
-    db.field(t102, "left", 0);
     let byte_enum = db.byte(0, false);
     db.field(t103, "enum", byte_enum);
     db.field(t103, "content", 0);
@@ -802,31 +811,42 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.field(t103, "fields", vec_fields);
     let byte_enum = db.byte(0, false);
     db.field(t104, "enum", byte_enum);
+    db.field(t104, "content", 0);
+    let vec_keys = db.vector(t90);
+    db.field(t104, "keys", vec_keys);
+    db.field(t104, "left", 0);
     let byte_enum = db.byte(0, false);
     db.field(t105, "enum", byte_enum);
     db.field(t105, "content", 0);
+    let vec_fields = db.vector(t0);
+    db.field(t105, "fields", vec_fields);
     let byte_enum = db.byte(0, false);
     db.field(t106, "enum", byte_enum);
-    db.field(t106, "content", 0);
-    db.field(t106, "key", 0);
-    db.field(t107, "name", t5);
+    let byte_enum = db.byte(0, false);
+    db.field(t107, "enum", byte_enum);
+    db.field(t107, "content", 0);
+    let byte_enum = db.byte(0, false);
+    db.field(t108, "enum", byte_enum);
+    db.field(t108, "content", 0);
+    db.field(t108, "key", 0);
+    db.field(t109, "name", t5);
     let vec_parts = db.vector(t10);
-    db.field(t107, "parts", vec_parts);
+    db.field(t109, "parts", vec_parts);
     let vec_keys = db.vector(t12);
-    db.field(t107, "keys", vec_keys);
-    db.field(t107, "complex", t4);
-    db.field(t107, "linked", t4);
-    db.field(t107, "size", 0);
-    db.field(t107, "align", 0);
+    db.field(t109, "keys", vec_keys);
+    db.field(t109, "complex", t4);
+    db.field(t109, "linked", t4);
+    db.field(t109, "size", 0);
+    db.field(t109, "align", 0);
     let vec_field_groups = db.vector(t79);
-    db.field(t107, "field_groups", vec_field_groups);
-    let t124 = db.vector(t10);
-    let _ = t124; // may be unused
-    db.field(t108, "data", t81);
-    let vec_types = db.vector(t107);
-    db.field(t108, "types", vec_types);
-    let t125 = db.vector(t107);
-    let _ = t125; // may be unused
+    db.field(t109, "field_groups", vec_field_groups);
+    let t128 = db.vector(t10);
+    let _ = t128; // may be unused
+    db.field(t110, "data", t83);
+    let vec_types = db.vector(t109);
+    db.field(t110, "types", vec_types);
+    let t129 = db.vector(t109);
+    let _ = t129; // may be unused
     let vec_vector = db.vector(t7);
     let vec_vector = db.vector(t13);
     let vec_vector = db.vector(t14);
@@ -838,12 +858,14 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     let vec_vector = db.vector(t76);
     let vec_vector = db.vector(t79);
     let vec_vector = db.vector(t80);
+    let vec_vector = db.vector(t81);
+    let vec_vector = db.vector(t82);
     let vec_vector = db.vector(t9);
-    let vec_vector = db.vector(t86);
-    let vec_vector = db.vector(t87);
     let vec_vector = db.vector(t88);
+    let vec_vector = db.vector(t89);
+    let vec_vector = db.vector(t90);
     let vec_vector = db.vector(t10);
-    let vec_vector = db.vector(t107);
+    let vec_vector = db.vector(t109);
     db.value(t7, "TyUnknown", t17);
     db.value(t7, "TyNull", t18);
     db.value(t7, "TyVoid", t19);
@@ -902,50 +924,51 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.value(t8, "NdFnRefDnr", t73);
     db.value(t8, "NdParallel", t74);
     db.value(t8, "NdRawExpr", t75);
-    db.value(t9, "DcLong", t82);
-    db.value(t9, "DcFloat", t83);
-    db.value(t9, "DcSingle", t84);
-    db.value(t9, "DcStr", t85);
-    db.value(t10, "PtBase", t89);
-    db.value(t10, "PtStruct", t90);
-    db.value(t10, "PtEnum", t91);
-    db.value(t10, "PtEnumValue", t92);
-    db.value(t10, "PtByte", t93);
-    db.value(t10, "PtShort", t94);
-    db.value(t10, "PtInt", t95);
-    db.value(t10, "PtShortRaw", t96);
-    db.value(t10, "PtVector", t97);
-    db.value(t10, "PtArray", t98);
-    db.value(t10, "PtSorted", t99);
-    db.value(t10, "PtOrdered", t100);
-    db.value(t10, "PtHash", t101);
-    db.value(t10, "PtIndex", t102);
-    db.value(t10, "PtRadix", t103);
-    db.value(t10, "PtDbRef", t104);
-    db.value(t10, "PtChildRec", t105);
-    db.value(t10, "PtTrie", t106);
+    db.value(t9, "DcLong", t84);
+    db.value(t9, "DcFloat", t85);
+    db.value(t9, "DcSingle", t86);
+    db.value(t9, "DcStr", t87);
+    db.value(t10, "PtBase", t91);
+    db.value(t10, "PtStruct", t92);
+    db.value(t10, "PtEnum", t93);
+    db.value(t10, "PtEnumValue", t94);
+    db.value(t10, "PtByte", t95);
+    db.value(t10, "PtShort", t96);
+    db.value(t10, "PtInt", t97);
+    db.value(t10, "PtShortRaw", t98);
+    db.value(t10, "PtVector", t99);
+    db.value(t10, "PtArray", t100);
+    db.value(t10, "PtSorted", t101);
+    db.value(t10, "PtOrdered", t102);
+    db.value(t10, "PtHash", t103);
+    db.value(t10, "PtIndex", t104);
+    db.value(t10, "PtRadix", t105);
+    db.value(t10, "PtDbRef", t106);
+    db.value(t10, "PtChildRec", t107);
+    db.value(t10, "PtTrie", t108);
     db.finish();
     IrSchemaIds {
         db_content: t9,
         db_parts: t10,
         node: t8,
         type_t: t7,
+        applied_import: t81,
         attribute: t76,
         block: t56,
-        bundle: t108,
-        data: t81,
-        db_field: t86,
-        db_type: t107,
-        dc_float: t83,
-        dc_long: t82,
-        dc_single: t84,
-        dc_str: t85,
+        bundle: t110,
+        data: t83,
+        db_field: t88,
+        db_type: t109,
+        dc_float: t85,
+        dc_long: t84,
+        dc_single: t86,
+        dc_str: t87,
         definition: t80,
-        enum_pair: t87,
+        enum_pair: t89,
         function: t78,
         integer_spec: t16,
         key: t12,
-        key_field: t88,
+        key_field: t90,
         linked_field_group: t79,
         name_nr: t15,
         name_ref: t14,
@@ -982,24 +1005,24 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
         nd_var: t58,
         nd_yield: t71,
         position: t11,
-        pt_array: t98,
-        pt_base: t89,
-        pt_byte: t93,
-        pt_child_rec: t105,
-        pt_db_ref: t104,
-        pt_enum: t91,
-        pt_enum_value: t92,
-        pt_hash: t101,
-        pt_index: t102,
-        pt_int: t95,
-        pt_ordered: t100,
-        pt_radix: t103,
-        pt_short: t94,
-        pt_short_raw: t96,
-        pt_sorted: t99,
-        pt_struct: t90,
-        pt_trie: t106,
-        pt_vector: t97,
+        pt_array: t100,
+        pt_base: t91,
+        pt_byte: t95,
+        pt_child_rec: t107,
+        pt_db_ref: t106,
+        pt_enum: t93,
+        pt_enum_value: t94,
+        pt_hash: t103,
+        pt_index: t104,
+        pt_int: t97,
+        pt_ordered: t102,
+        pt_radix: t105,
+        pt_short: t96,
+        pt_short_raw: t98,
+        pt_sorted: t101,
+        pt_struct: t92,
+        pt_trie: t108,
+        pt_vector: t99,
         sort_key: t13,
         ty_boolean: t22,
         ty_character: t25,
@@ -1027,6 +1050,7 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
         ty_unknown: t17,
         ty_vector: t31,
         ty_void: t19,
+        use_name: t82,
         variable: t77,
     }
 }

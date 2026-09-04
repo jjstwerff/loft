@@ -5488,12 +5488,7 @@ impl Data {
     ///   (operator defs only, walked in definition order).
     ///
     /// `caller_index` is intentionally left as its lazy `OnceLock` — it
-    /// rebuilds on first `callers_of`.  Cross-source import bindings (the
-    /// `insert_or_replace_stub` path) are NOT reproduced here: a
-    /// whole-stdlib / whole-bundle snapshot is single-pass and uniform, so
-    /// the `add_def`-level inserts are sufficient.  Multi-library import
-    /// reconciliation is a later extension if per-library snapshots land.
-    /// Rebuild the derived lookup indices from `definitions`.
+    /// rebuilds on first `callers_of`.
     ///
     /// Ends by replaying the retained imports ([`applied`](Self::applied)): a
     /// definition knows only its own source, so the loop below can restore
@@ -5610,6 +5605,39 @@ impl Data {
             ));
         }
         out
+    }
+
+    /// The retained imports in application order — what a stored image must
+    /// carry so `rebuild_indices` can replay them on load (loft#1359).
+    #[must_use]
+    pub(crate) fn applied_imports(&self) -> &[AppliedImport] {
+        &self.applied
+    }
+
+    /// Restore the retained imports from a stored image.  Call BEFORE
+    /// `rebuild_indices`, which replays them into `def_names`.
+    pub(crate) fn set_applied_imports(&mut self, applied: Vec<AppliedImport>) {
+        self.applied = applied;
+    }
+
+    /// Every `use` short name and alias with its source number, sorted by name
+    /// so two encodings of one `Data` compare equal.
+    #[must_use]
+    pub(crate) fn use_name_pairs(&self) -> Vec<(String, u16)> {
+        let mut pairs: Vec<(String, u16)> = self
+            .use_names
+            .iter()
+            .map(|(name, src)| (name.clone(), *src))
+            .collect();
+        pairs.sort();
+        pairs
+    }
+
+    /// Replace the `use` name map with a stored image's.  The map is not
+    /// derivable from the definitions — an alias names a SOURCE — so a load
+    /// that does not restore it answers `u16::MAX` for every `lib::name`.
+    pub(crate) fn set_use_names(&mut self, pairs: impl IntoIterator<Item = (String, u16)>) {
+        self.use_names = pairs.into_iter().collect();
     }
 
     #[must_use]

@@ -78,3 +78,44 @@ fn warm_m6_store_matches_native() {
     let _ = std::fs::remove_file(&script);
     let _ = std::fs::remove_dir_all(&cache);
 }
+
+/// A MULTI-source program — `use importlib::*` beside its own definitions — survives
+/// the warm load: the bundle carries the import tables, so the loaded `Data` reaches
+/// every wildcard-imported name exactly as the fresh parse did (loft#1359).
+#[test]
+fn warm_store_keeps_wildcard_import_bindings() {
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("loft_m6_import_{pid}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::write(
+        dir.join("importlib.loft"),
+        "pub struct Point { x: integer, y: integer }\n\
+         pub fn add(a: integer, b: integer) -> integer { a + b }\n\
+         pub fn mul(a: integer, b: integer) -> integer { a * b }\n",
+    )
+    .expect("write lib");
+    let script = dir.join("main.loft");
+    std::fs::write(
+        &script,
+        "use importlib::*;\n\
+         fn main() {\n\
+         \x20 p = Point { x: 3, y: 4 };\n\
+         \x20 print(\"{add(p.x, p.y)} {mul(p.x, p.y)}\\n\");\n\
+         }\n",
+    )
+    .expect("write script");
+    let cache = dir.join("cache");
+
+    let (ok_native, out_native) = run(&script, None, false);
+    assert!(ok_native, "native run failed: {out_native}");
+    assert_eq!(out_native.trim(), "7 12", "the fresh parse: {out_native}");
+
+    let (ok_cold, out_cold) = run(&script, Some(&cache), false);
+    assert!(ok_cold, "cold cache run failed: {out_cold}");
+    let (ok_warm, out_warm) = run(&script, Some(&cache), true);
+    assert!(ok_warm, "warm run failed: {out_warm}");
+    assert_eq!(out_native, out_warm, "the warm load lost an imported name");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

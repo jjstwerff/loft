@@ -30,6 +30,8 @@ IR_STRUCTS = {
     "Position", "Key", "SortKey", "NameRef", "NameNr", "IntegerSpec",
     "Block", "Attribute", "Variable", "Function",
     "LinkedFieldGroup", "Definition", "Data",
+    # loft#1359 — the import tables `rebuild_indices` replays on a warm load.
+    "AppliedImport", "UseName",
     # @PLN11 D2a — database type-schema types (Stores.types).
     "DbField", "EnumPair", "KeyField", "DbType", "Bundle",
 }
