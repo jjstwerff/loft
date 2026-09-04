@@ -80,7 +80,6 @@
   thr_q.items +=[<span class="en">Score</span> {value: <span class="nm">10</span> }, <span class="en">Score</span> {value: <span class="nm">20</span> }, <span class="en">Score</span> {value: <span class="nm">30</span> }];
   thr_q
 }</code></pre>
-<p>@FTR-070 — a <code>par</code> loop across threads: the worker runs on every element and the results come back in order, whatever the thread count</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="free-function-form-1">Free function (Form 1)</h2>
 <p>Each Score's value is doubled by <code>double_score</code> across 4 threads. The loop body sees <code>b</code> with the doubled value, in original order.</p>

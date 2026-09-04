@@ -27,7 +27,7 @@
 <p class="lib-legend">5 public items, in source order. Generated from the registry index, which re-derives them from the package source at publish time — so a signature here is the one that version actually ships.</p>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">enum</span> <span class="en">CborValue</span></code></pre>
-<p>A dynamic CBOR value.  Mirrors the stdlib <code>JsonValue</code>, with CBOR's extra <code>CBytes</code> (native byte string) and the integer split that CBOR makes at the wire level folded into one signed <code>CInt</code>. Example: @CBR-002 — which variant you pick is part of the wire form: the same two payload bytes are a different record as <code>CBytes</code> than as <code>CText</code>.</p>
+<p>A dynamic CBOR value.  Mirrors the stdlib <code>JsonValue</code>, with CBOR's extra <code>CBytes</code> (native byte string) and the integer split that CBOR makes at the wire level folded into one signed <code>CInt</code>.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">CborEntry</span></code></pre>
@@ -35,7 +35,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">encode</span>(v: <span class="en">CborValue</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt;</code></pre>
-<p>Encode a <code>CborValue</code> to canonical CBOR bytes. A map's entries are SORTED here by their encoded key bytes, so the order you built the map in never reaches the wire. Example: @CBR-001 — two maps built in opposite orders encode identically, which is what keeps a signature over the bytes valid. Example: @CBR-002 — <code>CBytes</code> and <code>CText</code> are different wire types, so the loft-side choice is part of what gets signed. Example: @CBR-004 — canonical is about ORDER, not uniqueness: duplicate keys encode without complaint.</p>
+<p>Encode a <code>CborValue</code> to canonical CBOR bytes. A map's entries are SORTED here by their encoded key bytes, so the order you built the map in never reaches the wire.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Decoded</span></code></pre>
@@ -43,7 +43,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">decode</span>(bytes: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt;) -&gt; <span class="en">Decoded</span></code></pre>
-<p>Decode canonical CBOR bytes into a <code>CborValue</code>.  Returns <code>ok=false</code> on any malformed, non-canonical, or truncated input — and rejects trailing bytes after the top-level value.  Never crashes. Example: @CBR-003 — <code>ok=false</code> is one answer for four different problems, and the surprising one is that well-formed but NON-canonical CBOR is refused. Example: @CBR-004 — a map carrying two entries under one key decodes ok=true.</p>
+<p>Decode canonical CBOR bytes into a <code>CborValue</code>.  Returns <code>ok=false</code> on any malformed, non-canonical, or truncated input — and rejects trailing bytes after the top-level value.  Never crashes.</p>
 </div>
 
   </article>

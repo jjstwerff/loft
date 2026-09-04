@@ -13,6 +13,11 @@ name: revalidate-libs
 
 on:
   workflow_dispatch:
+  # Called by `release-gate.yml`: one deliberate run of every nightly against ONE
+  # commit, ending in one verdict (the release evidence — RELEASE.md § The nightlies).
+  # A called workflow sees its CALLER's event, which is a dispatch or a probe push and
+  # never `pull_request`, so it takes the same full path the schedule takes.
+  workflow_call:
   schedule:
     - cron: '17 6 * * *'          # nightly, off the hour
   push:
@@ -30,8 +35,10 @@ on:
 permissions:
   contents: read
 
+# The group carries the CALLER's workflow name so a leg of `release-gate.yml` neither
+# collides with nor cancels a standalone run on the same ref.
 concurrency:
-  group: revalidate-libs-${{ github.ref }}
+  group: revalidate-libs-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

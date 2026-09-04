@@ -121,6 +121,38 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
 
+> **D-clo-22 — OPENED AND CLOSED (2026-09-04, loft#1353): a nullable record answered by a
+> FN-REF and reassigned, or chosen by an `if`, kept the raw pointer on the interpreter.**  The
+> reassign copy the interpreter emits for a borrowed-view call result asks
+> `use_analysis::callee_of` which function a fn-ref call reaches, and that resolver declined
+> every fn-ref whose return is `τ?`, because admitting the nullable spelling had been measured
+> as a use-after-free — on `1114-a-nullable-heap-capture-…`'s `fn(p2_n) -> P2s? { p2_st }`, a
+> lambda returning a CAPTURED store, which no caller variable names and the argument bracket
+> (`protectable_ref_args`) cannot protect.  So `j = if c { hr(b2) } else { d }` with `hr =
+> fn(q: Bag) -> P? { … q.rec … }` aliased `b2.rec` on the interpreter while `--native`, whose
+> arm has no such exception, copied — against `(B-Copy)` and `(O-NoDiverge)`.  Closed by
+> telling the two returns apart: a return that borrows a visible ARGUMENT is admitted (the
+> bracket protects it, and the copy is what the rules ask); one whose return dep names no
+> visible parameter — the closure record — is still declined (`fnref_return_borrows_closure`).
+> Guard `tests/scripts/1353-…loft` (the join, a reassigned nullable local, the plain and the
+> captured-store controls, which the 1114 guard pins as well), falsified at `1bb5e1b8` on
+> `--interpret`, native inert by construction.  The named twin is loft#1346
+> (ownership-history D-own-29).
+>
+> **D-clo-21 — OPENED AND CLOSED (2026-09-04, loft#1349): a lambda returning a lifetime tuple
+> handed its vector element up as a view of the argument's field.**  `(F-Ret)` says a returned
+> whole heap value is owned, never a view.  A NAMED function declared `-> (vector<integer>,
+> text)` takes the lifetime-tuple boxing at its declaration — the return becomes the synthetic
+> `__tuple<…>` record and every element is copied out through the return buffer.  A LAMBDA
+> declared the same way stored its annotation verbatim, so its tail `(q.items, q.nm)` was
+> handed up as the bare tuple the arms yield: the vector element a view of `q.items`, and
+> `t = hp(b); b.items[0] = 99` read 99 through `t` on both backends while the named twin
+> read the original.  Closed by one helper both lambda forms take at the same point on both
+> passes (`Parser::boxed_tuple_return`, the rule the named declaration already applied:
+> `has_lifetime_concern` → `tuple_def`).  The boxed lambda then joins with a tuple literal
+> exactly as a named function does, which is loft#1350's territory and closed beside it.
+> Measured on both backends; the cells are in loft#1350's guard.
+>
 > **D-clo-18 — RECLASSIFIED as a decided edge (2026-09-03, loft#1276): a `&` SCALAR parameter
 > written from inside a closure is REFUSED, and no code change closes it.**
 >
@@ -1110,3 +1142,46 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > diagnostic fires); 625 lib + interp + native_scripts green. (Making it *work* — inferring the
 > stored lambda's types from the later `.map` source — is cross-statement inference, a separate
 > enhancement; the crash → clean error is the fix.)
+
+## Carried by closures.md until 2026-09-04
+
+The rules doc used to carry these beside its `OPEN` line — closure summaries, and notes on
+the times the count read 0 over a live entry.  They are timeline, so they moved here
+unchanged; [closures.md](closures.md) now states only what is open.
+
+### D-clo-7 / D-clo-14 closure summaries, the cluster premise, D-clo-18/20's exit
+
+**D-clo-7 CLOSED 2026-09-03.**  The last open half — a `??` whose borrow arm hands back a
+capture the caller could not NAME — resolved by reading the SLOT off the callee's body: the
+subject's `OpGetDbRef(__closure, off)` and the build's `OpSetDbRef(___clos_N, off, var)` share
+an offset, so one offset over a variable assigned once is a witness as good as an argument's
+(`use_analysis::capture_return_offsets`, `closure_capture_base`).  A collection `??` over a
+capture turned out never to hand the capture back at all — its chosen arm is COPIED into the
+caller's `__retbuf` — and is separated from a capture returned DIRECTLY by whether the return's
+dep names `__closure` (`callref_capture_blocks`).
+
+**D-clo-14 CLOSED 2026-09-03** (loft#1257, and its bound-spelling mint arm with loft#1320): a
+closure's collection `??` return is freed by store IDENTITY against the `Join` base the temp's
+own dep names — inline, bound, as an argument, in a branch arm, at every collection kind. The
+record is in [closures-history.md](closures-history.md).
+
+**The cluster's premise is now measured false, and D-clo-14 is what measured it.** Both rows were
+recorded as *"the same missing mechanism — a per-execution ownership witness"* together with
+[ownership.md](ownership.md)'s `D-own-16` ([QUALITY.md](../QUALITY.md)'s cluster register). All
+three closed or narrowed WITHOUT one: a `Join`'s owner is decidable at run time by store
+IDENTITY against the variable the dep already NAMES, which costs no witness slot, no IR temp and
+no deps strip. The sharper question the cluster should have asked is whether a row has a NAMEABLE
+base — and D-clo-7's remaining half is exactly the case where it does not.
+
+**D-clo-18 is no longer here.** A `&` SCALAR parameter written from inside a closure is REFUSED,
+and refusing is deliberate: `(L-CapScalar)` gives the closure a COPY of the caller's value, so
+there is no shared record for the write to land in and no code change closes it. Per
+[ROADMAP.md](ROADMAP.md), a row that turns out **spec-may-adjust** leaves `formal/` and becomes a
+decided edge — it is [DESIGN_DECISIONS C115](../DESIGN_DECISIONS.md), together with `D-clo-20`,
+its heap twin, which took the same refusal for the same reason one rule over. Counting a
+permanent refusal as distance from the spec overstates the register by one.
+
+### the status line formal/README.md's area table carried until 2026-09-04
+
+**2 open** (D-clo-7, D-clo-14 — one `??`-default leak in two positions: the borrow arm's witness cannot be NAMED, so the mint arm's store leaks; they are the SAME missing per-execution ownership witness as ownership.md's D-own-16, and QUALITY.md carries them as one cluster. D-clo-18 and D-clo-20 left as REFUSALS, DESIGN_DECISIONS C115) — the `fn(){}` and `\|…\|` forms capture IDENTICALLY (pure sugar, D-clo-1); first-class (store/pass/return/escape); scalar-by-value / heap-shared capture; a stored un-inferrable short lambda in `map` is now a clean diagnostic, not a crash (D-clo-2). `L-Escape`'s STORAGE half is complete (D-clo-3, opened and closed 2026-08-22 by re-measuring the previous zero): a place that already holds a fn-ref — a local, a tuple member, a struct field, a vector element, a `&`-parameter's field — now takes a new one, releasing the closure record the old one owned, and a source the LITERAL refuses is refused identically
+

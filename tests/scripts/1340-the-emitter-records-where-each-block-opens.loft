@@ -1,0 +1,124 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @ARGS: --lib lib
+//
+// `lib/code.loft`'s emitter half patches the header it opened (loft#1340).
+//
+// `blocks` is documented as "start positions of blocks, if and loop statements", and
+// three readers pop it — `end_block`, `end_if`, `end_loop`. Nothing ever pushed. So the
+// stack was empty at the first `end_*`, `self.blocks[len - 1] ?? 0` discharged to 0, and
+// the patch landed on instruction 0 instead of on the header.
+//
+// Instruction 0 is why this needs a cell with something IN FRONT of the construct. When
+// the block is the first instruction, index 0 IS its header and the fallback patches the
+// right slot by accident: the length reads correct and the bug is invisible. Every cell
+// below therefore emits one value first, so the header sits at index 1.
+//
+// The spans are counted from the header INCLUSIVE, which is what `end_block` already
+// computes (`code.len() - b`) and what makes a span a distance to skip:
+//
+//   Block/Loop  length = header + body
+//   If          yes    = header + then-branch
+//               no     = the else-branch alone, so it starts where `yes` ends
+//
+// `end_if` read `code.len() - yes` for `no`, mixing a span with a position: correct only
+// when the `If` sits at index 0, the same fallback shape as the empty stack. With the
+// `If` at index 1 and a one-instruction else branch it claimed two.
+//
+// `null_value` is the other half: it was byte-identical to `boolean_value` above it and
+// appended `Boolean`, so the `Null` variant the enum declares was never constructed.
+//
+// @falsified-at: 60c750bb — interpret 0 assertion failures -> 1, stopping on the first
+// cell with `block header is Block {length:0,...}` against a wanted 2.  The pre-fix
+// library cannot be run directly (it has no `add_if`, and `null_value` takes an argument),
+// so the control keeps the new API and reverts only the behaviour.  Every cell moves:
+//
+//   cell    control                        fixed
+//   block   length:0                       length:2
+//   loop    length:0                       length:3
+//   if      yes:0,no:0                     yes:3,no:1
+//   outer   length:0                       length:4
+//   inner   length:0                       length:2
+//   null    Boolean {v:false}              Null {}
+//
+// The `if` row needs a SECOND control, because with nothing pushed the fallback patches
+// instruction 0 and both spans stay 0 — the empty stack hides the arithmetic behind it.
+// With the pushes present and only `end_if` reverted the header reads `yes:3,no:2`: two
+// else-instructions claimed where there is one, which is the cell that pins `no:1`.
+
+use code;
+
+// The emitter writes to `code` only when `cur_arg` is the 255 sentinel; a fresh `Code`
+// leaves it 0, which would send every value into a parameter default instead.
+fn emitter() -> Code {
+  c = Code {};
+  c.cur_arg = 255;
+  return c;
+}
+
+fn main() {
+  // --- A block that does not start at instruction 0 ---
+  b = emitter();
+  b.int_value(99);            // instruction 0 — the bystander the fallback used to patch
+  b.add_block("b1");          // instruction 1 — the header
+  b.int_value(7);
+  b.end_block(0);
+  assert(len(b.code) == 3, "block: code len {len(b.code)}");
+  assert(len(b.blocks) == 0, "block: stack not balanced, {len(b.blocks)} left");
+  // `Value`'s variants are not nameable from outside the library, so each cell asserts
+  // the header's RENDERED form — which pins every field at once rather than only the
+  // span, and would catch a patch that set the length by clobbering the id.
+  assert("{b.code[1]}" == "Block {{length:2,into:0,id:\"b1\"}}",
+         "block header is {b.code[1]}");
+  // The control: the bystander is untouched, so the patch went to the header and not
+  // merely somewhere.
+  assert("{b.code[0]}" == "Integer {{v:99}}",
+         "block: instruction 0 was overwritten, it is {b.code[0]}");
+
+  // --- A loop, the same shape ---
+  l = emitter();
+  l.int_value(99);
+  l.add_loop("L");            // instruction 1
+  l.int_value(7);
+  l.int_value(8);
+  l.end_loop();
+  assert(len(l.blocks) == 0, "loop: stack not balanced, {len(l.blocks)} left");
+  assert("{l.code[1]}" == "Loop {{length:3,id:\"L\"}}",
+         "loop header is {l.code[1]} (want length 3 = header + 2 body)");
+
+  // --- A conditional: `yes` spans the then-branch, `no` the else-branch ---
+  f = emitter();
+  f.int_value(99);
+  f.add_if();                 // instruction 1
+  f.int_value(1);             // then
+  f.int_value(2);             // then
+  f.else_if();
+  f.int_value(3);             // else
+  f.end_if(0);
+  assert(len(f.blocks) == 0, "if: stack not balanced, {len(f.blocks)} left");
+  // yes = 3 (header + 2 then), no = 1 (the single else instruction).  Before the fix
+  // `no` read 2 here: `code.len() - yes` instead of `code.len() - b - yes`.
+  assert("{f.code[1]}" == "If {{yes:3,no:1,into:0}}", "if header is {f.code[1]}");
+
+  // --- Nesting: an inner block must not patch the outer one ---
+  n = emitter();
+  n.int_value(99);
+  n.add_block("outer");       // instruction 1
+  n.int_value(1);
+  n.add_block("inner");       // instruction 3
+  n.int_value(2);
+  n.end_block(0);             // closes inner
+  n.end_block(0);             // closes outer
+  assert(len(n.blocks) == 0, "nested: stack not balanced, {len(n.blocks)} left");
+  assert("{n.code[3]}" == "Block {{length:2,into:0,id:\"inner\"}}",
+         "inner header is {n.code[3]}");
+  assert("{n.code[1]}" == "Block {{length:4,into:0,id:\"outer\"}}",
+         "outer header is {n.code[1]}");
+
+  // --- A null literal is a Null, not a Boolean ---
+  v = emitter();
+  v.null_value();
+  assert(len(v.code) == 1, "null: code len {len(v.code)}");
+  assert("{v.code[0]}" == "Null {{}}", "null_value emitted {v.code[0]}");
+}

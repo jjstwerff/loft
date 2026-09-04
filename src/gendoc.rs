@@ -8,7 +8,8 @@
 use loft::documentation::typst_escape;
 use loft::documentation::{
     StdlibSection, TopicSource, build_nav, gather_topic_info, generate_docs, get_topic_sources,
-    page_html, render_topic_body, render_topic_typst,
+    is_catalogue_anchor, is_example_tag, page_html, render_topic_body, render_topic_typst,
+    without_example_citations,
 };
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -161,6 +162,14 @@ fn parse_loft(content: &str, entries: &mut Vec<Entry>, fallback_section: &str) {
             named_a_section = true;
             doc.clear();
             after_section = true;
+            i += 1;
+            continue;
+        }
+
+        // A catalogue anchor is metadata for `feature_hygiene.sh`, not prose.  Skipped
+        // like a `#` attribute — it must not JOIN the doc block and must not break one
+        // either, since a real doc comment can sit on both sides of it.
+        if is_catalogue_anchor(trimmed) {
             i += 1;
             continue;
         }
@@ -427,10 +436,16 @@ fn esc(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// A doc comment's lines as display paragraphs, blank-line separated.
+///
+/// Worked-example citations are dropped first: they are bookkeeping addressed to
+/// whoever maintains the examples, and this is the one path the stdlib section pages,
+/// the print sheet and the PDF all render through.
 fn group_paragraphs(lines: &[String]) -> Vec<String> {
+    let lines = without_example_citations(lines);
     let mut result = Vec::new();
     let mut current = String::new();
-    for line in lines {
+    for line in &lines {
         if line.is_empty() {
             if !current.is_empty() {
                 result.push(current.trim().to_string());
@@ -1301,17 +1316,13 @@ fn comment_blocks(text: &str) -> Vec<(usize, String)> {
 /// The first `@AAA-###` in a comment block, if any. Three uppercase letters, a hyphen and
 /// three digits — the shape that cannot collide with loft's `@P` / `@PLN` / `@F` families.
 fn first_tag(block: &str) -> Option<String> {
-    let bytes: Vec<char> = block.chars().collect();
-    for i in 0..bytes.len() {
-        if bytes[i] != '@' || i + 7 >= bytes.len() {
+    let chars: Vec<char> = block.chars().collect();
+    for i in 0..chars.len() {
+        if chars[i] != '@' {
             continue;
         }
-        let w: String = bytes[i + 1..i + 8].iter().collect();
-        let ok = w.len() == 7
-            && w[0..3].chars().all(|c| c.is_ascii_uppercase())
-            && w.as_bytes()[3] == b'-'
-            && w[4..7].chars().all(|c| c.is_ascii_digit());
-        if ok {
+        let w: String = chars[i + 1..].iter().take(7).collect();
+        if is_example_tag(&w) {
             return Some(w);
         }
     }
@@ -1508,6 +1519,9 @@ fn numbered_source<S: std::hash::BuildHasher>(
 /// matters — kept as-is the text renders with the author's terminal width baked in, which
 /// is not a line break they chose for a browser.
 fn doc_paragraphs(doc: &str) -> String {
+    // Citations are dropped by LINE before the split, because a citation is appended to
+    // the prose paragraph above it rather than given one of its own.
+    let doc = without_example_citations(&doc.lines().collect::<Vec<_>>()).join("\n");
     let mut out = String::new();
     for para in doc.split("\n\n") {
         let joined = para

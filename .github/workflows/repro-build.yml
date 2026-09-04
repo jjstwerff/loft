@@ -28,6 +28,20 @@ on:
         description: 'Release to verify (default: the latest).'
         required: false
         default: ''
+  # Called by `release-gate.yml`: one deliberate run of every nightly against ONE
+  # commit, ending in one verdict (the release evidence — RELEASE.md § The nightlies).
+  # A called workflow sees its CALLER's event, which is a dispatch or a probe push and
+  # never `pull_request`, so it takes the same full path the schedule takes.
+  # Under the gate the LATEST release is what gets rebuilt (the candidate has none
+  # yet); what the gate proves is that the reproducibility contract still holds on
+  # the tree about to be tagged (`roundtrip`) and on the release it succeeds.
+  workflow_call:
+    inputs:
+      version:
+        description: 'Release to verify (default: the latest).'
+        required: false
+        default: ''
+        type: string
   # Weekly, not nightly: the answer only changes when a release does, and each job pays
   # a full cold build of loft.
   schedule:

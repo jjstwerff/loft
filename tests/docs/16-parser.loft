@@ -34,12 +34,11 @@
 //   collections (sorted/hash/index), and integer ranges with
 //   'integer limit(min, max)' — in parameter, field, and return position
 //
-// Three constructs it does NOT accept yet, all of them ordinary Loft that the
-// language itself compiles: an index expression ('v[0]'), the null-coalescing
-// operator ('a ?? 0'), and a formatted string literal ('"v={n}"'). A snippet
-// containing one answers a non-zero count even though it is valid, so a validator
-// built on this today will reject input it should accept. Tracked as loft#1259.
+// It reads an index expression ('v[0]'), the null-coalescing operator ('a ?? 0')
+// and a formatted string literal ('"v={n}"') as the compiler does, so a validator
+// built on this accepts what the compiler accepts.
 use parser;
+// @PAR-001 — validate a source string before acting on it: `== 0` is good, `> 0` is not
 fn main() {
   // ## Parsing a minimal function
   // The double braces '{{' and '}}' produce literal '{' and '}' inside a

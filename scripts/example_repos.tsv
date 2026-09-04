@@ -23,6 +23,7 @@
 STD	loft	https://github.com/loft-lang/loft	main
 GIT	loft	https://github.com/loft-lang/loft	main
 LEX	loft	https://github.com/loft-lang/loft	main
+PAR	loft	https://github.com/loft-lang/loft	main
 ACR	loft	https://github.com/loft-lang/loft	main
 EHK	loft	https://github.com/loft-lang/loft	main
 # FTR — demonstrators authored FOR a feature-catalogue entry (@PLN141 C2).  A feature

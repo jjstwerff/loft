@@ -290,7 +290,13 @@ measurement that closed it — is the companion [calls-history.md](calls-history
   (`F-ParamRebind` — the write-back must still stop there) and a repeated call as controls.
   `x = x` has no cell: the language refuses that spelling, and excluding it from the
   materialisation is what keeps the refusal (loft#1303).
-- **Return independence (`F-Ret`)** — `a = mk(); a[0]=99; b = mk()` leaves `b[0]==1`.
+- **Return independence (`F-Ret`)** — `a = mk(); a[0]=99; b = mk()` leaves `b[0]==1`.  The
+  NULLABLE record return, which has no delivery buffer, is pinned apart in
+  `tests/scripts/1337-a-view-of-a-local-returned-through-a-nullable-return-is-copied.loft`:
+  a walker's local rebound through its own reference field, a projection inside an `if` arm
+  beside a `null` and beside a literal, the walk that ends at null, eight nullable controls
+  and the two dense twins — each read after a filler allocation, both backends
+  (`D-call-8`, loft#1337).
 
 D-op-1's falsifier applies: any program where the interpreter and `--native` disagree on argument
 order, a parameter's effect on the caller, or a return's independence is the definitional error

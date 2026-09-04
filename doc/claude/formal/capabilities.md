@@ -132,17 +132,8 @@ controls (a granted call, a read, a script-owned mutation) are the `Cap-Call` / 
 non-default value to a locked parameter) — each a program whose admission flips to the exact rule
 above, its GREEN twin proving the rejection is the rule firing, not an incidental reject.
 
-The area is **formal — OPEN 0** (re-established 2026-07-11 after F6): every host-touching
+The area is **formal — OPEN 0**: every host-touching
 operation in a restricted context is decided by exactly one of the six rules — the call gate
 (incl. closures), field read/update/append, the parameter `#default` lock, and script-owned
 mutation — so an admitted script provably performs no host effect outside its profile, by
 construction. The falsifying escape suite + the RED/GREEN access corpus are the standing evidence.
-
-> **History — the D-cap-3 gap (@PLN102 F6).** From 2026-07-04 to 2026-07-11 this "OPEN 0" claim
-> was **over-stated**: the script-owned-vector rule rested on a false memory-model premise ("even
-> `r = &v` copies"), leaving a real escape — a `r = &param; r[i] = e` laundered a host-vector
-> write past the gate. It was found the right way, by *extending the falsifying suite* with the
-> `&`-alias case, and closed by making the gate follow the dep chain (above). The lesson the
-> freeze records: "OPEN 0 / by construction" is only as strong as the escape suite is complete —
-> here a spec contradiction (heap.md said `r = &v` copies; reality aliases) was the tell that the
-> suite had a blind spot.

@@ -35,15 +35,15 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rects_overlap</span>(a: const <span class="en">Rect</span>, b: const <span class="en">Rect</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
-<p>Test whether two axis-aligned rectangles overlap. The comparison is STRICT, so rectangles sharing an edge do NOT overlap. Example: @SHP-001 — touching is not overlapping, and what that buys: a row of abutting tiles is quiet, and a mover pushed out by exactly its penetration depth is done.</p>
+<p>Test whether two axis-aligned rectangles overlap. The comparison is STRICT, so rectangles sharing an edge do NOT overlap.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">circles_overlap</span>(a: const <span class="en">Circle</span>, b: const <span class="en">Circle</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
-<p>Test whether two circles overlap. Strict, like <code>rects_overlap</code>: tangent circles do NOT overlap. Example: @SHP-001 — the shared strict boundary across all three predicates.</p>
+<p>Test whether two circles overlap. Strict, like <code>rects_overlap</code>: tangent circles do NOT overlap.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rect_circle_overlap</span>(r: const <span class="en">Rect</span>, c: const <span class="en">Circle</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
-<p>Test whether a rectangle and a circle overlap. A true circle test — the circle's bounding box is NOT a substitute for it, and a circle wholly inside the rectangle counts as overlapping. Example: @SHP-003 — where the box approximation disagrees (every corner), and why containment answers true.</p>
+<p>Test whether a rectangle and a circle overlap. A true circle test — the circle's bounding box is NOT a substitute for it, and a circle wholly inside the rectangle counts as overlapping.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Overlap</span></code></pre>
@@ -51,19 +51,19 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rect_overlap_depth</span>(a: const <span class="en">Rect</span>, b: const <span class="en">Rect</span>) -&gt; <span class="en">Overlap</span></code></pre>
-<p>Compute the overlap depth between two rectangles on each axis. Both depths are UNSIGNED distances — the caller derives the direction from the relative positions.  Returns (0.0, 0.0) when they don't overlap. Useful for bounce direction: if ox &lt; oy → horizontal bounce. Example: @SHP-002 — the sign is the caller's to work out (applying it the wrong way pushes deeper), and the smaller axis is the minimal correction.</p>
+<p>Compute the overlap depth between two rectangles on each axis. Both depths are UNSIGNED distances — the caller derives the direction from the relative positions.  Returns (0.0, 0.0) when they don't overlap. Useful for bounce direction: if ox &lt; oy → horizontal bounce.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">aabb_overlap</span>(ax: <span class="ty"><a href="stdlib-types.html">float</a></span>, ay: <span class="ty"><a href="stdlib-types.html">float</a></span>, aw: <span class="ty"><a href="stdlib-types.html">float</a></span>, ah: <span class="ty"><a href="stdlib-types.html">float</a></span>,</code></pre>
-<p>Test AABB overlap using raw coordinates (no struct allocation — safe in loops). Same strict boundary as <code>rects_overlap</code>. Example: @SHP-001 — touching is not overlapping, raw form included.</p>
+<p>Test AABB overlap using raw coordinates (no struct allocation — safe in loops). Same strict boundary as <code>rects_overlap</code>.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">aabb_depth_x</span>(ax: <span class="ty"><a href="stdlib-types.html">float</a></span>, ay: <span class="ty"><a href="stdlib-types.html">float</a></span>, aw: <span class="ty"><a href="stdlib-types.html">float</a></span>, ah: <span class="ty"><a href="stdlib-types.html">float</a></span>,</code></pre>
-<p>Compute the AABB overlap depth on the X axis using raw coordinates — <code>aabb_depth_y</code> is the other half of the pair, and each call re-runs the overlap test on its own.  Unsigned, like <code>rect_overlap_depth</code>.  <code>0.0</code> means the two do not overlap AT ALL (a real overlap always penetrates by strictly more than zero), not &quot;they meet with no penetration on this axis&quot;. Safe in loops (no struct allocation). Example: @SHP-002 — the depth pair, its 0.0 sentinel, and how a caller turns it into a correction.</p>
+<p>Compute the AABB overlap depth on the X axis using raw coordinates — <code>aabb_depth_y</code> is the other half of the pair, and each call re-runs the overlap test on its own.  Unsigned, like <code>rect_overlap_depth</code>.  <code>0.0</code> means the two do not overlap AT ALL (a real overlap always penetrates by strictly more than zero), not &quot;they meet with no penetration on this axis&quot;. Safe in loops (no struct allocation).</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">aabb_depth_y</span>(ax: <span class="ty"><a href="stdlib-types.html">float</a></span>, ay: <span class="ty"><a href="stdlib-types.html">float</a></span>, aw: <span class="ty"><a href="stdlib-types.html">float</a></span>, ah: <span class="ty"><a href="stdlib-types.html">float</a></span>,</code></pre>
-<p>Compute the AABB overlap depth on the Y axis using raw coordinates — the other half of the <code>aabb_depth_x</code> pair, with the same unsigned <code>0.0</code>-is-no-overlap contract.  Safe in loops (no struct allocation). Example: @SHP-002 — the depth pair, its 0.0 sentinel, and how a caller turns it into a correction.</p>
+<p>Compute the AABB overlap depth on the Y axis using raw coordinates — the other half of the <code>aabb_depth_x</code> pair, with the same unsigned <code>0.0</code>-is-no-overlap contract.  Safe in loops (no struct allocation).</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Proxy</span></code></pre>

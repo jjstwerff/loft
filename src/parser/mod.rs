@@ -476,6 +476,9 @@ pub struct Parser {
     /// there can read.
     #[cfg(feature = "registry")]
     undeclared_reported: std::collections::HashSet<String>,
+    /// The `use` ids already reported by [`Parser::lib_flag_outranked`] — one advice per
+    /// id, for the same reason and with the same non-travel rule as `undeclared_reported`.
+    lib_outranked_reported: std::collections::HashSet<String>,
     /// What an auto-install already answered this run: `id -> Some(version)`, or `None`
     /// for a name the registry does not carry.  @PLN143 — a bare `use` is decided by
     /// `probe_auto_install` on EVERY parse pass now that no lockfile pins it, and asking
@@ -1301,6 +1304,7 @@ impl Parser {
             use_paths: std::collections::HashMap::new(),
             #[cfg(feature = "registry")]
             undeclared_reported: std::collections::HashSet::new(),
+            lib_outranked_reported: std::collections::HashSet::new(),
             #[cfg(feature = "registry")]
             auto_installed: std::collections::HashMap::new(),
             #[cfg(feature = "registry")]
@@ -6559,6 +6563,13 @@ impl Parser {
         // Return existing instantiation if already created.
         let existing = self.data.def_nr(&mangled);
         if existing != u32::MAX {
+            if std::env::var_os("LOFT_DBG_ACC").is_some() {
+                eprintln!(
+                    "[acc-mono] existing {mangled} pass1={} buffers={}",
+                    self.first_pass,
+                    self.data.def(existing).text_work_buffers()
+                );
+            }
             return existing;
         }
         // @PLN125 A2c — a monomorph substitutes a LIST of holders, not one.  The type
@@ -6640,6 +6651,15 @@ impl Parser {
                 .push((d_nr, g_nr, bindings.clone(), concrete.clone()));
         }
         self.instantiate_nested_generics(d_nr, &concrete);
+        // The body's text-return promotion ran while its tail call still named the nested
+        // TEMPLATE (`inner(s, c)` in `outer<S>(s: S) -> S?`): not a text call, nothing to
+        // promote.  Now that the call names `inner`'s monomorph, ask again — a `-> text?`
+        // forwarder that stays unpromoted copies the callee's result into a frame-local
+        // `__ret_N` and hands up a view of it, one orphan per call (loft#1357).  Only where
+        // nothing was promoted: a second hidden buffer would move the ABI.
+        if self.data.def(d_nr).text_work_buffers() == 0 {
+            self.promote_monomorph_text_return(d_nr);
+        }
         // I6: verify the concrete type satisfies every declared bound.
         // Emit a diagnostic and return u32::MAX if any required method is missing.
         if !self.check_satisfaction(g_nr, type_nr, &bindings[1..]) {
@@ -6902,6 +6922,20 @@ impl Parser {
                 // The body is fresh, so every call it makes to ANOTHER generic has to be
                 // retargeted at that one's monomorph again.
                 self.instantiate_nested_generics(d_nr, &concrete);
+                // And the text-return promotion has to be asked again: the first
+                // instantiation asked it of the pass-1 body, whose tail call still named
+                // the nested TEMPLATE (`-> S?` — not text, so nothing to promote), and the
+                // re-derived body is what the program runs.  Only where the first pass
+                // promoted nothing — a second hidden buffer would move the ABI (loft#1357).
+                if self.data.def(d_nr).text_work_buffers() == 0 {
+                    if std::env::var_os("LOFT_DBG_ACC").is_some() {
+                        eprintln!(
+                            "[acc-mono] re-derived stale monomorph {}",
+                            self.data.def(d_nr).name()
+                        );
+                    }
+                    self.promote_monomorph_text_return(d_nr);
+                }
             }
         }
     }
@@ -7802,6 +7836,17 @@ impl Parser {
                 }
             }
         });
+        if std::env::var_os("LOFT_DBG_ACC").is_some() {
+            let names: Vec<String> = remap
+                .iter()
+                .map(|(a, b)| format!("{}->{}", self.data.def(*a).name(), self.data.def(*b).name()))
+                .collect();
+            eprintln!(
+                "[acc-mono] nested in {}: remap={names:?} short={}",
+                self.data.def(d_nr).name(),
+                short_calls.len()
+            );
+        }
         if remap.is_empty() && short_calls.is_empty() {
             return;
         }
@@ -12103,14 +12148,46 @@ impl Parser {
             }
             Deps::frame(out)
         };
+        // Which shapes carry a borrow list is `Type::deps_ref` / `Type::with_deps`'s
+        // question (@FR-O-Deps: one fact, read everywhere), so it is asked there rather than
+        // restated as a list of variants here.  The list this replaces named four — text,
+        // vector, record, record enum — and a KEYED collection or a nullable return fell
+        // through it with the callee's ATTRIBUTE indices still in place, which the caller
+        // then read as its own frame variables: `r = if c { h(bag) } else { d }` with
+        // `h = fn(q: Bag) -> hash<K[k]> { q.m }` unioned attribute 0 (`q`) into a frame-space
+        // list — the debug-assertions gate's "dep-space violation" (loft#1335), and in a
+        // release build a borrow of whatever caller variable happens to be number 0.
         match ret {
             // Text is COPIED out through a work buffer rather than handed back, so the
-            // caller's value is its own however the callee reached it.
-            Type::Text(d) => Type::Text(visible(&d)),
-            Type::Vector(to, d) => Type::Vector(to, through(&d)),
-            Type::Reference(to, d) => Type::Reference(to, through(&d)),
-            Type::Enum(to, true, d) => Type::Enum(to, true, through(&d)),
-            other => other,
+            // caller's value is its own however the callee reached it — under `?` too.
+            other if matches!(other.base(), Type::Text(_)) => match other.borrow_deps() {
+                Some(d) => other.rewrap_deps(&visible(&d)),
+                None => other,
+            },
+            // A tuple has no list of its own: each element is a return in its own right.
+            Type::Tuple(elems) => Type::Tuple(
+                elems
+                    .into_iter()
+                    .map(|e| Self::fnref_result_type(e, types, fn_var))
+                    .collect(),
+            ),
+            // Every other kind that borrows — vector, struct, enum, the five keyed
+            // collections, a fn-ref, and an `Optional`/`RefVar` over any of them — is asked
+            // through `borrow_deps`, which is where "what does this type borrow?" is
+            // answered and which peels a `Rewritten` wrapper on the way.
+            // Enforces @FR-O-Move: *if the return borrows a parameter, the return type
+            // records it* — recorded in the callee's space, and mapped into the caller's here.
+            // The hand-written list this replaces named four shapes, so a keyed return
+            // (`fn(q: Bag) -> hash<K[k]> { q.m }`) reached the caller with the callee's
+            // ATTRIBUTE indices still in it: read in the caller's frame they name whichever
+            // local holds that number, and a branch join over such an arm unioned attr-space
+            // with frame-space deps (the debug-assertions gate's `dep-space violation`,
+            // loft#1335).  `call_dependencies` is the named-call twin, and loft#938 was the
+            // same omission there for `Optional`.
+            other => match other.borrow_deps() {
+                Some(d) => other.rewrap_deps(&through(&d)),
+                None => other,
+            },
         }
     }
 
@@ -13051,8 +13128,7 @@ impl Parser {
     /// the lexer's is whatever the caller passed, the candidate's is built from a
     /// probe directory — so `src/x.loft` and an absolute form must compare equal.
     fn is_current_source(&self, f: &str) -> bool {
-        let canon =
-            |p: &str| std::fs::canonicalize(p).unwrap_or_else(|_| std::path::PathBuf::from(p));
+        let canon = |p: &str| crate::portable_path::plain_canonical(std::path::Path::new(p));
         let cur = self.lexer.pos().file.clone();
         !cur.is_empty() && canon(&cur) == canon(f)
     }
@@ -13099,7 +13175,7 @@ impl Parser {
         let dep_root = Self::declared_path_dep_root(id, cur_dir);
         let blocked = |candidate: &str| {
             let cand = std::path::Path::new(candidate);
-            let cand = cand.canonicalize().unwrap_or_else(|_| cand.to_path_buf());
+            let cand = crate::portable_path::plain_canonical(cand);
             if dep_root.as_ref().is_some_and(|r| cand.starts_with(r)) {
                 return false;
             }
@@ -13164,7 +13240,74 @@ impl Parser {
         if blocked(&f) {
             f = format!("{id}.loft");
         }
+        self.lib_flag_outranked(id, &f);
         f
+    }
+
+    /// loft#1352 — a `--lib` directory provides `<id>`, and the `use` resolved elsewhere:
+    /// say so.
+    ///
+    /// Resolution is first-wins, and a project-local `lib/`, a declared dependency and the
+    /// script's own directory are all probed before the flag, so the flag never reaches a
+    /// name one of those also provides.  That precedence may well be right — an
+    /// intra-package `use` must not be hijackable by a stray flag — and this reports it
+    /// rather than moving it.  The cost of the silence was a MEASUREMENT: three runs of a
+    /// patched library copy passed through `--lib <copy>` from the repository root, and
+    /// every one scored the unmodified tree, because `lib/` beside the working directory
+    /// answered first and nothing said the flag had lost.
+    ///
+    /// `advice`, not `warning`: the program computes what the language promises for the
+    /// file it resolved.  What is wrong is the operator's belief about WHICH file, and the
+    /// cure is at the command line — run from a directory without a `lib/`, or put the
+    /// override where the resolution looks first.  Both layouts a `--lib` directory can
+    /// carry are checked, the flat `<dir>/<id>.loft` and the packaged
+    /// `<dir>/<id>/src/<id>.loft`, and a flag directory the winner lies INSIDE is not a
+    /// loss.  One report per id; `LOFT_NO_LIB_OUTRANKED` silences it.
+    fn lib_flag_outranked(&mut self, id: &str, resolved: &str) {
+        if self.lib_dirs.is_empty() || std::env::var_os("LOFT_NO_LIB_OUTRANKED").is_some() {
+            return;
+        }
+        if !std::path::Path::new(resolved).exists() {
+            return;
+        }
+        let canon =
+            |p: &str| std::fs::canonicalize(p).unwrap_or_else(|_| std::path::PathBuf::from(p));
+        let winner = canon(resolved);
+        let lib_dirs = self.lib_dirs.clone();
+        let Some((dir, provided)) = lib_dirs.iter().find_map(|l| {
+            let flat = format!("{l}{}{id}.loft", sep_str());
+            let packaged = format!("{l}{0}{id}{0}src{0}{id}.loft", sep_str());
+            let provided = [flat, packaged]
+                .into_iter()
+                .find(|c| std::path::Path::new(c).exists())?;
+            if winner.starts_with(canon(l)) {
+                return None;
+            }
+            Some((l.clone(), provided))
+        }) else {
+            return;
+        };
+        if !self.lib_outranked_reported.insert(id.to_string()) {
+            return;
+        }
+        diagnostic!(
+            self.lexer,
+            Level::Advice,
+            code = "lib-flag-outranked",
+            "`use {id}` resolved to `{resolved}`; `--lib {dir}` also provides it (`{provided}`) \
+             and was not consulted — a project-local `lib/`, a declared dependency and the \
+             script's own directory are searched before the flag"
+        );
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Mechanical,
+            title: "run from a directory without a `lib/` that provides this name, or put the \
+                    override where the resolution looks first"
+                .to_string(),
+            condition: None,
+            edit: None,
+            concept: "packages",
+            concept_ref: "@F55",
+        });
     }
 
     /// The optional import spec after a `use` target: `::*`, a single `::name [as bind]`,
@@ -13409,13 +13552,19 @@ impl Parser {
     /// one file is reachable under more than one name (a bare `use grid;` from outside a
     /// package and the `<pkg>::grid` key from inside it), and parsing it twice puts two
     /// copies of every definition in `Data` (loft#1080).
+    /// Is `cur_script` a file inside the registry cache — a package someone else
+    /// published, whose manifest is not this project's to fix?  Three diagnostics ask it,
+    /// each behind the `registry` feature, as is the cache directory it reads.
+    #[cfg(feature = "registry")]
+    fn script_in_registry_cache(cur_script: &str) -> bool {
+        crate::portable_path::is_under_canonical(
+            std::path::Path::new(cur_script),
+            &crate::registry_index::cache_dir(),
+        )
+    }
+
     fn source_loaded_from(&self, f: &str) -> Option<u16> {
-        let p = std::path::Path::new(f);
-        let canonical = p
-            .canonicalize()
-            .unwrap_or_else(|_| p.to_path_buf())
-            .to_string_lossy()
-            .to_string();
+        let canonical = crate::portable_path::plain_canonical_str(f);
         // Every id that names this file, not just one of them: `use_paths` outlives a
         // single pass (it is the parser's, while `use_names` is reset between the two),
         // so it holds names from the previous pass that this pass has not re-bound yet.
@@ -13430,12 +13579,7 @@ impl Parser {
     }
 
     fn record_use_path(&mut self, id: &str, f: &str) {
-        let p = std::path::Path::new(f);
-        let canonical = p
-            .canonicalize()
-            .unwrap_or_else(|_| p.to_path_buf())
-            .to_string_lossy()
-            .to_string();
+        let canonical = crate::portable_path::plain_canonical_str(f);
         self.use_paths.insert(id.to_string(), canonical);
     }
 
@@ -13555,11 +13699,7 @@ impl Parser {
         let Some(own) = self.own_module_file(id) else {
             return;
         };
-        let own_canonical = std::path::Path::new(&own)
-            .canonicalize()
-            .unwrap_or_else(|_| std::path::PathBuf::from(&own))
-            .to_string_lossy()
-            .to_string();
+        let own_canonical = crate::portable_path::plain_canonical_str(&own);
         let Some(loaded) = self.use_paths.get(id) else {
             return;
         };
@@ -13604,10 +13744,7 @@ impl Parser {
         // library that ships an overlapping basename today.
         let root_project = crate::resolution_scope::project_root(&self.database.source_dir);
         let inside = |file: &str, root: &std::path::Path| {
-            std::path::Path::new(file)
-                .canonicalize()
-                .unwrap_or_else(|_| std::path::PathBuf::from(file))
-                .starts_with(root)
+            crate::portable_path::plain_canonical(std::path::Path::new(file)).starts_with(root)
         };
         let captured_by_root = root_project
             .as_ref()
@@ -13676,11 +13813,7 @@ impl Parser {
         if std::env::var_os("LOFT_NO_UNDECLARED_DEP").is_some() {
             return;
         }
-        if std::fs::canonicalize(cur_script)
-            .ok()
-            .zip(std::fs::canonicalize(crate::registry_index::cache_dir()).ok())
-            .is_some_and(|(script, cache)| script.starts_with(&cache))
-        {
+        if Self::script_in_registry_cache(cur_script) {
             return;
         }
         let Some(root) = crate::resolution_scope::project_root(cur_script) else {
@@ -13728,7 +13861,7 @@ impl Parser {
     /// script) is in no package and so shares one with nothing.
     fn same_package(a: &str, b: &str) -> bool {
         let root = |p: &str| -> Option<std::path::PathBuf> {
-            let mut dir = std::path::Path::new(p).canonicalize().ok()?;
+            let mut dir = crate::portable_path::try_plain_canonical(std::path::Path::new(p))?;
             if dir.is_file() {
                 dir = dir.parent()?.to_path_buf();
             }
@@ -13757,7 +13890,7 @@ impl Parser {
         }
         let mut found = None;
         let start = if cur_dir.is_empty() { "." } else { cur_dir };
-        let mut search = std::path::Path::new(start).canonicalize().ok();
+        let mut search = crate::portable_path::try_plain_canonical(std::path::Path::new(start));
         while let Some(dir) = search {
             let manifest_path = dir.join("loft.toml");
             if manifest_path.exists() {
@@ -13859,7 +13992,7 @@ impl Parser {
                         })
                     })?;
                 let root = search_dir.join(rel);
-                return root.canonicalize().ok().or(Some(root));
+                return Some(crate::portable_path::plain_canonical(&root));
             }
             search_dir = search_dir.parent()?.to_path_buf();
         }
@@ -14344,10 +14477,7 @@ impl Parser {
         // would mutate the immutable cache — a harmless stray file on Unix, but an
         // ENOENT that aborts the whole resolution on Windows (nightly
         // `moros_glb_cli_end_to_end`).  Install without recording.
-        let in_registry_cache = std::fs::canonicalize(cur_script)
-            .ok()
-            .zip(std::fs::canonicalize(crate::registry_index::cache_dir()).ok())
-            .is_some_and(|(script, cache)| script.starts_with(&cache));
+        let in_registry_cache = Self::script_in_registry_cache(cur_script);
         // What this path installs UNDER — which lock governs it, which one it may write,
         // and the signature it never waives — is one tested fact rather than a literal
         // buried here (@PLN143).
@@ -14459,11 +14589,7 @@ impl Parser {
         }
         // A `use` inside an already-cached package is the dependency's own; its pins are
         // its author's business, and the consumer cannot act on them.
-        if std::fs::canonicalize(cur_script)
-            .ok()
-            .zip(std::fs::canonicalize(crate::registry_index::cache_dir()).ok())
-            .is_some_and(|(script, cache)| script.starts_with(&cache))
-        {
+        if Self::script_in_registry_cache(cur_script) {
             return;
         }
         if !self.pin_behind_reported.insert(id.to_string()) {

@@ -153,6 +153,3 @@ target-*/
 # Gate verdict written by scripts/ci-run.sh — local run state, never committed.
 .ci-verdict
 
-# Per-release manual-step progress written by scripts/release-checklist.py.
-# Local working state for one release; the list itself is generated, never stored.
-/.release-checklist/

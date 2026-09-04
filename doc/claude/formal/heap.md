@@ -260,14 +260,12 @@ contract (this file). What remains is the SAME meta-deviation, not a heap-specif
   interpreter's store and the native generator's `DbRef` ABI use the most different mechanisms.
   A program whose heap steps diverge is caught there. This doc does not add a new open row; it
   supplies the contract the oracle's heap-touching cases are read against.
-- **The lifetime side has the strongest standing proof, and it is not complete.** The free
-  discipline's soundness (`H-Sound`) rests on [ownership.md](ownership.md), whose register was
-  at 0 when this line was written (2026-07-04), re-opened, and back at **`OPEN: 0`** on
-  2026-09-03: the last entry, `D-own-8` — a Join's ownership fact holding on one path only —
-  was a path-completeness gap, which is what `H-Sound` consumes, and it closed by giving every
-  path of a value branch its own binding — so the discharge is real again.
-  ⚠ A claim about another doc's register goes stale silently; re-read the register rather
-  than this sentence.
+- **The lifetime side has the strongest standing proof, and it is exactly as complete as
+  ownership.md's register.** The free discipline's soundness (`H-Sound`) rests on
+  [ownership.md](ownership.md): its `OPEN` line is the discharge, and a path-completeness gap
+  there (the shape `D-own-8` had — a Join's ownership fact true on one path only) is what
+  `H-Sound` consumes. A claim about another doc's register goes stale silently, so read that
+  register rather than a restatement of it here.
 
 ## Conformance
 

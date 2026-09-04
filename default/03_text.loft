@@ -80,13 +80,13 @@ pub fn trim_end(self: text) -> text[self];
 #pure
 // Returns the byte index of the first occurrence of value, or null if not found.
 // Use to locate substrings before slicing.  Nullable: null when value is absent
-// (@PLN102 keystone step 4 — the type is honest about the not-found case).
+// (the type is honest about the not-found case).
 pub fn find(self: text, value: text) -> integer?;
 #rust"if let Some(v) = @self.find(@value) {{ v as i64 }} else {{ i64::MIN }}"
 #pure
 // Returns the byte index of the last occurrence of value, or null if not found.
 // Use to find file extensions or the last path separator.  Nullable: null when
-// value is absent (@PLN102 keystone step 4 — the type is honest about not-found).
+// value is absent (the type is honest about not-found).
 pub fn rfind(self: text, value: text) -> integer?;
 #rust"if let Some(v) = @self.rfind(@value) {{ v as i64 }} else {{ i64::MIN }}"
 #pure
@@ -229,15 +229,16 @@ pub fn join(self: vector<text>, sep: text) -> text {
 pub fn arguments() -> vector<text>;
 #rust"stores.os_arguments()"
 #impure(host_io)
+// Why the section is re-opened here rather than the definitions moved (a note for
+// whoever edits this file — a section marker clears the doc block, so nothing below
+// reaches the generated page):
+//
+// The two functions below are TEXT functions that sit after the Environment marker.
+// Re-opening the section files them under Text in the reference, which is where a
+// reader looks for them.  MOVING them instead would be wrong: definition order is the
+// order types are minted and the native `init()` replays that order, so relocating
+// `vector<u8>`'s first mention renumbers every type id after it.
 // --- Text ---
-// These two are TEXT functions that happen to sit after the Environment marker.
-// Re-opening the section files them under Text in the generated reference, which
-// is where a reader looks for them — `text_from_bytes` existed for two releases
-// and was reported as missing (loft#748) because `doc/stdlib-text.html` did not
-// list it.  Declaring the section rather than MOVING the definitions is
-// deliberate: definition order is the order types are minted, and the native
-// `init()` replays that order, so relocating `vector<u8>`'s first mention shifts
-// every type id after it (loft#739 / #742).  A comment cannot.
 // Return the BYTE at position `i` (0..len) as integer 0-255,
 // or 0 for out-of-bounds.  Unlike `text[i]` which decodes the
 // UTF-8 codepoint containing byte `i` (walking back through

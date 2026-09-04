@@ -621,6 +621,11 @@ pub struct Output<'a> {
     /// inside a ForLoopBody pushes the DbRef as-is — `as i64` there was
     /// the #481 native E0308/E0605.
     pub yield_collect_dbref: bool,
+    /// The store type id an eager factory snapshots each pushed handle under
+    /// (`coroutine_snapshot`); `None` when the yield is not a handle, or is a
+    /// handle kind with no standalone record (a keyed collection), which the
+    /// loop-body push then refuses.
+    pub yield_collect_snapshot_tp: Option<u16>,
     /// When set alongside `yield_collect`, the generator yields a TUPLE whose every element
     /// is carried by value, and the eager buffer holds those elements' `i64` images FLAT —
     /// one push per slot, `kinds.len()` per yield.  The `next_into` reader pops the same
@@ -677,6 +682,11 @@ pub struct Output<'a> {
     /// element.  Cleared after the assignment so argument-context
     /// tuples (which need `&str`) keep the default emit.
     pub tuple_text_to_string: bool,
+    /// The tuple local an `if` arm is about to hand over, when handing it over would MOVE
+    /// it (loft#1354).  Read by the `ValueType::Var` arm, which clones exactly this
+    /// variable and nothing else — a blanket clone on every tuple read would copy a
+    /// `String` at each use, and most of them are the last one.
+    pub(crate) clone_handed_tuple_local: Option<u16>,
     /// loft#1069 — the DECLARED element types of the tuple currently being emitted, when
     /// the destination named them.  Set beside [`Self::tuple_text_to_string`] by the same
     /// destination-aware paths, and for the same reason: a tuple ELEMENT cannot say what
@@ -970,10 +980,10 @@ pub(crate) fn def_returns_owned_text(def: &crate::data::Definition) -> bool {
     matches!(def.returned().base(), Type::Text(_))
         && matches!(def.code(), Value::Block(_))
         && !def.name().starts_with("Op")
-        && !def
-            .attributes()
-            .iter()
-            .any(|a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))))
+        // A user `&text` parameter is not a work buffer: the buffered-vs-bufferless
+        // shape reads the HIDDEN buffers only (`text_work_buffers`), else a function
+        // with such a parameter is emitted buffered and returns THROUGH it (loft#1338).
+        && def.text_work_buffers() == 0
 }
 
 /// @PLN10 — does this function's generated `--native` wrapper return an owned
@@ -1434,6 +1444,7 @@ impl<'a> Output<'a> {
             yield_collect: false,
             yield_collect_text: false,
             yield_collect_dbref: false,
+            yield_collect_snapshot_tp: None,
             yield_collect_kinds: None,
             yield_collect_refuse: None,
             yield_lazy_wrap: None,
@@ -1442,6 +1453,7 @@ impl<'a> Output<'a> {
             fn_ref_context: false,
             i32_literal_context: false,
             tuple_text_to_string: false,
+            clone_handed_tuple_local: None,
             tuple_slot_types: Vec::new(),
             call_stack_prefix: None,
             wasm_browser: false,
@@ -1523,7 +1535,10 @@ fn collect_witness_vars(data: &crate::data::Data, def_nr: u32) -> HashSet<u16> {
         // (`ownership_of`).  The proxy only narrows the candidate set; it frees nothing.
         let is_candidate = !vars.is_argument(v)
             && matches!(vars.tp(v), Type::Reference(_, _) | Type::Enum(_, true, _))
-            && vars.tp(v).depend().is_empty();
+            && vars.tp(v).depend().is_empty()
+            // loft#1336 / @FR-O-Witness — a local the IR already tracks through its owner
+            // witness is left to the IR: two trackers of one store would free it twice.
+            && vars.owner_witness(v).is_none();
         if !is_candidate {
             return;
         }

@@ -22,7 +22,7 @@
 //! path you are about to open: `std::path` already handles that correctly, and
 //! turning it into a string first only loses information.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Render `path` with `/` separators on every platform.
 ///
@@ -60,6 +60,107 @@ pub fn portable_str(path: &str) -> String {
 #[must_use]
 pub fn for_uri(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+/// `fs::canonicalize`, rendered in the ONE spelling every other path in the process uses.
+///
+/// On Windows `canonicalize` answers an extended-length verbatim path (`\\?\D:\…`), while
+/// the rest of the pipeline — library `use` resolution, the entry-package skip, a source
+/// position's `file`, the logger's project root, the LSP's URIs — builds and compares plain
+/// paths.  A verbatim path never equals or prefix-matches its plain twin (`VerbatimDisk`
+/// vs `Disk` components), so every canonicalised path that enters the shared path space
+/// sheds the prefix here.  A path that cannot be canonicalised is answered as given rather
+/// than dropped: an absolute-but-unresolved path is still better than none.  No-op on
+/// Linux/macOS.
+///
+/// This is the only `canonicalize` a caller should reach for; [`try_plain_canonical`] is
+/// the fallible twin for a site that must know the path EXISTS.
+#[must_use]
+pub fn plain_canonical(path: &Path) -> PathBuf {
+    try_plain_canonical(path).unwrap_or_else(|| path.to_path_buf())
+}
+
+/// [`plain_canonical`] for a site that needs "this path resolves" as a fact — `None` when
+/// it does not exist, never a guess.
+#[must_use]
+pub fn try_plain_canonical(path: &Path) -> Option<PathBuf> {
+    let abs = std::fs::canonicalize(path).ok()?;
+    Some(match abs.to_str() {
+        Some(text) => PathBuf::from(strip_verbatim(text)),
+        None => abs,
+    })
+}
+
+/// [`plain_canonical`] for the many sites that carry a path as text — the parser hands
+/// source positions around as `String`, and a display or a comparison key wants one back.
+#[must_use]
+pub fn plain_canonical_str(path: &str) -> String {
+    plain_canonical(Path::new(path))
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Shed a Windows verbatim prefix: `\\?\D:\…` becomes `D:\…` and `\\?\UNC\srv\share\…`
+/// becomes `\\srv\share\…`, the two spellings `canonicalize` produces there and the two
+/// plain forms everything else builds.  A path without a prefix is answered unchanged, so
+/// this is safe to apply to any spelling.
+#[must_use]
+pub fn strip_verbatim(path: &str) -> String {
+    if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else if let Some(rest) = path.strip_prefix(r"\\?\")
+        && rest.as_bytes().get(1) == Some(&b':')
+    {
+        rest.to_string()
+    } else {
+        path.to_string()
+    }
+}
+
+/// Does `file` name a source inside the shipped standard library?
+///
+/// A stdlib position's `file` is whatever path the loader used: `default/01_code.loft`
+/// relative to the repo in a test, an absolute `<install>/share/loft/default/…` from an
+/// installed binary, either separator on Windows.  Every reader that treats the stdlib
+/// differently — coverage, introspection, the REPL's listing, code generation's logging
+/// switch, the entry-point census — asks this ONE question, so the answer cannot vary by
+/// how loft was launched.  A user directory literally named `default` is misread as the
+/// stdlib; that is the price of a path-shaped answer, and the loader's own record of where
+/// it read the stdlib from is the sharper fact if it ever matters.
+#[must_use]
+pub fn is_stdlib_source(file: &str) -> bool {
+    file.starts_with("default/")
+        || file.starts_with("default\\")
+        || file.contains("/default/")
+        || file.contains("\\default\\")
+}
+
+/// Is `file` inside `dir`, by path COMPONENTS — so `pkg` does not claim `pkg2/x.loft`, and
+/// on Windows a `/` and a `\` spelling of one directory agree.  Both are taken as written;
+/// pair with [`plain_canonical`] when either side may be a relative or symlinked spelling.
+#[must_use]
+pub fn is_under(file: &str, dir: &str) -> bool {
+    Path::new(file).starts_with(Path::new(dir))
+}
+
+/// [`is_under`] after resolving BOTH sides: does the file `path` on disk live inside the
+/// directory `dir` on disk?  `false` when either does not exist — an unresolvable path is
+/// inside nothing.
+#[must_use]
+pub fn is_under_canonical(path: &Path, dir: &Path) -> bool {
+    match (try_plain_canonical(path), try_plain_canonical(dir)) {
+        (Some(p), Some(d)) => p.starts_with(&d),
+        _ => false,
+    }
+}
+
+/// Do two spellings name the same file on disk?  `false` when either does not exist.
+#[must_use]
+pub fn same_file(a: &Path, b: &Path) -> bool {
+    match (try_plain_canonical(a), try_plain_canonical(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -176,5 +277,64 @@ mod tests {
              backslash corrupts a Unix filename that contains one:\n  {}",
             offenders.join("\n  ")
         );
+    }
+
+    #[test]
+    fn a_verbatim_prefix_is_shed_and_nothing_else_is_touched() {
+        assert_eq!(strip_verbatim(r"\\?\C:\work\a.loft"), r"C:\work\a.loft");
+        assert_eq!(
+            strip_verbatim(r"\\?\UNC\srv\share\a.loft"),
+            r"\\srv\share\a.loft"
+        );
+        assert_eq!(strip_verbatim(r"C:\work\a.loft"), r"C:\work\a.loft");
+        assert_eq!(strip_verbatim("/home/u/a.loft"), "/home/u/a.loft");
+    }
+
+    #[test]
+    fn the_stdlib_is_recognised_however_it_was_loaded() {
+        assert!(is_stdlib_source("default/01_code.loft"));
+        assert!(is_stdlib_source(r"default\01_code.loft"));
+        assert!(is_stdlib_source(
+            "/usr/local/share/loft/default/01_code.loft"
+        ));
+        assert!(is_stdlib_source(r"C:\loft\default\01_code.loft"));
+        assert!(!is_stdlib_source("src/main.loft"));
+        assert!(!is_stdlib_source("defaults/x.loft"));
+        assert!(!is_stdlib_source(""));
+    }
+
+    #[test]
+    fn is_under_compares_components_not_characters() {
+        assert!(is_under("pkg/src/a.loft", "pkg"));
+        assert!(is_under("pkg/src/a.loft", "pkg/src"));
+        assert!(!is_under("pkg2/src/a.loft", "pkg"));
+        assert!(!is_under("pkg", "pkg/src"));
+    }
+
+    #[test]
+    fn canonical_comparisons_answer_false_for_what_does_not_exist() {
+        let dir = std::env::temp_dir();
+        let missing = dir.join("no-such-file-7d2b19.loft");
+        assert!(!same_file(&missing, &missing));
+        assert!(!is_under_canonical(&missing, &dir));
+        assert!(same_file(&dir, &dir));
+        assert!(is_under_canonical(&dir, &dir));
+        assert_eq!(try_plain_canonical(&missing), None);
+    }
+
+    #[test]
+    fn plain_canonical_answers_an_existing_path_without_a_verbatim_prefix() {
+        let dir = std::env::temp_dir();
+        let plain = plain_canonical(&dir);
+        assert!(plain.is_absolute(), "{plain:?}");
+        assert!(!plain.to_string_lossy().starts_with(r"\\?\"), "{plain:?}");
+        // The plain spelling still names the same directory.
+        assert_eq!(
+            std::fs::canonicalize(&plain).ok(),
+            std::fs::canonicalize(&dir).ok()
+        );
+        // A path that does not exist is answered as given, never dropped.
+        let missing = dir.join("no-such-dir-4c1e9a");
+        assert_eq!(plain_canonical(&missing), missing);
     }
 }

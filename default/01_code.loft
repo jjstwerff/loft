@@ -76,11 +76,11 @@ pub interface Addable {
 // Separate from `Addable` so a generic can ask for the fewest operators it needs.
 // Satisfied by integer, single, float, and user types defining OpMul and OpMin.
 //
-// Binary subtraction is `Subtractable` below and deliberately NOT here.  Both arities of `-`
-// CAN now be declared by one interface — that is what loft#1275 fixed, and `Subtractable`
-// beside `Numeric` is only a choice about the shipped surface — but adding a requirement to
-// `Numeric` would take satisfaction away from every user type that provides `OpMul` and unary
-// `OpMin` today, which is exactly what COMPATIBILITY.md forbids.
+// Binary subtraction is `Subtractable` below and deliberately NOT here.  One interface CAN
+// declare both arities of `-`, so keeping them apart is a choice about the shipped surface
+// rather than a limitation: adding a requirement to `Numeric` would take satisfaction away
+// from every user type that provides `OpMul` and unary `OpMin` today, which is what
+// COMPATIBILITY.md forbids.
 pub interface Numeric {
   op * (self: Self, other: Self) -> Self
   op - (self: Self) -> Self
@@ -89,17 +89,17 @@ pub interface Numeric {
 // Types that support binary `-` (subtraction), returning the same type.
 // Satisfied by integer, single, float, and user types defining a two-operand OpMin.
 //
-// A bound of its own rather than a third requirement on `Numeric`: a bound set may declare one
-// name at two arities since loft#1275 (`-` desugars to `OpMin` either way, and the stub key
-// carries the arity), so `<T: Numeric + Subtractable>` gets negation and subtraction together
-// from two interfaces that each name `OpMin`.  Before that it could get only one of them.
+// A bound of its own rather than a third requirement on `Numeric`: a bound set may declare
+// one name at two arities (`-` desugars to `OpMin` either way, and the stub key carries the
+// arity), so `<T: Numeric + Subtractable>` gets negation and subtraction together from two
+// interfaces that each name `OpMin`.
 pub interface Subtractable {
   op - (self: Self, other: Self) -> Self
 }
 
 // Types that support integer scaling via a `scale` method.
 // Uses a method (not `op *`) because a `<T: Numeric + Scalable>` would then need two
-// signatures of one name from ONE bound set, which is still refused (loft#1275).
+// signatures of one name from ONE bound set, which is refused.
 // Two SEPARATE generics may each bound their own `T` by an interface declaring the same
 // method differently — a header binds its own type variable.
 // User types satisfy Scalable by defining `fn scale(self: T, factor: integer) -> integer`.
@@ -156,7 +156,7 @@ fn OpNot(v1: boolean) -> boolean;
 // Both single and float variants exist for every function —
 // choose single for speed, float for precision.
 // Integer operations
-// loft#984 — the declared-RANGE guard, applied to the VALUE at a store into a slot that
+// The declared-RANGE guard, applied to the VALUE at a store into a slot that
 // declares one (`integer limit(lo, hi)`, a narrow width).  A value outside `lo..=hi` takes
 // the slot's DEFAULT — `dflt` is the lowest value in range, or the null sentinel where the
 // slot admits null — and reports it, rather than being wrapped, aliased, or dropped.
@@ -679,13 +679,11 @@ fn OpLeFloat(v1: float, v2: float) -> boolean;
 fn OpFormatFloat(pos: const u16, val: float, width: integer, precision: integer, token: const u8, plus: const boolean, dir: const i8);
 fn OpFormatStackFloat(pos: const u16, val: float, width: integer, precision: integer, token: const u8, plus: const boolean, dir: const i8);
 // --- min / max / clamp ---
-// @PLN25 F1b(b): each has a NON-NULL overload (`-> τ`) and a `τ?` overload (`-> τ?`). The call
-// dispatch picks the `τ?` overload whenever ANY argument is STATICALLY nullable, so an explicit
-// `integer?`/`single?`/`float?` argument — INCLUDING a division result (`1 / z`, now typed `τ?`
-// under DN3) — gets a correctly-typed nullable RESULT and routes to the `τ?` body. The non-null
-// bodies are therefore CLEAN (no `return null` guard): they only ever receive truly-non-null args,
-// so they no longer rely on the STD_SOURCE (N-Store) exemption, which is now retired. The `τ?`
-// overloads carry the propagation: null if either argument is null.
+// Each of these has two overloads: one over non-null values (`-> τ`) and one over nullable
+// ones (`-> τ?`).  You get the nullable overload whenever ANY argument is statically
+// nullable — an `integer?`/`single?`/`float?`, or a division result such as `1 / z` — and it
+// propagates: the answer is null if either argument is null.  Otherwise you get the
+// non-null overload and a non-null answer, so a plain `min(a, b)` needs no discharge.
 // Smallest of two integer values.
 pub fn min(both: integer, b: integer) -> integer {
   if both <= b { both } else { b }
@@ -733,7 +731,7 @@ pub fn clamp(both: float, lo: float, hi: float) -> float {
 }
 #pure
 // Approximate equality: true when a and b differ by at most eps (inclusive).
-// `==` on float/single is EXACT IEEE equality (@PLN102) — use `approx` when you want a
+// `==` on float/single is EXACT IEEE equality — use `approx` when you want a
 // tolerance, e.g. comparing computed transcendentals: `approx(sqrt(2.0) * sqrt(2.0), 2.0, 1e-9)`.
 // A null (NaN) operand is not approximately equal to anything, so the result is false.
 pub fn approx(both: float, b: float, eps: float) -> boolean {
@@ -759,7 +757,7 @@ fn OpConvTextFromNull() -> text;
 #rust"Str::new(crate::state::STRING_NULL)"
 fn OpLengthText(v1: text) -> integer;
 #rust"@v1.chars().count() as i64"
-// Number of characters (Unicode code points) in the text (@PLN110) — the human
+// Number of characters (Unicode code points) in the text — the human
 // count, as in every mainstream language. For a byte length (bounds checks, the
 // limit of byte-positioned indexing / slicing) use `size`.
 pub fn len(both: text) -> integer {
@@ -769,7 +767,7 @@ pub fn len(both: text) -> integer {
 
 fn OpSizeText(v1: text) -> integer;
 #rust"@v1.len() as i64"
-// Number of bytes in the text (@PLN110). This is the bound for byte-positioned
+// Number of bytes in the text. This is the bound for byte-positioned
 // operations: `s[i]`, slices `s[a..b]`, and `find`/`rfind` all use byte offsets.
 // For the human character count use `len`.
 pub fn size(both: text) -> integer {
@@ -1086,13 +1084,24 @@ fn OpVectorIsNull(r: vector) -> boolean;
 // `enum == null` (OpEqRef's rec==0 test misreads native enums as null).
 fn OpRefIsNull(r: reference) -> boolean;
 #rust"@r.store_nr == u16::MAX"
+// The store-identity test behind a local's runtime OWNER WITNESS (`__own_<name>`,
+// `scopes::owner_witness_locals`): true when the two references name DIFFERENT stores.
+// Two sentinels compare EQUAL (`u16::MAX == u16::MAX`), so a witness that never took a
+// store and a local that holds none read as one and release nothing.
+fn OpDistinctStore(a: reference, b: reference) -> boolean;
+#rust"@a.store_nr != @b.store_nr"
+// A reference as a VALUE: `w = OpRefAlias(v)` makes `w` name the store `v` names, where
+// the plain bind `w = v` COPIES the record (@FR-B-Copy).  Emitted only for the compiler's
+// own owner witness, which has to point at the local's store rather than own a second one.
+fn OpRefAlias(r: reference) -> reference;
+#rust"@r"
 // Number of elements in the vector. Use in loop bounds: for i in 0..v.len().
 pub fn len(both: vector) -> integer {
   OpLengthVector(both)
 }
 #pure
 
-// The byte footprint of the vector's element buffer (@PLN110): element count ×
+// The byte footprint of the vector's element buffer: element count ×
 // the element's in-buffer stride.  A heap/reference element (text, nested
 // collection, linked struct) counts as its 4-byte record pointer, never the
 // target's content — `size` is allocation-local and does not recurse into
@@ -1101,7 +1110,7 @@ pub fn len(both: vector) -> integer {
 fn OpSizeVector(r: vector, stride: const u16) -> integer;
 #rust"i64::from(vector::length_vector(&@r, &s.database.allocations)) * i64::from(@stride)"
 
-// The byte footprint of a struct value (@PLN110): its packed record size, a
+// The byte footprint of a struct value: its packed record size, a
 // compile-time constant of the struct type (all instances share one layout).
 // Inline fields and inline sub-records count fully; `text` / collection /
 // reference fields count as their 4-byte stored width — allocation-local, no
@@ -1110,7 +1119,7 @@ fn OpSizeVector(r: vector, stride: const u16) -> integer;
 fn OpSizeStruct(r: reference, sz: const u16) -> integer;
 #rust"{{ let _ = @r; i64::from(@sz) }}"
 
-// The byte footprint of a scalar value (@PLN110): its storage width — a
+// The byte footprint of a scalar value: its storage width — a
 // compile-time constant of the type (boolean 1; character / single 4; integer /
 // float 8; a narrow integer its narrow width, u8 1 / u16 2 / i32 4).  `v` is
 // evaluated (a side-effecting argument still runs) but only its type feeds the
@@ -1313,7 +1322,7 @@ fn OpReserveHash(r: hash, count: integer, db_tp: const u16);
 #rust"s.database.reserve_hash(&@r, @count, @db_tp);"
 fn OpSizeHash(r: hash) -> integer;
 #rust"i64::from(hash::table_bytes(&@r, &s.database.allocations))"
-// The byte footprint of a hash (@PLN110): its full bucket table, holes
+// The byte footprint of a hash: its full bucket table, holes
 // included.  The table is the hash's own allocation — `elms` slots, each a
 // 4-byte record-id (an empty slot is a hole and still counts, because open
 // addressing's spare capacity IS the format).  Allocation-local: the entry
@@ -1773,8 +1782,8 @@ fn OpPreAllocVector(r: vector, capacity: const u16, elem_size: const u16);
 fn OpReserveVector(r: vector, count: integer, elem_size: const u16);
 #rust"vector::reserve_vector(&@r, @count, u32::from(@elem_size), &mut s.database.allocations);"
 // --- Vector aggregates ---
-// Smallest element in a vector, or null when the vector is empty (@PLN102 keystone
-// step 4 — the type is honest about the empty case).  Works on any Ordered type (op <).
+// Smallest element in a vector, or null when the vector is empty (the type is
+// honest about the empty case).  Works on any Ordered type (op <).
 // Example: @STD-004
 pub fn min_of < T: Ordered > (v: vector<T>) -> T? {
   result = v[0];
@@ -1784,8 +1793,8 @@ pub fn min_of < T: Ordered > (v: vector<T>) -> T? {
   result
 }
 #pure
-// Largest element in a vector, or null when the vector is empty (@PLN102 keystone
-// step 4 — the type is honest about the empty case).  Works on any Ordered type (op <).
+// Largest element in a vector, or null when the vector is empty (the type is
+// honest about the empty case).  Works on any Ordered type (op <).
 // Example: @STD-004
 pub fn max_of < T: Ordered > (v: vector<T>) -> T? {
   result = v[0];
@@ -1800,14 +1809,6 @@ pub fn max_of < T: Ordered > (v: vector<T>) -> T? {
 // Example: sum([10, 20, 12], 0) == 42
 // Example: sum([10, 20, 12]) == 42
 // Example: @STD-005
-//
-// @PLN102 arc C — `init` gained its default so `sum_of(v)` can be REWRITTEN to `sum(v)`:
-// `superseded-call` offers that rename and `loft fix` verifies every edit by compiling the
-// result, so while `init` was required the only `#superseded` symbol loft ships had its fix
-// rejected on every program (loft#1003).  A literal default is not spellable here (`init: T = 0`
-// is "expected T, got integer"), so it is the nullable-with-discharge form, which needs
-// loft#1016's per-monomorph `construct_default(T)`.  Additive: every existing `sum(v, init)`
-// call is unchanged.
 pub fn sum < T: Addable > (v: vector<T>, init: T? = null) -> T {
   result = init?;
   for i in 0..v.len() { result = result + v[i] };
@@ -1815,7 +1816,7 @@ pub fn sum < T: Addable > (v: vector<T>, init: T? = null) -> T {
 }
 #pure
 // Sum of all integer elements. Returns 0 for an empty vector.
-// @PLN102 arc C — superseded by the general `sum(v, init)`; kept as a shim over it
+// Superseded by the general `sum(v, init)`; kept as a shim over it
 // (the old form keeps working). `sum_of(v)` == `sum(v, 0)`. Defined AFTER `sum` so the
 // shim's call resolves — a forward reference to a generic is not yet supported.
 pub fn sum_of(v: vector<integer>) -> integer {
@@ -1824,10 +1825,24 @@ pub fn sum_of(v: vector<integer>) -> integer {
 #superseded "sum"
 #pure
 
+// A type that can be walked as a tree.  Declaring `fn children(self: T) -> vector<T>`
+// is the whole contract — that bare function is what makes `T` walkable, with nothing to
+// register and no base type to inherit from.  `tree_walk` is what consumes it.
 pub interface Walkable {
   fn children(self: Self) -> vector<Self>
 }
 
+// Every node reachable from `wk_root` in breadth-first order: the root, then its
+// children, then theirs.  `T` is any type declaring `fn children(self: T) -> vector<T>`
+// — writing that bare function is what makes a type `Walkable`, with nothing to register.
+//
+// `cap` bounds the ANSWER, not just the effort: at most `cap` nodes come back (the root
+// alone when `cap` is 0 or 1) and the walk stops there.  That bound is what makes this
+// total on a structure that has a cycle or no end, so pass a count you would accept as an
+// answer rather than a number picked to be large.
+//
+// Nodes are not de-duplicated — the walk carries no visited set, so a node reached by two
+// parents is returned twice.
 // Example: @STD-006
 pub fn tree_walk < T: Walkable > (wk_root: T, cap: integer) -> vector<T> {
   wk_order = [wk_root];
@@ -1855,15 +1870,14 @@ pub fn tree_walk < T: Walkable > (wk_root: T, cap: integer) -> vector<T> {
 // this function's.  The file and line are injected by the compiler; do not pass them
 // manually.
 //
-// The type variable is spelled `AssertValue` and NOT `T` on purpose.  A type variable's
-// bound stubs are keyed by its NAME (`t_1T_to_text`), so every generic in the program
-// spelling its variable `T` shares one namespace with a user `struct T` — and a bound
-// declaring a method as common as `to_text` or `op ==` then blocks that struct from
-// defining its own.  Measured: with these bounds on `T`, every user struct named `T`
-// formatted as EMPTY and could not declare `to_text` at all.  loft#1153 tracks the
-// collision itself; until it closes, a stdlib generic bound to a common method needs a
-// name no one would write.
 pub fn assert_eq < AssertValue: Equatable + Printable > (got: AssertValue, want: AssertValue, what: text, file: text, line: integer) {
+  // The type variable is spelled `AssertValue` and NOT `T` on purpose, and a stdlib
+  // generic bound to a common method needs the same treatment.  A type variable's bound
+  // stubs are keyed by its NAME (`t_1T_to_text`), so every generic spelling its variable
+  // `T` shares one namespace with a user `struct T` — and a bound declaring a method as
+  // common as `to_text` or `op ==` then blocks that struct from defining its own: with
+  // these bounds on `T`, a user struct named `T` formats as EMPTY and cannot declare
+  // `to_text` at all.
   if got != want {
     if what == "" {
       assert(false, "got {got.to_text()}, want {want.to_text()}", file, line);
@@ -1904,7 +1918,7 @@ pub struct StructField {
   // Was the field DECLARED nullable (`text?` rather than `text`)?
   //
   // The payload variants above are typed non-null, and `τ?` shares `τ`'s
-  // runtime layout (@PLN25) — a nullable field spells absence with a SENTINEL
+  // runtime layout — a nullable field spells absence with a SENTINEL
   // rather than a wrapper. So a null field's value arrives inside `FvText` /
   // `FvInt` / … as that sentinel, and this flag is what says so; without it a
   // reader would have to discover the possibility by being surprised.

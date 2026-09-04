@@ -25,7 +25,7 @@
 <article>
 <div class="item">
 <pre><code>pub fn min(both: integer, b: integer) -&gt; integer</code></pre>
-<p>@PLN25 F1b(b): each has a NON-NULL overload (`-&gt; τ`) and a `τ?` overload (`-&gt; τ?`). The call dispatch picks the `τ?` overload whenever ANY argument is STATICALLY nullable, so an explicit `integer?`/`single?`/`float?` argument — INCLUDING a division result (`1 / z`, now typed `τ?` under DN3) — gets a correctly-typed nullable RESULT and routes to the `τ?` body. The non-null bodies are therefore CLEAN (no `return null` guard): they only ever receive truly-non-null args, so they no longer rely on the STD_SOURCE (N-Store) exemption, which is now retired. The `τ?` overloads carry the propagation: null if either argument is null. Smallest of two integer values.</p>
+<p>Each of these has two overloads: one over non-null values (`-&gt; τ`) and one over nullable ones (`-&gt; τ?`).  You get the nullable overload whenever ANY argument is statically nullable — an `integer?`/`single?`/`float?`, or a division result such as `1 / z` — and it propagates: the answer is null if either argument is null.  Otherwise you get the non-null overload and a non-null answer, so a plain `min(a, b)` needs no discharge. Smallest of two integer values.</p>
 </div>
 <div class="item">
 <pre><code>pub fn max(both: integer, b: integer) -&gt; integer</code></pre>
@@ -61,7 +61,7 @@
 </div>
 <div class="item">
 <pre><code>pub fn approx(both: float, b: float, eps: float) -&gt; boolean</code></pre>
-<p>Approximate equality: true when a and b differ by at most eps (inclusive). `==` on float/single is EXACT IEEE equality (@PLN102) — use `approx` when you want a tolerance, e.g. comparing computed transcendentals: `approx(sqrt(2.0) * sqrt(2.0), 2.0, 1e-9)`. A null (NaN) operand is not approximately equal to anything, so the result is false.</p>
+<p>Approximate equality: true when a and b differ by at most eps (inclusive). `==` on float/single is EXACT IEEE equality — use `approx` when you want a tolerance, e.g. comparing computed transcendentals: `approx(sqrt(2.0) * sqrt(2.0), 2.0, 1e-9)`. A null (NaN) operand is not approximately equal to anything, so the result is false.</p>
 </div>
 <div class="item">
 <pre><code>pub fn approx(both: single, b: single, eps: single) -&gt; boolean</code></pre>

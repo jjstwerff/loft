@@ -70,6 +70,9 @@ after it could never run (loft rejects that at compile time).
   (M-Exhaust)  a match on an enum must cover EVERY variant — each variant by its own arm, or a
                trailing `_`.  A match missing a variant is a STATIC ERROR
                ("match on E is not exhaustive — missing: …"), NOT a runtime fault.
+  (M-Bool)     a match on a BOOLEAN whose arms name `true` and `false`, each unguarded, is
+               exhaustive the same way: no value falls through, so nothing about the match is
+               nullable.  A guarded arm can fail and is not part of the domain.
 ```
 
 **In words.** The compiler proves a `match` handles every case: if you add a variant to an enum,
@@ -77,6 +80,14 @@ every `match` that forgot it stops compiling with a precise "missing: …" messa
 is the load-bearing guarantee — a `match` can never fall through to nothing at runtime, so there
 is no "unmatched value" runtime error in loft's model; the exhaustiveness is discharged
 statically, before the program runs.
+
+`(M-Bool)` is the same guarantee for the one scalar whose whole domain a match can spell.  It
+was written after the compiler answered the other way: a wildcard-less scalar match carries a
+typed-null fall-through for the value no arm matched, and a `match w { true => …, false => … }`
+kept it — so its join read as nullable and `-> text { match w { … } }` warned
+nullable-into-non-null on both backends, whatever the arms held, while the same choice
+spelled as an `if` was quiet (loft#1343).  The last arm is the fallback now, as a trailing
+`_` would be.
 
 ---
 
@@ -212,6 +223,15 @@ is a view; `..rest` / repetition are fresh vectors); the pattern grammar + prece
 ## Deviations
 
 OPEN: **0** (a *rules* doc — it shrinks operational.md's D-op-1, adds no code deviation).
+
+- **D-match-1 — OPENED AND CLOSED 2026-09-04 (loft#1343).** `(M-Bool)` did not exist, and the
+  edge it names was answered wrong: a boolean match spelling both arms was lowered with the
+  scalar match's typed-null fall-through, so its type read nullable and a `-> text` function
+  returning it warned `(N-Store)` on both backends.  Closed in the scalar match parser: both
+  literal arms, unguarded, make the last arm the fallback.  Guard
+  `tests/scripts/1343-a-boolean-match-with-both-arms-is-exhaustive.loft` +
+  `tests/boolean_match_exhaustive.rs` (the warning stream, which no corpus channel scores);
+  falsified at `dd46146c` — five warnings → none on both backends.
 
 - **PEG patterns are SHIPPED (@PLN35)** — the *Rules — PEG patterns* § opens **no** deviation: the
   shipped implementation (phases 1–7 + PC1–PC5, [plans/35-match-peg](../plans/35-match-peg/))

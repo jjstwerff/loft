@@ -31,15 +31,15 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call"><a href="stdlib-text.html">byte_at</a></span>(idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, data: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>Read the byte at <code>idx</code> (0..size) of a <code>recv</code> result.  A terminal stream is raw bytes, so read it byte-by-byte rather than as UTF-8.  Out of range returns -1 — not 0, which the stream itself may legitimately carry. Example: @SSH-002 — bound the loop with <code>size</code>, and test the end with <code>&lt; 0</code>.</p>
+<p>Read the byte at <code>idx</code> (0..size) of a <code>recv</code> result.  A terminal stream is raw bytes, so read it byte-by-byte rather than as UTF-8.  Out of range returns -1 — not 0, which the stream itself may legitimately carry.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">connect</span>(host: <span class="ty"><a href="stdlib-types.html">text</a></span>, port: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Session</span></code></pre>
-<p>Open a TCP connection to <code>host:port</code> and run the SSH transport handshake. Check <code>ok()</code> before authenticating. Example: @SSH-001 — a failed session stays callable and silent, so <code>ok()</code> is the only thing that reports it.</p>
+<p>Open a TCP connection to <code>host:port</code> and run the SSH transport handshake. Check <code>ok()</code> before authenticating.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(self: <span class="en">Session</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
-<p>True when the session connected and completed the transport handshake. Example: @SSH-001 — skip this and the whole session ladder runs, quietly, on nothing.</p>
+<p>True when the session connected and completed the transport handshake.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">login</span>(self: <span class="en">Session</span>, user: <span class="ty"><a href="stdlib-types.html">text</a></span>, password: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
@@ -55,7 +55,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">recv</span>(self: <span class="en">Session</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
-<p>Return the bytes the remote shell produced since the last call, or &quot;&quot; when nothing is pending (non-blocking).  Binary-safe: iterate 0..size(result) and read each byte with <code>byte_at</code> — <code>size</code> is the BYTE count, which is what <code>byte_at</code> is indexed against; <code>len</code> counts characters and would truncate. Example: @SSH-002 — the byte a <code>len</code>-bounded loop drops, and why -1 is not 0.</p>
+<p>Return the bytes the remote shell produced since the last call, or &quot;&quot; when nothing is pending (non-blocking).  Binary-safe: iterate 0..size(result) and read each byte with <code>byte_at</code> — <code>size</code> is the BYTE count, which is what <code>byte_at</code> is indexed against; <code>len</code> counts characters and would truncate.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">resize</span>(self: <span class="en">Session</span>, cols: <span class="ty"><a href="stdlib-types.html">integer</a></span>, rows: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>

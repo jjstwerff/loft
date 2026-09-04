@@ -133,7 +133,7 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(evens[<span class="nm">0</span>] == <span class="nm">2</span>, <span class="st">"evens[0]: {evens[0]}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(evens[<span class="nm">1</span>] == <span class="nm">4</span>, <span class="st">"evens[1]: {evens[1]}"</span>);</code></pre>
 <h2 id="what-a-closure-cannot-capture">What a closure cannot capture</h2>
-<p>A <code>&amp;</code> parameter cannot be captured at all, in any shape — copy it into a local, capture the local, and write the local back before returning (loft#1276).</p>
+<p>A <code>&amp;</code> parameter cannot be captured at all, in any shape — copy it into a local, capture the local, and write the local back before returning.</p>
 <p>A capturing closure cannot be stored in a COLLECTION either: <code>vector&lt;fn(…)&gt;</code> and the keyed collections take non-capturing lambdas only.  A struct FIELD holds one without trouble, which is the shape to reach for.</p>
 <pre><code>  step = <span class="nm">7</span>;
   stepper = <span class="en">Stepper</span> { advance: <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { x + step } };
@@ -309,8 +309,7 @@ fn main() {
 
   // ## What a closure cannot capture
   // A '&amp;' parameter cannot be captured at all, in any shape — copy it into a
-  // local, capture the local, and write the local back before returning
-  // (loft#1276).
+  // local, capture the local, and write the local back before returning.
   //
   // A capturing closure cannot be stored in a COLLECTION either: 'vector&lt;fn(…)&gt;'
   // and the keyed collections take non-capturing lambdas only.  A struct FIELD

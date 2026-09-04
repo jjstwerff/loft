@@ -5,7 +5,7 @@
 // Types and functions for reading and writing files.
 // A File value is obtained via file() and carries the path, format, and an internal reference.
 // An environment variable as a name/value pair.
-// Capability groups (@PLN86) — the fs/env split a sandbox profile grants via
+// Capability groups — the fs/env split a sandbox profile grants via
 // `fs#read` / `fs#update` / `env#read`; the functions below link in their signature.
 capability fs
 capability env
@@ -77,10 +77,9 @@ pub struct File {
   // 24
   size: integer,
   // 0
-  // @PLN116 — a bare enum field needs an explicit default (an enum's 0 is null, and a
-  // non-null field may not hold null).  A fresh File is `NotExists` until `OpGetFile`
-  // determines the real format for a valid path (see `file()`), so `NotExists` is the
-  // honest placeholder — it is overwritten before any read.
+  // A fresh File reads as `NotExists` until `file()` has determined the real format for
+  // the path, so this default is a placeholder rather than a claim about the path — it is
+  // overwritten before any read.
   format: Format = NotExists,
   // 32
   ref: i32?,
@@ -141,7 +140,7 @@ fn OpRmdir(path: text) -> integer fs#update;
 // Use for small configuration files or scripts.
 // Example: @STD-010
 pub fn content(self: File) -> text?fs#read {
-  // @PLN102 H4 — a MISSING file reads as null, distinct from an EMPTY file (""),
+  // A MISSING file reads as null, distinct from an EMPTY file (""),
   // so a missing config is not silently indistinguishable from an empty one.
   if self.format == Format.NotExists { return null }
   // loft#829 — a directory holds no text; "" would claim it is an empty file.
@@ -166,7 +165,7 @@ pub fn content(self: File) -> text?fs#read {
 // Example: @STD-011
 pub fn lines(self: File) -> vector<text> fs#read {
   result = [];
-  // @PLN102 H4 — content() is now `text?`; a missing file has no lines.
+  // A missing file has no lines, which is why the result is nullable.
   c = self.content() ?? "";
   p = 0;
   prev_cr = false;
@@ -245,9 +244,9 @@ pub fn path_sep() -> character;
 // Stores so the access is observable.
 #impure(host_io)
 // Use as the entry point for all file I/O.
-// A relative path resolves against the program's own directory (#255 / @PLN9), so
+// A relative path resolves against the program's own directory, so
 // `../data.txt` names the file above the script — the same file an absolute path
-// would name, and it answers the same either way (loft#712).
+// would name, and it answers the same either way.
 
 pub fn file(path: text) -> File fs#read {
   result = File { path: path, ref: null };
@@ -267,7 +266,7 @@ pub fn exists(path: text) -> boolean fs#read {
 }
 // Filesystem stat (via file()); par-safe.
 #impure(io)
-// Method form: f = file("path"); if f.exists() { ... }
+// Method form: f = file("path"); if f.exists() { .. }
 // Also callable as exists(file_obj) via the 'both' parameter name.
 pub fn exists(both: File) -> boolean fs#read {
   both.format != Format.NotExists
@@ -296,7 +295,7 @@ pub fn move(from: text, to: text) -> FileResult fs#update {
 #impure(io)
 // Create a single directory level; the parent must already exist.
 // FileResult.Other when the directory is already there.  There is no
-// counterpart that REMOVES a directory (loft#1256).
+// counterpart that REMOVES a directory.
 
 pub fn mkdir(path: text) -> FileResult fs#update {
   fs_result(OpMkdir(path))
@@ -305,7 +304,7 @@ pub fn mkdir(path: text) -> FileResult fs#update {
 // Create a directory and all missing parents (like Unix mkdir -p).
 // Idempotent: a directory that already exists is FileResult.Ok, which is what
 // makes it safe on the way into a run.  There is no counterpart that REMOVES a
-// directory (loft#1256).
+// directory.
 
 pub fn mkdir_all(path: text) -> FileResult fs#update {
   fs_result(OpMkdirAll(path))
@@ -333,14 +332,14 @@ pub fn is_file(path: text) -> boolean fs#read;
 #rust"codegen_runtime::fs_is_file(&s.database.resolve_path(@path))"
 #impure(io)
 // Lists the entry NAMES of directory `path` (base names, not full paths),
-// sorted.  @PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct
+// sorted.  A MISSING / non-directory path lists as NULL (distinct
 // from an EMPTY directory, `[]`); discharge with `?? []` to keep the old shape.
 // Use to enumerate a directory; join with `path` to build full child paths.
 // Example: @STD-010
 pub fn list_dir(path: text) -> vector<text> ?fs#read;
 #rust"stores.fs_list_dir(@path)"
 #impure(io)
-// Reads the whole file `path` as raw bytes.  @PLN102 H4 — a MISSING / unreadable
+// Reads the whole file `path` as raw bytes.  A MISSING / unreadable
 // file reads as NULL (distinct from an EMPTY file, `[]`); discharge with `?? []`
 // to keep the old shape.  Binary-exact (round-trips with write_bytes); use for
 // non-UTF-8 data — for text prefer `file(path).content()`.
@@ -380,7 +379,7 @@ pub fn mtime(path: text) -> integer fs#read;
 //
 // Desktop-only: the sidecar is built over memory-mapped files, so on
 // the wasm targets this answers false — "nothing validates", which is
-// the state that sends a caller down its rebuild branch (loft#1063).
+// the state that sends a caller down its rebuild branch.
 pub fn store_durable_check(path: text) -> boolean fs#read;
 #rust"crate::store::Store::durable_check(std::path::Path::new(@path))"
 #impure(io)
@@ -394,7 +393,7 @@ pub fn store_durable_check(path: text) -> boolean fs#read;
 //
 // Desktop-only, like `store_durable_check`: on the wasm targets this
 // answers false — the seal did not happen — so seal where the store is
-// written and read it back with `store_load` (loft#1063).
+// written and read it back with `store_load`.
 pub fn store_durable_seal(path: text) -> boolean fs#update;
 #rust"crate::store::Store::durable_seal(std::path::Path::new(@path))"
 #impure(io)
@@ -433,7 +432,7 @@ pub fn store_durable_seal(path: text) -> boolean fs#update;
 // A bare `reference` parameter accepts them all.
 //
 // It snapshots the whole STORE `r` lives in, which is not always a store of
-// just `r` (loft#757).  A keyed LOCAL owns its store, so binding it writes a
+// just `r`.  A keyed LOCAL owns its store, so binding it writes a
 // file for that collection.  A keyed FIELD shares its container's store, so
 // binding `pw.painted` above writes a file for `PaintedWorld` — carrying the
 // container and every sibling collection — and that file will NOT load back
@@ -484,8 +483,8 @@ pub fn store_persist_copy(r: reference, path: text) -> boolean fs#update;
 // `store_persist_bind` can't run (a browser / wasm target) or where a durable
 // live binding isn't wanted.  Returns `false` on a missing / truncated /
 // wrong-format file (no panic; assumes the on-disk layout matches `r`'s
-// declared type).  @PLN97 arc G Phase 1 — the whole-file load the browser
-// working-set path builds on (loft#522).
+// declared type).  This is the whole-file load that the browser's working-set
+// path builds on.
 //   h: hash<Rec[id]> = []
 //   store_load(h, "world.store")   // h now holds the file's records
 pub fn store_load(r: reference, path: text) -> boolean fs#read;
@@ -499,7 +498,7 @@ pub fn store_load(r: reference, path: text) -> boolean fs#read;
 // a hash mismatch REFUSES the load (returns false, loads nothing). The
 // fetch→verify→trust discipline the registry install uses, bridged onto the store
 // loader; `url` may be `http(s)://` or `file://`. Whole-file counterpart of the
-// paged `store_load_key(s)`/`store_load_range` loaders. @PLN97 arc G Phase 0.
+// paged `store_load_key(s)`/`store_load_range` loaders.
 //   h: hash<Rec[id]> = []
 //   store_load_url(h, "https://cdn.example/world.store", "<sha256-hex>")
 pub fn store_load_url(r: reference, url: text, sha256: text) -> boolean fs#read;
@@ -510,7 +509,7 @@ pub fn store_load_url(r: reference, url: text, sha256: text) -> boolean fs#read;
 // the INSTANT counterpart of store_load_url: skips the SHA-256 pin (you trust the
 // origin) for a fast read, but is still structurally validated, so a corrupt or
 // malformed image is rejected (false), never adopted. Use store_load_url for an
-// untrusted source. @PLN97 arc G Phase 0.
+// untrusted source.
 //   world: hash<Rec[id]> = []
 //   store_load_url_trusted(world, "https://cdn.internal/world.store")
 pub fn store_load_url_trusted(r: reference, url: text) -> boolean fs#read;
@@ -522,7 +521,7 @@ pub fn store_load_url_trusted(r: reference, url: text) -> boolean fs#read;
 // its block structure BEFORE adoption, so a crafted or corrupt file cannot hang
 // (0-size block) or drive a heap over-read; it is rejected (false). store_load is
 // faster (validates only in debug) for a file you produced yourself; use this for
-// a file whose provenance you don't control. @PLN97 arc G Phase 2.
+// a file whose provenance you don't control.
 //   h: hash<Rec[id]> = []
 //   if !store_load_untrusted(h, "downloaded.store") { /* rejected — malformed */ }
 pub fn store_load_untrusted(r: reference, path: text) -> boolean fs#read;
@@ -574,7 +573,7 @@ pub fn store_verify(r: reference) -> boolean;
 // never shrinks by itself — so mid-run the file is a rung on a ladder, not a
 // measure of content, and can sit 57% above what it holds. Releasing the
 // collection hands that tail back on its own, so the file a program leaves
-// behind follows its content whether or not this was ever called (loft#752).
+// behind follows its content whether or not this was ever called.
 // Call it MID-RUN, when a live set has dropped for good and the memory (or the
 // disk) is wanted back before the end.
 //   world: hash<Hex[q, r]> = []
@@ -638,12 +637,12 @@ pub fn store_release(r: reference) -> integer fs#update;
 // The entry's own fields are RELOCATED into the local store, so `text`, nested
 // structs and flat vectors all come across; only a `vector<text>` or a
 // `vector<vector>` is refused (its element pointers would dangle), and a refusal
-// says so on stderr rather than looking like an absent key. @PLN97 arc G (loft#522).
+// says so on stderr rather than looking like an absent key.
 //   tiles: hash<Tile[id]> = []
 //   store_load_key(tiles, "block.store", 42)   // tiles now holds entry 42 only
 // @F108 — Lazy store binding (catalogue anchor, @PLN92)
 //
-// @PLN129 arc A — bind a COLLECTION to a lazy source. After this, a lookup that
+// Bind a COLLECTION to a lazy source. After this, a lookup that
 // MISSES fetches that one entry and inserts it, so the next lookup is an ordinary
 // resident hit; a lookup that hits never leaves the process. The collection is
 // therefore automatically the cached data set — there is no separate cache.
@@ -659,7 +658,7 @@ pub fn store_release(r: reference) -> integer fs#update;
 //   store_bind_lazy(persons, "people.store")
 //   p = persons[42]        // fetches exactly entry 42, then holds it
 //
-// @PLN129 arc B — `sqlite:<path>` binds to a table instead, and the query is
+// `sqlite:<path>` binds to a table instead, and the query is
 // DERIVED from the collection's own type: the table is the element type's name
 // lowercased, the columns are its fields, and the `WHERE` is the collection's
 // key. Nothing is written down twice.
@@ -676,7 +675,7 @@ pub fn store_release(r: reference) -> integer fs#update;
 // FALSE means the binding was not made, and it is worth checking. A `.store`
 // IMAGE is read a page at a time, which only a `hash` or a `trie` supports: a
 // `sorted`, `index` or `spatial` bound to one is refused HERE, at the call that
-// is wrong, rather than answering `null` at every later lookup (loft#802). Those
+// is wrong, rather than answering `null` at every later lookup. Those
 // kinds load whole — `store_load` / `store_load_url_trusted` carry all of them.
 // A DATABASE source judges its own schema on the first fault instead, since what
 // it can serve is a fact about the other end.
@@ -686,7 +685,7 @@ pub fn store_release(r: reference) -> integer fs#update;
 pub fn store_bind_lazy(local: reference, source: text) -> boolean;
 #rust"{{ let r = @local; r.rec != 0 && stores.bind_lazy(&r, @source) }}"
 
-// @PLN129 arc B2 — run an explicit condition against this collection's bound
+// Run an explicit condition against this collection's bound
 // DATABASE source and pull every matching row into the collection. Answers how
 // many records the collection gained.
 //
@@ -709,7 +708,7 @@ pub fn store_bind_lazy(local: reference, source: text) -> boolean;
 pub fn store_lazy_query(local: reference, condition: text) -> integer;
 #rust"stores.lazy_query(&(@local), @condition)"
 
-// @PLN129 arc B step 8 — pull a whole KEY RANGE from this collection's bound
+// Pull a whole KEY RANGE from this collection's bound
 // DATABASE source in ONE query. Answers how many records the collection gained.
 //
 // This is what keeps lazy reading usable rather than merely correct. Fetching
@@ -717,7 +716,7 @@ pub fn store_lazy_query(local: reference, condition: text) -> integer;
 // is one. So when you know the span you want, ask for the span:
 //
 //   store_lazy_range(events, 100, 199);   // one query, up to 100 records
-//   for e in events { ... }               // all resident, no further fetching
+//   for e in events { .. }               // all resident, no further fetching
 //
 // The collection must be ORDERED (`sorted` or `index`) — a `hash` has no order
 // to range over — and keyed on ONE column, since two numbers cannot say which
@@ -728,7 +727,7 @@ pub fn store_lazy_query(local: reference, condition: text) -> integer;
 pub fn store_lazy_range(local: reference, lo: integer, hi: integer) -> integer;
 #rust"stores.lazy_range(&(@local), @lo, @hi)"
 
-// @PLN129 arc C — why a lazy fetch for this collection could not REACH its
+// Why a lazy fetch for this collection could not REACH its
 // source, or "" when it is healthy.
 //
 // A lookup cannot tell you this. C80 says a value read never raises, so a miss
@@ -751,13 +750,13 @@ pub fn store_lazy_range(local: reference, lo: integer, hi: integer) -> integer;
 pub fn store_lazy_error(local: reference) -> text;
 #rust"stores.lazy_error(&(@local))"
 
-// @PLN129 arc C — how many fetches could not REACH this collection's source.
+// How many fetches could not REACH this collection's source.
 // 0 is healthy. The magnitude behind `store_lazy_error`: after a traversal it
 // answers "how incomplete am I".
 pub fn store_lazy_faults(local: reference) -> integer;
 #rust"stores.lazy_faults(&(@local))"
 
-// @PLN129 arc C — acknowledge this collection's fetch failures, returning
+// Acknowledge this collection's fetch failures, returning
 // whether there was anything to acknowledge.
 //
 // The ONLY thing that clears them. A later fetch happening to succeed does NOT:
@@ -768,7 +767,7 @@ pub fn store_lazy_faults(local: reference) -> integer;
 pub fn store_lazy_clear(local: reference) -> boolean;
 #rust"stores.lazy_clear(&(@local))"
 
-// @PLN133 S8 — a loft DRIVER reporting that it could not reach its source.
+// A loft DRIVER reporting that it could not reach its source.
 //
 // The writing end of the channel `store_lazy_error` reads. A driver written in
 // loft (`fn lazy_fetch(...)`) has the same three answers a Rust source has, and
@@ -783,7 +782,7 @@ pub fn store_lazy_clear(local: reference) -> boolean;
 //       store_lazy_fail(coll, "cannot open {source}: {db.db_last_error()}");
 //       return 0;
 //     }
-//     ...
+//     ..
 //   }
 //
 // Sticky and counted exactly like a Rust source's failure: the FIRST reason is
@@ -794,7 +793,7 @@ pub fn store_lazy_fail(local: reference, why: text) fs#read;
 // Fetch ONE integer-keyed entry from a persisted collection image into `local`,
 // reading only the pages the lookup touches. The singular of `store_load_keys`
 // and the integer form of `store_load_key_text`; returns false when the key is
-// absent or the image cannot serve this collection. @PLN97 arc G (loft#522).
+// absent or the image cannot serve this collection.
 //   tiles: hash<Tile[id]> = []
 //   store_load_key(tiles, "block.store", 42)
 pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#read;
@@ -805,7 +804,6 @@ pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#
 // `hash<T[textkey]>` or `trie<T[textkey]>` (a place-name / string-id index) into
 // `local`, reading only the pages the lookup touches. Returns false when the key
 // is absent or the collection isn't a copyable text-keyed hash or trie.
-// @PLN97 arc G (loft#522), @PLN134 for the trie.
 //   places: hash<Place[name]> = []
 //   store_load_key_text(places, "gazetteer.store", "Amsterdam")
 pub fn store_load_key_text(local: reference, path: text, key: text) -> boolean fs#read;
@@ -819,7 +817,7 @@ pub fn store_load_key_text(local: reference, path: text, key: text) -> boolean f
 //
 // `limit` caps the WALK, not just the answer: with `limit` 8 the ninth record is
 // never stepped to, so its pages are never fetched. A negative `limit` means no
-// cap, which on a common prefix reads the whole run. @PLN134.
+// cap, which on a common prefix reads the whole run.
 //   words: trie<Word[w]> = []
 //   store_load_prefix(words, "vocab.store", "kerk", 20)
 pub fn store_load_prefix(local: reference, path: text, pre: text, limit: integer) -> integer fs#read;
@@ -848,7 +846,7 @@ pub fn store_load_prefix(local: reference, path: text, pre: text, limit: integer
 // and the two swapped when the identical data was written in the other axis
 // order — 81 % of the image to return 0.8 % of the records. Write such a
 // dataset TILED: it has no bad orientation, and for the square-ish boxes a
-// viewport uses it beats either linear order. @PLN136.
+// viewport uses it beats either linear order.
 //   pins: spatial<Pin[x, y]> = []
 //   store_load_box(pins, "map.store", [x1, y1], [x2, y2], 200)
 pub fn store_load_box(local: reference, path: text, from: vector<integer>, till: vector<integer>, limit: integer) -> integer fs#read;
@@ -858,7 +856,7 @@ pub fn store_load_box(local: reference, path: text, from: vector<integer>, till:
 // Plural form of `store_load_key`: fetch the given integer keys' entries into
 // `local` in one call (the paged reader is opened once and its cache reused),
 // returning how many were found. Keys absent from the remote are skipped. Same
-// relocation rules as `store_load_key`. @PLN97 arc G (loft#522).
+// relocation rules as `store_load_key`.
 //   tiles: hash<Tile[id]> = []
 //   got = store_load_keys(tiles, "block.store", [7, 13, 42])   // got == 3
 pub fn store_load_keys(local: reference, path: text, keys: vector<integer>) -> integer fs#read;
@@ -868,7 +866,7 @@ pub fn store_load_keys(local: reference, path: text, keys: vector<integer>) -> i
 // Plural form of `store_load_key_text`, and the text twin of `store_load_keys`:
 // fetch the given text keys' entries into `local` in ONE call, returning how many
 // were found. Keys absent from the remote are skipped. Serves a `hash<T[k]>` and
-// a `trie<T[k]>` alike, like the single-key form. loft#1064.
+// a `trie<T[k]>` alike, like the single-key form.
 //
 // Looping `store_load_key_text` is not the same call: each one opens its own
 // reader, so a ring of twenty asset names re-fetches the same 64 KiB bucket-table
@@ -885,7 +883,6 @@ pub fn store_load_keys_text(local: reference, path: text, keys: vector<text>) ->
 // persisted `sorted<T[k]>` into `local`, reading only the pages the range walk
 // touches — the ordered-collection counterpart of `store_load_keys` (a phone
 // pulling the corridor of map tiles a route crosses). Returns the count loaded.
-// @PLN97 arc G (loft#522).
 //   tiles: sorted<Tile[tkey]> = []
 //   store_load_range(tiles, "block.store", lo_cell, hi_cell)
 pub fn store_load_range(local: reference, path: text, lo: integer, hi: integer) -> integer fs#read;
@@ -983,7 +980,7 @@ pub fn env_variables() -> vector<EnvVariable> env#read;
 #impure(host_io)
 // Returns the value of the environment variable `name`, or `""` when it is not set.
 // An unset variable and one set to the empty string give the same answer, so this
-// cannot tell them apart (loft#1302). Use to read configuration from the shell
+// cannot tell them apart. Use to read configuration from the shell
 // environment.
 pub fn env_variable(name: text) -> text env#read;
 #rust"stores.os_variable(@name)"

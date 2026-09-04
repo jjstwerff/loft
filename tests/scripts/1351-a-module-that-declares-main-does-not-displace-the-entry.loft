@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @ARGS: --lib tests/lib
+//
+// The ENTRY file's `main` is the one that runs, even when an imported module declares one
+// too (loft#1351).
+//
+// `Data` scopes definitions by (name, source), but emitted Rust is one flat namespace, so
+// `namespace_colliding_native_fns` renames all but the lowest source's copy to
+// `n_s<N>_<name>`.  Its contract is that it runs after the two-pass parse and BEFORE a
+// native emit, and every `--native` path in `main.rs` calls it.  `tests/native.rs` did
+// not, so the harness emitted from a `Data` no real build produces: two definitions named
+// `n_main`, which `duplicate_fn_names` then reported as a collision that does not exist,
+// so BOTH were emitted under a disambiguated ident (`n_main_m0b5dfab1`) while the entry
+// template called the bare `n_main`.  rustc: `cannot find function n_main in this scope`.
+//
+// The control is in the module rather than here: `entrylib`'s own `main` asserts false, so
+// choosing the wrong entry FAILS instead of quietly running nothing. That matters because
+// the wrong-entry outcome is "the assertions never ran", which reads like a pass.
+//
+// @falsified-at: d47eec4c — native `1 compile failed` -> 0; the file did not build at all
+// on the pre-fix harness (`error[E0425]: cannot find function n_main`), so the interpret
+// side passed while the native side could not produce a binary.  The narrowed entry LOOKUP
+// added in that same commit is not enough on its own: it picks the right definition and
+// the emit still fails, because the duplicate name is what drives the mangling.
+
+use entrylib;
+
+fn main() {
+  assert(entrylib::entry_value() == 41, "the module is reachable: {entrylib::entry_value()}");
+}

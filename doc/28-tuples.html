@@ -93,7 +93,6 @@
   inner = <span class="fn-call">doubled_first</span>(p);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(inner == <span class="nm">40</span>, <span class="st">"the function saw its own doubled copy: {inner}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(p.<span class="nm">0</span> == <span class="nm">10</span>, <span class="st">"and the caller's tuple is untouched: {p.0}"</span>);</code></pre>
-<p>⚠ Writing to a TEXT element of a value parameter — <code>p.1 = "…"</code> where the parameter is <code>(integer, text)</code> — will not compile on --native today, though the interpreter runs it (loft#1278).  Until that closes, copy the parameter into a local first and write there: <code>q = p; q.1 = "…";</code>.</p>
 <h2 id="tuples-as-reference-parameters-swap-in-place">Tuples as reference parameters (swap in place)</h2>
 <p>A <code>&amp;</code> tuple holds scalar elements only.  <code>&amp;(text, …)</code> is refused when you compile, naming the element type — text lives on the heap, and a reference tuple has nowhere to put it.</p>
 <pre><code>  pair = (<span class="nm">3</span>, <span class="nm">7</span>);
@@ -247,11 +246,6 @@ fn main() {
   inner = doubled_first(p);
   assert(inner == 40, "the function saw its own doubled copy: {inner}");
   assert(p.0 == 10, "and the caller's tuple is untouched: {p.0}");
-
-  // ⚠ Writing to a TEXT element of a value parameter — 'p.1 = "…"' where the
-  // parameter is '(integer, text)' — will not compile on --native today,
-  // though the interpreter runs it (loft#1278).  Until that closes, copy the
-  // parameter into a local first and write there: 'q = p; q.1 = "…";'.
 
   // ## Tuples as reference parameters (swap in place)
   // A '&amp;' tuple holds scalar elements only.  '&amp;(text, …)' is refused when you

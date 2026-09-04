@@ -27,11 +27,11 @@
 <p class="lib-legend">139 public items, in source order. Generated from the registry index, which re-derives them from the package source at publish time — so a signature here is the one that version actually ships.</p>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rgba</span>(cr: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cg: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cb: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ca: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>Pack RGBA channels into a single integer using bitwise ops. Layout: bits 24..31 = alpha, 16..23 = red, 8..15 = green, 0..7 = blue. Loft integers are 64-bit signed post-2c, so the packed value fits directly — no widening cast needed.  Each channel is MASKED to 8 bits, so an out-of-range argument wraps rather than saturating or being refused. Example: @GFX-001 — the alpha byte is the one a hand-written hex literal leaves at zero, and a zero alpha is fully transparent.</p>
+<p>Pack RGBA channels into a single integer using bitwise ops. Layout: bits 24..31 = alpha, 16..23 = red, 8..15 = green, 0..7 = blue. Loft integers are 64-bit signed post-2c, so the packed value fits directly — no widening cast needed.  Each channel is MASKED to 8 bits, so an out-of-range argument wraps rather than saturating or being refused.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rgb</span>(cr: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cg: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cb: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>Opaque colour: the same pack with alpha 255.  <code>rgb(255, 0, 0)</code> is 0xFFFF0000 — NOT the 0xFF0000 a reader reaches for, which has alpha 0. Example: @GFX-001 — why the literal and this call are different colours, and what each compositing path does with the difference.</p>
+<p>Opaque colour: the same pack with alpha 255.  <code>rgb(255, 0, 0)</code> is 0xFFFF0000 — NOT the 0xFF0000 a reader reaches for, which has alpha 0.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">color_r</span>(color: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
@@ -54,11 +54,11 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">get_pixel</span>(self: const <span class="en">Canvas</span>, gx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, gy: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>Get pixel color at (x, y). Returns 0 if out of bounds — and 0 is a COLOUR the canvas can hold (<code>rgba(0, 0, 0, 0)</code>), so the answer cannot serve as a bounds test.  Bound with <code>width</code>/<code>height</code>. Example: @GFX-003 — a neighbourhood scan that tests the returned colour miscounts its own transparent pixels as off-canvas.</p>
+<p>Get pixel color at (x, y). Returns 0 if out of bounds — and 0 is a COLOUR the canvas can hold (<code>rgba(0, 0, 0, 0)</code>), so the answer cannot serve as a bounds test.  Bound with <code>width</code>/<code>height</code>.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_pixel</span>(self: <span class="en">Canvas</span>, sx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, sy: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
-<p>Set pixel color at (x, y). No-op if out of bounds.  STORES the colour byte for byte, alpha included — it does not composite; <code>blend_pixel</code> does. Example: @GFX-002 — storing a half-transparent colour replaces what was under it, rather than showing through it. Example: @GFX-003 — an out-of-range coordinate is declined in silence, so a wrong index is a missing part of the drawing, never a message.</p>
+<p>Set pixel color at (x, y). No-op if out of bounds.  STORES the colour byte for byte, alpha included — it does not composite; <code>blend_pixel</code> does.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call"><a href="stdlib-collections.html">clear</a></span>(self: <span class="en">Canvas</span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
@@ -70,23 +70,23 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">blend_pixel</span>(self: <span class="en">Canvas</span>, bx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, by: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
-<p>Draw a pixel with alpha blending at (x, y) — the compositing counterpart to <code>set_pixel</code>, and the one a caller reaching for alpha usually meant. Example: @GFX-002 — store versus composite, side by side.</p>
+<p>Draw a pixel with alpha blending at (x, y) — the compositing counterpart to <code>set_pixel</code>, and the one a caller reaching for alpha usually meant.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">fill_rect</span>(self: <span class="en">Canvas</span>, rx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ry: <span class="ty"><a href="stdlib-types.html">integer</a></span>, rw: <span class="ty"><a href="stdlib-types.html">integer</a></span>, rh: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
-<p>Fill a rectangle with a solid color. Clipped to canvas bounds.  Like every solid primitive here it STORES the colour (see <code>set_pixel</code>); a rectangle drawn in a half-transparent colour is not a translucent overlay. Example: @GFX-002 — what the buffer holds afterwards.</p>
+<p>Fill a rectangle with a solid color. Clipped to canvas bounds.  Like every solid primitive here it STORES the colour (see <code>set_pixel</code>); a rectangle drawn in a half-transparent colour is not a translucent overlay.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hline</span>(self: <span class="en">Canvas</span>, hx0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hx1: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hy: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
-<p>Draw a horizontal line from (x0, y) to (x1, y). Clipped.  The end is EXCLUSIVE — <code>[x0, x1)</code> — and a reversed span draws nothing rather than being normalised. Example: @GFX-004 — where a span starts and stops, and what silence looks like.</p>
+<p>Draw a horizontal line from (x0, y) to (x1, y). Clipped.  The end is EXCLUSIVE — <code>[x0, x1)</code> — and a reversed span draws nothing rather than being normalised.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">vline</span>(self: <span class="en">Canvas</span>, vx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, vy0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, vy1: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
-<p>Draw a vertical line from (x, y0) to (x, y1). Clipped.  Exclusive end and no normalisation, exactly like <code>hline</code>. Example: @GFX-004 — the half-open span rule on both axes.</p>
+<p>Draw a vertical line from (x, y0) to (x, y1). Clipped.  Exclusive end and no normalisation, exactly like <code>hline</code>.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draw_rect</span>(self: <span class="en">Canvas</span>, drx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, dry: <span class="ty"><a href="stdlib-types.html">integer</a></span>, drw: <span class="ty"><a href="stdlib-types.html">integer</a></span>, drh: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
-<p>Draw a rectangle outline (1px border). Clipped.  Built from four half-open spans, so (x, y, w, h) covers x .. x + w - 1 by y .. y + h - 1. Example: @GFX-004 — the exact pixels, and the hollow interior.</p>
+<p>Draw a rectangle outline (1px border). Clipped.  Built from four half-open spans, so (x, y, w, h) covers x .. x + w - 1 by y .. y + h - 1.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draw_line</span>(self: <span class="en">Canvas</span>, lx0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ly0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, lx1: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ly1: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
@@ -131,13 +131,13 @@
 <p>Fill a closed polygon under the EVEN-ODD rule.</p>
 <p>The polygon closes itself: the last point joins the first, so a triangle is three points and not four. Fewer than three points draws nothing.</p>
 <p>Even-odd means a point is inside when a ray from it crosses the outline an odd number of times, so a self-intersecting outline leaves its overlap EMPTY — the classic five-point star is a pentagon-shaped hole with five filled arms. That is a choice, not a bug: the alternative (non-zero winding) fills the middle, and the two disagree on exactly the shapes people draw deliberately.</p>
-<p>Matches <code>fill_triangle</code> pixel for pixel on a triangle, which is the reason the row rule below is inclusive rather than the half-open rule a scanline filler usually takes. See the note on <code>polygon_crossings</code>. Example: @GFX-006 — the star's hollow middle, and the triangle agreement.</p>
+<p>Matches <code>fill_triangle</code> pixel for pixel on a triangle, which is the reason the row rule below is inclusive rather than the half-open rule a scanline filler usually takes. See the note on <code>polygon_crossings</code>.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">resize_lanczos</span>(self: const <span class="en">Canvas</span>, ow: <span class="ty"><a href="stdlib-types.html">integer</a></span>, oh: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Canvas</span></code></pre>
 <p>Resample this canvas to <code>ow</code> x <code>oh</code> with a Lanczos-3 filter.</p>
 <p>Byte-identical to Pillow's <code>Image.resize(..., Image.LANCZOS)</code>, which is the point: the <code>.draw</code> corpus renders at 3x and downscales with exactly that, so a renderer that resamples any other way cannot be pixel-compared against it however good it looks (@PLN146 W0 finding 5).</p>
-<p>**Alpha is premultiplied across the resample and undone after**, because Pillow defines <code>resize</code> on an image with alpha as <code>convert(&quot;RGBa&quot;) -&gt; resize -&gt; convert(&quot;RGBA&quot;)</code>. That is a contract, not an optimisation: resampling straight RGBA lets a transparent texel's colour bleed into its neighbours, and the two disagree on any edge where alpha varies. Both roundings are Pillow's and neither is the obvious one — <code>(v*a + 127)/255</code> going in, a TRUNCATING divide coming out, and alpha 0 passes its colour through untouched rather than going black. Example: @GFX-007 — why a 3x supersample plus this is not the same picture as drawing once at final size.</p>
+<p>**Alpha is premultiplied across the resample and undone after**, because Pillow defines <code>resize</code> on an image with alpha as <code>convert(&quot;RGBa&quot;) -&gt; resize -&gt; convert(&quot;RGBA&quot;)</code>. That is a contract, not an optimisation: resampling straight RGBA lets a transparent texel's colour bleed into its neighbours, and the two disagree on any edge where alpha varies. Both roundings are Pillow's and neither is the obvious one — <code>(v*a + 127)/255</code> going in, a TRUNCATING divide coming out, and alpha 0 passes its colour through untouched rather than going black.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">resize_bicubic</span>(self: const <span class="en">Canvas</span>, ow: <span class="ty"><a href="stdlib-types.html">integer</a></span>, oh: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Canvas</span></code></pre>
@@ -147,7 +147,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">save_png</span>(self: const <span class="en">Canvas</span>, path: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
-<p>Save canvas as a PNG file. Automatically uses RGBA if any pixel has alpha &lt; 255, otherwise uses RGB. Returns true on success. Example: @GFX-005 — the choice is read off the pixels, so ONE alpha-0 pixel (a hand-written hex literal — @GFX-001) makes the whole file RGBA and that pixel a transparent hole.</p>
+<p>Save canvas as a PNG file. Automatically uses RGBA if any pixel has alpha &lt; 255, otherwise uses RGB. Returns true on success.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_screenshot</span>(width: <span class="ty"><a href="stdlib-types.html">integer</a></span>, height: <span class="ty"><a href="stdlib-types.html">integer</a></span>, path: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>

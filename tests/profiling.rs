@@ -391,7 +391,6 @@ fn alloc_sites_refuses_a_test_run_instead_of_going_quiet() {
 /// Ignored by default: it needs rustc to build the native binary, which the ordinary
 /// suite does not assume.
 #[test]
-#[ignore = "requires rustc (native build)"]
 fn a_native_run_says_the_sampler_cannot_follow_it() {
     let path = std::env::temp_dir().join("loft_prof_865.loft");
     std::fs::write(&path, "fn main() { println(\"x\"); }\n").expect("write probe");
@@ -431,7 +430,6 @@ fn a_native_run_says_the_sampler_cannot_follow_it() {
 /// 150× what the program does, so it owns ~99 % of the run. Unwarned, the table said
 /// `100 % app_bit`.
 #[test]
-#[ignore = "requires rustc (builds the library cdylib)"]
 fn a_profile_says_when_a_used_library_is_invisible_to_it() {
     let root = std::env::temp_dir().join("loft_prof_libblind");
     let _ = std::fs::remove_dir_all(&root);

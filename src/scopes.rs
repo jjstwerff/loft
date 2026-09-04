@@ -176,6 +176,14 @@ struct Scopes<'s> {
     /// it currently holds is this frame's SOLE property.  The static answer is not available
     /// (see `nullable_locals_that_displace`), so the displaced-store free reads this instead.
     local_owns: HashMap<u16, u16>,
+    /// loft#1336 / @FR-O-Witness — a heap-record LOCAL whose assignments MIX ownership (one
+    /// hands it a store of its own, another a view) → its OWNER WITNESS `__own_<name>`, the
+    /// hidden reference that names the store the local minted for as long as the local
+    /// still holds it.  Every release of such a local's stores goes through the witness —
+    /// at the `Set` that makes the local stop naming it, or at scope exit — and the local
+    /// itself is never freed.  Keyed on every id the local is known by (the original and
+    /// any scope copy `scan_set` makes of it).  [`owner_witness_locals`] picks them.
+    owner_witness: HashMap<u16, u16>,
     /// @PLN85 `local_source` over-free fix (gated by `LOFT_JOIN_OWN`): heap slots
     /// that hold an OWNED store displaced by a later `Borrowed`/`Join` reassignment
     /// (`use_analysis::displaced_owned_slots`). For these, `scan_set` strips the
@@ -1443,12 +1451,12 @@ pub(crate) fn collect_fnref_captures(
 /// and freeing that releases the source's store.  The empty-dep test is the
 /// ownership half, the same one the scalar branch of `get_free_vars` uses.
 ///
-/// STORE-backed elements only.  A tuple's `text` element is an owned `String` in a
-/// stack slot, not a store, and `OpFreeText` takes the VARIABLE whose slot it
-/// resets — handed a `TupleGet` value read instead, its stack-distance arithmetic
-/// underflows (loft#1004's corpus script panics with "attempt to subtract with
-/// overflow").  Text elements are released with the frame and are not the leak
-/// this exists for.
+/// STORE-backed elements only.  A tuple's `text` element is a `Str` VIEW — `put_text`
+/// stores the pointer+length pair, never an owning `String` — so there is nothing to
+/// release, and `OpFreeText` on the element reads that view as a `String` (a SIGSEGV;
+/// loft#1004 was the operand arithmetic underflowing before it got that far).  The
+/// bytes a tuple element views belong to whatever built them: a literal, or a `__ncc_N`
+/// temp its consumer frees.
 fn tuple_owned_elem_frees(
     elems: &[Type],
     v: u16,
@@ -1525,6 +1533,7 @@ fn run_scan_phase(
         owned_refs: HashMap::new(),
         rbuf_witness: None,
         local_owns: HashMap::new(),
+        owner_witness: HashMap::new(),
         displaced_owned,
         views_to_materialise: collect_views_to_materialise(orig_code, orig_vars, data),
         fnref_target: collect_fnref_targets(orig_code, orig_vars),
@@ -1563,6 +1572,35 @@ fn run_scan_phase(
         scopes.var_order.push(flag);
         scopes.local_owns.insert(v, flag);
     }
+    // loft#1336 / @FR-O-Witness — the OWNER WITNESS of a local whose assignments MIX
+    // ownership.  Minted before the scan for the same reason the two flags above are: the
+    // first assignment that has to maintain it already needs somewhere to write.  The local
+    // is marked never-free (@FR-O-Override) here, so every static free site — the pre-`Set`
+    // free, the transition frees, the scope-exit sweep — declines it and the witness is the
+    // ONE thing that releases its stores.  The witness carries a self-dep: not a borrow, and
+    // not the empty list @FR-O-Proxy reads as "owner", so no site frees it on its own.
+    for v in owner_witness_locals(
+        orig_code,
+        &function,
+        data,
+        d_nr,
+        &scopes.views_to_materialise,
+    ) {
+        if !crate::keys::owner_witness_enabled() {
+            break;
+        }
+        let Some(record) = function.tp(v).base().heap_def_nr() else {
+            continue;
+        };
+        let name = format!("__own_{}", function.name(v));
+        let w = function.add_temp_var(&name, &Type::Reference(record, Deps::none()));
+        function.depend(w, w);
+        function.set_skip_free(v);
+        function.set_owner_witness(v, w);
+        scopes.var_scope.insert(w, 0);
+        scopes.var_order.push(w);
+        scopes.owner_witness.insert(v, w);
+    }
     let mut code = scopes.scan(orig_code, &mut function, data);
     // The witness starts FALSE: on entry the buffer holds the CALLER's store, which this
     // function must never release.  A transition site is reachable with no prior assignment at
@@ -1583,6 +1621,25 @@ fn run_scan_phase(
         flags.sort_unstable();
         for flag in flags.into_iter().rev() {
             bl.operators.insert(0, v_set(flag, Value::Boolean(false)));
+        }
+    }
+    // An owner witness starts at the null SENTINEL (`store_nr == u16::MAX`): before the
+    // local's first owning assignment there is no store of its own to release, and
+    // `OpFreeRef` of the sentinel is a no-op (@FR-H-FreeNull).  Spelled as the sentinel
+    // call and not as `null`, because a heap local's `= null` lowers to `OpInitRef` — a
+    // stack-record placeholder the allocator is expected to replace — and a free of THAT is
+    // the `#306` refusal.
+    if !scopes.owner_witness.is_empty()
+        && let Value::Block(bl) = &mut code
+    {
+        let mut witnesses: Vec<u16> = scopes.owner_witness.values().copied().collect();
+        witnesses.sort_unstable();
+        witnesses.dedup();
+        for w in witnesses.into_iter().rev() {
+            bl.operators.insert(
+                0,
+                v_set(w, Value::Call(data.def_nr("OpNullRefSentinel"), vec![])),
+            );
         }
     }
     // lift vars from `scan_args` are assigned inside conditional branches but
@@ -5015,6 +5072,17 @@ impl Scopes<'_> {
             }
         }
         let v = *self.var_mapping.get(&ov).unwrap_or(&ov);
+        // A scope copy of a witnessed local (`copy_variable` above) is the same binding under
+        // a new id: it keeps the witness and the never-free mark, or its own Sets would go
+        // back to the static frees the witness replaced.
+        if v != ov
+            && let Some(&w) = self.owner_witness.get(&ov)
+            && !self.owner_witness.contains_key(&v)
+        {
+            function.set_skip_free(v);
+            function.set_owner_witness(v, w);
+            self.owner_witness.insert(v, w);
+        }
         // #316 — capture BEFORE put_scope below: an ownership-transition free
         // only applies to a REassignment.
         let was_in_scope = self.var_scope.contains_key(&v);
@@ -5173,6 +5241,9 @@ impl Scopes<'_> {
                 function.tp(v),
                 Type::Reference(_, d) | Type::Enum(_, true, d) if !d.is_empty()
             )
+            // @FR-O-Proxy asks free — @FR-O-Override applies here as at every other free
+            // site: a witnessed local (loft#1336) releases through its witness only.
+            && !function.is_skip_free(v)
             && self.owned_refs.get(&v) == Some(&self.loops.len())
             && matches!(
                 self.ref_rhs_ownership(value, data),
@@ -5862,13 +5933,64 @@ impl Scopes<'_> {
                 None => v_set(flag, Value::Boolean(sole)),
             });
         }
-        if prefix.is_empty() && ls.is_empty() && witness_update.is_none() {
+        // loft#1336 / @FR-O-Witness — keep the OWNER WITNESS naming exactly the store the
+        // local minted and still holds.  Three shapes, read off the value being assigned:
+        //
+        // - the local MINTS and the value does not read it: release the witnessed store
+        //   first (the store it is about to stop naming), then point the witness at what the
+        //   local now holds;
+        // - the local MINTS from a value that READS it (`c = mk(c.x)`, a materialised
+        //   `x = x.inner`): @FR-O-Detach — the old store stays live until the value is
+        //   computed, so the release comes AFTER the `Set`, and by store identity, because
+        //   a callee that filled the store the local already owned displaced nothing;
+        // - anything else — a view, a join, a null, a store somebody else owns: the local
+        //   stops owning, so release the witnessed store where the local no longer names it.
+        //   A view INTO the witnessed store (`x = x.inner` over an owned `x`) keeps it, and
+        //   the witness keeps naming it, so scope exit still frees it exactly once.
+        //
+        // Identity, not a flag, so both backends read one fact from the IR and the two
+        // sentinels — a witness that never took a store beside a local holding none — compare
+        // EQUAL and release nothing.
+        let mut witness_ops: Vec<Value> = Vec::new();
+        if let Some(&w) = self.owner_witness.get(&v) {
+            let kind = {
+                let d_nr = self.d_nr;
+                let defs = self
+                    .fn_defs
+                    .get_or_insert_with(|| crate::use_analysis::function_defs(data, d_nr));
+                witness_set_kind(value, v, ov, function, data, d_nr, &mut |val| {
+                    crate::use_analysis::ownership_of_with(data, d_nr, val, defs)
+                })
+            };
+            let guarded_release = v_if(
+                Value::Call(
+                    data.def_nr("OpDistinctStore"),
+                    vec![Value::Var(w), Value::Var(v)],
+                ),
+                release_witness(w, data),
+                Value::Null,
+            );
+            match kind {
+                WitnessSet::Mint => {
+                    prefix.insert(0, release_witness(w, data));
+                    witness_ops.push(witness_points_at(w, v, data));
+                }
+                WitnessSet::MintReading => {
+                    witness_ops.push(guarded_release);
+                    witness_ops.push(witness_points_at(w, v, data));
+                }
+                WitnessSet::Other => witness_ops.push(guarded_release),
+            }
+        }
+        if prefix.is_empty() && ls.is_empty() && witness_update.is_none() && witness_ops.is_empty()
+        {
             Value::Set(v, Box::new(set_value))
         } else {
             let mut all = prefix;
             all.append(&mut ls);
             all.push(Value::Set(v, Box::new(set_value)));
             all.extend(witness_update);
+            all.append(&mut witness_ops);
             Value::Insert(all)
         }
     }
@@ -6126,6 +6248,77 @@ impl Scopes<'_> {
         {
             let mut with_frees = Vec::with_capacity(ls.len());
             for stmt in ls.drain(..) {
+                // An `if` whose CONDITION consumes the temp (`if (v[i] ?? "") == k { return
+                // … }`) cannot take its free after the statement: an arm that returns never
+                // reaches it, one orphan per early exit (loft#1357).  Evaluate the condition
+                // into a boolean first, free what it consumed, then branch on the boolean.
+                let (pos, inner) = match stmt {
+                    Value::Span(b) => (Some(b.0.clone()), b.1.clone()),
+                    other => (None, other),
+                };
+                // A `parallel { … }` arm runs on a WORKER over a copy of this frame: the
+                // `__work_N` text a formatted argument builds there is the worker's copy,
+                // which nothing frees — the frame's own scope-exit `OpFreeText` releases
+                // main's (empty) copy.  Each arm frees the work texts it wrote, on the
+                // worker, once its call has consumed them (loft#1357).
+                if let Value::Parallel(arms) = &inner {
+                    let arms: Vec<Value> = arms
+                        .iter()
+                        .map(|arm| {
+                            let mut work: Vec<u16> = Vec::new();
+                            arm.walk(&mut |v| {
+                                if let Value::Var(w) = v
+                                    && function.name(*w).starts_with("__work_")
+                                    && matches!(function.tp(*w).base(), Type::Text(_))
+                                    && !work.contains(w)
+                                {
+                                    work.push(*w);
+                                }
+                            });
+                            if work.is_empty() {
+                                return arm.clone();
+                            }
+                            let mut ops = Vec::with_capacity(work.len() + 1);
+                            ops.push(arm.clone());
+                            for w in work {
+                                ops.push(call("OpFreeText", w, data));
+                            }
+                            Value::Insert(ops)
+                        })
+                        .collect();
+                    let stmt = match pos {
+                        Some(p) => Value::Span(Box::new((p, Value::Parallel(arms)))),
+                        None => Value::Parallel(arms),
+                    };
+                    with_frees.push(stmt);
+                    continue;
+                }
+                if let Value::If(cond, then, els) = &inner {
+                    let mut cond_ncc = Vec::new();
+                    collect_consumed_ncc_text(cond, function, &mut cond_ncc);
+                    if !cond_ncc.is_empty() {
+                        self.ret_temp_counter += 1;
+                        let name = format!("__cond_{}", self.ret_temp_counter);
+                        let tmp = function.add_temp_var(&name, &Type::Boolean);
+                        self.var_scope.insert(tmp, self.scope);
+                        self.var_order.push(tmp);
+                        with_frees.push(v_set(tmp, (**cond).clone()));
+                        for v in cond_ncc {
+                            with_frees.push(call("OpFreeText", v, data));
+                        }
+                        let branch =
+                            Value::If(Box::new(Value::Var(tmp)), then.clone(), els.clone());
+                        with_frees.push(match pos {
+                            Some(p) => Value::Span(Box::new((p, branch))),
+                            None => branch,
+                        });
+                        continue;
+                    }
+                }
+                let stmt = match pos {
+                    Some(p) => Value::Span(Box::new((p, inner))),
+                    None => inner,
+                };
                 let mut ncc = Vec::new();
                 collect_consumed_ncc_text(&stmt, function, &mut ncc);
                 with_frees.push(stmt);
@@ -6134,6 +6327,47 @@ impl Scopes<'_> {
                 }
             }
             ls = with_frees;
+        }
+        // Case b's premise — the tail IS the returned value, so its `__ncc_N` temp must
+        // outlive the block — holds only when the block YIELDS the text.  A SCALAR tail that
+        // consumes the temp (`len(s.name ?? "")`, `t.0 + len(t.1 ?? "")`) copies out the
+        // number and leaves the String to nobody: one orphan per call (loft#1357).  Hoist the
+        // value first, then free what it consumed, and let the tail be the hoisted scalar.
+        let mut expr = expr;
+        if !matches!(expr, Value::Null)
+            && matches!(
+                bl.result,
+                Type::Integer(_)
+                    | Type::Float
+                    | Type::Single
+                    | Type::Boolean
+                    | Type::Character
+                    | Type::Enum(_, false, _)
+            )
+        {
+            let mut ncc = Vec::new();
+            collect_consumed_ncc_text(&expr, function, &mut ncc);
+            if !ncc.is_empty() {
+                // An explicit `return <e>` hoists `<e>` and keeps the `return`.
+                let (inner, was_return) = match expr.unspan() {
+                    Value::Return(i) => ((**i).clone(), true),
+                    _ => (expr.clone(), false),
+                };
+                self.ret_temp_counter += 1;
+                let name = format!("__ret_{}", self.ret_temp_counter);
+                let tmp = function.add_temp_var(&name, &bl.result);
+                self.var_scope.insert(tmp, self.scope);
+                self.var_order.push(tmp);
+                ls.push(v_set(tmp, inner));
+                for v in ncc {
+                    ls.push(call("OpFreeText", v, data));
+                }
+                expr = if was_return {
+                    Value::Return(Box::new(Value::Var(tmp)))
+                } else {
+                    Value::Var(tmp)
+                };
+            }
         }
         let scope_vars = self.variables(self.scope);
         for &v in &scope_vars {
@@ -6653,6 +6887,28 @@ impl Scopes<'_> {
         // caller (`f(-1) == null`) never freed → append_text orphan.
         let expr_is_null_text_sentinel = matches!(expr.unspan(),
             Value::Call(d, args) if args.is_empty() && *d == data.def_nr("OpConvTextFromNull"));
+        // `return ta` where `ta` is an owned text LOCAL and the function holds a hidden
+        // `&text` buffer that is not `ta`: deliver through the buffer and free the local
+        // (@FR-F-Ret / @FR-F-Call).  The bare-Var fast path below returns the local's slot
+        // as-is, which is right for a scalar and for the buffer itself, and hands up a
+        // view of an orphan for a `String` nothing frees — a lambda whose one buffer went
+        // to `tb` returned `ta` that way, one orphan per call (loft#1357).
+        if is_return
+            && let Value::Var(v) = expr.unspan()
+            && !function.is_argument(*v)
+            && !function.is_skip_free(*v)
+            && matches!(function.tp(*v).base(), Type::Text(_))
+            && !matches!(function.tp(*v), Type::RefVar(_))
+            && let Some(buf) = any_text_return_buffer(function, data, self.d_nr)
+            && buf != *v
+        {
+            let mut result = Vec::with_capacity(ls.len() + 3);
+            result.push(v_set(buf, Value::Var(*v)));
+            result.push(call("OpFreeText", *v, data));
+            result.extend(ls);
+            result.push(Value::Return(Box::new(Value::Var(buf))));
+            return result;
+        }
         if ls.is_empty()
             || ((matches!(expr, Value::Null | Value::Var(_) | Value::Text(_))
                 || expr_is_null_text_sentinel)
@@ -6700,7 +6956,7 @@ impl Scopes<'_> {
             self.var_order.push(tmp);
             let mut result = Vec::with_capacity(ls.len() + 2);
             result.push(v_set(tmp, expr.clone()));
-            free_copied_work_texts(&mut result, expr, function, data);
+            free_copied_text_sources(&mut result, expr, &ls, function, data);
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
@@ -6804,23 +7060,81 @@ impl Scopes<'_> {
             result.append(&mut ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
+        } else if is_return
+            && matches!(tp.base(), Type::Text(_))
+            && !expr_is_terminal
+            && !matches!(expr.unspan(), Value::Null)
+            && let Some(buf) = text_return_buffer_for(expr, function, data, self.d_nr)
+        {
+            // @FR-F-Ret / @FR-F-Call — an owned text return is delivered through the
+            // CALLER's hidden `&text` buffer, never as a view of a local of this frame,
+            // and the frame frees every local it owns when it drops.  The block tail
+            // already writes that buffer (`text_return` promotes it); an EARLY
+            // `return <call>` / `return <view>` / `return a ?? b` used to reach the
+            // `__ret_N` hoist below instead, which copied the value into a frame-local
+            // `String` that nothing freed — one orphan per call, unbounded in a loop
+            // (loft#1338).  Write each arm of the value into the buffer this function
+            // already holds from its caller (per arm, so native's arm types stay
+            // uniform), free the frame-local temps the copy drained, run the scope-exit
+            // frees, and return the buffer.  The buffer is one the value does not
+            // READ: `"{x}-{n}"` written into `x` would clear `x` before rendering it.
+            let mut delivered = expr.clone();
+            crate::parser::Parser::push_text_arms_into(
+                &mut delivered,
+                buf,
+                data.def_nr("OpCreateStack"),
+            );
+            let mut result = Vec::with_capacity(ls.len() + 3);
+            result.push(delivered);
+            free_copied_text_sources(&mut result, expr, &ls, function, data);
+            result.extend(ls);
+            result.push(Value::Return(Box::new(Value::Var(buf))));
+            return result;
+        } else if is_return
+            && matches!(tp.base(), Type::Text(_))
+            && !expr_is_terminal
+            && !matches!(expr.unspan(), Value::Null)
+            && let Some(buf) = any_text_return_buffer(function, data, self.d_nr)
+        {
+            // The value reads every buffer this function holds (`rest[0..3]` where `rest` IS
+            // the promoted buffer; a `match` arm that yields the work text), so it cannot be
+            // written into one directly — clearing the buffer first would destroy what is
+            // being rendered.  STAGE it: copy into a frame-local temp, move the temp's bytes
+            // into the buffer, free the temp, run the frees, return the buffer.  Before this
+            // the temp itself was returned and orphaned, one `String` per call (loft#1357).
+            self.ret_temp_counter += 1;
+            let name = format!("__ret_{}", self.ret_temp_counter);
+            let tmp = function.add_temp_var(&name, tp);
+            function.set_skip_free(tmp);
+            self.var_scope.insert(tmp, self.scope);
+            self.var_order.push(tmp);
+            let mut result = Vec::with_capacity(ls.len() + 4);
+            result.push(v_set(tmp, expr.clone()));
+            free_copied_text_sources(&mut result, expr, &ls, function, data);
+            result.push(v_set(buf, Value::Var(tmp)));
+            result.push(call("OpFreeText", tmp, data));
+            result.extend(ls);
+            result.push(Value::Return(Box::new(Value::Var(buf))));
+            return result;
         } else if is_return && matches!(tp.base(), Type::Text(_)) && !expr_is_terminal {
-            // B5-L3 extension for text returns: save the expression's text
-            // to a `__ret_N` temp, run free ops, then return the temp.  The
-            // temp's String holds an OWN copy (OpAppendText copies bytes),
-            // so subsequent OpFreeText on the original work-text doesn't
-            // dangle the returned Str.  Mark the temp `skip_free` so its
-            // OpFreeText isn't emitted at scope exit — the String leaks
-            // for the duration of the caller's read, which is fine because
-            // the caller copies bytes via AppendText immediately on return.
+            // The residual of the arm above: a text-returning function that holds NO
+            // hidden `&text` buffer (a literal tail, or a tail whose promotion the
+            // targeted pass declined) and whose value the value reads every buffer of.
+            // Save the value's text to a `__ret_N` temp, run the free ops, then return
+            // the temp.  The temp's String holds an OWN copy (`OpAppendText` copies
+            // bytes), so the frees do not dangle the returned Str.  Its own scope-exit
+            // `OpFreeText` is suppressed (`skip_free`): the caller copies the bytes on
+            // return, and the String is ORPHANED — this is the one delivery that
+            // violates @FR-F-Call's "owned locals freed", kept only where no buffer
+            // exists to deliver through (`use_analysis::text_return_orphan_risk` is
+            // the predicate that hands such a function a buffer, so a leak here means
+            // that predicate did not see this return).
             //
-            // Native codegen also needs the wrap (otherwise the call result
-            // is dropped + `return null` returns the typed null sentinel).
-            // The native emit converts `Set(__ret, call)` into
-            // `let __ret: String = call(...).to_string()` — fine for the
-            // interpreter but for native, `Str::new(&__ret)` after Return
-            // would dangle.  Detect this in `output_block` and emit
-            // `return Str::new(call(...))` directly, dropping the temp.
+            // Native codegen also needs the wrap (otherwise the call result is
+            // dropped + `return null` returns the typed null sentinel), and then
+            // collapses `Set(__ret, call); …; Return(__ret)` back to `return
+            // Str::new(call(...))` in `output_block`, dropping the temp — which is
+            // why native never orphans here.
             self.ret_temp_counter += 1;
             let name = format!("__ret_{}", self.ret_temp_counter);
             let tmp = function.add_temp_var(&name, tp);
@@ -6829,7 +7143,7 @@ impl Scopes<'_> {
             self.var_order.push(tmp);
             let mut result = Vec::with_capacity(ls.len() + 2);
             result.push(v_set(tmp, expr.clone()));
-            free_copied_work_texts(&mut result, expr, function, data);
+            free_copied_text_sources(&mut result, expr, &ls, function, data);
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
@@ -7157,6 +7471,14 @@ impl Scopes<'_> {
         };
         for v in vars {
             if v == ret_var || suppress_source(function, v) {
+                continue;
+            }
+            // loft#1336 / @FR-O-Witness — a witnessed local's store is released through its
+            // witness, which names it only while the local still holds it; the local itself
+            // is never-free.  A returned local is skipped above like any other: the store is
+            // handed up, and the witness is not released for it.
+            if let Some(&w) = self.owner_witness.get(&v) {
+                ls.push(release_witness(w, data));
                 continue;
             }
             // on=4 iteration scratch (`hash_scratch`): a `return` out of an exposed loop
@@ -9862,27 +10184,103 @@ fn needs_pre_init(tp: &Type) -> bool {
     ) || crate::parser::vectors::is_keyed(tp)
 }
 
-/// @PLN85 text-tail-return-leak — after a B5-L3 `__ret_N` COPY hoist
-/// (`Set(__ret_N, expr)` lowers to `OpAppendText`, a deep copy), any `__work_N`
-/// text temp that `expr` reads is now dead: the caller consumes the `__ret_N`
-/// copy, not `__work_N`.  `wrap_value_text_dest` synthesises that work-text
-/// precisely so it CAN be freed, but as the return terminal its scope-exit free
-/// is suppressed (it looked like the returned value — `ret_var`).  Emit the free
-/// HERE, at the copy, so it fires ONLY when a copy actually happened; the
-/// direct-transfer path (fast-path `Return(Var(__work_N))`, no `__ret_N`) reaches
-/// neither this nor a free and correctly leaves `__work_N` for the caller.  Fixes
-/// the tail native-text-CALL leak (and the `-> text?` freed-then-read UAF) without
-/// touching the direct-transfer shapes attempt 1 broke.  See
-/// plans/85-store-lifetime-retirement/text-tail-return-leak.md.
-fn free_copied_work_texts(result: &mut Vec<Value>, expr: &Value, function: &Function, data: &Data) {
+/// After a return value has been COPIED — into the caller's hidden `&text` buffer, or into
+/// a `__ret_N` temp — the frame-local text temps it read are dead: the caller consumes
+/// the copy, not them.  Two kinds are otherwise never freed on this path, because each
+/// was suppressed on the premise that the return would TRANSFER it rather than copy it:
+///
+/// - a `__work_N` text that `wrap_value_text_dest` minted for a callee to fill — as the
+///   return's terminal it is skipped by `get_free_vars` (`ret_var`);
+/// - a `__ncc_N` null-coalesce temp, `skip_free` so the present-path Str outlives its
+///   block; a NON-tail consumer frees it in place (`collect_consumed_ncc_text`), and a
+///   return that copies is exactly such a consumer.
+///
+/// Emit the frees HERE, at the copy, so they fire only when a copy actually happened; the
+/// direct-transfer path (fast-path `Return(Var(__work_N))`, no copy) reaches neither this
+/// nor a free and correctly leaves the buffer for the caller.  An argument is the
+/// caller's.  A user local is freed by the scope sweep already — EXCEPT the one the
+/// return names: the sweep suppresses the returned variable on the premise that it is
+/// handed up, and once its bytes are copied into the buffer that premise is false, so a
+/// `return ta` delivered through the buffer frees `ta` here too (loft#1357; a lambda
+/// holding its one buffer for `tb` returned `ta` as a view of an orphan).
+fn free_copied_text_sources(
+    result: &mut Vec<Value>,
+    expr: &Value,
+    pending: &[Value],
+    function: &Function,
+    data: &Data,
+) {
     let mut srcs = Vec::new();
     collect_return_sources(expr, data, &mut srcs);
     for w in srcs {
-        if function.name(w).starts_with("__work_") && matches!(function.tp(w).base(), Type::Text(_))
+        if !matches!(function.tp(w).base(), Type::Text(_)) || function.is_argument(w) {
+            continue;
+        }
+        // A source the scope-exit sweep already releases is not drained twice: a
+        // multi-arm value has no single returned var for `get_free_vars` to suppress,
+        // so a `__work_N` behind a formatted-string ARM sits in `pending` as well.
+        if pending
+            .iter()
+            .any(|op| scope_free_op_var(op, data) == Some(w))
+        {
+            continue;
+        }
+        let n = function.name(w);
+        if n.starts_with("__work_")
+            || (n.starts_with("__ncc_") && function.is_skip_free(w))
+            || (!function.is_skip_free(w) && !matches!(function.tp(w), Type::RefVar(_)))
         {
             result.push(call("OpFreeText", w, data));
         }
     }
+}
+
+/// ANY hidden `&text` return buffer of `d_nr`, read by the value or not — the destination a
+/// STAGED return moves into (`text_return_buffer_for` is the direct-write question, which
+/// must exclude a buffer the value reads).  `None` = the function holds no buffer at all.
+fn any_text_return_buffer(function: &Function, data: &Data, d_nr: u32) -> Option<u16> {
+    data.def(d_nr)
+        .attributes()
+        .iter()
+        .filter(|a| {
+            a.hidden && matches!(&a.typedef, Type::RefVar(t) if matches!(**t, Type::Text(_)))
+        })
+        .map(|a| function.var(&a.name))
+        .find(|&v| v != u16::MAX)
+}
+
+/// The hidden `&text` return buffer of `d_nr` that `expr` does not read — the caller-owned
+/// destination an owned text return is delivered through (@FR-F-Ret), as a variable of
+/// the function's own frame.
+///
+/// A function holds one such buffer per promotion its body asked for (`text_return`: the
+/// block tail's accumulator, a formatted early return's work text, a built local the tail
+/// names), and any of them is a valid destination for a return — the call is leaving, so
+/// nothing this frame does with the buffer afterwards matters — EXCEPT one the value
+/// itself reads: writing `"{x}-{n}"` into `x` clears `x` before it is rendered.  Only a
+/// HIDDEN buffer qualifies; a user-written `&text` parameter is the caller's variable, and
+/// a return must not overwrite it.  `None` = the function has no buffer to deliver
+/// through, which is the `__ret_N` residual.
+fn text_return_buffer_for(
+    expr: &Value,
+    function: &Function,
+    data: &Data,
+    d_nr: u32,
+) -> Option<u16> {
+    let mut read = HashSet::new();
+    expr.walk(&mut |v| {
+        if let Value::Var(x) = v {
+            read.insert(*x);
+        }
+    });
+    data.def(d_nr)
+        .attributes()
+        .iter()
+        .filter(|a| {
+            a.hidden && matches!(&a.typedef, Type::RefVar(t) if matches!(**t, Type::Text(_)))
+        })
+        .map(|a| function.var(&a.name))
+        .find(|&v| v != u16::MAX && !read.contains(&v))
 }
 
 /// Does this reassignment displace a store the function OWNS through a callee that
@@ -10041,6 +10439,211 @@ fn nullable_locals_that_displace(code: &Value, function: &Function, data: &Data)
             && !function.is_argument(v)
     });
     out
+}
+
+/// Which heap-record LOCALS have assignments that MIX ownership — at least one that hands
+/// the local a store of its own and at least one that hands it a view?
+///
+/// The pre-scan answer to *"is an OWNER WITNESS worth a slot here?"* (loft#1336,
+/// `@FR-O-Witness`), asked once per function like [`nullable_locals_that_displace`].
+///
+/// **Why a witness and not the dep list.** A binding carries ONE dep list, flow-insensitively,
+/// and it records whichever assignment parsed LAST: `cur: Node? = a; cur = cur.next` leaves
+/// `cur` reading as a borrow for the whole frame, so the store the copy minted is released by
+/// nobody — and the inverse order leaves it reading as an owner while it holds a view, so the
+/// view's record is freed as if it were the local's.  Neither static answer is right for both
+/// assignments; the witness answers per RUN, by store identity.
+///
+/// A local with only owning assignments keeps the static free placement (the proxy is right
+/// for it), and one with only views has nothing to release.  Excluded on purpose: a
+/// parameter (its entry stash is the witness, `Function::rebind_orig`), a captured local (a
+/// closure reads the capture-time `DbRef`, @FR-L-CapHeap — the record takes over the free), a
+/// loop variable (bound by `Iter`, not by a `Set`), and the compiler's own temporaries.
+fn owner_witness_locals(
+    code: &Value,
+    function: &Function,
+    data: &Data,
+    d_nr: u32,
+    materialised_views: &HashMap<u16, ViewCause>,
+) -> Vec<u16> {
+    let mut defs: Option<crate::use_analysis::Defs> = None;
+    let mut minted: HashSet<u16> = HashSet::new();
+    let mut viewed: HashSet<u16> = HashSet::new();
+    fn walk(
+        node: &Value,
+        function: &Function,
+        data: &Data,
+        d_nr: u32,
+        defs: &mut Option<crate::use_analysis::Defs>,
+        minted: &mut HashSet<u16>,
+        viewed: &mut HashSet<u16>,
+    ) {
+        if let Value::Set(t, val) = node.unspan()
+            && (*t as usize) < function.count() as usize
+            && !function.name(*t).starts_with("__")
+            && !function.is_argument(*t)
+            && !function.is_captured(*t)
+            && !function.was_loop_var(*t)
+            && !matches!(function.tp(*t), Type::RefVar(_))
+            && function.tp(*t).base().heap_def_nr().is_some()
+        {
+            match witness_set_kind(val, *t, *t, function, data, d_nr, &mut |v| {
+                let defs =
+                    defs.get_or_insert_with(|| crate::use_analysis::function_defs(data, d_nr));
+                crate::use_analysis::ownership_of_with(data, d_nr, v, defs)
+            }) {
+                WitnessSet::Mint | WitnessSet::MintReading => {
+                    minted.insert(*t);
+                }
+                WitnessSet::Other => {
+                    // A view of another variable's storage.  A null or a store nobody names
+                    // is not a VIEW and does not make the ownership mixed on its own.
+                    if is_view_of_storage(val, data) {
+                        viewed.insert(*t);
+                    }
+                }
+            }
+        }
+        node.unspan()
+            .for_each_child(&mut |c| walk(c, function, data, d_nr, defs, minted, viewed));
+    }
+    walk(
+        code,
+        function,
+        data,
+        d_nr,
+        &mut defs,
+        &mut minted,
+        &mut viewed,
+    );
+    let mut out: Vec<u16> = minted
+        .intersection(&viewed)
+        .copied()
+        .filter(|v| !materialised_views.contains_key(v))
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+/// Does this value bind a VIEW of storage some other binding owns — a projection, a
+/// call answering a borrow, a join?  The `viewed` half of [`owner_witness_locals`].
+fn is_view_of_storage(value: &Value, data: &Data) -> bool {
+    match value.unspan() {
+        Value::Null => false,
+        Value::Call(nr, args) if args.is_empty() && data.def(*nr).name() == "OpNullRefSentinel" => {
+            false
+        }
+        // A whole-value copy of a heap record never views (@FR-B-Copy).
+        Value::Var(_) => false,
+        Value::Call(_, _)
+        | Value::CallRef(_, _)
+        | Value::Block(_)
+        | Value::Insert(_)
+        | Value::TupleGet(_, _) => true,
+        _ => false,
+    }
+}
+
+/// What a `Set` hands a witnessed local (see [`owner_witness_locals`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum WitnessSet {
+    /// The local MINTS a store of its own and the value does not read the local.
+    Mint,
+    /// The local MINTS a store of its own from a value that READS it, so the store it
+    /// displaces must stay live until the value is computed (@FR-O-Detach).
+    MintReading,
+    /// A view, a join, a null, or a store somebody else owns: the local stops owning.
+    Other,
+}
+
+/// Classify the value assigned to witnessed local `v` (`ov` is its pre-scan id).
+///
+/// MINTS means *both emitters give the local a store of its own here*: a whole-value copy of
+/// another heap variable (@FR-B-Copy, `gen_set_first_ref_var_copy` / native's record-copy
+/// arm); a loft-defined callee whose return does NOT adopt a fresh store, which both emitters
+/// deep-copy into the local (`state/codegen.rs`'s call-copy arm, `generation/dispatch.rs`'s
+/// `OpCopyRecord` arm); a value the oracle calls `Owned` — a minting call, an inline mint —
+/// unless that mint lands in a work-ref that frees it itself (the `c = { Object → __ref_N }`
+/// literal, whose store is the work-ref's and not solely the local's).
+///
+/// A PROJECTION is never a mint here, whatever its deps: @FR-B-View's materialise clause
+/// (a view live across a reshape of its container) is decided from the binding's FINAL dep
+/// list at codegen, which one `Set` cannot see mid-scan, so a witnessed local is kept out of
+/// that clause altogether — [`owner_witness_locals`] excludes every binding
+/// `collect_views_to_materialise` names, and both emitters decline the materialise arm for a
+/// witnessed local.  The two mechanisms never meet on one binding.
+///
+/// The fallback is `Other`, and it is the SAFE direction: a value this does not recognise as
+/// a mint is treated as a view, so the witness is released where the local stops naming it
+/// and never pointed at a store the local does not own — a retained store is recoverable, a
+/// premature free is not (@FR-O-Oracle's rule for an unnameable base).
+fn witness_set_kind(
+    value: &Value,
+    v: u16,
+    ov: u16,
+    function: &Function,
+    data: &Data,
+    d_nr: u32,
+    own: &mut impl FnMut(&Value) -> crate::use_analysis::Own,
+) -> WitnessSet {
+    let reads = value.reads_var(v) || value.reads_var(ov);
+    let mints = match value.unspan() {
+        Value::Var(src) => {
+            *src != v
+                && *src != ov
+                && (*src as usize) < function.count() as usize
+                && function.tp(*src).base().heap_def_nr().is_some()
+        }
+        Value::Call(nr, args) if args.is_empty() && data.def(*nr).name() == "OpNullRefSentinel" => {
+            false
+        }
+        Value::Call(_, _) | Value::CallRef(_, _) => {
+            let copied_by_both =
+                crate::use_analysis::callee_of(data, d_nr, value).is_some_and(|fn_nr| {
+                    data.def(fn_nr).is_loft_defined()
+                        && !data.def(fn_nr).return_adopts_fresh_store()
+                });
+            copied_by_both || matches!(own(value), crate::use_analysis::Own::Owned)
+        }
+        Value::Block(b) => {
+            let into_work_ref = b.operators.last().is_some_and(|last| {
+                matches!(last.unspan(), Value::Var(r)
+                    if (*r as usize) < function.count() as usize
+                        && (function.name(*r).starts_with("__ref_")
+                            || function.name(*r).starts_with("__rref_")))
+            });
+            !into_work_ref && matches!(own(value), crate::use_analysis::Own::Owned)
+        }
+        Value::Insert(_) => matches!(own(value), crate::use_analysis::Own::Owned),
+        _ => false,
+    };
+    if !mints {
+        WitnessSet::Other
+    } else if reads {
+        WitnessSet::MintReading
+    } else {
+        WitnessSet::Mint
+    }
+}
+
+/// Release the store an owner witness names and reset the witness to the sentinel — as ONE
+/// unit, because `OpFreeRef` of a variable does not reset its slot on the interpreter, and a
+/// witness left naming a freed store would release whatever the allocator hands that slot
+/// next.
+fn release_witness(w: u16, data: &Data) -> Value {
+    Value::Insert(vec![
+        call("OpFreeRef", w, data),
+        v_set(w, Value::Call(data.def_nr("OpNullRefSentinel"), vec![])),
+    ])
+}
+
+/// Point owner witness `w` at the store local `v` now holds — an ALIAS, where a plain
+/// `Set(w, Var(v))` would copy the record (@FR-B-Copy).
+fn witness_points_at(w: u16, v: u16, data: &Data) -> Value {
+    v_set(
+        w,
+        Value::Call(data.def_nr("OpRefAlias"), vec![Value::Var(v)]),
+    )
 }
 
 /// Does this call hand back a store the target does NOT already hold?
@@ -10513,8 +11116,23 @@ impl Scopes<'_> {
                         // EXCEPT a `&text`: the promoted out-buffer returned
                         // per the text-return contract (alive in the caller;
                         // hoisting it broke native's buffer materialization).
-                        Value::Var(v) => matches!(function.tp(*v), Type::RefVar(inner)
-                            if !matches!(inner.base(), Type::Text(_))),
+                        Value::Var(v) => {
+                            matches!(function.tp(*v), Type::RefVar(inner)
+                            if !matches!(inner.base(), Type::Text(_)))
+                            // A bare text LOCAL returned while the function holds a hidden
+                            // buffer is delivered through that buffer and freed, like any
+                            // other owned text return (@FR-F-Ret) — its slot does hold the
+                            // value, but nothing frees the `String` behind it once the frame
+                            // drops.  A lambda whose one buffer went to `tb` returned `ta`
+                            // this way, one orphan per call (loft#1357).
+                            || (is_return
+                                && !function.is_argument(*v)
+                                && !function.is_skip_free(*v)
+                                && matches!(function.tp(*v).base(), Type::Text(_))
+                                && !matches!(function.tp(*v), Type::RefVar(_))
+                                && any_text_return_buffer(function, data, self.d_nr)
+                                    .is_some_and(|b| b != *v))
+                        }
                         _ => true,
                     };
                     // Text results take the same hoist with the text-leg
@@ -10545,19 +11163,66 @@ impl Scopes<'_> {
                         && tail_needs_eval
                         && !expr_ends_in_return(o)
                     {
-                        self.ret_temp_counter += 1;
-                        let name = format!("__ret_{}", self.ret_temp_counter);
-                        let tmp = function.add_temp_var(&name, &block.result);
-                        // The hoisted value is the RETURN value (transferred to the caller):
-                        // its scope-exit free must NOT fire, else the caller reads a freed
-                        // record. Text already does this; a heap ref/vector needs it too.
-                        if is_text_result || is_heap_ref_result {
-                            function.set_skip_free(tmp);
+                        if is_text_result
+                            && !matches!(o.unspan(), Value::Null)
+                            && let Some(buf) = text_return_buffer_for(o, function, data, self.d_nr)
+                        {
+                            // @FR-F-Ret / @FR-F-Call — the block-tail twin of `free_vars`'s
+                            // text delivery: an owned text return goes into the CALLER's
+                            // hidden `&text` buffer, never into a frame-local temp nothing
+                            // frees.  This is the leg an early `return a ?? b` reaches (its
+                            // `??` lowers to a block whose tail is the `if`), and it orphaned
+                            // one String per call on the interpreter (loft#1338).  Per arm,
+                            // so native's arm types stay uniform; then the temps the copy
+                            // drained are freed, the scope frees follow, and the buffer is
+                            // what the `Return` below names.
+                            let mut delivered = o.clone();
+                            crate::parser::Parser::push_text_arms_into(
+                                &mut delivered,
+                                buf,
+                                data.def_nr("OpCreateStack"),
+                            );
+                            ls.push(delivered);
+                            let pending: Vec<Value> =
+                                trailing_frees.iter().chain(free.iter()).cloned().collect();
+                            free_copied_text_sources(&mut ls, o, &pending, function, data);
+                            hoist_tmp = Some(buf);
+                        } else {
+                            self.ret_temp_counter += 1;
+                            let name = format!("__ret_{}", self.ret_temp_counter);
+                            let tmp = function.add_temp_var(&name, &block.result);
+                            // The hoisted value is the RETURN value (transferred to the
+                            // caller): its scope-exit free must NOT fire, else the caller
+                            // reads a freed record.  Text already does this — and for text it
+                            // is the ORPHAN `free_vars`'s residual arm documents: kept only
+                            // where the function has no buffer to deliver through.  A heap
+                            // ref/vector needs it too.
+                            if is_text_result || is_heap_ref_result {
+                                function.set_skip_free(tmp);
+                            }
+                            self.var_scope.insert(tmp, self.scope);
+                            self.var_order.push(tmp);
+                            ls.push(v_set(tmp, o.clone()));
+                            if is_text_result {
+                                // The copy drained the `??` temp inside the tail; free it
+                                // even where the temp itself is the residual orphan.
+                                let pending: Vec<Value> =
+                                    trailing_frees.iter().chain(free.iter()).cloned().collect();
+                                free_copied_text_sources(&mut ls, o, &pending, function, data);
+                            }
+                            hoist_tmp = Some(tmp);
+                            // A buffer the tail READS is still the delivery once the value is
+                            // staged (the `free_vars` twin says why): move the temp's bytes
+                            // into it, free the temp, and return the buffer (loft#1357).
+                            if is_text_result
+                                && !matches!(o.unspan(), Value::Null)
+                                && let Some(buf) = any_text_return_buffer(function, data, self.d_nr)
+                            {
+                                ls.push(v_set(buf, Value::Var(tmp)));
+                                ls.push(call("OpFreeText", tmp, data));
+                                hoist_tmp = Some(buf);
+                            }
                         }
-                        self.var_scope.insert(tmp, self.scope);
-                        self.var_order.push(tmp);
-                        ls.push(v_set(tmp, o.clone()));
-                        hoist_tmp = Some(tmp);
                     }
                     // The block's OWN trailing scope-frees (after the result op) run first,
                     // then the enclosing scope's `free`; both after the result is hoisted.

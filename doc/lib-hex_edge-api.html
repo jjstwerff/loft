@@ -31,11 +31,10 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">surfaces_new</span>() -&gt; <span class="en">Surfaces</span></code></pre>
-<p>Example: @HXE-001</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">surf_straight</span>(s: <span class="en">Surfaces</span>, nx: <span class="ty"><a href="stdlib-types.html">float</a></span>, ny: <span class="ty"><a href="stdlib-types.html">float</a></span>, c: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>A straight wall with unit normal (nx,ny) at offset c.  Normal is constant -&gt; exact for every one of the 24 headings, and for anything between them. Example: @HXE-001</p>
+<p>A straight wall with unit normal (nx,ny) at offset c.  Normal is constant -&gt; exact for every one of the 24 headings, and for anything between them.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">surf_arc</span>(s: <span class="en">Surfaces</span>, cx: <span class="ty"><a href="stdlib-types.html">float</a></span>, cy: <span class="ty"><a href="stdlib-types.html">float</a></span>, r: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
@@ -64,7 +63,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">material_set_solid</span>(m: <span class="en">Materials</span>, id: <span class="ty"><a href="stdlib-types.html">integer</a></span>, solid: <span class="ty"><a href="stdlib-types.html">boolean</a></span>)</code></pre>
-<p>A DYNAMIC material — a level-crossing barrier, a door, a portcullis.  Flipping the table entry retargets every edge already carrying this id, so the geometry layer is not touched at all: no edge writes, no surface change, and therefore NO L2 cache invalidation (P6 keys the cache on the world version, which a material toggle does not bump).  That is the whole reason material is a separate axis from surface. Example: @HXE-010</p>
+<p>A DYNAMIC material — a level-crossing barrier, a door, a portcullis.  Flipping the table entry retargets every edge already carrying this id, so the geometry layer is not touched at all: no edge writes, no surface change, and therefore NO L2 cache invalidation (P6 keys the cache on the world version, which a material toggle does not bump).  That is the whole reason material is a separate axis from surface.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">mat_solid</span>(m: <span class="en">Materials</span>, id: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
@@ -101,7 +100,7 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">edge_block_surf</span>(e: <span class="en">EdgeSet</span>, qa: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ra: <span class="ty"><a href="stdlib-types.html">integer</a></span>, qb: <span class="ty"><a href="stdlib-types.html">integer</a></span>, rb: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
 <p>Block an edge, recording WHICH surface blocks it (surf 0 = a bare blocker with no recoverable normal — allowed, but it cannot be bounced off correctly).</p>
-<p>FIRST-WRITER-WINS, and that is load-bearing rather than incidental: plain construction stamps parts in an arbitrary order, and without the guard the LAST part to touch a shared edge would own it. <code>edge_block_arb</code> is the version that resolves the contest on geometry instead of order; this is the cheap one for edges only one part can claim. Example: @HXE-006</p>
+<p>FIRST-WRITER-WINS, and that is load-bearing rather than incidental: plain construction stamps parts in an arbitrary order, and without the guard the LAST part to touch a shared edge would own it. <code>edge_block_arb</code> is the version that resolves the contest on geometry instead of order; this is the cheap one for edges only one part can claim.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">edge_point</span>(qa: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ra: <span class="ty"><a href="stdlib-types.html">integer</a></span>, qb: <span class="ty"><a href="stdlib-types.html">integer</a></span>, rb: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
@@ -111,7 +110,7 @@
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">edge_block_arb</span>(e: <span class="en">EdgeSet</span>, sf: <span class="en">Surfaces</span>, qa: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ra: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
 <p>── P3: JUNCTION ARBITRATION ─────────────────────────────────────────────────</p>
 <p>When two parts meet, one edge is claimed by two surfaces. First-writer-wins made that order-dependent — stamp the wall then the tower and you got a different world than the other way round, which is exactly the class of bug that never shows up in a unit test.</p>
-<p>THE RULE: the surface whose geometry is NEAREST the edge's contact point wins; ties break to the LOWER surface id. Both halves matter — nearest is what a ball should actually bounce off, and the tie-break is what makes it deterministic. Example: @HXE-006</p>
+<p>THE RULE: the surface whose geometry is NEAREST the edge's contact point wins; ties break to the LOWER surface id. Both halves matter — nearest is what a ball should actually bounce off, and the tie-break is what makes it deterministic.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Junctions</span></code></pre>
@@ -126,11 +125,11 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">junction_ok</span>(j: <span class="en">Junctions</span>, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>, sf: <span class="en">Surfaces</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
-<p>Does the junction honour what was intended?  G0 is exact by construction (both surfaces pass through the seam point); this checks the TANGENT. Example: @HXE-011</p>
+<p>Does the junction honour what was intended?  G0 is exact by construction (both surfaces pass through the seam point); this checks the TANGENT.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">junction_g0</span>(j: <span class="en">Junctions</span>, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>, sf: <span class="en">Surfaces</span>, tol: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
-<p>G0: both surfaces must actually pass through the seam point. Example: @HXE-011</p>
+<p>G0: both surfaces must actually pass through the seam point.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Features</span></code></pre>
@@ -149,7 +148,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">apply_features</span>(e: <span class="en">EdgeSet</span>, sf: <span class="en">Surfaces</span>, f: <span class="en">Features</span>,</code></pre>
-<p>Apply every feature to the edge layer: an edge whose contact point falls inside a feature's interval takes that feature's material.  The SURFACE is untouched — which is why the body never fragments and the matcher still sees one wall. Example: @HXE-008</p>
+<p>Apply every feature to the edge layer: an edge whose contact point falls inside a feature's interval takes that feature's material.  The SURFACE is untouched — which is why the body never fragments and the matcher still sees one wall.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">edge_block_full</span>(e: <span class="en">EdgeSet</span>, qa: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ra: <span class="ty"><a href="stdlib-types.html">integer</a></span>, qb: <span class="ty"><a href="stdlib-types.html">integer</a></span>, rb: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
@@ -157,7 +156,6 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">edge_block</span>(e: <span class="en">EdgeSet</span>, qa: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ra: <span class="ty"><a href="stdlib-types.html">integer</a></span>, qb: <span class="ty"><a href="stdlib-types.html">integer</a></span>, rb: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
-<p>Example: @HXE-007</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">edge_blocked</span>(e: <span class="en">EdgeSet</span>, qa: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ra: <span class="ty"><a href="stdlib-types.html">integer</a></span>, qb: <span class="ty"><a href="stdlib-types.html">integer</a></span>, rb: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
@@ -165,11 +163,11 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">collide</span>(e: <span class="en">EdgeSet</span>, s: <span class="en">Surfaces</span>,</code></pre>
-<p>THE COLLISION RESPONSE QUERY: blocked?, and the EXACT outward normal to bounce off. Example: @HXE-007</p>
+<p>THE COLLISION RESPONSE QUERY: blocked?, and the EXACT outward normal to bounce off.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">passable</span>(e: <span class="en">EdgeSet</span>, qa: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ra: <span class="ty"><a href="stdlib-types.html">integer</a></span>, qb: <span class="ty"><a href="stdlib-types.html">integer</a></span>, rb: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
-<p>THE collision query.  Everything else is construction. Example: @HXE-010</p>
+<p>THE collision query.  Everything else is construction.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sweep_path</span>(e: <span class="en">EdgeSet</span>, x0: <span class="ty"><a href="stdlib-types.html">float</a></span>, y0: <span class="ty"><a href="stdlib-types.html">float</a></span>, x1: <span class="ty"><a href="stdlib-types.html">float</a></span>, y1: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
@@ -179,7 +177,7 @@
 <p>|P(t) - C|² = |P(t) - N|²   ⟺   P(t)·(N-C) = midpoint·(N-C) ⟹  t = ((M - P0)·D) / (V·D)     with D = N-C, and only when V·D &gt; 0</p>
 <p>So the answer is a function of the SEGMENT, not of how many frames it was cut into: dropping frames or falling fast cannot step over a wall. Centres come from the exact integer lattice (<code>lattice_k</code>/<code>lattice_m</code>), so the geometry carries no accumulated error.</p>
 <p>Returns the fraction of the segment that may be travelled (1.0 = all of it), the cell it stopped in, and the DIRECTION of the blocking edge — <code>dir &lt; 0</code> meaning nothing blocked. The signal is the direction and never a coordinate: hex coordinates are signed, so a -1 sentinel in q or r collides with real cells in any chunk that spans the origin. (It did: the first version reported &quot;no hit&quot; for every wall at q = -1.) Feed (q, r, dir) to <code>nb_q</code>/<code>nb_r</code> and <code>collide</code> for the exact bounce normal.</p>
-<p>EXTRACTION: this belongs with <code>passable</code>/<code>collide</code> and travels with them when hexedge is packaged — every consumer that moves a body over the field needs it. Example: @HXE-002 Example: @HXE-004 Example: @HXE-005</p>
+<p>EXTRACTION: this belongs with <code>passable</code>/<code>collide</code> and travels with them when hexedge is packaged — every consumer that moves a body over the field needs it.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sweep_path_from</span>(e: <span class="en">EdgeSet</span>, sq: <span class="ty"><a href="stdlib-types.html">integer</a></span>, sr: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
@@ -188,15 +186,14 @@
 <p>The cure is not a tolerance. The previous call already RETURNED the cell you are resting in, so hand it back: <code>(t, cq, cr, d) = sweep_path_from(e, cq, cr, …)</code>, threading <code>cq, cr</code> from one step to the next. Pressing on into the wall then answers <code>t = 0</code> in the cell you are in, which is the honest answer, and sliding along the wall works from the same call.</p>
 <p>WHY NOT A SKIN. The consumer-side workaround is to come to rest a small distance short (moros#10 used 1 cm at its scale), and it does work — but the smallest distance that works is not a constant. Measured: 1e-15 at the origin, 1e-11 about 1.7e3 world units out, 1e-9 about 1.7e6 out. It is a float-resolution floor, not a geometric clearance, so a constant chosen at one extent is silently wrong at another and the library has no better idea of the right value than the caller does. Threading the cell needs no such number.</p>
 <p>THE FAR-FIELD LIMIT, which no cure removes: past roughly 5e6 cells from the origin a double position can no longer hold &quot;on the bisector&quot; to better than this code's 1e-9 tolerance (measured: the recoverable offset from an absolute position loses 2.9e-10 at 3e6 cells and 6.4e-10 at 1e7). At that point the position itself is the limit, not the sweep, and the fix is to recentre the world rather than the arithmetic.</p>
-<p>Example: @HXE-002 Example: @HXE-003</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">edges_cut</span>(s: <span class="en">HexSet</span>, e: <span class="en">EdgeSet</span>)</code></pre>
-<p>A THIN wall: the cut between the cells of <code>s</code> and everything else.  One edge thick, and it separates by construction — in every one of the 24 headings. Example: @HXE-009</p>
+<p>A THIN wall: the cut between the cells of <code>s</code> and everything else.  One edge thick, and it separates by construction — in every one of the 24 headings.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">edges_solid</span>(s: <span class="en">HexSet</span>, e: <span class="en">EdgeSet</span>)</code></pre>
-<p>A SOLID body: every edge incident to an occupied cell, so the cells cannot be entered at all.  This is the cell model expressed in the edge primitive — which is the point: one collision layer serves both. Example: @HXE-009</p>
+<p>A SOLID body: every edge incident to an occupied cell, so the cells cannot be entered at all.  This is the cell model expressed in the edge primitive — which is the point: one collision layer serves both.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">edges_halfplane_surf</span>(e: <span class="en">EdgeSet</span>, q0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, w: <span class="ty"><a href="stdlib-types.html">integer</a></span>, h: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
@@ -204,7 +201,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">edges_halfplane</span>(e: <span class="en">EdgeSet</span>, q0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, w: <span class="ty"><a href="stdlib-types.html">integer</a></span>, h: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
-<p>Back-compat: a halfplane wall with no surface recorded. Example: @HXE-009</p>
+<p>Back-compat: a halfplane wall with no surface recorded.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sight_clear</span>(e: <span class="en">EdgeSet</span>, m: <span class="en">Materials</span>, x0: <span class="ty"><a href="stdlib-types.html">float</a></span>, y0: <span class="ty"><a href="stdlib-types.html">float</a></span>, z0: <span class="ty"><a href="stdlib-types.html">float</a></span>,</code></pre>
@@ -212,12 +209,12 @@
 <p>Is there a clear line of sight from an eye to a target?</p>
 <p>Sight is blocked by OPACITY, not by solidity.  A chain-link fence is solid and transparent; a hedge is permeable and opaque.  This is the first consumer to read one material axis while deliberately ignoring another, and it is the whole reason a material carries a vector of transmission terms rather than a single flag.</p>
 <p>Height matters as much as opacity: the sight line rises from eye to target, so an obstruction blocks only while the line is still below its top.  A near wall hides what the identical wall further along does not — which is exactly the railway sighting problem, and it falls out of the geometry rather than being special-cased.</p>
-<p>The walk steps at 0.2 world units.  A hex inradius is sqrt(3)/2 = 0.866, so consecutive samples cannot skip a cell: every cell change is a step to a NEIGHBOUR, and the edge between them is exactly the one to test. Example: @HXE-010</p>
+<p>The walk steps at 0.2 world units.  A hex inradius is sqrt(3)/2 = 0.866, so consecutive samples cannot skip a cell: every cell change is a step to a NEIGHBOUR, and the edge between them is exactly the one to test.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">surf_point</span>(s: <span class="en">Surfaces</span>, id: <span class="ty"><a href="stdlib-types.html">integer</a></span>, t: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
 <p>The inverse of surf_param: where along a surface does this parameter land?</p>
-<p>surf_param answers &quot;where is this point on that surface&quot;; derived placement needs the other direction — a Feature states an INTERVAL in surface parameters (plan #5 P5), and putting a door there means turning that interval back into a position. Without this the only way to place a door on an existing opening is to search for it. Example: @HXE-008</p>
+<p>surf_param answers &quot;where is this point on that surface&quot;; derived placement needs the other direction — a Feature states an INTERVAL in surface parameters (plan #5 P5), and putting a door there means turning that interval back into a position. Without this the only way to place a door on an existing opening is to search for it.</p>
 </div>
 
   </article>

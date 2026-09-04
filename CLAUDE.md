@@ -55,8 +55,14 @@ make check-rlib                          # 1s pre-flight: is libloft.rlib curren
                                          #   idle — two checkouts running gates at once doubles
                                          #   it (CI_BUDGET.md § A LOCAL `make ci`).
 ./scripts/find_problems.sh --bg|--peek|--wait   # background full-suite run + inspect/block
-make ci-roundtrip                        # the exhaustive stdlib round-trip pair, which `make ci`
-                                         #   excludes; run it before an IR-schema/serialiser change
+cargo test --release --test ir_schema_roundtrip   # the IR codec over the whole stdlib + every
+                                         #   tests/scripts file; run it after an IR-schema/
+                                         #   serialiser change (`make ci` runs it in the pool)
+make release-gate                        # every nightly against THIS commit in ONE CI run, one
+                                         #   verdict — the release evidence (`release-checklist`
+                                         #   reads it by HEAD's sha).  The 03:00 daily starts
+                                         #   03:34–14:45 UTC on whatever main was; this does not
+                                         #   excuse a red nightly — fix those the day they appear
 make falsify GUARD=<guard.loft> REF=<commit>   # does this guard FAIL on the build it was
                                          #   written to catch?  Compares exit/asserts/leak/
                                          #   panic apart and names the channel that moved.
@@ -159,6 +165,10 @@ src/main.rs            CLI; loads default/ then user file
   e.g. `t_4text_starts_with`. Operators `OpCamelCase` (loft) → `op_snake_case` (`fill.rs`).
 - `#rust "..."` in `default/*.loft` supplies the Rust body for codegen. Full naming + null-sentinel
   rules: [CODE.md](doc/claude/CODE.md).
+- **A new op or builtin renumbers `index/target_surface.json`** — run `make surface-gen`, or
+  `make ci` fails a drift guard no targeted suite shows. It asks a PREBUILT wasm rlib which
+  methods exist, so rebuild that rlib first or it records the new builtin as unavailable in
+  the browser and commits that as derived truth.
 - stdlib load order: `01_code.loft` (operators/math/text/collections) → `02_files.loft` (I/O) →
   `03_text.loft`.
 - **Before non-trivial functionality, check the library catalogue (`make libcatalogue`) + `loft install`** — don't reimplement.
@@ -277,8 +287,15 @@ the rules: [formal/README.md](doc/claude/formal/README.md) § When to reach for 
 ## Bug-filing policy — MANDATORY
 
 **Default is FIX, not file** — bugs surfaced while fixing another are the cheapest to fix (paths
-loaded, repro warm). In **stability work** the file-instead-of-fix escape hatches do NOT apply: fix
-in the same session with a regression test. Record scope + root cause, never origin commit.
+loaded, repro warm). **An open issue is DEFERRED work, and the owner does not defer: filing is
+fine as the record, but an open issue is never ignored for a release and rarely for a PR** — so
+it is fixed before the release (normally before the PR) by the filer or a named peer, and
+"ship with #N open" is never the recommendation. **Inside an INVESTIGATION plan, filing is not
+correct at all**: a bug met while digging into why something is broken is fixed on the spot,
+because leaving it in the way hides the full picture (such a plan is itself a last resort, for
+when the ordinary tools no longer work). In **stability work** the file-instead-of-fix escape
+hatches do NOT apply either: fix in the same session with a regression test. Record scope + root
+cause, never origin commit.
 
 **File only when NOT fixing now:** it blocks the current task (bookmark + workaround), or it's
 genuinely M+/needs-design (route to its canonical home). When you file: a **GitHub Issue**
@@ -315,6 +332,10 @@ Don't scope-creep the active fix with unrelated bugs.
 they merge-conflict across files and have destroyed sessions. **Always commit before any operation
 that changes the working tree.** Compare without switching: `git diff main -- <file>`,
 `git show origin/main:<file>`.
+The plain `git checkout -- <file>` and `git checkout-index -f -- <file>` forms are the SAME
+hazard wearing an innocent name: each has reverted an hour of unstaged work while "cleaning
+up" a probe. Undo a probe or a debug `eprintln` with the inverse edit, never with git, and
+commit BEFORE inserting it.
 
 Run **`make hooks`** once per clone: the `commit-msg` hook reports an issue mentioned without a
 `Fixes #N` trailer (that trailer is what the push workflow labels `fixed-pending-merge` off — see
@@ -344,7 +365,8 @@ machine — one manifest line, consumers unchanged; **the four rules for writing
 be placed** (a `pub fn` must not BE a native; answer a value, not a cursor; closures do not
 cross; a returned VIEW cannot be placed) ·
 [LOGGER.md](doc/claude/LOGGER.md) · [WASM.md](doc/claude/WASM.md) · [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) ·
-[BROWSER_INTEROP.md](doc/claude/BROWSER_INTEROP.md) · [WINDOWS.md](doc/claude/WINDOWS.md) / [WINDOWS_SESSION.md](doc/claude/WINDOWS_SESSION.md).
+[BROWSER_INTEROP.md](doc/claude/BROWSER_INTEROP.md) · [GALLERY_CI.md](doc/claude/GALLERY_CI.md) (the two browser
+artefacts that go stale independently, and the gate that catches it) · [WINDOWS.md](doc/claude/WINDOWS.md) / [WINDOWS_SESSION.md](doc/claude/WINDOWS_SESSION.md).
 
 **Networked runs:** `LOFT_NET_PROFILE=1|trace` reports socket operations by **margin**
 (a call that finished close to its deadline is a failure that has not happened yet) with
@@ -377,7 +399,8 @@ questions its sites actually ask, find each question's ONE home, then verify the
 against it — the defects are in the disagreements, and the citation is the receipt, never the
 task.  179 of 257 rules have no code representation, so this is a queue measured in years /
 [_SWEEP](doc/claude/STABILITY_SWEEP.md) / [_HOTSPOTS](doc/claude/STABILITY_HOTSPOTS.md) /
-[_REDFLAGS](doc/claude/STABILITY_REDFLAGS.md) · [DEPS_INVENTORY.md](doc/claude/DEPS_INVENTORY.md) ·
+[_REDFLAGS](doc/claude/STABILITY_REDFLAGS.md) · [BRITTLE.md](doc/claude/BRITTLE.md) (the
+survey of routines most likely to answer silently wrong, each with its hardening path) · [DEPS_INVENTORY.md](doc/claude/DEPS_INVENTORY.md) ·
 formal lens: [FORMALIZATION.md](doc/claude/FORMALIZATION.md) / [TYPING_RELATION.md](doc/claude/TYPING_RELATION.md) ·
 strict: [formal/README.md](doc/claude/formal/README.md) (rules + deviations driven to zero).
 
@@ -404,7 +427,8 @@ publishing is the **loft-ship skill** (touch-gated signing). REPL: [REPL.md](doc
 [BUG_REVIEW.md](doc/claude/BUG_REVIEW.md) (the monthly bug review: `make bug-review` reports which
 mechanism classes are still producing bugs + whether last cycle's keystone actually moved its
 class; the pass converts ONE rising class into ONE generalization — a report, never a gate) ·
-[.github/LABELS.md](.github/LABELS.md) · [RELEASE.md](doc/claude/RELEASE.md) · [LIBRARY_DOC_REVIEW.md](doc/claude/LIBRARY_DOC_REVIEW.md) (the monthly by-hand doc review, both
+[.github/LABELS.md](.github/LABELS.md) · [RELEASE.md](doc/claude/RELEASE.md) (the process) · [releases/](doc/claude/releases/README.md) (one directory
+per cycle: its state write-up and its committed checklist evidence) · [LIBRARY_DOC_REVIEW.md](doc/claude/LIBRARY_DOC_REVIEW.md) (the monthly by-hand doc review, both
 halves: `make libraries-review` says which libraries owe a review or have moved since their
 watermark, `make features-review` does the same for the `@F` catalogue, `scripts/doc-review.sh
 --since` drills into one library's functions — all three REPORT, none gates) · [COMPATIBILITY.md](doc/claude/COMPATIBILITY.md) (the breaking-change policy, @PLN102 arc A) · [MOVING.md](doc/claude/MOVING.md) ·
@@ -521,6 +545,12 @@ form looks exactly like an empty one. Adjacency is the signal rather than the gr
 because the idiom is written TOGETHER while a group nobody intended is two fields added at
 different times for different reasons. Quiet on adjacent members, on a pair with no keyed
 member, and on a LIBRARY's struct, which a consumer cannot rearrange) ·
+`LOFT_NO_LIB_OUTRANKED` (loft#1352 `lib-flag-outranked` ADVICE: `use <id>` resolved
+somewhere other than a `--lib` directory that also provides it — resolution is first-wins
+and a project-local `lib/`, a declared dependency and the script's own directory are
+searched BEFORE the flag, so a `--lib` override run from a tree with a `lib/` measures the
+original in silence; reports the precedence rather than moving it, once per id, quiet when
+the winner lies inside the flag's directory) ·
 `LOFT_NO_UNDECLARED_DEP` (loft#968 `undeclared-dependency` ADVICE: `use <pkg>` resolved a
 REGISTRY package the project's `loft.toml` never declares — so nothing distinguishes "we
 depend on this" from "this happens to be installed on the box that built it", the negative
@@ -621,3 +651,12 @@ step for a wrong answer in a function that reassigns a local across sibling bloc
 soundness condition is `store_dead_after_block`, NOT the flag: a local READ after the blocks
 does not confine, because freeing a confined store while the local still holds it returns the
 wrong element on the branch NOT taken. QUALITY.md § Cluster III Route 2.
+
+**Owner witness for a mixed-ownership local (loft#1336, default-ON, both backends):** a
+heap-record local that OWNS after one assignment (a copy, a minting call) and VIEWS after
+another carries a hidden `__own_<name>` naming the store it minted while it still holds it;
+the IR releases it by store identity at the rebind or at scope exit, and the local itself is
+never-free (`formal/ownership.md` @FR-O-Witness). **`LOFT_NO_OWNER_WITNESS=1`** emits the
+pre-witness form: the first bisect step for a leak or a wrong answer in a local that is both
+copy-bound and view-bound (a walker `cur: Node? = a; cur = cur.next`), and what the
+`LOFT_NO_JOIN_OWN` positive controls set beside their own switch.

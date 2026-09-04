@@ -54,7 +54,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">doc_len</span>(d: <span class="en">Doc</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>|⌊D⌋| — the character length of the logical text. Example: @ZTX-002 — CHARACTERS, which is not the byte length of the materialised text.</p>
+<p>|⌊D⌋| — the character length of the logical text.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">locate</span>(d: <span class="en">Doc</span>, a: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
@@ -66,15 +66,15 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">insert_text</span>(d: <span class="en">Doc</span>, a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, s: <span class="ty"><a href="stdlib-types.html">text</a></span>, style: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Doc</span></code></pre>
-<p>insert text <code>s</code> (style-id <code>style</code>) at anchor <code>a</code>. Appends <code>s</code>'s characters to a fresh buffer (append-only), then rebuilds the piece sequence splitting the piece at <code>a</code>. Example: @ZTX-001 — this RETURNS a new Doc; the one passed in is unchanged, so a discarded result is an edit that silently never happened.</p>
+<p>insert text <code>s</code> (style-id <code>style</code>) at anchor <code>a</code>. Appends <code>s</code>'s characters to a fresh buffer (append-only), then rebuilds the piece sequence splitting the piece at <code>a</code>.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">delete_range</span>(d: <span class="en">Doc</span>, a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Doc</span></code></pre>
-<p>delete the range [a,b). Keeps each piece's portion outside [a,b); the buffer is UNCHANGED (deleted characters stay in B so undo can restore them). Example: @ZTX-001 — a value, not a mutation: bind the result. Example: @ZTX-002 — <code>a</code> and <code>b</code> are CHARACTER positions, and the append-only buffer does not shrink (that is what undo restores from).</p>
+<p>delete the range [a,b). Keeps each piece's portion outside [a,b); the buffer is UNCHANGED (deleted characters stay in B so undo can restore them).</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_style</span>(d: <span class="en">Doc</span>, a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>, style: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Doc</span></code></pre>
-<p>set style-id <code>style</code> on the range [a,b): split each overlapping piece three ways ([ps,a) old · [a,b) new · [b,pe) old) and restyle the middle. Example: @ZTX-001 — a value, not a mutation: bind the result.</p>
+<p>set style-id <code>style</code> on the range [a,b): split each overlapping piece three ways ([ps,a) old · [a,b) new · [b,pe) old) and restyle the middle.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">slice_runs</span>(d: <span class="en">Doc</span>, a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Run</span>&gt;</code></pre>
@@ -112,7 +112,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">invert</span>(d: <span class="en">Doc</span>, t: <span class="en">Txn</span>) -&gt; <span class="en">Txn</span></code></pre>
-<p>invert(D, τ) → τ⁻¹ such that apply(apply(D,τ), τ⁻¹) ≈ D (same text + same per-char styles). Each op's inverse is computed against its pre-state; the groups are emitted in reverse op order (prepend each new group), since τ⁻¹ undoes the last op first. Example: @ZTX-003 — <code>d</code> must be the state BEFORE the transaction; the inverse of a deletion is an insertion of what was there, which only the pre-state knows. Restores per-character styles as well as text.</p>
+<p>invert(D, τ) → τ⁻¹ such that apply(apply(D,τ), τ⁻¹) ≈ D (same text + same per-char styles). Each op's inverse is computed against its pre-state; the groups are emitted in reverse op order (prepend each new group), since τ⁻¹ undoes the last op first.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Style</span></code></pre>
@@ -210,7 +210,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">flow_layout</span>(d: <span class="en">Doc</span>, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>, measure: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span>, w_col: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">BoxSet</span></code></pre>
-<p>The BoxSet-only view of a flow layout (the M1/M2 surface). Example: @ZTX-004 — measurement is an ARGUMENT, which is why the same document and ports lay out identically on every target; <code>default_resolver</code> + <code>mono_measure</code> are the deterministic pair to test against.</p>
+<p>The BoxSet-only view of a flow layout (the M1/M2 surface).</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">line_assignment</span>(d: <span class="en">Doc</span>, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>, measure: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span>, w_col: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">LaidLine</span>&gt;</code></pre>

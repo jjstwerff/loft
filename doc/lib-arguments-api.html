@@ -38,11 +38,11 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">required</span>(self: <span class="en">Args</span>, opt_short: <span class="ty"><a href="stdlib-types.html">text</a></span>, opt_long: <span class="ty"><a href="stdlib-types.html">text</a></span>, arg_name: <span class="ty"><a href="stdlib-types.html">text</a></span>, desc: <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>
-<p>A required value option: <code>parse</code> fails if it is absent. Example: @ARG-004 — the parse-failure idiom (<code>ok</code>/<code>error_msg</code>/<code>try_help</code>).</p>
+<p>A required value option: <code>parse</code> fails if it is absent.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">optional</span>(self: <span class="en">Args</span>, opt_short: <span class="ty"><a href="stdlib-types.html">text</a></span>, opt_long: <span class="ty"><a href="stdlib-types.html">text</a></span>, arg_name: <span class="ty"><a href="stdlib-types.html">text</a></span>, desc: <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>
-<p>An optional-argument option: its value attaches only via <code>=</code> / glued form (<code>--color=auto</code>, <code>-cauto</code>); given bare (<code>--color</code>) it is present with value &quot;&quot;. Example: @ARG-002 — glued value vs bare, and why the next word stays a positional.</p>
+<p>An optional-argument option: its value attaches only via <code>=</code> / glued form (<code>--color=auto</code>, <code>-cauto</code>); given bare (<code>--color</code>) it is present with value &quot;&quot;.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_usage</span>(self: <span class="en">Args</span>, synopsis: <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>
@@ -58,11 +58,11 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">enable_help</span>(self: <span class="en">Args</span>)</code></pre>
-<p>Opt-in: register <code>--help</code>/<code>-h</code> and <code>--version</code>/<code>-V</code> (short forms only when free), so <code>parse</code> records <code>--help</code>/<code>--version</code> and <code>help()</code> lists them.  Nothing is auto-printed — the caller checks <code>wants_help()</code> / <code>wants_version()</code>. Example: @ARG-003 — the opt-in dance, and <code>--help</code> bypassing the required check.</p>
+<p>Opt-in: register <code>--help</code>/<code>-h</code> and <code>--version</code>/<code>-V</code> (short forms only when free), so <code>parse</code> records <code>--help</code>/<code>--version</code> and <code>help()</code> lists them.  Nothing is auto-printed — the caller checks <code>wants_help()</code> / <code>wants_version()</code>.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">parse</span>(self: <span class="en">Args</span>, argv: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">text</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
-<p>Parse a command line against the declared options.  Answers false on a usage error (see <code>ok</code>/<code>error_msg</code>); afterwards flags read through <code>has</code>, value options through <code>get</code>, and every non-option word lands in <code>positionals</code> in order. Example: @ARG-001 — the declare → parse → query lifecycle.</p>
+<p>Parse a command line against the declared options.  Answers false on a usage error (see <code>ok</code>/<code>error_msg</code>); afterwards flags read through <code>has</code>, value options through <code>get</code>, and every non-option word lands in <code>positionals</code> in order.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">has</span>(self: <span class="en">Args</span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>

@@ -51,6 +51,15 @@ join-of-local (need view materialisation; 553 `textslice` SIGSEGV'd both backend
 this) and address-taken defs (signature change breaks fn-pointers). `force_tret` is narrowed
 to the promoted set so Phase B patches exactly the changed callers.
 
+**Widened 2026-09-04 (loft#1338):** the view-of-local / join-of-local deferral is lifted.  The
+553 crash the filter was written around does not reproduce on the current Phase A —
+`Set(__tret, view)` lowers to the interpreter's own `OpAppendText` copy, which IS the
+materialisation the note asked for, and `553 textslice` is green on both backends.  The
+orphan predicate it reads (`text_return_orphan_risk`) now classifies every `return` site of
+the function, not the block tail alone, and counts only a HIDDEN `RefVar(Text)` attribute as
+a buffer (a user `&text` parameter is the caller's variable).  The address-taken exclusion
+stands: a fn-ref value's type carries no buffer, so promotion still breaks its callers.
+
 **Former default-on failures under V2 (§Verification 4) — RESULT (commit `ab1a61cb`):**
 `text_return_analysis` ✅, `index_hygiene` ✅, `wrap loft_suite` ✅ (the 553 view-of-local
 crash is now deferred), `s5_local_swap_hands_over` ✅, `s7_debugger_loop_end_to_end` ✅ — the

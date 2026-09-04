@@ -1,0 +1,22 @@
+# Memcheck suppressions for scripts/valgrind-sweep.sh — the release's valgrind gate.
+#
+# One entry, and it names a DELIBERATE allocation: a declared text field default is interned
+# for the life of the process by an intentional, bounded `Box::leak` in
+# `typedef::fold_declared_default` — one allocation per field that declares a text default,
+# never one per read — because `Content::Str` is a raw `{ptr, len}` with no owning variant.
+# The function carries `#[inline(never)]` so this frame keeps its name; the ASan leak gate
+# names the same frame in .github/lsan_suppressions.txt for the same reason.
+#
+# Nothing else is suppressed here on purpose.  The LSan file also suppresses the four text
+# construction entry points (`append_text`, `format_text`, `format_long`, `text_tl_fmt`) on
+# the premise that they leak only on a FAULT path; measured 2026-09-04 under this sweep, 14
+# of the 22 scripts losing an `append_text` block carried no fault at all (loft#1338, then
+# loft#1357 for the residue), so that premise does not hold and the class stays visible
+# here: this sweep is the instrument the CI leak gate is not.
+{
+   declared-text-default-is-interned-for-the-process
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   fun:*fold_declared_default*
+}

@@ -163,35 +163,40 @@ impl Output<'_> {
                     }
                     write!(w, "}}")?;
                 } else if self.yield_collect {
-                    // Inside a ForLoopBody factory: push to the collector.
-                    write!(w, "__values.push((")?;
-                    self.output_code_node(w, node.yield_inner())?;
-                    if self.yield_collect_text {
-                        write!(w, ").to_string())")?;
-                    } else if self.yield_collect_dbref {
-                        // The factory collects EAGERLY: the whole loop runs up
-                        // front and the consumer reads the pushed DbRefs
-                        // afterwards.  For struct/vector yields that is
-                        // unsound in general — a per-iteration construction
-                        // (or any rebound local) reuses its record, so every
-                        // pushed DbRef aliases the FINAL state, silently
-                        // (probe: three yields of {7,17,27} summed to 81 on
-                        // native vs the interpreter's lazy 51).  Even view
-                        // yields are only sound when each iteration's view
-                        // targets a distinct persistent record — not
-                        // emit-decidable.  Until the native for-body factory
-                        // preserves per-yield snapshots (copy or true lazy
-                        // suspension), reject the shape loudly; the
-                        // interpreter carries the full semantics and
-                        // straight-line (non-loop) struct yields keep
-                        // working (each pushes a distinct site once).
-                        write!(w, "))")?;
+                    // Inside an eager factory: push to the collector.  The whole loop
+                    // runs before the consumer reads anything, so a HANDLE to a
+                    // per-iteration record would alias that record's final state
+                    // (three yields of {7,17,27} summed to 81 instead of 51).  A
+                    // handle yield therefore pushes a SNAPSHOT — a copy in the
+                    // generator's own store, released at exhaustion or abandonment —
+                    // which is the value at the yield, as the interpreter's lazy
+                    // suspension hands out.  COROUTINE.md § Design: lazy loop yields.
+                    if let Some(tp) = self.yield_collect_snapshot_tp {
                         write!(
                             w,
-                            "; compile_error!(\"loft --native: yielding a struct/vector value from a generator's LOOP body is not supported natively yet — the eager collector cannot preserve per-yield snapshots (values would silently alias). Run interpreted, yield from straight-line code, or materialise with a worklist (e.g. the stdlib tree_walk) instead of a generator.\")"
+                            "__values.push(loft::codegen_runtime::coroutine_snapshot(cell, &mut __snap, ("
                         )?;
+                        self.output_code_node(w, node.yield_inner())?;
+                        write!(w, "), {tp}))")?;
                     } else {
-                        write!(w, ") as i64)")?;
+                        write!(w, "__values.push((")?;
+                        self.output_code_node(w, node.yield_inner())?;
+                        if self.yield_collect_text {
+                            write!(w, ").to_string())")?;
+                        } else if self.yield_collect_dbref {
+                            // A handle kind with no standalone record to copy into (a
+                            // keyed collection lives inline in its parent) has no
+                            // snapshot form: refuse loudly rather than alias.
+                            write!(w, "))")?;
+                            write!(
+                                w,
+                                "; compile_error!(\"loft --native: a keyed collection yielded \
+                                 from a generator's LOOP body has no snapshot form — yield its \
+                                 element records instead, or run under --interpret\")"
+                            )?;
+                        } else {
+                            write!(w, ") as i64)")?;
+                        }
                     }
                 } else {
                     write!(w, "yield ")?;
@@ -299,6 +304,14 @@ impl Output<'_> {
                 let var = node.var_nr();
                 let variables = self.data.def(self.def_nr).variables();
                 let var_name = sanitize(variables.name(var));
+                // loft#1354 — this read HANDS the local to an `if` that binds it, and a
+                // tuple carrying text is `(…, String, …)`: not `Copy`, so a bare read moves
+                // it and any later use of the local is E0382 on a program the interpreter
+                // runs.  Only the variable the arm was entered for is cloned.
+                if self.clone_handed_tuple_local == Some(var) {
+                    self.clone_handed_tuple_local = None;
+                    return write!(w, "var_{var_name}.clone()");
+                }
                 if let Some(field) = self.coroutine_persistent_fields.get(&var) {
                     // P224: read from the coroutine struct field, under the name the struct
                     // definition gave it — which is the variable's own only where no other
@@ -750,13 +763,12 @@ impl Output<'_> {
                     // `text_return`), `Str::new(<local_String>)` would
                     // dangle.  Route through `stores.scratch` instead so
                     // the value's backing String lives as long as `stores`.
-                    // Note: text_return doesn't set the `hidden` flag (only
-                    // ref_return does), so we don't filter on `a.hidden`.
+                    // A work buffer is a HIDDEN `RefVar(Text)` attribute — every one
+                    // `text_return` promotes is marked so; a user `&text` parameter is
+                    // not a buffer (`return_buffer_name`, loft#1338).
                     let needs_p205_scratch = wrap_text && {
                         let def = self.data.def(self.def_nr);
-                        let no_work_buffer = !def.attributes().iter().any(|a| {
-                            matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
-                        });
+                        let no_work_buffer = def.text_work_buffers() == 0;
                         // @P321e — also route through scratch when the return
                         // value is a text LOCAL var (an owned `String`, not the
                         // RefVar work-buffer arg).  `Str::new(&var_local)`
@@ -1741,7 +1753,9 @@ impl Output<'_> {
         {
             Self::write_typed_null(w, &tp)?;
         } else {
+            self.clone_handed_tuple_local = self.arm_moves_a_live_tuple_local(true_v);
             self.output_code_inner(w, true_v)?;
+            self.clone_handed_tuple_local = None;
         }
         self.fn_ref_context = saved_ctx;
         self.indent -= u32::from(!b_true || text_string_unify || bool_unify);
@@ -1773,7 +1787,9 @@ impl Output<'_> {
         {
             Self::write_typed_null(w, &tp)?;
         } else {
+            self.clone_handed_tuple_local = self.arm_moves_a_live_tuple_local(false_v);
             self.output_code_inner(w, false_v)?;
+            self.clone_handed_tuple_local = None;
         }
         if text_string_unify {
             write!(w, ").to_string()}}")?;
@@ -1821,6 +1837,47 @@ impl Output<'_> {
     /// caller cares about and so misses a `Set` inside a loop.  Built on `for_each_child`,
     /// whose match is exhaustive on purpose: a new [`ValueType`] forces a decision there
     /// rather than silently dropping out of this answer (loft#815).
+    /// Does this if-arm hand over a LOCAL whose Rust value cannot be copied?
+    ///
+    /// A loft tuple lowers to a Rust tuple, and a tuple carrying a text element is
+    /// `(…, String, …)` — not `Copy`.  Yielding the bare local from an arm therefore MOVES
+    /// it, and any later read of the local is `error[E0382]: borrow of moved value`, on a
+    /// program the interpreter runs (loft#1354).
+    ///
+    /// Only the TUPLE shape needs this.  A text local is already re-materialised by the
+    /// text-unify paths above, and a struct or vector local is a `DbRef`, which is `Copy` —
+    /// which is why `x = if c { s } else { … }` compiles for every other heap type and
+    /// only the tuple refused.
+    ///
+    /// The clone matches what the arm means: the element that is a store handle stays a
+    /// handle (the same `DbRef`, so the two names see one vector, which is what the IR's
+    /// `["dp"]` dep already says), and the owned `String` is duplicated so both names can
+    /// read it.
+    fn arm_moves_a_live_tuple_local(&self, v: &Value) -> Option<u16> {
+        // An arm is usually a BLOCK whose tail is the variable, so the bare-`Var` spelling
+        // is only the simplest case.  Cloning the block's RESULT would not help: the tail
+        // has already moved the local by then, so the clone has to happen at the tail.
+        let inner = match v.unspan() {
+            Value::Var(nr) => *nr,
+            Value::Block(b) => match b.operators.last().map(Value::unspan) {
+                Some(Value::Var(nr)) => *nr,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let vars = self.data.def(self.def_nr).variables();
+        if vars.is_argument(inner) {
+            return None;
+        }
+        let Type::Tuple(elems) = vars.tp(inner).base() else {
+            return None;
+        };
+        elems
+            .iter()
+            .any(|t| matches!(t.base(), Type::Text(_)))
+            .then_some(inner)
+    }
+
     fn collect_assigned_vars(node: IrNode, result: &mut Vec<u16>) {
         if node.kind() == ValueType::Set {
             let v = node.set_var();
@@ -1879,19 +1936,27 @@ impl Output<'_> {
     ///    that expression is captured into `let _ret` first, then yielded at the end.
     /// 3. **String conversion** — a text-typed block may receive a `Str` from a field read;
     ///    `.to_string()` converts it to an owned `String`.
-    // @PLN10 Phase B — the sanitized `var_…` name of this function's first
+    // @PLN10 Phase B — the sanitized `var_…` name of this function's first HIDDEN
     // `RefVar(Text)` work buffer (a `&mut String` arg the caller owns), if any.
     // A buffered (`!nwb`) text fn returning a LOCAL / `??`-block / nwb-inner value
     // writes that owned `String` into this buffer and hands back a `Str` pointing
     // into it — caller-lifetime backing, no `stores.scratch`.  `None` only for an
     // nwb fn (handled by the owned-`String` path), so the scratch fallback below
     // is dead-but-safe.
+    //
+    // HIDDEN, because a user-written `&text` parameter is the caller's variable: read
+    // as the buffer, an early `return mk()` in `fn f(s: &text, …)` was written into `s`
+    // and the caller's text silently changed (loft#1338).  Every buffer `text_return`
+    // promotes is marked hidden, so the hidden ones are exactly the deliverable ones —
+    // `Definition::text_work_buffers` is the one home for that count.
     pub(super) fn return_buffer_name(&self) -> Option<String> {
         self.data
             .def(self.def_nr)
             .attributes
             .iter()
-            .find(|a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))))
+            .find(|a| {
+                a.hidden && matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
+            })
             .map(|a| sanitize(&a.name))
     }
 
@@ -2360,16 +2425,12 @@ impl Output<'_> {
                     // dangling the returned `Str`'s raw pointer.  Route
                     // through `stores.scratch` instead so the value's
                     // backing String lives as long as `stores` does.
-                    // Note: text_return doesn't set the `hidden` flag (only
-                    // ref_return does), so we don't filter on `a.hidden`.
-                    let needs_p205_scratch = wrap_result
-                        && {
-                            let def = self.data.def(self.def_nr);
-                            matches!(def.returned(), Type::Text(_))
-                            && (
-                                !def.attributes().iter().any(|a| {
-                                    matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
-                                })
+                    // A work buffer is a HIDDEN `RefVar(Text)` attribute (see
+                    // `return_buffer_name`, loft#1338).
+                    let needs_p205_scratch = wrap_result && {
+                        let def = self.data.def(self.def_nr);
+                        matches!(def.returned(), Type::Text(_))
+                            && (def.text_work_buffers() == 0
                                 // @PLAN52 cluster VI (2026-05-30): closures (and
                                 // other functions with a `__work_ret: &mut String`
                                 // attribute) declare the buffer but the closure
@@ -2383,9 +2444,8 @@ impl Output<'_> {
                                 // (program-lifetime) and `Str::new` reads from
                                 // there.  Detect by the `__ncc_*` skip_free temp
                                 // signature.
-                                || self.block_contains_ncc_skip_free(bl)
-                            )
-                        };
+                                || self.block_contains_ncc_skip_free(bl))
+                    };
                     // @PLN10 Phase A — a bufferless ("nwb") user text fn returns
                     // an owned `String` (its wrapper is `-> String`), so its
                     // body-tail emits `(tail).to_string()`, not a `Str` wrap.

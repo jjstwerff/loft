@@ -88,17 +88,17 @@ fn package_root_for(file: &str) -> Option<std::path::PathBuf> {
 /// Returns the path relative to the package root, so the report reads
 /// `src/regex.loft:30` rather than an absolute path nobody can scan.
 fn coverage_path(src: &str, test_file: &str, root: Option<&std::path::Path>) -> Option<String> {
-    if src.is_empty() || src.starts_with("default/") || src.starts_with("default\\") {
+    if src.is_empty() || crate::portable_path::is_stdlib_source(src) {
         return None;
     }
-    let abs = std::fs::canonicalize(src).ok()?;
-    if let Ok(t) = std::fs::canonicalize(test_file)
+    let abs = crate::portable_path::try_plain_canonical(std::path::Path::new(src))?;
+    if let Some(t) = crate::portable_path::try_plain_canonical(std::path::Path::new(test_file))
         && abs == t
     {
         return None;
     }
     let root = root?;
-    let root = std::fs::canonicalize(root).ok()?;
+    let root = crate::portable_path::try_plain_canonical(root)?;
     let rel = abs.strip_prefix(&root).ok()?;
     // This string is a REPORT — something a reader copies into an editor, and something
     // a test asserts on — not a path anything opens, so it must read the same on every
@@ -804,9 +804,7 @@ pub(crate) fn run_tests(
         let mut bases: BTreeMap<(Vec<String>, String), BaseSlot> = BTreeMap::new();
 
         for file_path in files {
-            let abs_file = file_path
-                .canonicalize()
-                .unwrap_or_else(|_| file_path.clone())
+            let abs_file = crate::portable_path::plain_canonical(file_path)
                 .to_str()
                 .unwrap_or("")
                 .to_string();
@@ -1292,9 +1290,7 @@ pub(crate) fn run_tests(
                     continue;
                 }
                 // Skip standard library / operators.
-                if def.position.file.starts_with("default/")
-                    || def.position.file.starts_with("default\\")
-                {
+                if crate::portable_path::is_stdlib_source(&def.position.file) {
                     continue;
                 }
                 // skip library functions loaded via `use`. Only run
@@ -1870,6 +1866,16 @@ pub(crate) fn run_tests(
                         } else {
                             state.execute_argv(&fn_name_owned, &data_copy, &user_args);
                         }
+                        // A frame-driven program (`yield_frame`, `gl_swap_buffers`) hands
+                        // control back after each frame and is RESUMED until it finishes —
+                        // the CLI's loop.  Without it the runner scored the first frame as
+                        // the whole test and abandoned `main` mid-loop: its scope-exit frees
+                        // never ran, and the release valgrind sweep (which runs every script
+                        // under `--tests`) reported the frame's formatted texts as definitely
+                        // lost (loft#1357, `85-yield-resume`).
+                        while state.database.frame_yield {
+                            state.resume();
+                        }
                         // loft#860 — resolve this test's samples against ITS `Data` and
                         // merge them.  Before the fault check below, because a test
                         // that FAULTED still burnt the time it burnt; only a Rust panic
@@ -2196,6 +2202,10 @@ pub(crate) fn run_tests(
         );
         return 1;
     }
+    // The text-buffer ledger (`LOFT_TEXT_TIMELINE`) reports here as it does at a program's
+    // exit: a suite run used to end without the summary, so a leak in a `main`-less guard
+    // was invisible to the one instrument built to see it (loft#1357).  No-op unarmed.
+    crate::state::text_timeline_summary();
     if total_fail == 0 {
         println!(
             "test result: ok. {total_pass} passed; {total_files} file{}  {scope}",

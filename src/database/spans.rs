@@ -590,7 +590,7 @@ fn report(run: Run) {
 /// stated, because a sweep that pins four axes while moving one reads as proof and is
 /// not.
 #[test]
-#[ignore = "a design measurement: reads a layout and PRINTS, rather than defending an invariant"]
+#[ignore = "a design measurement: reads a layout and PRINTS, rather than defending an invariant — run with --release --lib --ignored --nocapture"]
 fn record_spans_across_the_generator_matrix() {
     let base = Run {
         tiles: 2000,
@@ -738,7 +738,7 @@ fn minor_faults() -> u64 {
 /// Does the hint move the resident set, and what does it cost?
 #[cfg(all(feature = "mmap", target_os = "linux"))]
 #[test]
-#[ignore = "a design measurement: builds ~90 MB of store and PRINTS peak RSS"]
+#[ignore = "a design measurement: builds ~90 MB of store and PRINTS peak RSS — run with --release --lib --ignored --nocapture"]
 fn a_frontier_release_moves_the_resident_set() {
     for run in [
         Run {

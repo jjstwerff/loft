@@ -1535,10 +1535,13 @@ impl Deps {
     /// attr-space list would corrupt it (debug-asserted).  Used by the text-return
     /// retbuf renumber (`Type::renumber_frame_deps`).
     pub fn renumber_frame(&mut self, from: u16, to: u16) {
+        // An EMPTY list has nothing to corrupt, whatever space it is tagged — a `&text`
+        // parameter's declared type carries the attribute tag into the variable table, and
+        // the retbuf renumber walks every variable's type (loft#1335).  `union` exempts the
+        // empty list for the same reason.
         #[cfg(debug_assertions)]
-        debug_assert_ne!(
-            self.space,
-            DepSpace::Attr,
+        debug_assert!(
+            self.items.is_empty() || self.space != DepSpace::Attr,
             "renumber_frame on attr-space deps ({:?})",
             self.items
         );
@@ -4067,8 +4070,7 @@ impl Definition {
         if !self.name.starts_with("n_") || self.name.starts_with("n___lambda_") {
             return false;
         }
-        if self.position.file.starts_with("default/") || self.position.file.starts_with("default\\")
-        {
+        if crate::portable_path::is_stdlib_source(&self.position.file) {
             return false;
         }
         // Only the AUTHOR's parameters count: `text_return` / `ref_return` add hidden buffers.
@@ -5486,12 +5488,7 @@ impl Data {
     ///   (operator defs only, walked in definition order).
     ///
     /// `caller_index` is intentionally left as its lazy `OnceLock` — it
-    /// rebuilds on first `callers_of`.  Cross-source import bindings (the
-    /// `insert_or_replace_stub` path) are NOT reproduced here: a
-    /// whole-stdlib / whole-bundle snapshot is single-pass and uniform, so
-    /// the `add_def`-level inserts are sufficient.  Multi-library import
-    /// reconciliation is a later extension if per-library snapshots land.
-    /// Rebuild the derived lookup indices from `definitions`.
+    /// rebuilds on first `callers_of`.
     ///
     /// Ends by replaying the retained imports ([`applied`](Self::applied)): a
     /// definition knows only its own source, so the loop below can restore
@@ -5608,6 +5605,39 @@ impl Data {
             ));
         }
         out
+    }
+
+    /// The retained imports in application order — what a stored image must
+    /// carry so `rebuild_indices` can replay them on load (loft#1359).
+    #[must_use]
+    pub(crate) fn applied_imports(&self) -> &[AppliedImport] {
+        &self.applied
+    }
+
+    /// Restore the retained imports from a stored image.  Call BEFORE
+    /// `rebuild_indices`, which replays them into `def_names`.
+    pub(crate) fn set_applied_imports(&mut self, applied: Vec<AppliedImport>) {
+        self.applied = applied;
+    }
+
+    /// Every `use` short name and alias with its source number, sorted by name
+    /// so two encodings of one `Data` compare equal.
+    #[must_use]
+    pub(crate) fn use_name_pairs(&self) -> Vec<(String, u16)> {
+        let mut pairs: Vec<(String, u16)> = self
+            .use_names
+            .iter()
+            .map(|(name, src)| (name.clone(), *src))
+            .collect();
+        pairs.sort();
+        pairs
+    }
+
+    /// Replace the `use` name map with a stored image's.  The map is not
+    /// derivable from the definitions — an alias names a SOURCE — so a load
+    /// that does not restore it answers `u16::MAX` for every `lib::name`.
+    pub(crate) fn set_use_names(&mut self, pairs: impl IntoIterator<Item = (String, u16)>) {
+        self.use_names = pairs.into_iter().collect();
     }
 
     #[must_use]

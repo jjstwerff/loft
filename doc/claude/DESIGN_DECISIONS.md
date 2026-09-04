@@ -3535,3 +3535,49 @@ piece of work `formal/closures.md` D-clo-7 / D-clo-14 and `formal/ownership.md` 
 implementable in one step rather than two, and this entry is the evidence that they are one
 question. Nothing smaller reopens it: a repoint of the capture slot has already been measured
 and moves the defect rather than removing it.
+
+## C116 — a collection element holds a plain fn-ref, never a capturing closure
+
+`vector<fn(integer) -> integer>` and every keyed collection over a fn type REFUSE a capturing
+closure, at the literal and at an element assignment alike — a direct lambda, a local that
+holds one, and a closure factory's return. A struct FIELD holds a capturing closure without
+trouble, and that is the route the refusal names.
+
+### What was actually there
+
+The refusal has stood since loft#247, but its message said *"not supported **yet**"* and
+pointed at a deferred layout plan (@P213/@P214), the same text lived in two parser sites, and
+a canary (`tests/threading_chars.rs::par_vec_of_capturing_fns_t4`) sat `#[ignore]`d *"until the
+underlying vector storage works"* — a promise of a future the register had never decided. The
+user chapter (`tests/docs/26-closures.loft`) already stated the rule without the "yet".
+
+### Why not implement it
+
+A collection has ONE element layout, and a fn-ref element is the four-byte definition number a
+call dispatches on. A capturing closure is that number PLUS an environment record whose shape is
+its capture set — different for every lambda, even two of one signature (`|x| x * a` and
+`|x| x * b` capture different cells). Giving the element slot a second half (the "co-located
+closure record" the old message deferred to) would widen every fn-typed collection for the one
+case that captures, and would make the environment a record the COLLECTION owns — freed on
+element removal, copied on vector copy, moved on sort — a second ownership discipline for one
+element kind. A struct field has none of that: its closure record is co-located in the struct
+(C75), so the state travels with the value that reads it. The refusal converts a runtime crash
+(*"Write to read-only store"*, the path the old comment recorded) into a compile error — C79's
+*decline-what-we-cannot-implement-safely* again, and forward-compatible in the same direction:
+an error can be dropped later, a silently different semantics cannot.
+
+### Compatibility
+
+Nothing that compiled changes: the refused shapes never ran. The message loses the word "yet"
+and the plan pointer, and names the struct-field route. `#318` (a closure inside a struct that a
+collection holds) is the same wall one layer up and stays refused; the route is a struct that is
+NOT itself an element.
+
+### Decision
+
+**Closed — refuse, 2026-09-04 (loft#1358).** ONE home for the refusal,
+`Parser::refuse_capturing_closure_in_collection` (raised by the collection literal and by the
+element assignment); `par_vec_of_capturing_fns_t4` now guards the refusal instead of waiting
+for a feature; [formal/closures.md](formal/closures.md) keeps its one-line note and cites this
+entry. Per-element state goes in a struct whose field carries the closure:
+`Stepper { advance: fn(x: integer) -> integer { x + step } }`.

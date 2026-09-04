@@ -304,7 +304,7 @@ fn formatter_width_counts_characters_not_bytes() {
 /// on this machine after the fix; an answer in microseconds means the snapshot is
 /// being rebuilt per call again.
 #[test]
-#[ignore = "a measurement, not a gate"]
+#[ignore = "a measurement, not a gate — run with --test host_call measure_call_cost -- --ignored --nocapture"]
 fn measure_call_cost() {
     let mut p = prog();
     let n = 100_000;

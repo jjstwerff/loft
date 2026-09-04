@@ -4258,9 +4258,6 @@ fn test() {
 //   fn field / item / as_text / as_number / as_long / as_bool / len
 //   MyStruct.parse(v: JsonValue) — replaces .parse(text)
 //
-// `#[ignore]`'d while the implementation lands incrementally across
-// `default/06_json.loft`, `src/json.rs`, and the parser's .parse() gate.
-// Unignore each case as its layer comes online.
 
 /// String-variant parsing: the value is correctly stored, but
 /// returning it through a function boundary trips a JsonValue-store

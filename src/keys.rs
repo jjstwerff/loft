@@ -1233,6 +1233,25 @@ pub fn join_own_enabled() -> bool {
     *ON.get_or_init(|| !env_set("LOFT_NO_JOIN_OWN"))
 }
 
+/// loft#1336 / @FR-O-Witness — a heap-record local whose assignments MIX ownership (one
+/// hands it a store of its own, another a view) releases its stores through an OWNER
+/// WITNESS `__own_<name>` that `scopes` maintains per RUN in the IR, by store identity, so
+/// both backends translate one fact.  **DEFAULT ON.**  Without it the store such a local
+/// minted was released by nobody once a view displaced it (a walker `cur: Node? = a; while
+/// … { cur = cur.next }` leaked its copy), and a later copy-bind was written INTO the
+/// viewed record on `--native`.
+///
+/// `LOFT_NO_OWNER_WITNESS` emits the pre-witness form.  Kept for the reason
+/// `LOFT_NO_JOIN_OWN` is: the before-half of an A/B on ONE binary, the first bisect step
+/// for a wrong answer or a leak in a local that is both copy-bound and view-bound, and what
+/// keeps the fuzz gate's leak-channel positive control non-vacuous — the witness closes the
+/// `local_source` shape that control leaks on purpose.  One cached env read.
+#[must_use]
+pub fn owner_witness_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| !env_set("LOFT_NO_OWNER_WITNESS"))
+}
+
 /// #497 — the reassignment-path adopt-vs-copy fix: a Reference local
 /// REASSIGNED from a `!return_adopts_fresh_store()` call deep-copies
 /// (parity with the first-Set path) instead of adopting a possibly

@@ -18,6 +18,17 @@ The **say-what-you-do** release. Two threads, and they turned out to be one: eve
 the language reference was read against the compiler that ships, and most of what came back
 was not a wrong sentence but a promise nothing was keeping.
 
+**Every text buffer a frame mints is released.**  A handful of shapes answered the right
+value on both backends while the interpreter left one text buffer behind per call: a
+lambda returning a captured text through `??`, a nullable text local returned, a
+generic's early return of a loop variable and a generic forwarding a nested generic, a
+`par` loop discarding text elements, a function whose result reads its own return
+buffer, a `??` consumed by a number (`len(s.name ?? "")`) or by an `if` whose arm
+returns, and a `parallel` arm passing a formatted string.  A loop over any of them grew
+without bound.  Each now frees, or hands its text to the caller's buffer, the way the
+plain spelling always did.  The release's valgrind sweep is the instrument that saw it,
+and it now runs nightly.
+
 **A value chosen by `if`, `match` or `??` now binds like any other value.**
 `b = if c { a } else { [0, 0] }` used to alias `a` — a later write to `a` showed through
 `b` — and a branch mixing a fresh value with an existing one could leak the fresh one on
@@ -27,6 +38,40 @@ result is owned, a view stays a view.  The same rule reaches `x = f(v) ?? d`, a 
 re-bound inside a loop from a closure that may hand its argument back, and a local bound at
 two places from two sources.  A closure answering a view of a keyed field is no longer freed
 under its caller — a regression this cycle had introduced.
+
+**A function that returns text from an early `return` no longer leaks a buffer per call.**
+`if !w { return lo(n) ?? "" }`, `return t[0][0]`, `return s.name` inside a loop or a nested
+arm — each answered the right text and quietly left one String behind on the interpreter,
+so a loop grew without bound while every value stayed correct.  Every `return` now delivers
+through the same caller-owned buffer the function's tail already used.  The same census
+found that on the compiled backend a function with a `&text` parameter of your own could
+write its returned text INTO that parameter; it no longer can.
+
+**A closure that answers a keyed collection, a `?` value or a tuple now carries the right
+borrow fact to its caller.**  The bridge that turns a callee's parameter numbers into the
+caller's variables handled four shapes and passed the rest through untranslated, so an `if`
+choosing between such a call and a local could read a stale number as one of your
+variables.  The bridge now covers every shape; the nightly invariant gate that had been
+red on it is green.
+
+**Four returns now do what the rules say.**  A `match` on a boolean that spells out `true`
+and `false` no longer warns that its result might be null.  A function returning `vector<T>?`
+that answers a field of its argument hands back a copy, so a later write to that field no
+longer shows through the result.  A nullable record chosen by an `if`, or reassigned from a
+call, is copied on the interpreter as it always was on the compiled backend.  And a lambda
+declared `-> vector<T>?` or `-> S?` accepts a non-null tail, as a named function always did.
+
+**`--lib` tells you when it lost.**  A project's own `lib/` is searched before a `--lib`
+directory, so an override passed on the command line from inside such a project was
+ignored without a word.  It still is — that order may well be right — but loft now says so,
+naming the file that answered and the one the flag would have used.
+
+**Tuples with text or collections behave the same from a lambda as from a named function.**
+A lambda returning `(vector<T>, text)` used to hand its vector out as a view of the caller's
+field; it now returns a copy, as a named function always did.  And an `if` that chooses
+between such a function's result and a tuple you wrote inline compiles now, whichever arm is
+which.  A nullable record answered by a lambda and chosen by an `if`, or reassigned, is
+copied on the interpreter as it was on the compiled backend.
 
 **The reference is now read end to end — 40 chapters of 40.** The Standard Library section
 was the last and the worst: its generator read three of the seven `default/*.loft` files, so
@@ -172,6 +217,14 @@ shell idiom there is.
 
 ### Smaller things you may notice
 
+- A struct or vector yielded from a generator's LOOP body compiles on `--native`, and the
+  consumer reads the value as it was at the yield; the statements after the loop run too
+  (they were silently dropped).
+- `yield from` a record generator inside an `if` no longer reports a wrong free on the
+  interpreter.
+- A capturing closure in a collection is refused with the struct-field route named, not a
+  plan that never landed: a collection takes non-capturing lambdas, a struct field holds a
+  capturing one.
 - `loft check` prints `ok`, not an absolute path and an internal cache entry.
 - `yield from` passes its arguments, and a parameterised sub-generator compiles on
   `--native`.
@@ -180,6 +233,31 @@ shell idiom there is.
 - A format hole holding an escaped quote — `"{shout("a\"b")}"` — no longer ends the
   enclosing item early.
 - A `par` worker over nested vectors is handed its own row rather than every second one.
+- A walker over a self-referencing record — `cur: Node? = a; while cur != null { cur =
+  cur.next }` — no longer leaks the copy it starts from, and copying a value into a variable
+  that currently views another record no longer writes into that record on `--native`.
+- A value handed back through a nullable return (`-> S?`) that is a view of a local is
+  copied before it leaves the function; it used to hand back a record the function had
+  already released.
+- On Windows, a `log.conf` `[levels]` key ending in `/` raises a file's level as documented,
+  and `loft check`'s machine-readable line names the source in the spelling the live host
+  compares against.
+- Every public type in the distribution now has a description on its API page — a third of
+  the structs had none, `Stage`, `Canvas` and `Server` among them, each named in dozens of
+  signatures with nothing saying what it was. And the reference pages no longer end a
+  function's description with a bookkeeping tag (`Example: @RND-001`, `@PLN110`, `loft#…`):
+  those were notes to the maintainers, and a reader could open none of them.
+- The reference had been warning you off four things that work. The parser library reads
+  index expressions, `??` and format literals; production mode logs and continues on the
+  compiled backend too, not only interpreted; a text element of a value tuple parameter can
+  be written on `--native`; and a generic's result may be used inline without leaking a
+  record. Each was a limitation that had since been fixed, with the warning left behind.
+- Appending a payload-less variant of a struct-enum to a vector — `xs += [V.Null]` where
+  `V` also has variants with fields — no longer leaks a record per site. Spelled `[Null]`
+  it never did; the two spellings were built by two copies of one routine.
+- A tuple carrying text can be handed to an `if` binding and the original still read
+  afterwards on `--native` — `t = if c { pair } else { (0, "z") }; pair.1` used to refuse
+  to compile, because the arm had moved the value.
 
 ---
 

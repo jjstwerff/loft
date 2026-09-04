@@ -35,16 +35,41 @@ case "${1:-status}" in
     #                                      HUP and QUIT are all catchable; only SIGKILL and
     #                                      SIGSTOP are not, which is why `status` still
     #                                      re-reads the pid as a last resort.
+    #   * WHO sent the signal.  A signal names its sender only to the process that
+    #     receives it, and `make` prints "Terminated" and nothing more — which is exactly
+    #     the state two gates on this box died in on 2026-09-04, with no OOM record in the
+    #     journal and every checkout's tooling killing by recorded pid only.  So when
+    #     `strace` is on the PATH, `make` runs under it tracing SIGNALS ONLY (`-e trace=none`
+    #     costs nothing measurable on one process, and children are not followed): every
+    #     delivered signal lands in `target/gate-signals.log` as
+    #     `--- SIGTERM {si_signo=SIGTERM, si_code=SI_USER, si_pid=N, si_uid=U} ---`, and the
+    #     wrapper snapshots the process table into `target/gate-killer-snapshot.txt` the
+    #     moment `make` dies, while the sender is most likely still alive to be named.
+    #     `si_code` separates a user `kill` (SI_USER) from the kernel (SI_KERNEL) and a
+    #     timer or the OOM killer.  `CI_NO_TRACE=1` opts out.
+    #
+    # The `setsid` is load-bearing beside the traps: a `make ci` run as an agent tool's
+    # background task is a child of that tool's process tree and dies with whatever stops
+    # that tree; started here it is its own session and only an addressed signal reaches it.
     setsid nohup bash -c '
       s=$(date +%s)
       note() { echo "$1 $$ $(date +%s) $(( $(date +%s) - s ))s $2" > .ci-verdict; }
+      snapshot() { mkdir -p target; ps -eo pid,ppid,pgid,sid,uid,etimes,comm,args > target/gate-killer-snapshot.txt 2>/dev/null; }
       for sg in TERM INT HUP QUIT; do
-        trap "note KILLED \"the gate wrapper received SIG$sg\"; exit 1" $sg
+        trap "snapshot; note KILLED \"the gate wrapper received SIG$sg\"; exit 1" $sg
       done
-      make ci > /dev/null 2>&1
+      if [ -z "${CI_NO_TRACE:-}" ] && command -v strace >/dev/null 2>&1; then
+        mkdir -p target
+        strace -o target/gate-signals.log -tt -e trace=none -e signal=all make ci > /dev/null 2>&1
+      else
+        make ci > /dev/null 2>&1
+      fi
       rc=$?
       if   [ $rc -eq 0 ];   then note PASSED ""
-      elif [ $rc -gt 128 ]; then note KILLED "make ci died on signal $((rc-128))"
+      elif [ $rc -gt 128 ]; then
+        snapshot
+        sender=$(grep -oE "SIG[A-Z]+ \{[^}]*\}" target/gate-signals.log 2>/dev/null | tail -1)
+        note KILLED "make ci died on signal $((rc-128))${sender:+ — $sender (target/gate-signals.log, target/gate-killer-snapshot.txt)}"
       else note FAILED "$(grep -m1 -E "^error|FAIL \[" result.txt 2>/dev/null | head -c 90)"
       fi' >/dev/null 2>&1 &
     echo "RUNNING $! $(date +%s) started" > $V

@@ -1,0 +1,10 @@
+{
+  "M-libs": {
+    "at": "2026-09-01 10:07",
+    "note": "revalidate_libs_local.sh after the owns_freeable_store fold: 42 pass, 0 runtime/env, 0 COMPILE-BREAK"
+  },
+  "M-monthly-bugs": {
+    "at": "2026-09-01 10:02",
+    "note": "keyed collections named; Scopes::owns_freeable_store landed (IR byte-identical, 1052 files); D-own-26 opened for the 11 undischarged O-Override sites; trigger fold routed to STABILITY_ROADMAP"
+  }
+}

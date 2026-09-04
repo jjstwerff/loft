@@ -33,7 +33,7 @@
   JObject { fields: vector&lt;JsonField&gt; },
   JInteger { value: integer },
 }</code></pre>
-<p>Typed union of JSON values.  The discriminant (1..6) picks the active variant; variant data lives in the variant's fields. Matches the RFC 8259 kinds, plus `JInteger` (@PLN109) for an integer-shaped number preserved to an exact `integer` (i64).</p>
+<p>Typed union of JSON values.  The discriminant (1..6) picks the active variant; variant data lives in the variant's fields. Matches the RFC 8259 kinds, plus `JInteger` for an integer-shaped number preserved to an exact `integer` (i64).</p>
 <p>`JInteger` MUST stay the LAST variant: the store discriminant it gets (7) is hard-coded as `JV_DISCR_INT` in `src/native.rs`, and the existing variants' discriminants (1–6) must not shift.</p>
 </div>
 <div class="item">
@@ -46,7 +46,7 @@
 <div class="item">
 <pre><code>pub fn json_parse(raw: text) -&gt; JsonValue</code></pre>
 <p>Parse JSON text into a `JsonValue` tree.  Malformed input returns `JNull`; the error trail is accessible via `json_errors()`.  All six variants materialise (primitives, arrays, objects, nested containers); the entire tree lives in one store and frees as one unit when the root `DbRef` leaves scope.</p>
-<p>```loft match json_parse(raw) { JObject { fields } =&gt; for f in fields { handle(f) }, JArray  { items }  =&gt; for v in items  { handle(v) }, JNull              =&gt; println(&quot;parse error: {json_errors()}&quot;), _                  =&gt; println(&quot;unexpected root kind&quot;), } ``` Example: @STD-007</p>
+<p>```loft match json_parse(raw) { JObject { fields } =&gt; for f in fields { handle(f) }, JArray  { items }  =&gt; for v in items  { handle(v) }, JNull              =&gt; println(&quot;parse error: {json_errors()}&quot;), _                  =&gt; println(&quot;unexpected root kind&quot;), } ```</p>
 </div>
 <div class="item">
 <pre><code>pub fn json_errors() -&gt; text</code></pre>
@@ -80,7 +80,7 @@
 <div class="item">
 <pre><code>pub fn as_bool(self: JsonValue) -&gt; boolean?</code></pre>
 <p>Typed extractor — returns `null` on kind mismatch.</p>
-<p>Declared `boolean?` and not `boolean`: the doc has always promised the null and the signature could not carry it.  Its three siblings keep the promise because `text`, `float` and `integer` each have an in-band sentinel a non-null return can hold; a two-state Rust `bool` has none, so this one answered `false` for every mismatching kind — for an absent field, for the string `&quot;true&quot;`, and for `1` — indistinguishably from a field that really says `false` (loft#1302).</p>
+<p>Declared `boolean?` and not `boolean`: the doc has always promised the null and the signature could not carry it.  Its three siblings keep the promise because `text`, `float` and `integer` each have an in-band sentinel a non-null return can hold; a two-state Rust `bool` has none, so this one answered `false` for every mismatching kind — for an absent field, for the string `&quot;true&quot;`, and for `1` — indistinguishably from a field that really says `false`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn kind(self: JsonValue) -&gt; text</code></pre>
@@ -124,20 +124,20 @@
 </div>
 <div class="item">
 <pre><code>pub fn json_array(items: vector&lt;JsonValue&gt;) -&gt; JsonValue</code></pre>
-<p>Q4 constructor — build a JsonValue set to the `JArray` variant carrying the supplied items.  Each element is deep-copied into the new tree's arena via the shared `dbref_to_parsed` walker, so nested containers and arena-origin subtrees (e.g. a captured `field()` result) embed correctly.  Empty input produces a real empty JArray. Example: @STD-008</p>
+<p>Q4 constructor — build a JsonValue set to the `JArray` variant carrying the supplied items.  Each element is deep-copied into the new tree's arena via the shared `dbref_to_parsed` walker, so nested containers and arena-origin subtrees (e.g. a captured `field()` result) embed correctly.  Empty input produces a real empty JArray.</p>
 </div>
 <div class="item">
 <pre><code>pub fn json_object(fields: vector&lt;JsonField&gt;) -&gt; JsonValue</code></pre>
-<p>Build a JsonValue set to the `JObject` variant carrying the supplied fields.  Each field's value deep-copies via the same `dbref_to_parsed` walker as `json_array`, so a JObject can carry captured-subtree JArray / JObject values.  Empty input produces a real empty JObject. Example: @STD-008</p>
+<p>Build a JsonValue set to the `JObject` variant carrying the supplied fields.  Each field's value deep-copies via the same `dbref_to_parsed` walker as `json_array`, so a JObject can carry captured-subtree JArray / JObject values.  Empty input produces a real empty JObject.</p>
 </div>
 <div class="item">
 <pre><code>pub fn struct_from_jsonvalue(v: JsonValue, struct_kt: integer) -&gt; JsonValue</code></pre>
 <p>Internal walker — populate a struct of the given `struct_kt` (known-type number) from a JsonValue.  Compile-time codegen for `Struct.parse(JsonValue)` emits exactly one call to this function regardless of struct shape; the runtime walker uses `stores.types[struct_kt].parts` to dispatch on each field's declared type (primitive, nested struct, JsonValue passthrough, or vector). Path-qualified schema-side diagnostics on type mismatches go to `json_errors()`.  Users should not call this directly — write `MyStruct.parse(value)` instead.</p>
-<p>Return type is declared as `JsonValue` here purely because it shares the same DbRef byte layout as the actual `reference[T]` the walker produces — the compile-time codegen at `parse_type_parse` overrides the type to `reference[T]` for the caller while the stack accounting remains correct. Example: @STD-009</p>
+<p>Return type is declared as `JsonValue` here purely because it shares the same DbRef byte layout as the actual `reference[T]` the walker produces — the compile-time codegen at `parse_type_parse` overrides the type to `reference[T]` for the caller while the stack accounting remains correct.</p>
 </div>
 <div class="item">
 <pre><code>pub fn struct_to_json(self_ref: JsonValue, struct_kt: integer) -&gt; text</code></pre>
-<p>Populates json_errors on type mismatches.  Allocates the result struct into worker stores → par-safe; no parent state writes. P54 Q3 second half — serialise any user struct to canonical JSON. Backs the parser-side intercept for `instance.to_json()`; the `field == &quot;to_json&quot;` rewrite in `src/parser/fields.rs` lowers the method call to `n_struct_to_json(self_ref, struct_kt)`.  Walks `stores.types[struct_kt].parts` via `Stores::show_json` (which reuses the existing `ShowDb` schema walker) and produces RFC 8259 JSON text.  String fields are escaped (`&quot;` / `\` / control bytes); nested structs and vectors recurse; `JsonValue`-typed fields render their inline subtree verbatim.  The first parameter is declared as `JsonValue` purely so the parser type-system accepts the synthesised call regardless of the actual receiver's struct type — the runtime only reads the `struct_kt` discriminant for dispatch. Example: @STD-009</p>
+<p>Populates json_errors on type mismatches.  Allocates the result struct into worker stores → par-safe; no parent state writes. P54 Q3 second half — serialise any user struct to canonical JSON. Backs the parser-side intercept for `instance.to_json()`; the `field == &quot;to_json&quot;` rewrite in `src/parser/fields.rs` lowers the method call to `n_struct_to_json(self_ref, struct_kt)`.  Walks `stores.types[struct_kt].parts` via `Stores::show_json` (which reuses the existing `ShowDb` schema walker) and produces RFC 8259 JSON text.  String fields are escaped (`&quot;` / `\` / control bytes); nested structs and vectors recurse; `JsonValue`-typed fields render their inline subtree verbatim.  The first parameter is declared as `JsonValue` purely so the parser type-system accepts the synthesised call regardless of the actual receiver's struct type — the runtime only reads the `struct_kt` discriminant for dispatch.</p>
 </div>
 <div class="item">
 <pre><code>pub fn struct_to_json_pretty(self_ref: JsonValue, struct_kt: integer) -&gt; text</code></pre>

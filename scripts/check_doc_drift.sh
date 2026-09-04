@@ -1413,7 +1413,7 @@ check_libraries_progress() {
     else                 n=$(grep -cae '^[[:space:]]*pub fn ' "$k" 2>/dev/null); fi
     [ "${n:-0}" -gt 0 ] || continue
     sha=$(git log -1 --format=%H -- "$k" 2>/dev/null)
-    printf '%s\tin-tree\tin-tree\t%s\t%s\t%s\t-\n' "$k" "$k" "${sha:--}" "$n"
+    printf '%s\tin-tree\tin-tree\t%s\t%s\t%s\t-\t-\n' "$k" "$k" "${sha:--}" "$n"
   done < <(_libraries_in_tree) >> "$pop"
   if [ $have_pub -eq 1 ]; then
     jq -r --slurpfile r "$reg" '
@@ -1421,20 +1421,23 @@ check_libraries_progress() {
       (($r[0].packages[$p.key].homepage // "")
         | capture("github\\.com/[^/]+/(?<repo>[^/]+)/tree/[^/]+/(?<dir>.+)$")
         // {repo: "?", dir: $p.key}) as $loc |
+      ([$p.value.api[] | select((.doc // "") == "")]) as $u |
       [ $p.key, "published", $loc.repo, $loc.dir, ($p.value.sha // "-"),
         ($p.value.api | length),
-        ([$p.value.api[] | select((.doc // "") == "")] | length) ] | @tsv' \
+        ($u | length),
+        ([$u[] | select((.sig | test("^[[:space:]]*pub[[:space:]]+fn\\b")) | not)] | length) ] | @tsv' \
       "$unrel" >> "$pop"
   fi
 
   local g_new g_todo g_stale reread
   g_new=$(mktemp); g_todo=$(mktemp); g_stale=$(mktemp); reread=$(mktemp)
   local n_rev=0 n_new=0 n_stale=0 n_exempt=0 n_deferred=0 n_todo=0 n_blindpath=0
-  local n_api_pub=0 n_api_tree=0 n_undoc=0
+  local n_api_pub=0 n_api_tree=0 n_undoc=0 n_undoc_ty=0
   local kind group dir cur api undoc row wmrev wmcom tree cites verdict reason
 
-  while IFS=$'\t' read -r k kind group dir cur api undoc; do
+  while IFS=$'\t' read -r k kind group dir cur api undoc undoc_ty; do
     if [ "$kind" = "published" ]; then n_api_pub=$((n_api_pub + api)); n_undoc=$((n_undoc + undoc))
+      n_undoc_ty=$((n_undoc_ty + undoc_ty))
     else                               n_api_tree=$((n_api_tree + api)); fi
     row=$(awk -F'\t' -v k="$k" '$1 == k {print; exit}' "$wm")
     wmrev=$(printf '%s' "$row" | cut -f2); wmcom=$(printf '%s' "$row" | cut -f3)
@@ -1488,8 +1491,15 @@ check_libraries_progress() {
   say ""
   say "  $n_rev reviewed · $n_new never reviewed · $n_exempt exempt · $n_deferred deferred · \
 $n_todo owe a verdict · $n_stale stale row(s)"
-  [ $have_pub -eq 1 ] && say "  public surface: $n_api_pub published pub fns ($n_undoc carry no doc \
-comment) · $n_api_tree in-tree"
+  # SPLIT THE UNDOCUMENTED COUNT BY KIND.  Read as one number it says 2.5% and reads as
+  # fine; split, it says the functions are at 0.2% and the TYPES at 22% — a blind spot two
+  # orders of magnitude wide, on the items a reader meets first.  Measured 2026-09: 33 of
+  # the 34 undocumented types are named in another public signature, `stage::Stage` in 111
+  # of them.  The single figure is what hid that, so it is not printed alone.
+  if [ $have_pub -eq 1 ]; then
+    say "  public surface: $n_api_pub published pub items ($n_undoc undocumented — \
+$((n_undoc - n_undoc_ty)) fn, $n_undoc_ty type) · $n_api_tree in-tree pub fns"
+  fi
   [ $n_blindpath -gt 0 ] && yellow "  $n_blindpath library(ies) not checked out under \
 $LIBRARIES_SIBLINGS/ — their verdict is unknown, not absent"
 

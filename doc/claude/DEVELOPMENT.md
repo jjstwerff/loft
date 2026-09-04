@@ -1011,16 +1011,26 @@ of the array).
 
 ## GitHub Issues and Releases — Hard Limits
 
-**Never create or update GitHub issues.**  All planning, status, and design
-information lives in the committed documentation (`doc/claude/`).  Interested
-contributors can read it there.  Duplicating it into GitHub issues creates a
-second source of truth that drifts from the real one.
+**Issues follow CLAUDE.md § Bug-filing policy.**  A bug you are NOT fixing now is a
+GitHub issue with a both-backend repro and its labels; a bug fixed in the same session
+gets a regression test and no issue — an issue for it is a second copy of the data, stale
+the moment it is created.  Plans are `loft-lang/plans` issues.  Design decisions and
+standing state live in `doc/claude/`: an issue is a pick-up, never the home of a decision.
 
 **Never trigger or automate a release.**  Every release requires a manual
 validation phase (see [RELEASE.md](RELEASE.md)) that cannot be automated:
 hands-on testing of pre-built binaries on each platform, review of the
 CHANGELOG, and a deliberate version-bump decision.  Do not push release tags,
 trigger release workflows, or draft GitHub Releases programmatically.
+
+**Merging is squash or rebase, never a merge commit.**  The `Use branches` ruleset on
+`main` requires linear history, so `gh pr merge --auto --merge` is refused with *"Merge
+method merge commits are not allowed on this repository"* — while the classic
+branch-protection API still reports `required_linear_history: false`, because the rule
+lives in the ruleset (`/repos/<owner>/<repo>/rulesets`), so read both before calling the
+refusal mysterious.  Use `--squash`.  A refused `--merge` arms nothing, so it is a safe
+probe; a `--squash` on a PR whose required checks are green merges almost at once, so arm it
+only when a merge is actually wanted.
 
 ---
 

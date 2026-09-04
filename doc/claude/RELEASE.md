@@ -15,7 +15,8 @@ priorities, and ambitions live elsewhere:
 
 | File | Scope | Question it answers |
 |---|---|---|
-| **RELEASE.md** (this file) | Ship checklist | "What must be true before we can publish?" |
+| **RELEASE.md** (this file) | Ship checklist — the process | "What must be true before we can publish?" |
+| **[releases/](releases/README.md)** | One directory per cycle | "What did THIS release need, find, and decide?" |
 | **[ROADMAP.md](ROADMAP.md)** | Things we want to do, grouped by milestone | "What's the arc of work for the project, in what order?" |
 | **[PLANNING.md](PLANNING.md)** | Priority-ordered backlog, all features | "What's the next best thing to pick up?" |
 | **[PROBLEMS.md](PROBLEMS.md)** | Known bugs with severity | "What's broken today?" |
@@ -163,257 +164,15 @@ plan.  Closing is explicit and cross-repo:
 - **Manual fallback:** run `scripts/close-shipped-plans.sh --range
   <prev-release>..main` once after the merge if the on-merge workflow didn't fire.
 
-### `2026-06` — first monthly cycle, and the switch to calendar versioning
+## Release records — one directory per cycle
 
-The monthly cadence is **adopted starting `2026-06`**, shipped **mid-month**
-(2026-06-14) as a one-time exception to the "ships at the start of the month"
-rule — the tree is stable and the library work is ready.  `2026-07` (branch
-exists) then rebases onto the new `main` tip and resumes as the next cycle,
-shipping at the start of July as normal.
-
-This is also the **switch from semver `0.8.x` to calendar versioning**: the
-release is named for its month (`2026-06`), which `Cargo.toml` spells
-`2026.6.0` (year.month.patch — cargo needs three numeric parts with no leading
-zeros).  Each month bumps the month digit (`2026.7.0`, …, `2026.12.0`,
-`2027.1.0`); the patch slot is reserved for in-month security fixes
-(`2026.6.1`).  Existing library `loft = ">=0.8"` constraints are still
-satisfied by `2026.6.0`.
-
-**Scope (frozen):** what is on `main` + the `../loft2` flat-namespace break +
-bug fixes only — no other new features.
-
-### `2026-07` — candidate release blockers
-
-The gate is **stability + public face**, not features (see § Safety gate). As
-of 2026-07-04 the filed-bug tracker is **empty** (`loft-lang/loft` has 0 open
-issues; highest is #501, all closed), so the list below is the concrete
-must-close set before the `2026-07` tag — grouped hard-blocker → public-face →
-ecosystem → hygiene. The `2026-07` branch already exists; rebase it onto the
-current `main` tip before working the list.
-
-**A. Safety gate — hard blockers (a crash/leak slips the tag, no exceptions):**
-
-- [x] **D-key-1 — parser crash on a value-position keyed slice.** ✅ FIXED
-  2026-07-04. A keyed range slice (`x = idx[lo..hi]`) panicked at
-  `src/variables/mod.rs:524` (`set_loop` with no active loop); a partial-key
-  match (`x = idx[k1]` on a multi-key index) panicked later at codegen
-  ("Iter should have been rewritten"). Both are a `for`-only iterator used in a
-  value position — now a clean diagnostic. Fix: a save/restore `iterable_context`
-  flag around the iterable parse in `parse_in_range`, `set_loop` tolerates the
-  missing loop, and `parse_key` rejects both subscript forms in a value position.
-  Guards: `tests/parse_errors.rs::keyed_{range_slice,partial_key}_in_value_position_is_error`
-  + `tests/scripts/502-keyed-slice-for-only.loft` (the legit for/comprehension/
-  exact-lookup paths, both backends). full parse_errors (157) + wrap (51) green.
-- [x] **Re-verify the full safety suite on the tag candidate** — ✅ RUN
-  2026-07-04 on the branch tip (D-key-1 landed). `cargo nextest run --release
-  --no-fail-fast`: **2603 / 2606 passed, 182 skipped**; ownership fuzz gate
-  2/2, `LOFT_POISON=1` leak suite 49/49, the D-key-1 area poison-clean on both
-  backends. **No SIGSEGV, no signal crash, no compile/link failure, no `stores
-  not freed`.** The 3 failures are all ENVIRONMENTAL, not safety-gate items and
-  not regressions. ✅ `error_messages::baselines_are_locked_in` **FIXED**
-  2026-07-04 — it was a network-dependent flake (a `use unknown_module`
-  auto-install attempt prints a `[registry] … Dns Failed` line offline / a
-  registry-not-found line online, neither in the golden); `normalise()` now strips
-  `[registry]` lines, so the baseline is deterministic across CI / offline / the
-  sandbox (suite green offline). Remaining 2 are browser-only: `html_wasm` /
-  `html_asyncify` (need node + a headless browser — the brittle class
-  §CI-hardening addresses); re-run on a browser CI runner to clear before tag.
-  None block the safety gate.
-- [x] **Zero-leak gate** — ✅ no `stores not freed` warnings across the suite
-  run above (both backends); the `LOFT_POISON` leak suite is green.
-
-**B. Public face — the website must not ship stale or broken (elevated 2026-07-04):**
-
-- [ ] **🟢 BLOCKER — Brick Buster `--html` render: BOTH root causes FIXED; pending
-  merge + rebuild.** Two layered bugs, both fixed:
-  1. **Vector-arg host-import elision** (commit e8e13234, `src/generation/`) — the
-     `--html` codegen dropped every `#native` call taking a `vector` (`gl_upload_vertices`
-     / `gl_upload_canvas` / `gl_set_mat4`), so no buffers reached WebGL (blank canvas).
-     Fixed → geometry draws. Guard `tests/html_gl_imports.rs` + `tools/wasm_imports.mjs`
-     (browser-free import-table check).
-  2. **Canvas mutations lost** (the "6-colour" residual) — root-caused with a direct GL
-     texture probe: every `Canvas` draw method did `d = self.data; d[i]=…`, which C86
-     H-Copy COPIES, so the whole software rasterizer silently drew nothing (the atlas /
-     text textures were blank). The maker surfaced a formal contradiction (binding.md
-     `B-HeapAlias` "heap aliases" vs heap.md `H-Copy` "heap copies"); a both-backends
-     boundary matrix proved H-Copy, and that `&`-write-through was silently ignored for
-     a vector lvalue. **Fixed by making `& vector` a writable alias** (commit 348a37f5 —
-     a genuine language feature: `d = &self.data; d[i]=…` writes through, non-owning;
-     plain bind still copies). binding.md corrected (`B-Copy`/`B-Ref-Alias`/`B-View`);
-     guard `tests/scripts/503-vector-reference-alias.loft`. Graphics library adopts it in
-     **PR loft-libs-graphics#10** (6 Canvas sites → `&self.data`); proven end-to-end (a
-     red|blue `fill_rect` now reads back blue). Also fixed a pre-existing no-`main`
-     test-runner crash surfaced en route (commit 0d967c62).
-  **Remaining (merge-gated, no code left):** land the loft compiler changes → merge
-  graphics PR#10 + republish graphics → rebuild `doc/brick-buster.html` (`make game`) in
-  a graphics-enabled env → confirm the render gate passes (≥20 colours) → commit the fresh
-  hero. Keep NOT committing a rebuilt hero until that gate is green. Original
-  investigation below.
-- [ ] ~~**🔴 render REGRESSED; hero cannot be freshly rebuilt.**~~ Investigated 2026-07-04 (network + headless chromium): the
-  committed `doc/brick-buster.html` (last good build ~2026-06-13) renders
-  correctly (headless render gate PASSES, 128 distinct colours), but **`make game`
-  from current source produces a bundle whose canvas renders BLANK** — it clears
-  to the background colour and draws NO sprites/content (render gate: `canvas.blank`,
-  1 distinct colour, 6 s wait, SwiftShader on). Confirmed a real regression, not a
-  timing/GPU artefact, by rendering old-vs-new side by side. **So the staleness was
-  a symptom: the hero was frozen at the last working build because rebuilding breaks
-  it.** **ROOT CAUSE CONFIRMED 2026-07-04 (NOT @PLN25 — predates it):** the
-  `--html`/wasm codegen **drops every `#native` host-import CALL that takes a
-  `vector` argument.** Proof — the wasm import table of the last-good build lists
-  `loft_gl_upload_vertices` (vertex buffer, `vector<single>`), `loft_gl_upload_canvas`
-  (atlas texture pixels, `vector<integer>`), and `loft_gl_set_mat4` (matrix uniform,
-  `vector<float>`); a fresh build's import table is MISSING exactly those three,
-  while every scalar-arg GL fn (`gl_draw`, `gl_bind_texture`, `gl_set_uniform_float`,
-  …) survives. Runtime confirms it: instrumenting the fresh page shows `loft_gl_draw`
-  fires (n=6) but `loft_gl_upload_vertices` is **never called** — so `ss_vao` is never
-  populated and every `gl_draw(ss_vao, 6)` no-ops. No vertices, no atlas texture, no
-  matrices ever reach WebGL → clear works, nothing draws. **The buffers aren't handled
-  wrong — the buffer-upload calls are ELIDED.** Fix lives in the `--html` host-import
-  codegen (`src/generation/` — the reachability / host-import declaration path,
-  `reachable_functions` at `generation/mod.rs:345`): a host import with a `vector<T>`
-  param must marshal it to the `(ptr, count)` the `loft-gl-wasm.js` side already
-  expects (`new Float32Array(mem, ptr, count)`), not drop the call. **Do NOT commit a
-  rebuilt hero until this is fixed** (I did not — kept the working committed build;
-  broken rebuild saved at `/tmp/bb-fresh.html`). Once fixed, rebuild + the render gate
-  must pass, then the freshness gate (§CI-hardening) keeps it honest. **Structural
-  fix still applies: build+deploy the bundle from CI instead of committing it.**
-- [ ] **Brick Buster visual gate — via the CPU Canvas atlas, not the browser.**
-  Every sprite (ball / paddle / bricks / power-ups / particles) is drawn by
-  `build_atlas()` → `graphics::Canvas` (`fill_rect`/`fill_circle`/`vline`/`hline`,
-  no 3D — verified 2026-07-04): the **software rasterizer, zero GL**. So golden-test
-  `build_atlas().save_png()` (fuzzy-MAE, headless, deterministic) — it exercises
-  exactly the drawing primitives that regress (GL is stable; the primitives inside
-  it break), at ~one PNG diff, no display. **Ready-made recipe (de-risked this
-  session):** the harness already exists — `graphics`'s `native/tests/gold.rs`
-  (`gold_compare(example, gold_name, max_abs, mean_abs)`, runs the example under
-  `--interpret` so no GL/native-compile, decodes both PNGs, fuzzy-MAE compare,
-  `UPDATE_GOLD=1` to capture). Add an `examples/25-brick-buster-atlas.loft` (copy
-  `build_atlas()` verbatim + `at.save_png("25-brick-buster-atlas.png")`) and a
-  `brick_buster_atlas_matches_gold()` case. **WHERE it must run:** the graphics
-  library is *extracted* to `loft-libs-graphics` and its `graphics.loft` depends on
-  the `math`/`mesh`/`scene` packages, so rendering needs a **working graphics
-  install** — build it in the graphics library's own **library-CI** (or a monorepo
-  job that `loft install graphics` first). It CANNOT run in an offline monorepo
-  checkout (no registry ⇒ `use graphics` can't resolve its deps — confirmed
-  2026-07-04). Keep one browser WebGL confirmation (`make test-html-render`) as a
-  release-time check, but it is not the gating one.
-- [ ] **Gallery** — regenerate and verify `doc/gallery.html` examples run
-  (`scripts/build-gallery-examples.loft`, `gallery-examples.js`); GALLERY_CI
-  green (both bundles instantiate — the `gallery` job's Node probe already gates
-  js↔wasm consistency).
-
-**CI hardening (this cycle — retires the recurring "broke the WASM bundle /
-stale website" class; theme-aligned with `2026-07` library hardening):**
-
-- [x] **The missing freshness gate — LANDED 2026-07-04.** The Node
-  instantiate-probe (`tests/html_wasm.rs` for `--html`; the `gallery` job's
-  "Probe committed wasm/js pair") already catches js↔wasm *consistency* but not
-  *freshness*: a stale-but-consistent bundle passes (proven by the 12-day-stale
-  `doc/brick-buster.html` being green). Rather than a rebuild-then-`git diff
-  --exit-code` (which risks *flaking* on wasm build non-determinism — the exact
-  brittleness that killed the last attempt), the gate is `scripts/check_bundle_fresh.sh`
-  + an advisory `bundle-fresh` CI job: **git-only, deterministic** (no build), and
-  **PR-scoped** — it fails only a change set that edits a bundle's source
-  (`tools/brick-buster/25-brick-buster.loft`) without rebuilding the bundle in the
-  same set, so it can never flake and never blocks an innocent PR. Tested on real
-  history (flags the current staleness; passes a clean set; skips on an
-  unresolvable base). Advisory now; **promote to a required check once item B
-  rebuilds the currently-stale `doc/brick-buster.html`**. The gallery wasm bundle
-  (whole compiler → wasm) stays covered by the job's rebuild + Node-instantiate,
-  not this gate (its "source" is all of `src/`).
-- [x] **Move the flaky browser render off the blocking PR path — LANDED
-  2026-07-04.** The GPU/headless-browser-flaky binaries (`html_render` =
-  Chrome + SwiftShader WebGL; `html_asyncify` = headless-page asyncify resume) are
-  now excluded from the per-PR `test` run (a `pull_request`-only filter addition)
-  and run in a new **nightly + push-to-main, Linux-only, retry-tolerant** step,
-  mirroring the differential-oracle pattern already in the same job. The
-  DETERMINISTIC node-based `html_wasm` instantiate-probe (the LinkError /
-  import-mismatch catch) STAYS on the PR path — it does not flake. Net: the per-PR
-  browser surface is now deterministic-only; the brittle pixel render is visible
-  daily but never blocks a PR. *(The Canvas atlas golden that replaces its everyday
-  value is the ready-to-build gate scoped in item B above.)*
-
-**C. Library ecosystem — a coherent registry on day one:**
-
-- [x] **Merge PR #18 + republish — DONE 2026-07-04.** PR #18
-  (`lima-default-random-0.3.0`) merged to `loft-libs-core` main (commit 2a8aed5b,
-  by jjstwerff). Registry republished via `registry_maintain.sh` (commit `bb191e7`
-  on `loft-lang/registry`): `arguments` 0.1.3, `random` 0.3.0, `regex` 0.2.1,
-  `cbor` 0.1.1, **and** `crypto` 0.3.5 (also stale) — 5 GitHub releases cut, each
-  sha256-verified against its tarball, the index re-signed (trust-gate verified,
-  the re-sign foot-gun avoided) and pushed. Coverage check now **0 findings across
-  21 libraries** — the July registry is coherent.
-- [x] **`loft install` smoke — VERIFIED out of band 2026-07-04.** Every check the
-  install makes is confirmed against registry `main` directly (bypassing the stale
-  raw-CDN): the index carries all 5 new versions (GitHub API), `loft-keygen verify`
-  passes on the pushed `index.json` + `index.json.sig` ("signature valid"), and each
-  tarball's sha256 matched its entry at publish. The literal `loft install
-  <lib>@<version>` is gated only on raw-CDN propagation (~1h) — a time delay, not an
-  action; re-run once `raw.githubusercontent.com` catches up (or point a fresh cache
-  at the API index).
-
-**D. Release hygiene:**
-
-- [x] **CHANGELOG `2026-07`** — ✅ DRAFTED 2026-07-04 (review before tag). Leads
-  with the **breaking type migration** (`text as int/float/single` → `τ?` fallible
-  parse, with the `?? default` upgrade recipe), then the retired store-lifetime bug
-  class, dense vectors, `&`-binding, the sandbox, browser/`--html`, and a fixes
-  round-up incl. the four migrated libs. Verify the prose against the final scope
-  before tagging.
-- [ ] Bump `Cargo.toml` `2026.6.0` → `2026.7.0`; run the § Per-release ship
-  checklist (tag, crates.io publish, per-OS binaries + stdlib checksums).
-
-**Explicitly NOT `2026-07` blockers** (recorded so they are not re-litigated on
-release day): open plans/features (@PLN86/87/88/90/91, …) — the release is
-stability-gated, not feature-gated; the formal **D-op-1/2** operational
-meta-deviations (differential-vs-definitional conformance, not bugs); the
-**P54 auto-wrap diagnostic-drop** gap (medium diagnostic-quality, not a crash —
-the two-stage `Struct.parse(json_parse(t))` form reports correctly); and the
-other demo apps (server / game-client / scene) which ship on their own cadence.
-
-### `2026-08` — release state (prep done 2026-08-01)
-
-The gate is the same: stability, not features. The `2026-08` **theme** work
-(@PLN24 `#c`, @PLN23 database clients, @PLN4 HTTP server) is **not** in this
-release — what ships is the heap-correctness body of work that accumulated over
-the cycle, and the release is gated on that being clean rather than on the theme
-landing. The theme carries to the next cycle.
-
-**Tracker state.** `loft-lang/loft` has 7 open issues (#717–#723) and every one
-is `fixed-pending-merge` — fixed on the cycle branch, closing automatically on
-merge via their `Fixes #N` trailers. So the tag is taken against a **zero open
-bug** tracker, but only *after* the merge: `main` on its own still carries four
-`sev:high` SIGSEGV / miscompile faults, and is not releasable.
-
-**Validation — each issue against its own reproducer**, on the interpreter, the
-interpreter under `LOFT_POISON=1`, and `--native`:
-
-| issue | shape | result |
-|---|---|---|
-| #717 | unreproduced SIGSEGV + crash report lost to a pipe | both guards green (`tests/scripts/717-closure-struct-return.loft`, `tests/crash_report_file.rs`) |
-| #718 | `#remove` on an `index<T[..]>` owning a `text` | survived 2 |
-| #719 | struct declaring both `sorted` and `index` over one type | survived 19 |
-| #720 | `spatial<T[x,y]>` point subscript, all three roles | survived 9 |
-| #721 | closure struct result used inline leaks its buffer | no leak |
-| #722 | element bound out of a returned temporary | fields intact after churn |
-| #723 | the same bind inside a loop | 1500 |
-
-`fixed-pending-merge` is applied by automation off a commit trailer, so it is a
-claim, not evidence — hence the table. #721 was additionally checked against a
-control built at the revert commit (`02b50662`), which warns `1 stores not freed
-at program exit` on the issue's own reproducer where this tree is silent.
-
-**Gate evidence** (deliberate runs, per § The nightlies): `make ci` ALL GATES
-PASSED — 3649/3649, one flaky (`keyframes_survive_total_datagram_loss`, a UDP
-timing test that failed under the fully-parallel run and passed on retry; 12/12
-in isolation, unrelated to this work). `LOFT_POISON=1` gate 1753/1753. `fmt` +
-`clippy` clean. Found and fixed en route: a stale `index/target_surface.json`
-(a builtin added without regenerating it — the branch-gates workflow does not
-run that check, so only the full local gate catches it).
-
-**Still owner-only and manual** (§ No Automated Releases): the merge, the tag
-push, the draft build, validation and publish. Prep here is the version bump to
-`2026.8.0` and the CHANGELOG roll-up, nothing further.
+What a PARTICULAR release needed, found, and decided is not process, and it does not belong
+in this file: a section per cycle made RELEASE.md grow by a screen a month and buried the
+gates under the history of meeting them.  Each cycle has its own directory instead —
+[releases/README.md](releases/README.md) is the index — holding the release's state
+write-up (`README.md`) and the checklist's recorded evidence (`checklist.json`, which
+`make release-checklist` reads and writes).  This file stays the process: what must be
+true before ANY release, and how to prove it.
 
 ## What each milestone means
 
@@ -467,22 +226,41 @@ directions, so neither substitutes for the other:
   failing*, not a workflow that reported failure.
 - **A green nightly run does NOT discharge the bar either.**  It proves the
   tests that RAN passed on the tree they ran against, which is neither this
-  tag's tree nor necessarily the whole suite.
+  tag's tree nor necessarily the whole suite.  And the schedule is not a clock:
+  the 03:00 UTC daily has started anywhere between 03:34 and 14:45 (measured
+  2026-08-16..09-04), on whatever `main` was at that moment.
 
-So the release evidence is a **current, deliberate run**, not a historical
-result: re-run each nightly suite against the tag candidate and record the
-outcome.  Where a nightly cannot run here (a hosted-runner dependency, a
-platform we do not have), say so explicitly and name what was substituted —
-an unrunnable suite is an unproven one, not a passing one.
+So the release evidence is a **current, deliberate run on the candidate's
+commit**, not a historical result — and it is one command:
 
-The three cases that clear the bar, all of which end in evidence rather than a
-badge:
+```
+make release-gate          # every nightly, THIS commit, one CI run, one verdict
+make release-checklist     # `A-release-gate` reads the newest run for HEAD's sha
+```
 
-| the nightly | what clears it |
+`release-gate.yml` calls the six nightlies as reusable workflows — the full
+`ci.yml` matrix incl. Windows with the stdlib round-trip and the differential
+oracle, every `miri.yml` sanitizer and invariant gate, `registry-validation`,
+`revalidate-libs`, `browser-threads`, `repro-build` — and a `verdict` job goes
+red if any leg did not succeed, `cancelled` and `skipped` included.  It also
+counts the jobs a PR shows as **advisory**: informational on a diff, blocking
+on a release.  It is keyed by commit on purpose — a green run on any other
+commit, last night's `main` included, is not evidence for this one — and it
+dispatches only on a pushed ref, so what it tests is what GitHub holds.
+
+The gate is the release's evidence; it is **not** a licence to leave the nightly
+red.  The schedule keeps running and a red nightly is still fixed the day it
+appears: a gate at release time is where a month of deferred reds would pile
+up, and one per day is a fix while six at once is a slip.
+
+The three cases that a red LEG can be, all of which end in evidence rather than
+a badge:
+
+| the leg | what clears it |
 |---|---|
-| **red for an environment reason** (missing ALSA/GL, expired token, registry unreachable, toolchain bump) | run the suite here and show it green; record the reason for the red — that is a real CI finding, and the release proceeds |
-| **red for a REAL failure that we then FIXED** (e.g. Windows was genuinely broken) | the proof of the fix IS the evidence.  Do **not** wait a cycle for the next nightly to agree — a release is not gated on the CI cadence catching up.  Record the failure, the fix, and the run that shows it green |
-| **green** | still name what it covered, since a green run also covers whatever skipped itself |
+| **red for an environment reason** (missing ALSA/GL, expired token, registry unreachable, toolchain bump) | fix the environment or run that suite here and show it green; record the reason for the red — that is a real CI finding, and the release proceeds on a re-run of the gate |
+| **red for a REAL failure that we then FIXED** (e.g. Windows was genuinely broken) | the fix lands, the gate is re-run on the fixed commit, and THAT run is the evidence.  Do **not** wait a cycle for the next nightly to agree — a release is not gated on the CI cadence catching up |
+| **green** | still name what it covered: a green run also covers whatever skipped itself, which is why the `verdict` job treats a skipped leg as not green |
 
 The second row is the one worth stating out loud, because the instinct is to
 wait for a green nightly before tagging.  That instinct trades a day for no new
@@ -492,40 +270,6 @@ warranted when the fix is NOT proven — when "we think that fixed it" is doing
 the work — and then the thing to get is proof, not another night.
 
 A nightly run reports one bit; the release needs the state behind it.
-
-### 0.8.4 progress
-
-**2026-04-14:** tag deferred — safety gate caught P54
-chained-call leak (`json_*().method()` leaks temporary store).
-
-**2026-04-25 (dep-fix-sprint):** dep-inference fix landed.
-Two changes:
-1. Parser (`src/parser/definitions.rs`): native methods
-   returning same struct-enum as `self` now carry `dep=[0]`
-   (borrow from self).  Constructors (no self) keep `dep=[]`.
-2. Scope lift (`src/scopes.rs::inline_struct_return`): native
-   struct-enum constructors (empty dep) are lifted to
-   temporaries and freed at scope exit.
-
-Result: **79 previously-ignored P54/Q4 leak tests un-ignored
-and passing**.  Ignored count in `issues.rs` dropped from 89
-to 6 (maintenance, B2/B3 match crash, B5 recursive, B7
-character-interpolation, P136 harness, step-6 by design).
-
-**Remaining blockers for 0.8.4 tag:**
-- WASM-build + WASM-runtime gates — both verified green
-  (run via `make wasm-html-test` to avoid the rlib-feature collision)
-- Crash bugs: none (B2-runtime, B3, B5, B7, P136, P142, P155 all closed)
-- Zero-leak gate — wrap-suite `loft_suite` currently emits no
-  `stores not freed` warnings across scripts 42/62/76/95; re-verify
-  on the tag candidate
-- Zero-ignore baseline approval — only the `regen_fill_rs`
-  maintenance entry remains (candidate for permanent exemption)
-
-Severity legend:
-- **H** — hard block.  Release cannot ship.
-- **M** — block unless the exact scenario is documented and the
-  release notes call it out as a known issue.
 
 ### WASM endpoint — our primary deliverable must work
 
@@ -562,7 +306,7 @@ crash gates closed:
 
 | ID | H/M | Summary | Reference |
 |---|---|---|---|
-| **Valgrind-clean gate** | H | `valgrind target/release/loft <script>` must produce `ERROR SUMMARY: 0 errors from 0 contexts` AND `definitely lost: 0 bytes in 0 blocks` on every script in `tests/scripts/` and every doc in `tests/docs/`.  Run on the tag candidate before release. | ROADMAP.md |
+| **Valgrind-clean gate** | H | `scripts/valgrind-sweep.sh`: every script in `tests/scripts/` and every doc in `tests/docs/` under memcheck, on the interpreter and as the compiled native program, must show no invalid access and `definitely lost: 0 bytes in 0 blocks`.  Runs nightly (`miri.yml` `valgrind` job); run it on the tag candidate before release. | ROADMAP.md |
 
 ### Memory leaks — no release may leak on valid programs
 
@@ -1009,27 +753,59 @@ the release notes why it stays.
 - Read the first sentence of each page and verify the sequencing makes sense for a reader progressing top-to-bottom (introductory concepts before advanced ones).
 - If a topic added in this release landed at the end of the sequence but logically belongs earlier, renumber and update all cross-links.
 
-### 8 — Validate coding standards and clean up clippy suppressions
+### 8 — Validate coding standards and review clippy suppressions
 
 ```bash
 cargo clippy -- -D warnings
+make clippy-review                        # which suppressions are dead, which are live but unexplained
+make clippy-review ARGS="--legs all"      # + the warnings CI never lints (debug assertions ON, wasm32)
 ```
 
-All warnings must be errors-free.  Additionally, review every `#[allow(clippy::...)]`
-annotation in the codebase and attempt to remove it by fixing the underlying code:
+All warnings must be errors-free.  `make clippy-review` then measures every
+`#[allow(clippy::…)]` under `src/` instead of grepping for them: in a throwaway
+worktree each one becomes an `#[expect]`, clippy runs CI's three lines, and the
+compiler names each expectation nothing fulfilled — the function that shrank under
+the line limit, the parameter that was removed — beside whether anything on or
+above the line says why it is there.  A report, never a gate; it edits nothing.
 
-```bash
-grep -rn "#\[allow(clippy::" src/
-```
-
-For each suppression found:
-- If the function has been refactored or shortened since the annotation was added, remove
-  the `#[allow]` and verify clippy still passes.
-- If the suppression covers a genuine structural constraint (e.g. a dispatch function that
-  cannot be split without losing clarity), keep it and add a brief comment explaining why.
+For each suppression the report says which of three things it is:
+- **dead** — remove the `#[allow]`; clippy stays silent, and the report is the proof.
+- **live and unjustified** — keep it, and add a brief comment saying which structural
+  constraint it covers (a dispatch function that cannot be split without losing clarity).
+- **redundant with a crate-root `#![allow]`** — `src/lib.rs` / `src/main.rs` already switch
+  the lint off for the whole crate, so the attribute is an intent marker at best.
 
 The goal is to keep suppressions intentional and minimal, not to accumulate them as a
 release-over-release debt.
+
+> **Measured 2026-09-04 (`e4366d4d`) — a census, not a cleanup.**  257 attributes name
+> a clippy lint (244 on items, 13 file-scope, 3 via `cfg_attr`), 329 lint mentions over
+> 54 lints.  A grep counts 22 more: `#![allow]` text inside string literals that a
+> generator emits into another file (`src/create.rs`, `src/generation/mod.rs`,
+> `src/android.rs`), which the tool excludes.
+> **Justification:** 150 of the 244 item-level attributes have a comment on the line
+> or on the line above; 94 do not (159 if the item's own `///` doc line does not count).
+> **Dead:** 51 attributes outright and 7 in part (one of several lints named) — 66 of
+> the 329 mentions: `too_many_lines` 16 (the function is now under 100 lines),
+> `too_many_arguments` 15 (7 parameters or fewer now), `unused_self` 5,
+> `cast_precision_loss` 3, the rest 1–2 each.  34 of the 54 dead item-level attributes
+> carry a justification comment, so the comment describes a constraint that no longer
+> exists; 3 were dead when written (2026-09-02, seven-parameter functions).
+> **Redundant with a crate root:** 80 (`too_many_lines` 57, the three `cast_*` lints
+> 29, `type_complexity` 2).  The crate-root lists themselves: `src/main.rs`'s
+> `match_same_arms`, `redundant_closure`, `implicit_hasher`, `unnecessary_wraps` and
+> `must_use_candidate` fire nowhere in the bin; every entry of `src/lib.rs`'s list is
+> live.
+> **What CI never lints:** with debug assertions ON (`[profile.dev.package.loft]`
+> strips them) 10 pedantic warnings hide — `ptr_as_ptr` ×4, `ref_as_ptr` ×2,
+> `borrow_as_ptr` ×2, `useless_borrows_in_formatting`, `missing_panics_doc`; in the
+> browser wasm rlib 7 — `needless_return` ×2, `format_push_string` ×2,
+> `drop_non_drop` ×2, `unnested_or_patterns`.  Either configuration fails `-D warnings`
+> today if it is ever gated.
+> **Outside the census:** 167 `#[allow]` naming only rustc lints (`dead_code` …), 111 of
+> them dead in every compiled leg.
+> The per-suppression table is the tool's output; `make clippy-review ARGS="--legs all"`
+> regenerates it in about two minutes on a warm target.
 
 ### 9 — Generate HTML and PDF
 
@@ -1161,6 +937,7 @@ adds an item that needs a new tool, add the tool here.
 | `objdump` | DWARF inspection for NDB.0 (`-h` lists debug sections) | OS package manager (GNU binutils) |
 | `node` | JS-glue probes for browser quality gate; `vsce` runtime | https://nodejs.org (20.x+) |
 | `python3` | JSON validation (`python3 -m json.tool`); generic scripting | OS package manager |
+| `gh` | `make release-gate` (dispatch + watch) and the checklist's CI-reading items (`A-release-gate`, `A-draft`, `A-smoke`) | https://cli.github.com (needs the `workflow` scope) |
 | `chromium` / `google-chrome` | WASM HTML build verification (already used by `make wasm-html-test`) | OS package manager |
 
 ### The per-release checklist — `make release-checklist`
@@ -1186,7 +963,7 @@ Three things make it worth working through rather than reading:
   verdict line, and a verdict older than the newest source file reports STALE
   rather than pass.  A gate you can tick is a gate that gets ticked.
 - **Manual items carry the exact command and what counts as a pass**, and are
-  the only ones `--done` accepts.  Progress lives in `.release-checklist/`
+  the only ones `--done` accepts.  Progress lives in `releases/<cycle>/checklist.json`, committed
   (local, gitignored) with a timestamp and your note as the evidence.
 - **Items for work this release did not touch stay hidden.**  The VS Code
   extension pass and the native-debug gate are rituals for code most releases
@@ -1210,7 +987,9 @@ apply (e.g. NDB.0 in [`plans/34-native-debug/`](plans/34-native-debug)).
 file calls a release blocker is an item: the safety gate's valgrind, zero-leak,
 zero-ignore and skip-list rows (`M-valgrind`, `M-leaks`, `M-ignores`, with
 `A-ignores` checking the rationales mechanically), the WASM endpoint gate
-(`M-wasm`), the nightlies (`M-nightly-1`…`6`), step 9's artefacts, step 10's
+(`M-wasm`), the nightlies (`A-release-gate`: one deliberate run of all six against
+HEAD's commit, measured — it replaced six hand-dispatched, hand-ticked items), step 9's
+artefacts, step 10's
 binaries and registry entry, and the monthly reviews the cadence makes
 per-release work (`M-monthly-docs`, `M-monthly-bugs`, `M-close-plans`).
 

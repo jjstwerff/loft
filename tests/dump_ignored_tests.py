@@ -1,37 +1,53 @@
 #!/usr/bin/env python3
-# Regenerate tests/ignored_tests.baseline from tests/issues.rs.
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+# Regenerate tests/ignored_tests.baseline from EVERY test in the tree.
 # Usage: python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline
+import glob
 import re
 import sys
 
 HEADER = """\
-# Baseline for tests/issues.rs #[ignore = "..."] entries.
-# One `<test_name>\\t<reason>` pair per line, sorted by test_name.
-# Updated by tests/doc_hygiene.rs::ignored_tests_baseline_is_current
-# whenever the set drifts.  A drift typically means one of:
+# Baseline of every `#[ignore = "..."]` and `#[cfg_attr(<cfg>, ignore = "...")]` in
+# tests/*.rs and src/**/*.rs.  One `<file>::<test_name>\\t<reason>` pair per line,
+# sorted; the file is part of the key because two `src/` tests share a bare name.
+# Checked by tests/doc_hygiene.rs::ignored_tests_baseline_is_current, which fails on
+# any drift.  A drift typically means one of:
 #   - an ignored test just got its fix landed (un-ignore it + delete its line here)
-#   - a new ignored spec landed for a new QUALITY.md item (add its line here)
+#   - a new ignored test landed (add its line here, with the reason it carries)
 #   - the reason message changed (update the line here)
+# `make release-checklist`'s A-ignores reads this file, so a test ignored WITHOUT a
+# reason is a release finding, not just a lint.
 # Regenerate with: `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`
 """
 
-def main() -> int:
-    with open("tests/issues.rs", encoding="utf-8") as f:
+IGNORE = re.compile(r'\s*#\[(?:cfg_attr\([^,]+,\s*)?ignore\s*=\s*"(.+)"\s*\)?\]')
+BARE = re.compile(r'\s*#\[(?:cfg_attr\([^,]+,\s*)?ignore\s*\)?\]')
+
+
+def scan(path):
+    with open(path, encoding="utf-8") as f:
         lines = f.read().splitlines()
-    out = []
     for i, line in enumerate(lines):
-        m = re.match(r'\s*#\[ignore\s*=\s*"(.+)"\]', line)
-        if not m:
+        m = IGNORE.match(line)
+        reason = None
+        if m:
+            # Mirror the Rust test's unescape so both sides compare equal.
+            reason = m.group(1).replace('\\"', '"').replace("\\\\", "\\")
+        elif BARE.match(line):
+            reason = ""
+        else:
             continue
-        # Mirror the Rust test's unescape so both sides compare
-        # equal: `\"` → `"`, `\\` → `\`.
-        reason = m.group(1).replace('\\"', '"').replace("\\\\", "\\")
         for j in range(i + 1, min(i + 10, len(lines))):
-            fm = re.match(r"fn (\w+)\(", lines[j])
+            fm = re.match(r"\s*(?:pub(?:\([^)]*\))?\s+)?fn (\w+)\s*[(<]", lines[j])
             if fm:
-                out.append((fm.group(1), reason))
+                yield f"{path}::{fm.group(1)}", reason
                 break
-    out.sort()
+
+
+def main() -> int:
+    files = sorted(glob.glob("tests/*.rs")) + sorted(glob.glob("src/**/*.rs", recursive=True))
+    out = sorted(pair for p in files for pair in scan(p))
     sys.stdout.write(HEADER)
     for name, reason in out:
         sys.stdout.write(f"{name}\t{reason}\n")

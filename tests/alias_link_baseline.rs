@@ -23,7 +23,10 @@ fn probe() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scripts/link-widen-baseline.loft")
 }
 
-/// Run `file` on `backend` with extra env; return `(ok, stdout, stderr)`.
+/// Run `file` on `backend` with extra env; return `(ok, stdout, stderr)`.  A failure's
+/// stderr carries the exit status first — a code says the program or `rustc` ended it,
+/// a signal says something killed it — because an empty stdout+stderr on its own once
+/// left a red gate with nothing to read.
 fn run(backend: &str, file: &PathBuf, env: &[(&str, &str)]) -> (bool, String, String) {
     let mut cmd = Command::new(loft_bin());
     cmd.arg(backend)
@@ -34,10 +37,14 @@ fn run(backend: &str, file: &PathBuf, env: &[(&str, &str)]) -> (bool, String, St
         cmd.env(k, v);
     }
     let out = cmd.output().expect("failed to invoke loft binary");
+    let mut stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    if !out.status.success() {
+        stderr = format!("[exit status: {}]\n{stderr}", out.status);
+    }
     (
         out.status.success(),
         String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
+        stderr,
     )
 }
 

@@ -1010,8 +1010,9 @@ fn scan_identifiers(text: &str, file: &str) -> Vec<(String, Reference)> {
 
 /// Canonical absolute path string (falls back to the lossy path on error).
 fn canonical(p: &Path) -> String {
-    let abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    plain_path(&abs)
+    crate::portable_path::plain_canonical(p)
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// A path as a consumer expects to see it, with Windows' extended-length prefix
@@ -1024,12 +1025,7 @@ fn canonical(p: &Path) -> String {
 /// accept it.  Strip it so a path means the same thing to a consumer on every platform.
 /// Non-Windows paths pass through untouched.
 pub fn plain_path(p: &Path) -> String {
-    let s = p.to_string_lossy();
-    if let Some(unc) = s.strip_prefix(r"\\?\UNC\") {
-        format!(r"\\{unc}")
-    } else {
-        s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
-    }
+    crate::portable_path::strip_verbatim(&p.to_string_lossy())
 }
 
 /// `true` when `s` begins with a Windows drive-letter prefix (`C:`).

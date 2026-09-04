@@ -609,14 +609,11 @@ fn p200_int_compare_emitter_registered() {
 // `pln10_n2_cdylib_text_wrapper_returns_owned_string` below, which
 // also covers the emit half standalone.)  The ORIGINAL blocker —
 // @P389 / issue #249, cross-package native link — closed 2026-06-04,
-// and the same invocation passes standalone (`./target/debug/loft
-// tests/integration/p244_smoke.loft` → exit 0).  What still fails is
-// running it UNDER `cargo test`: the nested rustc hits "found crates
-// (`loft_ffi` and `loft_ffi`) with colliding StableCrateId values"
-// (the known environmental cargo-test/native-link interaction —
-// see doc/claude/WINDOWS.md's C-ABI note on the StableCrateId class).
+// It runs UNDER `cargo test` too.  The nested native link used to hit "found crates
+// (`loft_ffi` and `loft_ffi`) with colliding StableCrateId values" and the test was
+// ignored for it; the C-ABI dylib link seals the package's crate graph (WINDOWS.md,
+// verified 2026-06-15), so that class is gone and this is an ordinary test again.
 #[test]
-#[ignore = "loft_ffi StableCrateId collision when the native link runs nested under cargo test — passes standalone; environmental, not a codegen regression"]
 fn p244_text_native_wrapper_compiles_under_native() {
     // Direct binary invocation — see p203_reproducer_passes_under_native
     // for the nested-cargo race rationale.

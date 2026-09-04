@@ -105,7 +105,7 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">5</span>&lt;&lt;<span class="nm">0</span> == <span class="nm">5</span>, <span class="st">"shift left by 0: identity"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">5</span>&gt;&gt;<span class="nm">0</span> == <span class="nm">5</span>, <span class="st">"shift right by 0: identity"</span>);</code></pre>
 <h2 id="float-null-compares-uniformly-with-every-other-scalar">Float null compares uniformly with every other scalar</h2>
-<p>Floats store null as <code>NaN</code> internally, but null COMPARISON is uniform with every other scalar type (@PLN102 null model): <code>null == null</code> is TRUE, null is not equal to any real value, and null orders as the low extreme. Detect a null float with <code>f == null</code> (or <code>!f</code> / <code>f ?? default</code>) — NOT the old <code>f != f</code> trick, which no longer works now that <code>null == null</code> is true. Both the defended and the undefended division yield null and continue (C80 / E-Uncomp — see tests/scripts/184-i333-div-zero-null-continues.loft); the undefended site additionally reports a warning.</p>
+<p>Floats store null as <code>NaN</code> internally, but null COMPARISON is uniform with every other scalar type: <code>null == null</code> is TRUE, null is not equal to any real value, and null orders as the low extreme. Detect a null float with <code>f == null</code> (or <code>!f</code> / <code>f ?? default</code>) — NOT the old <code>f != f</code> trick, which no longer works now that <code>null == null</code> is true. Both the defended and the undefended division yield null and continue (C80 / E-Uncomp — see tests/scripts/184-i333-div-zero-null-continues.loft); the undefended site additionally reports a warning.</p>
 <pre><code>  bad = <span class="nm">0.0</span> / <span class="nm">0.0</span> ?? <span class="kw">null</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!bad, <span class="st">"a null float is falsy"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad == <span class="kw">null</span>, <span class="st">"detect a null float with `== null`"</span>);
@@ -355,7 +355,7 @@ fn main() {
 
   // ## Float null compares uniformly with every other scalar
   // Floats store null as `NaN` internally, but null COMPARISON is uniform with
-  // every other scalar type (@PLN102 null model): `null == null` is TRUE, null is
+  // every other scalar type: `null == null` is TRUE, null is
   // not equal to any real value, and null orders as the low extreme. Detect a
   // null float with `f == null` (or `!f` / `f ?? default`) — NOT the old `f != f`
   // trick, which no longer works now that `null == null` is true.

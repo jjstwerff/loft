@@ -558,21 +558,6 @@ capture typing is a new *source* of the types loft already has; `match` also sta
 **OPEN: 0.**  Every deviation this doc has carried is closed; the record is in the companion
 [types-history.md](types-history.md).
 
-⚠ **This line read `OPEN: 0` while D-Narrow-Asgn and D-Narrow-Res were both live, and the
-oracle under it could not have moved either** — `(I-Narrow)` had only two clauses, so a
-nullable target was not a case the rule could be checked against at all; and the sentinel's
-exclusion from `τ?`'s range was prose in a table rather than a rule, so nothing could be
-checked against it either.  Both gained the clause they were missing — `(I-Narrow-Opt)`, which
-closed D-Narrow-Asgn, and `(N-Reserve)`, which turns an open design question into a stated
-deviation.  A register is only as strong as the completeness of the rules above it.
-
-⚠ **And it read `OPEN: 0` again while D-Null-Heap was live, where the rules were NOT the weak
-part.**  `(N-Opt)` and `(N-Store)` are written for every `τ` and always were; what disagreed was
-the enforcement, gated on a scalar-only predicate whose own doc comment stated the carve-out as
-if it were the model.  So a register can also be wrong when its rules are complete and nothing
-re-measures the code against them — the second failure mode, and the one a reading of this doc
-alone cannot catch.
-
 ## Conformance check (how we know a deviation is real)
 
 Each deviation should have a falsifying program — the case where obeying the rule and

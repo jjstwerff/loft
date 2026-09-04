@@ -547,6 +547,18 @@ on exactly this reasoning and the check answered API BREAK + DATA BREAK against 
 releases.  ⚠ Note that loft has **no positional struct construction** — `Pixel { 1, 2, 3 }` is
 a parse error — so field ORDER is not one of the axes here, however plausible it sounds.)
 
+**A pinned layout fingerprint moves on the edit you MEANT, and that is the step it exists
+for.**  A pack is a store, so a library's struct definitions are its file layout; a test
+pinning that layout's fingerprint fails both when the schema is edited (deliberate) and
+when loft's layout rules move underneath it (no edit at all — which is why it is pinned
+rather than merely computed).  When it fails on a change you meant, re-pin AND move
+`data_compatible_with` in the SAME commit, keeping the old number written beside the new
+one — a pin nobody can compare against says a format is *different*, not that it
+*changed* — and `loft compat check --full` must then report `DECLARED BREAK (below the
+floor)` rather than a bare BREAK.  The fingerprint is identical on `--interpret` and
+`--native`, which is the other half of the claim: a pack built on one backend is readable
+by the other.
+
 The mechanical `[auto]` core of the full correctness bar — see
 [LIBRARY_CHECKLIST.md](LIBRARY_CHECKLIST.md) for the Goal-by-Goal + doc-quality
 `[review]` items and the registry `verified` administration.
@@ -946,6 +958,24 @@ out of sync and lie.
 | Monorepo test-fixture re-sync (dogfood libs — step 5d) | [`scripts/sync-fixtures.sh`](../../scripts/sync-fixtures.sh) header (`PINNED_REFS`, `--check`) |
 
 ## Troubleshooting
+
+**A test passes `loft test` and fails the CI command with `Library 'raster' not found`** —
+`loft test` sets up the package context; the CI gate runs the raw
+`loft --interpret --tests tests` (and its `--native` twin) from the package directory,
+which does not.  A sibling MODULE (`src/raster.loft`) is reachable only once the package's
+entry file has been loaded and pulled it in, so the `use` order is load-bearing:
+`use <pkg>;` first, then `use <pkg>::raster;`.  Run the CI command itself before tagging
+(§ 3).
+
+**`native symbol 'loft_x' was not registered via loft_register!`** — a native crate registers
+each C-ABI entry point in FOUR hand-maintained places in `native/src/lib.rs`: `pub use
+m::{…}` at the crate root (what `--native` codegen calls — `pub`, because `--native-wasm`
+links the rlib and writes the Rust PATH, so a private `use` compiles natively and fails
+every wasm build with E0603 in code the author never sees), `use m::{…__loft_bridge}` for
+the proc-macro's bridge idents, `loft_ffi::loft_register!{…}` (the legacy raw-pointer
+registry, `loft_register_v1`) and `loft_ffi::loft_register_bridges!{…}` (the uniform-ABI
+registry, `loft_register_bridges_v1`).  Missing the legacy one panics with the message
+above although the build succeeded.
 
 **`loft publish` says "release `<tag>` not found"** — you
 haven't created the GitHub release yet, OR the asset name in

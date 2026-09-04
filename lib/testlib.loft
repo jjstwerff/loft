@@ -12,11 +12,13 @@ pub enum Status {
 }
 // --- Plain structs ---
 
+// A plain two-field value, for exercising a consumer against the simplest struct shape.
 pub struct Point {
   x: float,
   y: float
 }
 
+// A struct with a heap field, for exercising a consumer against a nested type.
 pub struct Bag {
   label: text,
   count: i32,

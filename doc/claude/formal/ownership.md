@@ -164,13 +164,33 @@ and a decision that reads the wrong one is wrong in the silent direction:
                 cannot hoist defers the detach past the assignment.  Detaching before the
                 reads is never admissible, and DECLINING the detach to avoid the hazard
                 trades the wrong answer for a retained store rather than resolving it.
+  (O-Witness)   A LOCAL WHOSE ASSIGNMENTS MIX OWNERSHIP CARRIES A RUNTIME OWNER WITNESS.
+                A binding carries ONE dep list, flow-insensitively, and it records
+                whichever assignment parsed LAST — so where one assignment hands a
+                heap-record local a store of its own (a whole-value copy, a minting call)
+                and another hands it a VIEW, no static reading is right for both.  Such a
+                local is given a hidden witness `__own_<name>` naming the store it minted
+                for as long as it still holds it, and the sentinel otherwise.  The witness
+                is maintained in the IR at every assignment — a mint points it; a view
+                releases it by STORE IDENTITY (`OpDistinctStore`) after the value is
+                computed, per O-Detach; a mint that reads the local releases the same way
+                — and released at scope exit.  The local itself is never-free
+                (O-Override), and both backends translate the one fact (O-NoDiverge).  A
+                projection bound into such a local is always a VIEW: binding.md's
+                materialise clause does not apply to it, and a binding that clause names
+                is never witnessed.  Every copy into it lands in a FRESH store, never in
+                place — the slot may hold a view.
 ```
 
 **In words.** There is a real oracle, and it is not the dep list. `deps` is a cheap
 stand-in for it that is right most of the time and wrong for a borrow nobody recorded a dep
 for; `is_skip_free` is the patch that makes the stand-in safe at a free site; and
 `owned_refs` carries the two things a type cannot — *which* assignment, and *how deep in
-loops* it happened.
+loops* it happened.  And where even that is not enough — a local that OWNS after one
+assignment and VIEWS after another, in a loop that runs both — the ownership is a per-RUN
+fact, and `O-Witness` carries it in a slot beside the local: the walker `cur: Node? = a;
+while cur != null { cur = cur.next }` frees the copy it started from at the first rebind
+and nothing at the last, whichever iteration that is (loft#1336).
 
 ⚠ **`(O-Oracle)`'s interprocedural half has a failure mode of its own: it can lose the
 callee's answer on the way back to the caller.** The summary is stated in the CALLEE's
@@ -269,40 +289,8 @@ implication that reading `deps` is *sufficient*.
 > and the `--native` release of a displaced store on a fn-ref re-bind of a USER local, which
 > is loft#1328 and which the `??` hoist sidesteps by releasing in the IR.
 
-**D-own-8 CLOSED 2026-09-03** (loft#1320, loft#1321, loft#1323): a Join's ownership fact was
-true on one path only because ONE binding carried two paths.  The close is structural, not
-N-ary: every arm tail of a bound value branch that a single bind would leave OWNING — a fn-ref
-call of any ownership, a named call answering a record the caller must copy, a plain variable
-(`(B-Copy)`) — is given a binding of its own, bound by that single bind's own lowering, and
-the joined binding borrows the temps.  The two shapes loft#1320 declined take the witness the
-base itself could not be: a SNAPSHOT of the store the base named at the bind (`(O-Latest)`,
-the way a rebindable parameter's entry stash already witnesses).  And the `??` hoist that
-binds a CALL subject now owns what a plain bind of that call would.  Measured on both backends
-at the ceiling and in the over-free direction; the full record, including the two regressions
-the first cut introduced and what each taught, is in
-[ownership-history.md](ownership-history.md).
-
-**D-own-26 CLOSED 2026-09-03**, against the bar its own entry set: *"the honest cure is a way
-to fail a build in which a free-deciding site reads the proxy without the veto."* That gate
-now exists, is falsified on five separate paths, and passes — 9 sites declare `free` and all
-9 consult `O-Override`; the other 15 declare which of the other three facts they read. The
-"eleven of seventeen" it opened with was a hand count that could not separate *asking* the
-proxy from *freeing* on it. What the close does NOT cover: a site that declares a non-free
-question and frees somewhere the gate cannot see. The full record is in
-[ownership-history.md](ownership-history.md).
-
-**D-own-16 CLOSED 2026-09-03.** Every cell that should reach zero does, on both backends, with
-every value unchanged: a minting call that reads the local, the self-referential join
-`c = mk(i) ?? c`, a conditional borrow, and a local bound from a PARAMETER and then minted.
-The one shape that still retains a store is a lambda-CAPTURED local, and that is
-`(L-CapHeap)` holding rather than a leak — a captured heap value is SHARED, so declining the
-free is the right answer and its right answer keeps a store.  Guard:
-`tests/scripts/1085b-a-nullable-local-frees-what-it-displaces.loft`; the full record, including
-the two mechanisms that were tried and reverted, is in
-[ownership-history.md](ownership-history.md).
-
-The full register — these entries in full, plus every closed one with its dates and
-issue numbers — is the companion [ownership-history.md](ownership-history.md).
+The full register — every entry, open and closed, with its dates and issue numbers — is
+the companion [ownership-history.md](ownership-history.md).
 
 ## Machine-checkable soundness — the @PLN94 flow-sensitive oracle (proof skeleton)
 
@@ -420,6 +408,16 @@ runtime-witness discharge (a separate `OpFreeRefIfDistinct` lemma); proving the 
 analysis directly (the certifier sidesteps it).
 
 ## Conformance
+
+- **A fn-ref call's return records the argument it borrows, for EVERY kind (`O-Move`,
+  loft#1335)** — `fn pick(x: integer, bag: Bag) -> hash<K[k]> { h = fn(q: Bag) -> hash<K[k]>
+  { q.m }; h(bag) }` records `bag` (attribute 1) as what its return borrows, for a keyed, an
+  optional keyed and an optional struct return exactly as for the vector control.  On the
+  four-shape list it replaced, the keyed return recorded attribute 0 — the scalar `x` — which
+  in a join with a local unioned attribute-space with frame-space deps (the debug-assertions
+  gate's `dep-space violation`), and would have read as an owned store had the lift not
+  re-derived the answer.  Guard `frame_vars::a_fn_ref_return_borrows_the_argument_in_the_callers_space_for_every_kind`,
+  a FACT test, falsified on the list.
 
 - **A `??` default-arm mint is released once (`O-Borrow`, loft#1322)** — `_vec_N` and
   `__vdb_N` name one store, and exactly one of them frees it: at the vector and keyed kinds,

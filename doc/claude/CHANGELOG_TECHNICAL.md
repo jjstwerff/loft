@@ -9,6 +9,240 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The warm cache carries its import tables, an eager generator owns its snapshots and runs its tail, and every ignore says how it runs instead (2026-09-04)
+
+loft#1359: the IR root (`tools/ir_schema/ir.loft` `Data`, cache format **4**) now carries
+`imports` (the retained `AppliedImport`s `rebuild_indices` replays) and `use_names`; a warm
+load of a multi-source program used to lose every `use lib::*` binding and the module map,
+because neither is derivable from the definitions.  `DATA_ROOT_WORDS` / `BUNDLE_ROOT_WORDS`
+size the root claims from the schema — `Store::claim` counts 8-byte words INCLUDING the
+record header, and a claim sized from the stride alone put the last field in the next block
+(the hang that cost an hour).  The JSON snapshot carries both tables too, and the guard
+`multi_source_round_trip_preserves_derived_indices` is un-ignored; `g2_m6_warm_store` gains
+a real multi-source warm run.  loft#1356: the native eager factory pushes every handle as a
+SNAPSHOT (`coroutine_snapshot`, one store per generator, freed at exhaustion and from
+`drop_stores`) instead of refusing struct/vector loop-body yields, and it now emits the
+generator's TAIL — it had dropped every statement after the last yield, which leaked each
+persistent heap local of an eager generator and lost a `print` after the loop.  The
+`yield from` desugar binds `__yf_item` as a borrow of `__yf_sub` (the loft#481 dep), so an
+enclosing `if` arm no longer frees the sub-generator's frame through it (BUG #306 on the
+interpreter).  loft#1358: closed as C116 — one refusal home
+(`Parser::refuse_capturing_closure_in_collection`), the canary converted to its guard.
+`tests/ignored_tests.baseline` shrinks to 33 and `doc_hygiene::every_ignore_reason_says_how_it_runs`
+requires each reason to name the run it rides (`--ignored` by hand, a nightly job, a platform);
+the two `web/http.loft` skips were inert (the file lives in `tests-network/`, which no suite
+walks) and are gone.
+### Every text buffer a frame mints is released, and the release valgrind sweep runs nightly
+
+loft#1357 — the residue of loft#1338 under `scripts/valgrind-sweep.sh`: 11 corpus files losing
+one `String` per call on the interpreter, values right on both backends.  Eight shapes, each
+closed where its own question is asked (calls-history D-call-12): a lambda that already holds
+its one hidden `&text` buffer now accumulates / binds into a local and MOVES it into that
+buffer (`parse_block`'s `do_if_acc` / `do_tret_bind`; the pass-2 gate reads
+`lambda_text_buffer_var` because such a lambda never minted the `__acc`/`__tret` attribute the
+gate keyed on); a returned bare text local is delivered through the buffer and freed
+(`free_vars`, and `free_copied_text_sources` now frees the returned local it copied);
+`text_return_orphan_risk` flags a returned text LOCAL whatever bound it (a text `Set` copies,
+so the oracle's borrow-of-argument answer was true of the store and false of the `String`);
+`rewrite_text_returns_into` reaches a `return` inside `Loop` / `Iter` / `Drop`;
+`try_generic_instantiation` re-asks the promotion once `instantiate_nested_generics` has
+retargeted the nested call (the first ask saw the template's `-> S?`); a tail that READS its
+buffer is staged into `__ret_N`, moved, freed (`free_vars` and `insert_free`,
+`any_text_return_buffer`); a `??` temp consumed by a SCALAR tail is freed after the scalar is
+hoisted, and one consumed by an `if` CONDITION is freed after the condition is evaluated into
+a boolean (the statement scan in `convert`); a `par` loop's text binding of the element is
+not marked never-free (a text binding copies); a `parallel` arm frees the `__work_N` texts it
+wrote, on the worker; and `run_tests` resumes a frame-yielding `main` until it finishes, as
+the CLI does (it scored the first frame as the whole test and abandoned the frame's texts —
+the sweep's one remaining red file).  The text ledger (`LOFT_TEXT_TIMELINE`) is one `Mutex`
+for the process and reports under `--tests`.  Guard `tests/scripts/1357-…loft` + `tests/text_buffer_ledger.rs`
+(99 orphans → 0 by hand; inert on the six `make falsify` channels).  `miri.yml` gains the
+nightly `valgrind` job (the sweep on the release binary, both backends) and
+`release-gate-sweeps` (the two ignored tests whose reason names the release gate).
+
+### A lambda's lifetime tuple is boxed like a named function's, a tuple result joins a tuple literal, and a nullable record from a fn-ref copies on the interpreter (2026-09-04)
+
+loft#1349: a lambda declared `-> (vector<integer>, text)` stored its annotation verbatim,
+so its tail was handed up as the bare tuple its arms yield and the vector element aliased the
+argument's field; both lambda forms now take `Parser::boxed_tuple_return`, the rule the named
+declaration already applied (`has_lifetime_concern` → `tuple_def`), at the same point on both
+passes (closures-history D-clo-21).  loft#1350: an `else` arm yielding a stack tuple whose
+element types spell the expected synthetic `__tuple<…>` name is boxed into its own work-ref
+in `block_result` and retyped as the record, so `parse_if` joins two records; a different
+shape keeps the refusal (tuples-history D-tup-7).  loft#1353: `use_analysis::callee_of`
+admits the nullable fn-ref spelling when the return borrows a visible ARGUMENT — the reassign
+copy brackets every ref argument — and still declines a return that borrows the closure
+(`fnref_return_borrows_closure`), the shape the 1114 guard pins (closures-history D-clo-22).
+loft#1351 is the sibling checkout's fix, carried here so the harness measures what a real
+build emits: `tests/native.rs` calls `namespace_colliding_native_fns` after its parse, as
+every `--native` path does; its guard lives on that branch.  Guards `1349`/`1350` (one
+file), `1353`.  Filed apart: loft#1354 (a tuple local yielded by an arm is moved on
+`--native`).
+
+### A `--lib` directory that lost to a project-local `lib/` says so (2026-09-04)
+
+loft#1352.  `use` resolution is first-wins, and a project-local `lib/`, a declared dependency
+and the script's own directory are probed before `--lib`, so the flag never reaches a name
+one of those provides — three measurements of a patched library copy passed through `--lib
+<copy>` from the repository root scored the unmodified tree, in silence.  The precedence is
+REPORTED, not moved: `lib-flag-outranked` (advice) names the file that answered and the file
+the flag provides, once per id, quiet without a flag, when the winner lies inside the flag's
+directory, and under `LOFT_NO_LIB_OUTRANKED`.  Whether the precedence itself should change is
+an owner call and is left where it is.  `tests/lib_flag_outranked.rs` pins the reported /
+honoured pair with a copy that cannot parse behind the flag, so a clean run is positive
+evidence.
+
+### Four returns settle against the rules: a boolean match is exhaustive, a nullable vector return copies its projection, a nullable record reassigned from a call copies on the interpreter, and a nullable lambda keeps its `?` (2026-09-04)
+
+loft#1343: a `match` on a boolean spelling `true` and `false` is exhaustive — the scalar match
+parser makes the last arm the fallback instead of carrying a typed-null fall-through whose
+leaf the join read as nullable (`formal/matching.md` `(M-Bool)`, D-match-1).  loft#1345: a
+`-> vector<T>?` function's branching tail reaches the vector materialiser, which now has a
+PROJECTION leaf (`is_projection_op` → clear + append into the buffer), so `q.items` under a
+null arm is copied instead of handed up as the view (calls-history D-call-10).  loft#1346: the
+interpreter's set lowering skipped its borrowed-view copy when "the call reads the
+destination", asked through the flag that routes the post-free — also raised for a nullable
+local — so every nullable record reassigned from a borrowed-view call, the `if` join's lifted
+arm temp included, kept the raw pointer while native copied; it asks `rhs_reads_v` now, and
+`OpCopyRefOrNull` writes `DbRef::NULL` for a null result instead of `Stores::null()`, which
+allocates (ownership-history D-own-29).  loft#1347: the borrow-copy and forwarder vector
+delivery legs re-set the returned type without the declared `?`, so a lambda `-> vector<T>?`
+published two types across the passes and was refused; one `set_delivered_vector_return`
+keeps the `?` (D-call-11).  Guards `1343-…`, `1345-…`, `1346-…`, `1347-…` +
+`tests/boolean_match_exhaustive.rs`.  Filed apart: loft#1349 (a lambda's lifetime tuple),
+loft#1350 (a tuple result refuses to join a tuple literal), loft#1353 (the fn-ref nullable
+record join).
+
+### The nightly gate: a fn-ref return of any shape maps its deps into the caller, and the branches doc no longer links a file that is never committed (2026-09-04)
+
+loft#1335, both legs.  **Debug-assertions gate:** `fnref_result_type` bridged a fn-ref
+call's return deps from the callee's attribute space to the caller's frame for four listed
+shapes and handed every other shape back untouched, so a keyed collection, a `?` return or a
+tuple reached the caller with attribute indices in place — the `if` join then unioned
+attribute 0 into a frame list ("dep-space violation", `Deps::union`, on every nightly since
+the loft#1245 guard).  The mapper now asks `Type::borrow_deps` / `rewrap_deps` and lists
+nothing; `Deps::renumber_frame` exempts an EMPTY attribute-tagged list (a `&text`
+parameter's declared type carries the tag into the variable table).  The whole gate is green
+on this tree.  `formal/ownership-history.md` D-own-28; DEPS_INVENTORY.md crossing site 6.
+Guard `tests/scripts/1335-…loft`.  **Doc index hygiene:** the generated
+`LIBRARY_BRANCHES.md` linked `LIBRARIES.md`, which is built on demand and never committed,
+so the link was broken on every CI checkout; `scripts/lib-branch-audit.sh` now names the
+file and the command instead.  Held fixed and filed apart: a nullable VECTOR return, a
+vector in a returned tuple, and a nullable record chosen by an `if` alias the field.
+
+### An early text return is delivered through the caller's buffer, and a user `&text` parameter is never that buffer (2026-09-04)
+
+loft#1338.  A text function's block tail already delivered through the hidden `&text`
+parameter `text_return` promotes; an EARLY `return <call>` / `return a ?? b` / `return
+t[0][0]` reaching the scope pass with frees to run was copied into a frame-local `__ret_N`
+String marked `skip_free` — orphaned, one per call, on the interpreter only (native collapses
+the temp), with every value right.  Both hoist sites (`scopes::free_vars` and the block-tail
+leg of `insert_free`) now write the value per arm into the buffer the function already holds
+(`push_text_arms_into`), free the `__work_N` / `__ncc_N` temps the copy drained, then run the
+frees and return the buffer; the copy stays only for a function with no buffer.  The loft#568
+orphan predicate classifies every `return` site, not the tail alone (`early_return_ownerships`;
+a null arm is a sentinel and excluded), and the targeted promotion (@PLN104) no longer defers
+the view-of-local / join-of-local classes — `553 textslice` is green on both backends.  The
+buffer question has one home, `Definition::text_work_buffers` (a HIDDEN `RefVar(Text)`
+attribute): six sites restated it as any `RefVar(Text)`, which a user `&text` parameter also
+is, so the predicate left such a function unbuffered and `--native` wrote the returned text
+INTO the parameter.  `formal/calls-history.md` D-call-9; the LSan `append_text` suppression's
+premise ("fault path only") is corrected in place.  Guard
+`tests/scripts/1338-an-early-text-return-is-delivered-through-the-caller-buffer.loft` +
+`tests/early_text_return.rs` (the text ledger under `LOFT_TEXT_TIMELINE=1`).  Side finding
+loft#1343.
+
+### A view of a local returned through a nullable return is copied before it escapes (2026-09-04)
+
+loft#1337.  A `-> S?` return has no delivery buffer, so what is handed up is what the
+reference-delivery selector decides — and two shapes got past it on both backends: a local
+rebound through its own reference field (`cur = cur.next; cur`, a SELF-dep the view walk
+skipped) handed up a sibling local's record after its exit free, and a projection inside an
+`if` arm (`if take { t.l } else { null }`) was never seen, so the tail was demoted to
+`return null`.  `(F-Ret)` already says a whole heap value is handed out owned, never a view
+of a local.  Closed at the selector: a self-dep on a user local reads as a view, an `if` arm
+is a tail where there is no buffer, and the buffer-less materialise is made per arm — only
+the viewing arms are copied, a null arm stays null, a nullable local source copies only
+where present.  The dense route is byte-identical.  Guard: `tests/scripts/1337-…`, both
+backends, falsified at `c0a09c95`.  `D-call-8` opened and closed.
+
+### A local whose assignments mix ownership releases through an owner witness (2026-09-04)
+
+loft#1336.  `cur: Node? = a; while cur != null { cur = cur.next }` leaked the copy `cur` took
+at the bind on both backends, and `s: Node? = a; s = a.next; s = a` wrote the second copy
+INTO the viewed record on `--native` while the interpreter aliased the source.  Neither the
+`reference` field nor the `?` nor the copy-bind was the axis: a call-minted local, a nested
+field view and the dense twin all misbehaved the same way, because a binding carries one dep
+list and it records whichever assignment parsed last.  `formal/ownership.md` gains
+`(O-Witness)`: such a local is given a hidden `__own_<name>` that names the store it minted
+while it still holds it, maintained in the IR at every assignment by store identity
+(`OpDistinctStore`, `OpRefAlias` are the two new ops) and released at scope exit; the local
+is never-free.  The native emitter's private `_own_store_` tracker was the reference route
+and now applies only to hidden temporaries; both emitters copy into such a local FRESH and
+decline the materialise arms for it.  `LOFT_NO_OWNER_WITNESS=1` is the A/B opt-out, and the
+`LOFT_NO_JOIN_OWN` positive controls set it too.  Guard: `tests/scripts/1336-…`, fifteen
+cells, falsified at `c25b444c`.  D-own-27 opened and closed; the record is in
+`ownership-history.md`.
+### A fn-ref call's return records what it borrows, for every kind of return (2026-09-04)
+
+`Parser::fnref_result_type` maps a lambda's declared return deps — attribute indices in the
+callee's space — through the actual arguments into the caller's frame.  It did so for text,
+vector, struct and enum returns and handed every other kind back verbatim, so a fn-ref
+returning a keyed field view (`fn(q: Bag) -> hash<K[k]> { q.m }`) reached the caller still
+naming attribute 0.  In the caller's frame that is whichever variable holds number 0: with a
+scalar parameter first, the enclosing function's own return then recorded the scalar and read
+as an OWNED store, and a branch join over such an arm unioned attribute-space with frame-space
+deps — the debug-assertions gate's `dep-space violation` on `1245b` (loft#1335).  The shape
+list is gone: any type that borrows is asked through `Type::deps_ref` and rewrapped, a tuple
+element-wise, which is what `(O-Move)` states and what `call_dependencies` already learned for
+`Optional` (loft#938).  Guard: `frame_vars::a_fn_ref_return_borrows_the_argument_in_the_callers_space_for_every_kind`
+asserts the FACT — the enclosing function's return names the parameter — in a build that always
+runs; falsified: the keyed cell answers `[0]` on the four-shape list.  Values were right in
+every cell before and after, because the lift and the ownership oracle re-derive what the dep
+mis-stated; the script corpus is clean under `-C debug-assertions=on` again.  Noted on the way:
+a named function cannot hand a fn-ref call's TUPLE back as its tail (`expected __tuple<…>, got
+(…) on return from block`), a standing refusal that kept a tuple cell out of the guard.
+
+The gate's other red, `issue_328_reference_self_recursive_walk`'s `Database 5 not correctly
+freed`, is loft#1336: a nullable struct local bound by copy leaks its store when rebound to a
+`reference` field view, and a later copy-bind writes into the viewed record on `--native`.
+Filed with its eleven-cell matrix; the cure needs a per-variable ownership witness.
+
+### Path spelling has one home, and the Windows nightly's two real failures close (2026-09-04)
+
+`portable_path` now answers every path-spelling question the tree used to answer per site:
+`plain_canonical` / `try_plain_canonical` / `plain_canonical_str` (canonicalise in the plain
+spelling every other path uses — on Windows `fs::canonicalize` answers a verbatim `\\?\C:\…`
+that never equals or prefix-matches its plain twin), `strip_verbatim` (disk and UNC),
+`is_stdlib_source` (however the stdlib was loaded — the eight readers that checked only
+`default/` treated an installed stdlib as user code), `is_under` (by component, so `pkg` does
+not claim `pkg2/`) and `is_under_canonical` / `same_file`.  Fifty `canonicalize` sites, thirteen
+stdlib checks and the two string-prefix package tests route through them.  That is what closed
+the Windows leg's two real reds: the logger's project root came back verbatim and matched no
+record's plain path, so a `[levels]` key ending in `/` could not raise a file's level
+(`log_source_path`); and the check-line contract test built its expected path from the 8.3
+`temp_dir()` and a bare `canonicalize`, neither the driver's spelling
+(`check_line_audiences`).  Validated on Windows through `windows-probe.yml` dispatched on the
+branch with the named tests.  The macOS reds in the same nightly were already closed by #1330
+and a retry-green cold-cache flake in `native_scripts`; the `doc index hygiene` red was the
+generated branch report linking the uncommitted library catalogue.
+
+### The release gate: every nightly against one commit, one verdict (2026-09-04)
+
+`release-gate.yml` calls the six nightlies — `ci.yml` (full matrix incl. Windows, the
+stdlib round-trip, the differential oracle), `miri.yml`, `registry-validation`,
+`revalidate-libs`, `browser-threads`, `repro-build` — as reusable workflows against ONE
+commit, and a `verdict` job is red on any leg that is not `success`, advisory PR jobs
+included.  `make release-gate` dispatches it on the pushed branch and waits; the release
+checklist's six hand-dispatched `M-nightly-*` items become one measured `A-release-gate`,
+keyed by HEAD's commit.  Measured cause: the 03:00 daily started between 03:34 and 14:45
+UTC over three weeks, on whatever `main` was, and push-to-main's full matrix was red on
+each of the last eight merges — the nightly-only legs are where a merge is found red, so
+a release needs them run deliberately on the candidate.  Each nightly gains a
+`workflow_call` trigger; `miri.yml`'s `from_gate` keeps its issue filer and digest with
+the schedule, and three concurrency groups now carry the caller's workflow name.
+CI_BUDGET.md § The schedule is not a clock; RELEASE.md § The nightlies.
+
 ### A fn-ref that FORWARDS is witnessed by the dep its callee declares (2026-09-04)
 
 Branch-internal, never on `main`: loft#1329 made a captured fn-ref resolvable, which first

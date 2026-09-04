@@ -180,6 +180,124 @@ fn is_topic_directive(trimmed: &str) -> bool {
     trimmed.starts_with("// @NAME: ") || trimmed.starts_with("// @TITLE: ")
 }
 
+/// Does `s` open with a worked-example tag — three uppercase letters, a hyphen, three
+/// digits (`STD-001`, `LEX-002`)? `s` is the text FOLLOWING an `@`.
+///
+/// The shape is chosen so it cannot collide with loft's tracker families: `@P259`,
+/// `@PLN3` and `@F7` all put a digit or a differently-sized letter run where this wants
+/// exactly three letters then a hyphen.
+///
+/// One home for the shape, because two readers must agree on it: the example index
+/// FINDS a tag, and the topic renderer must NOT print one. A renderer that disagreed
+/// about what a tag looks like would publish the ones it failed to recognise.
+#[must_use]
+pub fn is_example_tag(s: &str) -> bool {
+    let w: Vec<char> = s.chars().take(7).collect();
+    w.len() == 7
+        && w[0..3].iter().all(char::is_ascii_uppercase)
+        && w[3] == '-'
+        && w[4..7].iter().all(char::is_ascii_digit)
+}
+
+/// Does this line OPEN a worked-example tag definition (`// @AAA-### — what it shows`)?
+///
+/// A tag definition marks the call site that teaches a function (@PLN141). It is
+/// bookkeeping for `check_doc_drift.sh examples`, not prose a reader of the page asked
+/// for, so the topic renderers drop it along with the rest of its comment block.
+fn opens_example_tag(trimmed: &str) -> bool {
+    trimmed
+        .strip_prefix("//")
+        .map(str::trim_start)
+        .and_then(|t| t.strip_prefix('@'))
+        .is_some_and(is_example_tag)
+}
+
+/// Is this comment line a feature-catalogue ANCHOR (`@F40 — file & directory I/O
+/// (catalogue anchor, @PLN92)`)?
+///
+/// An anchor ties a stdlib file to its `@F` entry in the feature catalogue.
+/// `scripts/feature_hygiene.sh` reads it out of `default/` as the CODE anchor — the
+/// answer to *where does this feature live* — so it has to stay in the source. It is
+/// bookkeeping for that script and for nothing else, so it must not reach the page: an
+/// anchor sitting above a `pub` item became that item's published description, and
+/// `store_bind_lazy` opened with `@F108 — Lazy store binding (catalogue anchor, @PLN92)`.
+///
+/// Keyed on BOTH halves — an opening `@F<n>` and the `catalogue anchor` marker — so a
+/// sentence that merely mentions a feature id stays prose.
+#[must_use]
+pub fn is_catalogue_anchor(trimmed: &str) -> bool {
+    let Some(text) = trimmed.strip_prefix("//").map(str::trim_start) else {
+        return false;
+    };
+    let opens_with_feature = text
+        .strip_prefix("@F")
+        .is_some_and(|r| r.starts_with(|c: char| c.is_ascii_digit()));
+    opens_with_feature && text.contains("catalogue anchor")
+}
+
+/// Does this doc line OPEN a worked-example citation (`Example: @AAA-### — what it shows`)?
+///
+/// A citation points a maintainer at the call site that teaches this item; it is
+/// bookkeeping for `check_doc_drift.sh examples`, the sibling of the `@AAA-###`
+/// DEFINITION [`opens_example_tag`] drops. The reader of a published page never asked
+/// for it, and CLAUDE.md § User-facing output keeps tracker tags out of what a command
+/// prints — a rendered citation is a bare tag with no link and no explanation.
+///
+/// Accepts the line with or without its `//`, because the two shapes are both real: the
+/// stdlib and package extractors hand on comment text already stripped, while a caller
+/// reading source lines has not stripped it. A predicate that silently matched only one
+/// of them is how the second renderer would start publishing what the first hides.
+#[must_use]
+pub fn opens_example_citation(line: &str) -> bool {
+    let text = line.trim_start();
+    let text = text.strip_prefix("//").map_or(text, str::trim_start);
+    text.strip_prefix("Example:")
+        .map(str::trim_start)
+        .and_then(|t| t.strip_prefix('@'))
+        .is_some_and(is_example_tag)
+}
+
+/// A doc comment's lines with every worked-example citation removed.
+///
+/// One home for "a citation is not prose", because the renderers that must agree on it
+/// are three pages apart: the stdlib sections, the print sheet and the PDF all reach it
+/// through `group_paragraphs`, and the library API pages through `doc_paragraphs`. A
+/// renderer that disagreed would publish the citations the others hide.
+///
+/// A citation is a BLOCK, not a line: 51 of the 377 in the shipped distribution wrap
+/// onto continuation lines, so dropping the opener alone would leave the tail behind as
+/// a sentence fragment — a worse page than the one this fixes. The block runs from its
+/// opener to the next blank line, the next citation, or the end of the comment.
+///
+/// The terminating blank is KEPT: it separates the citation's paragraph from whatever
+/// follows, and swallowing it would weld two paragraphs of real prose together.
+///
+/// Only a line that OPENS with the citation is bookkeeping. A tag written INSIDE a
+/// sentence is the author's prose and stays — `graphics::rgba` explains a hex literal
+/// "(a hand-written hex literal — @GFX-001)", and `hex_shape` cites `(@HXS-002)` in the
+/// middle of a measurement. A predicate that matched any tag would cut both sentences in
+/// half.
+#[must_use]
+pub fn without_example_citations<S: AsRef<str>>(lines: &[S]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut in_citation = false;
+    for line in lines {
+        let text = line.as_ref();
+        if opens_example_citation(text) {
+            in_citation = true;
+            continue;
+        }
+        if in_citation {
+            if !text.trim().is_empty() {
+                continue;
+            }
+            in_citation = false;
+        }
+        out.push(text.to_string());
+    }
+    out
+}
+
 /// Is this line part of the header block a topic opens with, rather than its prose?
 ///
 /// The block is attribution, provenance and directives. Provenance matters because a
@@ -707,6 +825,8 @@ fn parse_sections(source: &str) -> Vec<DocSection> {
     let mut prose: Vec<String> = Vec::new();
     let mut code: Vec<String> = Vec::new();
     let mut in_header = true;
+    // Inside a worked-example tag definition's comment block, which is dropped whole.
+    let mut in_example_tag = false;
 
     for line in source.lines() {
         let trimmed = line.trim();
@@ -714,6 +834,22 @@ fn parse_sections(source: &str) -> Vec<DocSection> {
             continue;
         }
         in_header = false;
+
+        // Drop a worked-example tag definition and the rest of its comment block.  The
+        // WHOLE block goes, not just the tagged line: the description wraps, so dropping
+        // one line leaves its continuation as an orphan sentence that reads worse than
+        // the tag did.  The block ends at the first non-comment line, which then falls
+        // through to be handled normally.
+        if in_example_tag {
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            in_example_tag = false;
+        }
+        if opens_example_tag(trimmed) {
+            in_example_tag = true;
+            continue;
+        }
 
         if trimmed.starts_with("//") {
             if !code.is_empty() {
@@ -1824,9 +1960,7 @@ pub fn generate_pkg_docs(
     let api_count = all_api_sections.len();
     // The ABSOLUTE path: a relative `graphics/doc` reads like part of the project you
     // are standing in, which is how stray doc trees ended up committed (loft#911).
-    let shown = out_dir
-        .canonicalize()
-        .unwrap_or_else(|_| out_dir.clone())
+    let shown = crate::portable_path::plain_canonical(&out_dir)
         .display()
         .to_string();
     println!(
@@ -1963,5 +2097,135 @@ pub enum Shape { Circle, Square }
             !sigs.iter().any(|s| s.contains("const")),
             "const excluded, got {sigs:?}"
         );
+    }
+
+    /// A worked-example tag DEFINITION is bookkeeping, and a topic page must not print it.
+    ///
+    /// `@FTR-037` reached the published Sorted Collections page as a bare paragraph
+    /// beginning "@FTR-037 —". The whole comment block has to go: the description wraps,
+    /// so dropping only the tagged line leaves its continuation as an orphan sentence.
+    #[test]
+    fn a_worked_example_tag_block_is_not_rendered_as_prose() {
+        let src = "\
+// Prose the reader asked for.
+
+// @FTR-037 — a `sorted` collection keeps its order as records arrive, descending on a
+// `-key`, and answers a lookup by that key
+fn main() {
+  // ## A heading
+  // Prose after the tag.
+}
+";
+        let body = render_topic_body(src, &HashMap::<String, String>::new());
+        assert!(
+            !body.contains("FTR-037"),
+            "the tag must not reach the page: {body}"
+        );
+        assert!(
+            !body.contains("answers a lookup by that key"),
+            "the tag's continuation line must go with it: {body}"
+        );
+        // The control: prose on BOTH sides of the block still renders, so the test is
+        // measuring suppression of the block and not suppression of everything.
+        assert!(
+            body.contains("Prose the reader asked for."),
+            "prose before the tag survives: {body}"
+        );
+        assert!(
+            body.contains("Prose after the tag."),
+            "prose after the tag survives: {body}"
+        );
+        assert!(
+            body.contains("A heading"),
+            "a heading after the tag survives: {body}"
+        );
+    }
+
+    /// A citation is a BLOCK: the opener and the lines it wraps onto both go, and the
+    /// blank that ends it stays so the paragraphs either side do not weld together.
+    #[test]
+    fn a_worked_example_citation_is_dropped_with_its_continuation_lines() {
+        let doc = vec![
+            "The topmost node under this screen point, or -1.",
+            "Example: @STG-006 — picking samples alpha, so a click falls",
+            "through a hole.",
+            "",
+            "Walks the draw order BACKWARDS, so the node drawn last is tested first.",
+        ];
+        let kept = without_example_citations(&doc);
+        assert_eq!(
+            kept,
+            vec![
+                "The topmost node under this screen point, or -1.".to_string(),
+                String::new(),
+                "Walks the draw order BACKWARDS, so the node drawn last is tested first."
+                    .to_string(),
+            ],
+            "opener and continuation go, the separating blank stays"
+        );
+    }
+
+    /// The control the block rule needs: a tag written INSIDE a sentence is the author's
+    /// prose, not bookkeeping, so only a line that OPENS with the citation is dropped.
+    /// A predicate that matched any tag would cut `hex_shape`'s measurement in half.
+    #[test]
+    fn a_tag_inside_a_sentence_is_prose_and_survives() {
+        let doc = vec!["half of `D` sits 1.1021 degrees off its nominal (@HXS-002), so the"];
+        assert_eq!(
+            without_example_citations(&doc),
+            vec![doc[0].to_string()],
+            "a mid-sentence tag is the author's prose"
+        );
+        assert!(!opens_example_citation(doc[0]));
+    }
+
+    /// Consecutive citations are one run, and a citation that ends the comment needs no
+    /// terminator — the two shapes that make up most of the distribution's 377.
+    #[test]
+    fn consecutive_citations_all_go_and_a_trailing_one_needs_no_blank() {
+        let doc = vec![
+            "Seed an independent stream.",
+            "Example: @RND-001 — the reason to prefer this over `rand_seed`.",
+            "Example: @RND-003 — equal seeds replay exactly.",
+        ];
+        assert_eq!(
+            without_example_citations(&doc),
+            vec!["Seed an independent stream.".to_string()]
+        );
+    }
+
+    /// Both input shapes reach the predicate: the extractors hand on stripped comment
+    /// text, a caller reading source lines has not stripped the `//`.
+    #[test]
+    fn the_citation_predicate_accepts_a_line_with_or_without_its_comment_marker() {
+        assert!(opens_example_citation("Example: @STD-012"));
+        assert!(opens_example_citation(
+            "// Example: @STD-012 — trailing prose"
+        ));
+        assert!(opens_example_citation("  //   Example:  @STD-012"));
+        assert!(
+            !opens_example_citation("Example: see rand_seed"),
+            "prose that merely opens with the word is not a citation"
+        );
+        assert!(
+            !opens_example_citation("Example: @PLN3"),
+            "a plan tag is not the worked-example shape"
+        );
+    }
+
+    /// The tag shape is deliberately narrow so it cannot swallow loft's tracker families.
+    #[test]
+    fn the_example_tag_shape_excludes_the_tracker_families() {
+        assert!(
+            is_example_tag("STD-001"),
+            "three letters, hyphen, three digits"
+        );
+        assert!(is_example_tag("FTR-037 — trailing prose is fine"));
+        assert!(!is_example_tag("PLN3"), "@PLN3 is a plan, not an example");
+        assert!(!is_example_tag("P259"), "@P259 is a P-issue");
+        assert!(!is_example_tag("F7"), "@F7 is a feature");
+        assert!(!is_example_tag("FR-B-Copy"), "@FR- is a formal rule");
+        assert!(!is_example_tag("STD-01"), "two digits is not the shape");
+        assert!(!is_example_tag("ST-001"), "two letters is not the shape");
     }
 }

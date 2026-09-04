@@ -36,7 +36,8 @@ Usage:
     scripts/release-checklist.py --undo M-win-selfupdate
     scripts/release-checklist.py --json
 
-Progress on the manual half is kept in `.release-checklist/<version>.json` -- local
+Progress on the manual half is kept in `doc/claude/releases/<cycle>/checklist.json`,
+committed with the tree -- a tick made on one machine is a tick on every machine
 state, never committed, and never consulted for an automatic item.
 """
 
@@ -51,7 +52,18 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STATE_DIR = os.path.join(ROOT, ".release-checklist")
+def cycle_of(version: str) -> str:
+    """The release cycle a Cargo version belongs to: `2026.9.0` -> `2026-09`, which is both the
+    `YYYY-MM` branch name and the directory under `doc/claude/releases/`.  A pre-calendar
+    version (`0.8.4`) is its own cycle."""
+    major, minor, *_ = version.split(".")
+    return f"{major}-{int(minor):02d}" if int(major) >= 2000 else version
+
+
+def state_path(version: str) -> str:
+    """Where this version's manual-item record lives: beside the cycle's release write-up,
+    committed, so the evidence survives the machine it was gathered on."""
+    return os.path.join(ROOT, "doc", "claude", "releases", cycle_of(version), "checklist.json")
 REPO = "loft-lang/loft"
 
 # States an item can be in.  `UNKNOWN` is deliberately not a pass: a check that could not
@@ -663,6 +675,52 @@ def check_smoke_ran(version: str, network: bool):
     return OK, f"bundle smoke ran and passed on all {len(ran)} legs"
 
 
+def check_release_gate(network: bool):
+    """The newest completed `release-gate.yml` run for HEAD's commit, and its verdict.
+
+    The gate is every nightly, run deliberately against ONE commit and ending in one
+    verdict (`make release-gate`).  It is keyed by COMMIT on purpose: the release evidence
+    RELEASE.md asks for is a run on the tag candidate, and a run on any other commit --
+    last night's `main`, the branch before its final fix -- is not that, however green.
+    A run still in flight is UNKNOWN, not a pass, for the same reason a check that could
+    not run is.
+    """
+    if not network:
+        return UNKNOWN, "skipped (--no-network)"
+    code, sha = sh("git", "rev-parse", "HEAD")
+    if code != 0:
+        return UNKNOWN, "could not read HEAD"
+    short = sha[:12]
+    code, out = sh(
+        "gh", "run", "list", "--workflow", "release-gate.yml", "--commit", sha,
+        "--json", "databaseId,conclusion,status,createdAt,url", "--limit", "10",
+        timeout=90,
+    )
+    if code != 0:
+        if "404" in out:
+            # A dispatchable workflow has to be on the default branch; until this one has
+            # merged, GitHub answers as if it did not exist.
+            return UNKNOWN, "release-gate.yml is not on GitHub's default branch yet — merge it, then `make release-gate`"
+        return UNKNOWN, f"could not list release-gate runs: {out.splitlines()[-1] if out else code}"
+    try:
+        runs = json.loads(out or "[]")
+    except json.JSONDecodeError:
+        return UNKNOWN, "could not parse `gh run list`"
+    if not runs:
+        return UNKNOWN, f"no release-gate run for {short} — `make release-gate` (the branch must be pushed)"
+    run = max(runs, key=lambda r: r.get("createdAt", ""))
+    when = run.get("createdAt", "")[:16].replace("T", " ")
+    if run.get("status") != "completed":
+        return UNKNOWN, f"run for {short} still {run.get('status')} (started {when}) — {run.get('url')}"
+    if run.get("conclusion") == "success":
+        return OK, f"GREEN for {short} at {when} — {run.get('url')}"
+    return (
+        FAIL,
+        f"{run.get('conclusion')} for {short} at {when} — the `verdict` job names the red "
+        f"legs: {run.get('url')}",
+    )
+
+
 def changed_since_last_tag(version: str, paths: list[str]) -> bool:
     """Did any of `paths` change since the previous release?
 
@@ -772,10 +830,11 @@ def build_items(version: str, network: bool) -> list[tuple[str, list[Item]]]:
         Item(
             "M-valgrind",
             "Valgrind-clean on the TAG CANDIDATE",
-            "valgrind target/release/loft <script> over tests/scripts/ + tests/docs/",
-            "`ERROR SUMMARY: 0 errors from 0 contexts` AND `definitely lost: 0 bytes` "
-            "— RELEASE.md § Memory safety says run it on the candidate, not last week",
-        ),
+            "scripts/valgrind-sweep.sh   # interpreter + native, every script and document",
+            "GREEN — no invalid access and nothing definitely lost on either backend.  A "
+            "possibly-lost record is Rust's interior pointers, not a leak, and a leaked STORE is "
+            "M-leaks' question (TESTING.md § Occasional valgrind pass)",
+),
         Item(
             "M-leaks",
             "Zero-leak gate re-verified on the TAG CANDIDATE",
@@ -802,9 +861,11 @@ def build_items(version: str, network: bool) -> list[tuple[str, list[Item]]]:
         Item(
             "M-docs-review",
             "Pre-release documentation review (RELEASE.md steps 1-4 + 8)",
-            "load the doc-quality skill first, then walk the steps",
+            "load the doc-quality skill first, then walk the steps; step 8 is "
+            "`make clippy-review`",
             "stale problem docs removed, code links resolve, every doc reachable, "
-            "clippy suppressions re-justified.  Steps 5-7 are deferred (2026-05-15)",
+            "clippy suppressions measured (dead ones named, live ones explained).  "
+            "Steps 5-7 are deferred (2026-05-15)",
         ),
         Item(
             "M-monthly-docs",
@@ -841,23 +902,17 @@ def build_items(version: str, network: bool) -> list[tuple[str, list[Item]]]:
         ),
     ]
 
-    nightlies = [
-        ("ci.yml (full matrix, incl. Windows)", "gh workflow run ci.yml --ref <tag>"),
-        ("miri.yml (UB / ASan / TSan / poison)", "gh workflow run miri.yml --ref <tag>"),
-        ("registry-validation.yml", "gh workflow run registry-validation.yml"),
-        ("revalidate-libs.yml", "gh workflow run revalidate-libs.yml"),
-        ("browser-threads.yml", "gh workflow run browser-threads.yml"),
-        ("repro-build.yml", "gh workflow run repro-build.yml"),
-    ]
+    # Every nightly, run deliberately against THIS commit in one CI run with one verdict
+    # (`release-gate.yml`).  This used to be six manual items, one per nightly, each
+    # dispatched by hand and ticked by a person; keyed by HEAD's commit it is now
+    # measured, and a run on any other commit does not count (RELEASE.md § The nightlies).
     nightly_items = [
         Item(
-            f"M-nightly-{i}",
-            f"Nightly proven green ON THE TAG CANDIDATE: {name}",
-            cmd,
-            "a deliberate run against this tree — not last night's badge.  If it cannot "
-            "run here, say so and name what was substituted (RELEASE.md § The nightlies)",
-        )
-        for i, (name, cmd) in enumerate(nightlies, 1)
+            "A-release-gate",
+            "The release gate is GREEN on this commit (every nightly, one run, one verdict)",
+            "make release-gate    # dispatches release-gate.yml on the pushed branch and waits",
+            check=lambda: check_release_gate(network),
+        ),
     ]
 
     after_tag = [
@@ -985,7 +1040,7 @@ def build_items(version: str, network: bool) -> list[tuple[str, list[Item]]]:
 
 
 def load_state(version: str) -> dict:
-    p = os.path.join(STATE_DIR, f"{version}.json")
+    p = state_path(version)
     if os.path.isfile(p):
         with open(p, encoding="utf-8") as f:
             return json.load(f)
@@ -993,8 +1048,9 @@ def load_state(version: str) -> dict:
 
 
 def save_state(version: str, state: dict) -> None:
-    os.makedirs(STATE_DIR, exist_ok=True)
-    with open(os.path.join(STATE_DIR, f"{version}.json"), "w", encoding="utf-8") as f:
+    p = state_path(version)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2, sort_keys=True)
         f.write("\n")
 

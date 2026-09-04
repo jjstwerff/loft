@@ -123,7 +123,7 @@ fn main() {
 
   // ## Float null compares uniformly with every other scalar
   // Floats store null as `NaN` internally, but null COMPARISON is uniform with
-  // every other scalar type (@PLN102 null model): `null == null` is TRUE, null is
+  // every other scalar type: `null == null` is TRUE, null is
   // not equal to any real value, and null orders as the low extreme. Detect a
   // null float with `f == null` (or `!f` / `f ?? default`) — NOT the old `f != f`
   // trick, which no longer works now that `null == null` is true.

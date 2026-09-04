@@ -6,13 +6,37 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** (D-tup-4's KEYED half CLOSED 2026-08-31, loft#1230 — below); D-tup-5 and D-tup-6 opened and closed
+OPEN: **0** (D-tup-7 opened and closed 2026-09-04, loft#1350 — below; D-tup-4's KEYED half CLOSED 2026-08-31, loft#1230); D-tup-5 and D-tup-6 opened and closed
 2026-08-28; D-tup-3 opened and closed 2026-08-26; D-tup-2 closed the day the
 rule it needed was written down.  Bounded by the oracle note below — **and D-tup-3 is what that
 note was warning about**: it was found by giving an element a HEAP type, which this doc's
 all-`(integer, integer)` oracle cannot express, so the zero above never covered it.  D-tup-5 and
 D-tup-6 are two more from the same blind spot, one axis further: a NULLABLE element, which the
 all-`(integer, integer)` oracle cannot express either.
+
+### D-tup-7 — OPENED AND CLOSED (2026-09-04, loft#1350): a lifetime-tuple result refused to join a tuple literal in an `if`
+
+A lifetime-bearing tuple is ONE notion in two spellings: the stack tuple an author writes —
+`([0], "d")`, or a local holding one — and the synthetic `__tuple<…>` record a function's
+return is boxed into so `(F-Ret)` can hand every element out owned.  `if c { np(b) } else {
+dp }` put the two spellings on the two arms: the then arm yields the record, the else arm is
+parsed against the then arm's type, and `convert` has no route from a stack tuple to the
+record — *"expected __tuple<vector<integer>,text>, got (vector<integer>, text) on else"*, for
+a program that reads as one type to its author.  Written with the literal FIRST it compiled
+(the record does convert to the tuple), and with both arms as calls it compiled; the refusal
+was one direction of one join.  loft#1349 widened it: a lambda's tuple return is boxed the
+same way now, so `if c { lam(b) } else { dp }` moved from an alias to this refusal.
+
+**Closed in `block_result`, by the boxing a function tail already takes.**  An `else` arm
+that yields a stack tuple whose element types spell the SAME synthetic name as the expected
+record is boxed into its own work-ref (`rewrite_tail_tuple_with_work_ref`) and retyped as
+the record, so `parse_if` joins two records — the arm kind a struct literal already is; a
+tuple of a different shape keeps the refusal, which is then about the elements.  Guard
+`tests/scripts/1350-a-lifetime-tuple-result-joins-a-tuple-literal.loft` (the four join
+directions, a named and a fn-ref callee, a literal local and an inline literal, the
+mismatched shape that must still refuse), falsified at `1bb5e1b8` on both backends.  Held
+fixed and filed apart: a tuple local YIELDED by an arm is moved on `--native` and a later
+read refuses to build (loft#1354).
 
 ### D-tup-5 — OPENED AND CLOSED (2026-08-28, loft#1122): a member was not parsed against the type its position names
 
@@ -384,3 +408,25 @@ than a third spelling both would have to learn.  Guard:
   the rule is an open design question (**loft#1102**); either way `(T-Cons)` owes a clause, and
   the `OPEN: 0` above does not cover this because the oracle carries no collection element
   either.
+
+## Carried by tuples.md until 2026-09-04
+
+The rules doc used to carry these beside its `OPEN` line — closure summaries, and notes on
+the times the count read 0 over a live entry.  They are timeline, so they moved here
+unchanged; [tuples.md](tuples.md) now states only what is open.
+
+### D-tup-4's keyed half, and why the zero stood over it
+
+`D-tup-4`'s KEYED half closed 2026-08-31 (loft#1230): a keyed collection given to a tuple is now
+COPIED like its vector twin, so `(T-Cons)`'s independence holds for every element type.
+
+⚠ **The zero above is only as strong as the Conformance list below it, and that list checked
+`(T-Cons)`'s copy with a VECTOR** — the one element type that already obeyed it. The keyed half
+stood for five days after the vector half closed because the rule's own example exercised the
+passing shape. A conformance entry that names one member of a family is a claim about that
+member, not the family.
+
+### the status line formal/README.md's area table carried until 2026-09-04
+
+**0 open** (2026-08-31) — D-tup-1 closed 2026-08-20 (the reference tuple has a rule; `&(τ,…)`'s SCALAR-only restriction is now binding.md's D-bind-11, not an unspecified composition), and D-tup-4's keyed half closed 2026-08-31 (loft#1230: a keyed collection given to a tuple is COPIED like its vector twin, so `(T-Cons)`'s independence holds for every element type) — positional products (n≥2); `.i` a compile-time index; `(a,b) = …` destructuring; tuple returns. ⚠ its differential oracle is all-`(integer, integer)`: the doc read `0 open` through loft#1004 and loft#1005, both `text`-element deviations it could not see
+

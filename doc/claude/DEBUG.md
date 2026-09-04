@@ -1153,7 +1153,7 @@ struct fields.
 | `LOFT_STORES=log` | Per-alloc/free trace (`+ alloc #N`, `- free #N`). | Find a `free` then `alloc` of the same store while a `DbRef` is still live.  Note: a store is logged under the var name at *free* time, which may differ from its *alloc* name. |
 | `LOFT_STORES=warn` | Warns when >30 stores are active. | Catch a runaway leak early.  **Note (@PLN103):** this OVER-warns — a large *working set* (many concurrently-live stores, all freed) trips it though it is not a leak.  Prefer `=timeline` to disambiguate. |
 | `LOFT_STORES=timeline` (@PLN103) | Per-store lifeline with a STABLE id `#<store_nr>.<seq>` (the `seq` disambiguates the reused `store_nr` slot, so a `free` prints the same id as its `alloc`), plus an exit SUMMARY: `<allocs>, <frees>, peak <N> concurrently-live (working set)` reconciled with the authoritative leak count. Both backends. | The working-set-vs-leak question `=warn` can't answer: a high `peak` with `NO leak` is a big-but-clean working set; a real leak reports `N user store(s) LEAKED`.  Also: match a freed-then-reused slot by its `.seq`.  **The label column is native-only** (loft#759): generated code passes the variable to `free_named`, so a native line reads `free #3.5 var___ref_1`, while every interpreter line reads `·` — the interp `FreeRef` opcode takes its `DbRef` off the stack and carries no name.  So on `--interpret` the timeline says WHICH store died, never which site killed it; pair it with `loft introspect` (which does name the free) rather than reading the interp column for attribution. |
-| `LOFT_TEXT_TIMELINE` (@PLN104) | The **text-buffer** analogue of `LOFT_STORES=timeline` — text values are Rust `String`s on the stack frame, so their heap allocation is INVISIBLE to the store timeline / `check_store_leaks`. Any value → exit SUMMARY (`<allocs>, <frees>, peak <N> bytes live`) + a `LEAKED #seq fn=<d_nr> <bytes> <content>` line for every `String` still live at exit; `=timeline` adds a per-op `grow`/`free` lifeline. Interp only (native RAII frees text). Realloc-safe (capacity delta by ptr). | **The loft#568 owned-text-return orphan class** — the leak `LOFT_STORES=timeline` is blind to and the ASan `ir_read` suppression measures UNRELIABLY (stack-substring, false-pos/negs by `malloc_context_size`). This is DETERMINISTIC and names the leaking fn + content. Reach for it first on a suspected text-return leak. |
+| `LOFT_TEXT_TIMELINE` (@PLN104) | The **text-buffer** analogue of `LOFT_STORES=timeline` — text values are Rust `String`s on the stack frame, so their heap allocation is INVISIBLE to the store timeline / `check_store_leaks`. Any value → exit SUMMARY (`<allocs>, <frees>, peak <N> bytes live`) + a `LEAKED #seq fn=<d_nr> <bytes> <content>` line for every `String` still live at exit; `=timeline` adds a per-op `grow`/`free` lifeline. Interp only (native RAII frees text). Realloc-safe (capacity delta by ptr). ONE ledger for the process, so a `par` worker's or a `parallel` arm's buffers count; and the summary prints at the end of a `--tests` / `loft test` run as well as at a program's exit (loft#1357 — before that a worker's orphan read as "NO text leak" and a `main`-less guard printed nothing). | **The loft#568 owned-text-return orphan class** — the leak `LOFT_STORES=timeline` is blind to and the ASan `ir_read` suppression measures UNRELIABLY (stack-substring, false-pos/negs by `malloc_context_size`). This is DETERMINISTIC and names the leaking fn + content. Reach for it first on a suspected text-return leak. |
 | `LOFT_TRACE_DB=1` | Every `OpDatabase` call with the type it allocates and the `DbRef` the target slot held ON ENTRY, **and every free with an `already_free` column**.  **Both backends** — the native runtime's line names the type too, so a call that crosses into a package's shared library still prints (it did not before loft#810, which is exactly where the adoption was). | Pin cross-iter slot dangling (a slot's stale DbRef gets `clear+claim`'d, clobbering another var's record).  The ENTRY `DbRef` is the whole point: a non-null one means this allocation ADOPTED a slot, and if a fresh `null_named` handed that same slot to somebody else first, the record now has two owners.  Pair with `LOFT_STORES=log` — the interleaving of `+ alloc #N` against the adoptions is what names the second owner — and confirm with `LOFT_NO_SLOT_REUSE=1`.  **`already_free=false` is the second owner arriving the OTHER way**: the free itself is the fault, because the `DbRef` reaching it is a stale copy and the slot it releases is still in use — the next allocation then takes it legitimately, so the allocation trace alone shows nothing wrong (loft#1085).  Added during PLAN51 Cluster II diagnosis. |
 | `LOFT_TRACE_CR=1` | Every interp `OpCopyRecord` with src+dst + Canvas field reads BEFORE and AFTER copy. | Pin same-store copy corruption (`remove_claims` frees nested vec records before `copy_block` reads them) or wrong-source mid-copy.  Added during PLAN51 Cluster II diagnosis. |
 | `LOFT_TRACE_LEX=1` (#625) | The lexer's POSITION bookkeeping: every recorded identifier position (`idpos`), every `to()` seek, every `revert`, every memory `replay`. | **A diagnostic naming the wrong LINE.** The reporting cursor is shared and long-lived: any warning pass may seek it BACKWARDS to point at an earlier site, and `to()` moves only that cursor — the tokenizer keeps counting lines from wherever it was left, so an unrestored seek shifts every LATER diagnostic and the symptom surfaces in an unrelated message. Run it and **diff the two passes**: the pass that records a token at the wrong line names the seek just before it. |
@@ -1509,6 +1509,37 @@ the shipped build). The copy would have inherited it. Two minutes on the control
 on the destination actually being null"*, which is what the rule said in the first place.
 
 ---
+
+**A negative result is only as good as the tree it was measured on.** A candidate fix
+rejected early can have been rejected by a DIFFERENT bug still live in the same subsystem: a
+widening was tried, answered wrong, backed out and written into an issue as a negative
+result; two commits later the real cause of that wrong answer — a slot-ordering defect in the
+same emitter — was fixed, and the widening re-applied on top was correct all along. The
+retraction was wrong too: the over-free later blamed on the same widening reproduced with it
+REVERTED. When a fix lands in a subsystem, re-run every candidate backed out of it before
+trusting the reason it was backed out; and before writing a negative result into an issue,
+run the failing cell with the change reverted — if it still fails, the change was never the
+cause.
+
+**A repro can contain the WORKING form of the same construct, and that form can repair the
+defect.** loft#1125 was filed with a dense `index<IS[k]>` local beside the nullable one that
+failed; the dense local runs the pre-registration walk that sizes the element struct, so the
+nullable one inherited a correct layout and the file as filed printed the right answer.
+Removing the dense twin refused the file instantly — the real axis was *no dense twin of this
+element type anywhere in the program*. When a filed repro is green, DELETE its sibling cells
+before concluding it was fixed, and give every cell of the guard its own element type and its
+own name, with a header sentence saying why: a guard built the natural way (one struct, a
+dense cell beside every nullable cell) passes on the broken build.
+
+**A guard that can only fire on one word size names where it can SPEAK, not where the
+corruption is.** `Store::checked_offset` raises `Store offset overflow` from
+`isize::try_from(rec * 8 + fld)` with `u32` inputs — an offset that always fits an `i64`, so
+the raise is dead on every 64-bit target and live only on wasm32. loft#950 was filed as *"the
+`--html` page traps; the interpreter, `--native` and `--native-wasm` are all green"*, which
+reads as a browser-specific defect. The same corrupted `rec` on a 64-bit build computes a
+representable offset and reads whatever lies there — the silent-wrong half of the same bug.
+Before believing "only the browser", ask whether the other targets have a guard that could
+have spoken; `LOFT_STRICT_STORES=1` is the one that speaks on all of them.
 
 ## Using the Test Framework for Quick Iteration
 

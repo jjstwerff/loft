@@ -501,6 +501,7 @@ reframes the rest:
 | `@FR-O-Proxy` | empty `deps` as a stand-in for "owner" — unsound alone | `Type::depend().is_empty()`, 24 sites |
 | `@FR-O-Override` | the never-free veto that makes the proxy safe at a free | `Function::is_skip_free` |
 | `@FR-O-Latest` | latest assignment's ownership + the LOOP DEPTH it was taken at | `Scopes::owned_refs` |
+| `@FR-O-Witness` | a MIXED-ownership local's owner, per RUN, by store identity | `Scopes::owner_witness` (`owner_witness_locals`, `witness_set_kind`), `Function::owner_witness`; both emitters read the flag to copy FRESH and to decline the materialise arms |
 
 **`deps` is not the oracle.** `ownership_of` derives own-vs-borrow from the IR — a store
 mint is `Owned`, a projection is `Borrowed(base)`, a call resolves through the callee's
@@ -773,6 +774,49 @@ element type in one struct are several routes to a single record set* — even t
 loft#901 and loft#927 are all fixes to it and two more landed this week (a view beside a
 `vector<S?>`, and group formation ceasing to depend on declaration order).  An edge the rules
 cannot express is a rule that wants extending: `Col-Group` is the missing one.
+
+## The text return buffer — one home, six restatements, one of them a user's variable (2026-09-04)
+
+The notion: *the hidden `&text` buffer a text function delivers its result through*.  Its one
+home is `Definition::text_work_buffers` — a HIDDEN `RefVar(Text)` attribute, which is also the
+count the fn-ref dispatch ABI pushes, so the interpreter could never have disagreed with it.
+Six sites restated the test as *any* `RefVar(Text)` attribute, three of them under a comment
+saying `text_return` never sets `hidden` (it has, since @P387): `holds_text_work_buf`, the
+loft#568 orphan predicate's `has_buf`, `return_buffer_name`, the two `needs_p205_scratch`
+gates, and `def_returns_owned_string`.  A user-written `&text` parameter is a `RefVar(Text)`
+attribute too, and the restatement read it as the buffer.
+
+What that cost was two defects with one root (loft#1338).  The orphan predicate saw `fn
+f(s: &text, c) -> text { if c { return mk() } … }` as already buffered and declined to hand it
+one, so the interpreter delivered the early return through the orphaning `__ret_N` copy; and
+`--native`, asked the same question by its own spelling, chose `s` as the return buffer and
+wrote the returned text INTO the caller's variable — a silent wrong answer, with the return
+value itself correct.  All six now read the one home, which is the whole fix on the native
+side.  `tests/scripts/1338-…loft` `d5` is the cell; `Data::fnref_text_buffers` still counts a
+`RefVar(Text)` attribute as invisible when matching fn-ref candidates, which is moot while the
+grammar admits no `&text` in a function type, and is recorded here so the next reader does not
+re-derive it.
+
+## Who releases a text buffer — one question, the sites that answer it (2026-09-04)
+
+The notion: *a `String` a frame minted is released by the frame, or by the caller it is
+delivered to* (@FR-F-Call / @FR-F-Ret).  There is no one home: the answer is given where
+each shape is lowered, and loft#1357 was eight of those sites answering for a neighbouring
+shape.  The sites, so the next reader can find them all:
+
+| site | releases |
+|---|---|
+| `scopes::get_free_vars` | every owned text local at scope exit (unconditional unless `skip_free`) |
+| `scopes::free_vars` — the buffer arm, the staged arm, the bare-local arm | an owned text RETURN: written into the caller's hidden buffer (per arm, staged when the value reads the buffer, moved when it is a bare local), the copied sources freed by `free_copied_text_sources` |
+| `scopes::insert_free` — the block-tail leg | the same three deliveries for an implicit tail |
+| `scopes::convert` — the statement scan | a `??` temp its statement consumed; a scalar tail's temp after the scalar is hoisted; an `if` condition's temp after the condition is evaluated; a `parallel` arm's `__work_N` on the worker |
+| `Parser::parse_block` (`do_if_acc` / `do_tret_bind`) | a lambda's accumulator or bind temp, moved into the one buffer the lambda holds |
+| `Parser::promote_monomorph_text_return` (+ the re-ask in `try_generic_instantiation`) | a monomorph's returns, routed into `__tret` — including one inside a loop |
+| `use_analysis::text_return_orphan_risk` | names the function that needs a buffer at all; a returned text LOCAL counts whatever bound it |
+| `collections.rs` (the par element accessor) | a text binding of the element is NOT marked never-free — it copies |
+
+The instrument is `LOFT_TEXT_TIMELINE=1` (one ledger per process, reported at a program's
+exit and at the end of a `--tests` run) and, for the release, `scripts/valgrind-sweep.sh`.
 
 ## Not mergeable — recorded so the question is not reopened
 

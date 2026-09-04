@@ -1,0 +1,140 @@
+name: Release gate
+
+# One deliberate run of everything a release must have green, against ONE commit,
+# ending in ONE verdict.
+#
+# Why a dispatch and not the schedule.  The nightlies answer "is main healthy?" on a
+# clock nobody controls: GitHub queues scheduled runs behind everything else, and the
+# 03:00 UTC daily has STARTED anywhere between 03:34 and 14:45 (measured over
+# 2026-08-16..09-04).  They also test whatever `main` is at that moment, never the
+# commit about to be tagged.  And a PR's CI is deliberately narrower than the
+# nightly — its macOS and Windows legs are placeholders, the stdlib round-trip and the
+# differential oracle are off its path, and seven jobs are advisory (visible, never
+# required) — so a change can be green on every PR and red on the legs that only run
+# after the merge.  A release needs the other answer: THIS commit, EVERY leg, NOW.
+#
+# What it runs: the six nightlies, called as reusable workflows, so this file cannot
+# drift from what the nightly actually tests.  Each takes the path its own
+# `workflow_dispatch` takes — every OS, the round-trip pair and the oracle in
+# `ci.yml`; every sanitizer and invariant gate in `miri.yml`; every published package
+# (`registry-validation.yml`); every shipped library against this tree
+# (`revalidate-libs.yml`); the threaded browser leg (`browser-threads.yml`); the
+# reproducible-build check (`repro-build.yml`).  A red ANYWHERE is a red verdict, and
+# that includes the jobs a PR shows as advisory: informational on a diff, blocking on
+# a release.
+#
+# What it does not do.  Nothing here tags, drafts, publishes, or files an issue —
+# `miri.yml`'s `notify` and `daily-status` stay with the schedule, because a candidate
+# run must neither open nor auto-CLOSE the nightly's tracking issue.  And it replaces
+# nothing: the schedule keeps running and a red nightly is still fixed the day it
+# appears.  A gate at release time is where a month of "we'll look at the nightly
+# later" would pile up, and one red leg per day is a fix while six at once is a slip.
+#
+# How to run it.  `make release-gate` dispatches it on the current (pushed) branch and
+# waits; `make release-checklist` then reads the newest completed run for HEAD's
+# commit (`A-release-gate`) — a run for any other commit is not evidence for this one.
+# By hand:
+#
+#   gh workflow run release-gate.yml --ref <branch-or-tag>
+#
+# A dispatch needs the workflow file on the default branch, so this can be dispatched
+# only once it has merged.  Before that, a push to the `release-gate-probe` branch runs
+# it from the pushed tree — the same probe pattern `ci-probe` and `gate-probe` use.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [release-gate-probe]
+
+# Two dispatches on the same ref queue; a release run is never cancelled by a newer
+# one.  A cancelled gate proves nothing and a re-run costs an hour.
+concurrency:
+  group: release-gate-${{ github.ref }}
+  cancel-in-progress: false
+
+# The union of what the called workflows declare.  A called workflow can only NARROW
+# what its caller grants; a job declaring more than the caller holds is a workflow
+# error, even where that job would be skipped.  `issues: write` is `miri.yml`'s
+# `notify` (skipped under the gate), `pull-requests: write` is `ci.yml`'s
+# `nightly-status` (PR-only, so skipped too), `actions: read` is the daily digest.
+permissions:
+  contents: read
+  actions: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  ci:
+    name: ci.yml
+    uses: ./.github/workflows/ci.yml
+    with:
+      os: all
+    secrets: inherit
+
+  miri:
+    name: miri.yml
+    uses: ./.github/workflows/miri.yml
+    with:
+      from_gate: true
+    secrets: inherit
+
+  registry:
+    name: registry-validation.yml
+    uses: ./.github/workflows/registry-validation.yml
+    secrets: inherit
+
+  libs:
+    name: revalidate-libs.yml
+    uses: ./.github/workflows/revalidate-libs.yml
+    secrets: inherit
+
+  browser:
+    name: browser-threads.yml
+    uses: ./.github/workflows/browser-threads.yml
+    secrets: inherit
+
+  repro:
+    name: repro-build.yml
+    uses: ./.github/workflows/repro-build.yml
+    secrets: inherit
+
+  # The one line the release reads.  A called workflow's result is `success` only when
+  # every job in it succeeded, so a red advisory job inside `ci.yml` is a red `ci` here
+  # without any list of job names to keep in step.  Anything that is not `success`
+  # counts — `cancelled` and `skipped` included: a leg that did not run proved nothing,
+  # and treating it as green is how a gate stops gating without ever going red.
+  verdict:
+    name: verdict
+    needs: [ci, miri, registry, libs, browser, repro]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: One verdict, every leg named
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          SHA: ${{ github.sha }}
+          REF: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Release gate — \`$REF\` @ \`${SHA:0:12}\`"
+            echo
+            echo "| leg | result |"
+            echo "|---|---|"
+            printf '%s' "$RESULTS" | jq -r '
+              to_entries[]
+              | "| \(.key) | \(if .value.result == "success" then "✅ success" else "❌ \(.value.result)" end) |"'
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          red=$(printf '%s' "$RESULTS" | jq -r '
+            to_entries[] | select(.value.result != "success") | "\(.key)=\(.value.result)"' \
+            | paste -sd' ' -)
+          if [ -z "$red" ]; then
+            echo "release gate GREEN for ${SHA:0:12}: every leg succeeded"
+            echo "**GREEN** — every leg succeeded. \`make release-checklist\` reads this run for commit \`${SHA:0:12}\`." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "**RED** — not green: $red. Open each leg above for the failing job; the release slips until every one is green on a re-run of this commit (or its fix)." >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::release gate RED for ${SHA:0:12}: $red — $RUN_URL"
+          exit 1

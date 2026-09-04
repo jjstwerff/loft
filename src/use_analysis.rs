@@ -2093,6 +2093,55 @@ impl<'a> Ownership<'a> {
         class
     }
 
+    /// Every EARLY `return <e>` in the body of `d_nr`, classified the way
+    /// [`Self::return_ownership`] classifies the tail.
+    ///
+    /// The tail is one delivery site among several: a function returns from wherever a
+    /// `return` stands, and each site hands the caller a value of its own ownership.  A
+    /// predicate that reads only the tail (`fn f(c) -> text { if c { return mk() } "x" }`)
+    /// answers for the literal and never sees the owned call — which is how such a
+    /// function stayed unbuffered and orphaned one String per early return (loft#1338).
+    /// Not memoised: the tail's class is what callers consult and cache; this is asked
+    /// once, by the orphan predicate, for the function's own delivery.
+    fn early_return_ownerships(&mut self, d_nr: u32) -> Vec<Own> {
+        let def = self.data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) || fn_body_tail(&def.code).is_none() {
+            return Vec::new();
+        }
+        // A null arm returns a SENTINEL, not a buffer: `return null` in a `-> text?`
+        // function lowers to `OpConvTextFromNull()`, a constant Str with nothing behind
+        // it to orphan, and reading it as owned text would hand a buffer to a function
+        // whose real tail forwards a borrow (`text_src(i, tag) { if i == 0 { return
+        // null } return tag }`), which is the promotion the framework's own verdict
+        // declines.
+        let null_text = self.data.def_nr("OpConvTextFromNull");
+        let mut returned: Vec<Value> = Vec::new();
+        def.code.walk(&mut |v| {
+            if let Value::Return(inner) = v
+                && !matches!(inner.unspan(), Value::Null)
+                && !matches!(inner.unspan(), Value::Call(d, args) if *d == null_text && args.is_empty())
+            {
+                returned.push((**inner).clone());
+            }
+        });
+        if returned.is_empty() || !self.visiting.insert(d_nr) {
+            return Vec::new();
+        }
+        let mut defs = Defs::default();
+        collect_defs(&def.code, &FillOps::of(self.data), &mut defs);
+        let outer_vars = std::mem::take(&mut self.visiting_vars);
+        let classes = returned
+            .iter()
+            .map(|e| {
+                self.visiting_vars.clear();
+                self.classify(e, &def.variables, &defs)
+            })
+            .collect();
+        self.visiting_vars = outer_vars;
+        self.visiting.remove(&d_nr);
+        classes
+    }
+
     /// Classify a value expression within `func` (using `defs` to resolve local
     /// vars to their defining RHS). The recursive core of the analysis.
     fn classify(&mut self, node: &Value, func: &Function, defs: &Defs) -> Own {
@@ -3276,6 +3325,16 @@ pub fn callee_of(data: &Data, d_nr: u32, value: &Value) -> Option<u32> {
         // the `Enum(__nullable<S>, true)` the field rewrite produces (loft#1114).  Reading
         // `Optional` alone matched nothing here: by the time a return type reaches this,
         // the rewrite has already run.
+        //
+        // loft#1353 — the nullable spelling IS admitted where the return borrows a VISIBLE
+        // argument: the reassign copy the readers emit brackets every ref argument
+        // (`protectable_ref_args`, both spellings since loft#1245), so the source-free that
+        // follows the copy cannot reach the caller's store, and the copy is what `(B-Copy)`
+        // asks of `j = if c { hr(b) } else { d }` — a nullable record from a fn-ref chosen
+        // by an `if` aliased the argument's field on the interpreter while `--native`
+        // copied.  A return that borrows the CLOSURE (a captured store: the `1114` shape
+        // above) is still declined — no caller variable names that store, so the bracket
+        // cannot protect it and the freed-source bit would reach it.
         Value::CallRef(v, _) => fnref_target_of(
             function_defs(data, d_nr)
                 .rhs
@@ -3283,11 +3342,28 @@ pub fn callee_of(data: &Data, d_nr: u32, value: &Value) -> Option<u32> {
                 .map_or(&[], Vec::as_slice),
         )
         .filter(|d| {
-            data.nullable_struct_payload(data.def(*d).returned())
-                .is_none()
+            let def = data.def(*d);
+            data.nullable_struct_payload(def.returned()).is_none()
+                || !fnref_return_borrows_closure(def)
         }),
         _ => None,
     }
+}
+
+/// Does this lambda's return borrow its CLOSURE — a captured store no caller variable
+/// names?
+///
+/// A return dep that names no visible parameter names the closure record
+/// (`fnref_result_type` reads the same fact at the call: an index past the visible
+/// arguments is the fn-ref slot's own record).  The visible parameters are the leading
+/// non-hidden attributes; a hidden one (a text work buffer, the `__closure` record) is
+/// not a caller-supplied store.
+fn fnref_return_borrows_closure(def: &crate::data::Definition) -> bool {
+    let visible = def.attributes().iter().filter(|a| !a.hidden).count();
+    def.returned()
+        .depend()
+        .iter()
+        .any(|&a| a == u16::MAX || a as usize >= visible)
 }
 
 /// See [`HeapDelivery`].
@@ -3326,20 +3402,53 @@ pub fn text_return_orphan_risk(data: &Data, d_nr: u32) -> Option<&'static str> {
     if !matches!(def.returned().base(), Type::Text(_)) {
         return None;
     }
-    let has_buf = def
-        .attributes()
-        .iter()
-        .any(|a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))));
-    if has_buf {
+    // Only a HIDDEN `&text` buffer delivers a return.  A user-written `&text` parameter
+    // is the caller's variable — counting it here left `fn f(s: &text, c) -> text { if c
+    // { return mk() } … }` unbuffered, and `--native` then wrote the returned text INTO
+    // `s` (loft#1338).  `text_work_buffers` is the one home for the count.
+    if def.text_work_buffers() > 0 {
         return None;
     }
     let borrows_arg = |base: u16| base != u16::MAX && def.variables.is_argument(base);
-    match return_ownership(data, d_nr) {
-        Own::Owned => Some("owned-by-value"),
-        Own::Borrowed { base } if !borrows_arg(base) => Some("view-of-local"),
-        Own::Join { base } if !borrows_arg(base) => Some("join-of-local"),
-        _ => None,
+    // A returned TEXT LOCAL is a view of this frame whatever bound it: a text `Set` copies
+    // bytes into the local's own `String` (`OpAppendText`), so `t = text_src(i, s); return t`
+    // hands up `t`'s buffer, not the argument `text_src` borrowed.  The ownership oracle
+    // follows the binding to `s` — the right answer for the STORE question it exists for,
+    // and one that left this local orphaned on every call (loft#1357).  A `&text` place
+    // (`RefVar`) and an argument are the caller's.
+    let mut returns_text_local = false;
+    let vars = &def.variables;
+    let is_text_local = |e: &Value| {
+        matches!(e.unspan(), Value::Var(v)
+            if !vars.is_argument(*v)
+                && !matches!(vars.tp(*v), Type::RefVar(_))
+                && matches!(vars.tp(*v).base(), Type::Text(_)))
+    };
+    if let Some(tail) = fn_body_tail(&def.code) {
+        returns_text_local |= is_text_local(tail);
     }
+    def.code.walk(&mut |v| {
+        if let Value::Return(inner) = v {
+            returns_text_local |= is_text_local(inner);
+        }
+    });
+    if returns_text_local {
+        return Some("view-of-local");
+    }
+    // The tail first, then every early `return`: each is a delivery site, and one that
+    // hands back frame-local text is enough to orphan (loft#1338).  The kind named is the
+    // first risky site's, which is what the promotion needs to know — it re-routes ALL of
+    // them through the one buffer.
+    let mut own = Ownership::new(data);
+    let tail = own.return_ownership(d_nr);
+    std::iter::once(tail)
+        .chain(own.early_return_ownerships(d_nr))
+        .find_map(|o| match o {
+            Own::Owned => Some("owned-by-value"),
+            Own::Borrowed { base } if !borrows_arg(base) => Some("view-of-local"),
+            Own::Join { base } if !borrows_arg(base) => Some("join-of-local"),
+            _ => None,
+        })
 }
 
 /// Public, test-facing entry: the owned-slot reassignment sites of function `d_nr`.

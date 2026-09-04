@@ -1,9 +1,44 @@
-# Baseline for tests/issues.rs #[ignore = "..."] entries.
-# One `<test_name>\t<reason>` pair per line, sorted by test_name.
-# Updated by tests/doc_hygiene.rs::ignored_tests_baseline_is_current
-# whenever the set drifts.  A drift typically means one of:
+# Baseline of every `#[ignore = "..."]` and `#[cfg_attr(<cfg>, ignore = "...")]` in
+# tests/*.rs and src/**/*.rs.  One `<file>::<test_name>\t<reason>` pair per line,
+# sorted; the file is part of the key because two `src/` tests share a bare name.
+# Checked by tests/doc_hygiene.rs::ignored_tests_baseline_is_current, which fails on
+# any drift.  A drift typically means one of:
 #   - an ignored test just got its fix landed (un-ignore it + delete its line here)
-#   - a new ignored spec landed for a new QUALITY.md item (add its line here)
+#   - a new ignored test landed (add its line here, with the reason it carries)
 #   - the reason message changed (update the line here)
+# `make release-checklist`'s A-ignores reads this file, so a test ignored WITHOUT a
+# reason is a release finding, not just a lint.
 # Regenerate with: `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`
-regen_fill_rs	maintenance: regenerates src/fill.rs — run manually when default/*.loft changes
+src/database/spans.rs::a_frontier_release_moves_the_resident_set	a design measurement: builds ~90 MB of store and PRINTS peak RSS — run with --release --lib --ignored --nocapture
+src/database/spans.rs::record_spans_across_the_generator_matrix	a design measurement: reads a layout and PRINTS, rather than defending an invariant — run with --release --lib --ignored --nocapture
+src/fuzz_keyed.rs::f26_wide_poison_sweep	F2.6 wide poison sweep — heavy; run with --ignored
+src/fuzz_oracle.rs::seed_corpus_replay	F1 seed-corpus replay — heavy; run with --ignored
+src/ir_read.rs::bench_read_data_breakdown	perf bench — run manually with --ignored --nocapture
+src/ir_read.rs::bench_stdlib_load_mmap_vs_parse	perf bench — run manually with --ignored --nocapture
+src/radix_db/pages.rs::box_query_page_span	measurement — run with --release --lib --ignored --nocapture
+src/radix_db/pages.rs::interval_versus_box	measurement — run with --release --lib --ignored --nocapture
+src/radix_db/pages.rs::pan_session	measurement — run with --release --lib --ignored --nocapture
+src/radix_db/pages.rs::record_placement	measurement — run with --release --lib --ignored --nocapture
+src/radix_tree.rs::bench_move_and_proximity	benchmark — run with --release --ignored --nocapture
+src/radix_tree.rs::bench_move_finger	benchmark — run with --release --ignored --nocapture
+src/radix_tree.rs::bench_vs_btreemap	benchmark — run with --release --ignored --nocapture
+src/radix_tree.rs::probe_finger_savings	probe — run with --release --ignored --nocapture
+src/spatial.rs::bench_queries	benchmark — run with --release --ignored --nocapture
+src/trie_db.rs::prefix_query_page_span	measurement — run with --release --lib --ignored --nocapture
+src/trie_db.rs::record_placement	measurement — run with --release --lib --ignored --nocapture
+src/trie_db.rs::warm_cache_session	measurement — run with --release --lib --ignored --nocapture
+tests/codegen_emitter.rs::native_suite_floor_holds	expensive — runs the full native suite; opt-in via `--ignored`
+tests/differential_oracle.rs::oracle_corpus_agrees_across_backends	differential oracle — runs nightly in ci.yml's `test` job (the Differential oracle step); by hand: --test differential_oracle -- --ignored
+tests/format_width_is_bounded.rs::a_positive_width_still_pads	no `ulimit -v` on Windows; the cap is the guard
+tests/format_width_is_bounded.rs::a_width_below_zero_pads_nothing	no `ulimit -v` on Windows; the cap is the guard
+tests/fuzz_differential.rs::keyed_generated_agree_across_backends	F3 differential (rustc per program) — run with --features fuzzing --ignored
+tests/host_call.rs::measure_call_cost	a measurement, not a gate — run with --test host_call measure_call_cost -- --ignored --nocapture
+tests/issues.rs::regen_fill_rs	maintenance: regenerates src/fill.rs — run manually when default/*.loft changes
+tests/leak_cases.rs::leak_cases_native	heavy (rustc per case) — run with --test leak_cases -- --ignored
+tests/leak_cross_mode.rs::p297_nested_call_arg_temp_leak_free_both_backends	heavy (shells out + rustc) — run with --test leak_cross_mode -- --ignored
+tests/leak_cross_mode.rs::p298_const_struct_arg_call_leak_free_both_backends	heavy (shells out + rustc) — run with --test leak_cross_mode -- --ignored
+tests/leak_cross_mode.rs::plain_call_to_loop_local_leak_free_both_backends	heavy (shells out + rustc) — run with --test leak_cross_mode -- --ignored
+tests/ownership_fuzz_gate.rs::fuzz_gate_map54_full_replay	full both-backends replay (rustc per cell) — runs nightly in miri.yml's `release-gate-sweeps` job; by hand: `cargo test --release --test ownership_fuzz_gate fuzz_gate_map54_full_replay -- --ignored`
+tests/ownership_oracle.rs::oracle_dev_free_check_ratchet	dev-tier ratchet — sweeps tests/scripts under check-dev; run on demand
+tests/ownership_oracle.rs::oracle_fact_is_backend_identical_si2	native backend needs rustc per run — runs nightly in miri.yml's `release-gate-sweeps` job; by hand: `cargo test --release --test ownership_oracle oracle_fact_is_backend_identical_si2 -- --ignored`
+tests/ownership_oracle.rs::oracle_leak_scan_ratchet	experimental leak-scan ratchet — sweeps tests/scripts under check-leak; run on demand

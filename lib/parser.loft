@@ -40,6 +40,7 @@ struct FormatSpec {
 // the log as it goes, and the parser itself is internal.  Returning it is what lets a
 // caller (or a doc page) assert that a snippet is valid rather than merely watch the
 // call not crash.
+// Example: @PAR-001
 pub fn parse(name: text, s: text) -> integer {
   p = Parser { };
   p.operators =[
@@ -67,9 +68,19 @@ pub fn parse(name: text, s: text) -> integer {
   p.lexer.set_keywords([
   "for", "in", "if", "else", "fn", "pub", "use", "struct", "enum", "match", "and", "or", "true", "false", "null"
   ]);
-  p.lexer.parse_file("default/01_code.lav");
-  p.cur_file += 1;
-  parse_file(p);
+  // No prelude is loaded, and pointing one at `default/01_code.loft` would be a
+  // REGRESSION rather than the fix it looks like.  `parse` answers a count of the errors
+  // in the source it was given; a prelude's errors land in the same `log` and are added
+  // to that count, so the caller is charged for text they did not write.  Measured: a
+  // clean snippet answers 0 today and 2 with the stdlib loaded, because this parser does
+  // not yet accept every construct `01_code.loft` uses.
+  //
+  // Nothing is lost by leaving it out.  The definitions a prelude would build go into
+  // `p.code`, and `parse` returns `p.log.errors` and discards the rest — so a prelude
+  // cannot change any answer this function gives, only spoil it.  Load one when the
+  // parser starts ANSWERING with what it resolved, and give it its own error channel
+  // then (the path was `default/01_code.lav`, an extension this repo has never had, so
+  // the read had always silently found nothing — loft#1339).
   p.lexer.parse_string(name, s);
   p.cur_file += 1;
   parse_file(p);

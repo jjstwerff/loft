@@ -1147,7 +1147,7 @@ Implement the suspend/resume cycle.
 | CL-5 | Serialisation cost per yield is O(frame depth); deeply recursive `yield from` chains are slow | Flatten recursive generators iteratively using an explicit `vector` stack local |
 | CL-6 | Mutable-reference parameters (`&vector<T>`) in a generator function are not visible to the frame copy | Pass collections by value or use `reference<T>` and write through the reference |
 | CL-8 | On `--native`, a generator yielding a tuple with a **text element** (`iterator<(text, integer)>`) does not yet compile — a yielded `text` is a `&str`, so riding the unified yield codec needs a store intern (`db_from_text`) with a lifetime question still open. Scalar and DbRef-ref tuple elements (`(integer, float)`, `(vector, integer)`, …) work on both backends. | Yield the text from a separate single-`text` generator, or wrap the pair in a record and yield its `reference<S>` |
-| CL-9 | **Mostly fixed (loft#836, slice 1).** A loop whose body ends in ONE unconditional `yield` is now lazy on `--native` too: one iteration per advance, the cursor persisted in the coroutine struct. An infinite or early-`break`-consumed loop-generator therefore stops when its consumer does. FOUR shapes still take the eager `ForLoopBody` buffer, so their side effects still interleave differently: more than one yield per iteration, a yield inside an `if`/`match`, a nested loop, a `continue`, and a statement AFTER the yield (each needs a resume point one state cannot encode — axes A2–A5). A yield of a tuple / fn-ref (the `next_into` channel) or of a struct / vector (the `__ref_*` work local is not persisted, so it would leak per yield) also stays eager. Values agree throughout. | Put the `yield` last in the loop body and yield a scalar or `text` — that shape is lazy on both backends. Otherwise use **straight-line** yields, or fully drain the generator. Remaining slices: **[Lazy loop yields (CL-9)](#design-lazy-loop-yields-cl-9)** below. |
+| CL-9 | **Mostly fixed (loft#836, slice 1).** A loop whose body ends in ONE unconditional `yield` is now lazy on `--native` too: one iteration per advance, the cursor persisted in the coroutine struct. An infinite or early-`break`-consumed loop-generator therefore stops when its consumer does. FOUR shapes still take the eager `ForLoopBody` buffer, so their side effects still interleave differently: more than one yield per iteration, a yield inside an `if`/`match`, a nested loop, a `continue`, and a statement AFTER the yield (each needs a resume point one state cannot encode — axes A2–A5). A yield of a tuple / fn-ref (the `next_into` channel) or of a struct / vector also stays eager; a struct / vector pushed into the eager buffer is a per-yield SNAPSHOT in a store the generator owns (released when it is exhausted or abandoned), so the consumer reads the value as it was at the yield rather than the record's final state, and the statements after the loop run once the buffer is filled (loft#1356). Values agree throughout. | Put the `yield` last in the loop body and yield a scalar or `text` — that shape is lazy on both backends. Otherwise use **straight-line** yields, or fully drain the generator. Remaining slices: **[Lazy loop yields (CL-9)](#design-lazy-loop-yields-cl-9)** below. |
 
 ### Native yield codec — status (@PLAN16 phase 02)
 
@@ -1173,6 +1173,14 @@ Full record: the @PLAN16 closure doc at
 > the cursor persisted — and everything else keeps the eager buffer. `tests/scripts/836-lazy-loop-yields.loft`
 > and `tests/oracle/26-coroutine-laziness.loft` assert the interleaving; VALUES cannot, which is
 > why the value-only oracle reported agreement across a difference this wide.
+> The eager buffer holds VALUES, not handles: a struct or vector yield is copied into a
+> snapshot store the generator owns (`coroutine_snapshot`, one store per generator, freed at
+> exhaustion and from `drop_stores`), because the whole loop runs before the consumer reads
+> and a handle to a per-iteration record would alias its final state — three yields of
+> {7,17,27} summed to 81. The factory also runs the generator's TAIL (the statements after the
+> last yield, where its scope-exit frees live) once the buffer is filled; it used to drop it,
+> which leaked every persistent heap local and lost a `print` after the loop (loft#1356;
+> guard `tests/scripts/1356-a-record-yielded-from-a-loop-body-is-the-value-at-the-yield.loft`).
 > The rest below is the original design, kept as the map for slices 2-4.
 
 ### The problem, precisely

@@ -765,14 +765,15 @@ fn parallel_html_builds_do_not_cross_contaminate() {
 // self-skip when their toolchain is absent, so the suite is a no-op on a
 // machine with neither Node nor wasmtime.
 
-/// Library packages skipped wholesale for the WASM gate — those whose tests
-/// depend on native-only host facilities the browser/WASI stub can't provide.
-/// Travels with each chunk on extraction, mirroring `LIB_PKGS_WASM_SKIP` in
-/// the plan-12 design.
+/// Library packages skipped on EVERY wasm path — their tests need a host facility
+/// no wasm target offers.  An entry states the facility, which gates still run
+/// the package, and what would remove it (TESTING.md § Every skip says why, how
+/// it runs instead, and when it ends).
 const LIB_PKGS_WASM_SKIP: &[&str] = &[
-    // server is a native HTTP/socket listener — a browser/WASI guest has no
-    // listen/accept, so it cannot run there by construction (a genuine
-    // platform limit, not a bug — unlike imaging).
+    // server: its tests bind a socket and accept connections.  A browser page
+    // and a WASI guest have no listen/accept — the sandbox forbids it — so the
+    // limit is the platform's, by construction, and has no end condition.  The
+    // package's tests run on the interpreter and `--native` gates.
     "server",
 ];
 
@@ -784,17 +785,11 @@ const LIB_TESTS_WASM_SKIP: &[&str] = &[];
 /// Use this for libraries that genuinely need the filesystem — the browser
 /// has none by construction (correct platform behaviour, not a bug to fix).
 const LIB_PKGS_NODE_SKIP: &[&str] = &[
-    // hex_world's tests save+load a binary world file.  Wasmtime can do this via
-    // `--dir <tmp>` (see @P334 fix); the browser has no filesystem at all
-    // without a JS host bridge (out of scope for now).  Un-skip if a future
-    // JS-host VirtFS bridge ships.
+    // hex_world: its tests save and load a binary world file.  The browser has
+    // no filesystem without a JS host bridge; wasmtime has one (`--dir <tmp>`),
+    // so the package runs on the wasmtime path and on the interpreter and
+    // `--native` gates.  Ends when a JS-host VirtFS bridge ships.
     "hex_world",
-    // `input` un-gated on node 2026-06-04: both its blockers — #248 (@P391
-    // cross-package ctor → CONST_STORE) and #266 (nested `&self` writes not
-    // persisting on `--interpret`) — are fixed, and `01-basics` builds + runs
-    // green on the node (`wasm32-unknown-unknown` / browser) path.  It remains
-    // in LIB_PKGS_WASMTIME_SKIP below for an UNRELATED reason (E0463: the
-    // graphics native crate is absent from the wasmtime sysroot).
 ];
 
 /// Packages skipped ONLY on the wasmtime (wasip2) path.  Use this for
@@ -802,21 +797,19 @@ const LIB_PKGS_NODE_SKIP: &[&str] = &[
 /// createImageBitmap, etc.) — wasmtime has no canvas / image codec; the
 /// browser does.
 const LIB_PKGS_WASMTIME_SKIP: &[&str] = &[
-    // @P321(c): imaging's PNG decode is provided by the browser via
-    // `createImageBitmap` + Canvas `getImageData` (see
-    // `lib/imaging/wasm/{src/lib.rs, host.js}` and `doc/loft-gl-wasm.js`).
-    // Wasmtime has no equivalent; the bridge call would always return
-    // false, breaking `assert(img.width == 256)`.  Browsers handle this
-    // fine.
+    // imaging: its PNG decode is the browser's (`createImageBitmap` + canvas
+    // `getImageData`, through `lib/imaging/wasm/{src/lib.rs, host.js}` and
+    // `doc/loft-gl-wasm.js`).  Wasmtime has no canvas or image codec, so the
+    // bridge call answers false and `assert(img.width == 256)` fails for a
+    // reason that is not loft's.  The package runs on the browser path and on
+    // the interpreter and `--native` gates.  Ends when the wasm bridge carries
+    // a pure-wasm PNG decoder, so wasmtime decodes without a host canvas.
     "imaging",
-    // input — the #248/@P391 + #266 language blockers are FIXED (it now runs
-    // green on `--interpret`, `--native`, and the node/browser wasm path).
-    // STILL gated here for an UNRELATED build issue: `input` depends on
-    // `graphics`, whose native crate is absent from the wasmtime (wasip2)
-    // sysroot, so `--html` codegen fails with E0463 at lib resolution.
-    // Verified failing 2026-06-04.  Un-skip once the graphics crate is
-    // available to the wasmtime build (a wasm-sysroot / packaging task, not a
-    // language bug).
+    // input: it depends on `graphics`, whose native crate is not in the
+    // wasmtime (wasip2) sysroot, so the `--html` build fails at library
+    // resolution (E0463) before any test runs — a packaging limit, not a
+    // language one.  The package runs on the interpreter, `--native` and the
+    // browser path.  Ends when the graphics crate is built for wasip2.
     "input",
 ];
 

@@ -108,51 +108,81 @@ fn every_new_guard_records_its_control() {
     );
 }
 
-/// The set of `#[ignore = "..."]` entries in `tests/issues.rs` must
-/// match the committed baseline at `tests/ignored_tests.baseline`.
-/// A drift typically means one of three things worth the author's
-/// attention at review time:
-///   * An ignored test just got its underlying fix landed — the
-///     baseline entry should be deleted and the test unignored.
-///   * A new ignored spec was added for a new QUALITY.md item —
-///     the baseline should grow.
-///   * The `#[ignore = "…"]` reason string was edited — baseline
-///     should update.
+/// Every `#[ignore = "..."]` — and every `#[cfg_attr(<cfg>, ignore = "...")]` — in
+/// `tests/*.rs` and `src/**/*.rs` must match the committed baseline at
+/// `tests/ignored_tests.baseline`, keyed `<file>::<test>` because two `src/` tests share
+/// a bare name.  A drift is one of three things worth the author's attention at review:
+///   * an ignored test just got its fix landed — delete its line and un-ignore it;
+///   * a new ignored test was added — the baseline grows, with the reason it carries;
+///   * the reason string was edited — the baseline updates.
 ///
-/// Without this guard, silently-passing ignored tests and stale
-/// reason strings accumulate invisibly (the failure mode that made
-/// B5's documented symptom stale for weeks before anyone noticed).
+/// Without this guard, silently-passing ignored tests and stale reason strings
+/// accumulate invisibly — and until 2026-09 the guard read ONE file, `tests/issues.rs`,
+/// so the release checklist's `A-ignores` vouched for 1 ignore while nextest was skipping
+/// 35.  `make release-checklist` reads the same baseline, which is why a reason-less
+/// ignore is a release finding and not only a lint.
 /// Regenerate the baseline with
 /// `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`.
 #[test]
 fn ignored_tests_baseline_is_current() {
-    let src = fs::read_to_string("tests/issues.rs").expect("cannot read tests/issues.rs");
+    fn rust_files(dir: &str, out: &mut Vec<String>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                rust_files(&p.to_string_lossy(), out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    let mut files: Vec<String> = Vec::new();
+    for e in fs::read_dir("tests").expect("read tests/").flatten() {
+        let p = e.path();
+        if p.is_file() && p.extension().is_some_and(|x| x == "rs") {
+            files.push(p.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    rust_files("src", &mut files);
+    files.sort();
+
     let mut actual: Vec<(String, String)> = Vec::new();
-    let lines: Vec<&str> = src.lines().collect();
-    for (i, line) in lines.iter().enumerate() {
-        let t = line.trim_start();
-        let Some(rest) = t.strip_prefix("#[ignore") else {
-            continue;
-        };
-        let Some(rest) = rest.trim_start().strip_prefix('=') else {
-            continue;
-        };
-        let Some(start) = rest.find('"') else {
-            continue;
-        };
-        let tail = &rest[start + 1..];
-        let Some(end) = tail.rfind('"') else {
-            continue;
-        };
-        let reason = tail[..end].replace("\\\"", "\"").replace("\\\\", "\\");
-        // Scan forward up to 10 lines for the `fn NAME(` line.
-        for next in lines.iter().skip(i + 1).take(10) {
-            let nt = next.trim_start();
-            if let Some(after_fn) = nt.strip_prefix("fn ")
-                && let Some(paren) = after_fn.find('(')
-            {
-                actual.push((after_fn[..paren].to_string(), reason.clone()));
-                break;
+    for file in &files {
+        let src = fs::read_to_string(file).unwrap_or_else(|e| panic!("cannot read {file}: {e}"));
+        let lines: Vec<&str> = src.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            let t = line.trim_start();
+            // `#[ignore…]` or `#[cfg_attr(<cfg>, ignore…)]` — both carry a reason the same way.
+            let rest = if let Some(r) = t.strip_prefix("#[ignore") {
+                r
+            } else if t.starts_with("#[cfg_attr(") && t.contains("ignore") {
+                &t[t.find("ignore").unwrap() + "ignore".len()..]
+            } else {
+                continue;
+            };
+            let reason = match rest.trim_start().strip_prefix('=') {
+                Some(r) => {
+                    let Some(start) = r.find('"') else { continue };
+                    let tail = &r[start + 1..];
+                    let Some(end) = tail.rfind('"') else { continue };
+                    tail[..end].replace("\\\"", "\"").replace("\\\\", "\\")
+                }
+                None => String::new(), // a bare `#[ignore]`: no reason, and the baseline says so
+            };
+            // Scan forward up to 10 lines for the `fn NAME(` line.
+            for next in lines.iter().skip(i + 1).take(10) {
+                let nt = next.trim_start();
+                let nt = nt
+                    .strip_prefix("pub ")
+                    .map_or(nt, |r| r.trim_start_matches(|c| c != ' ').trim_start());
+                if let Some(after_fn) = nt.strip_prefix("fn ")
+                    && let Some(paren) = after_fn.find(['(', '<'])
+                {
+                    actual.push((format!("{file}::{}", &after_fn[..paren]), reason.clone()));
+                    break;
+                }
             }
         }
     }
@@ -170,9 +200,8 @@ fn ignored_tests_baseline_is_current() {
         expected.push((name.to_string(), reason.to_string()));
     }
     if actual != expected {
-        let mut msg = String::from(
-            "tests/issues.rs #[ignore] set drifted from tests/ignored_tests.baseline.\n",
-        );
+        let mut msg =
+            String::from("the #[ignore] set drifted from tests/ignored_tests.baseline.\n");
         let actual_set: std::collections::BTreeSet<_> = actual.iter().collect();
         let expected_set: std::collections::BTreeSet<_> = expected.iter().collect();
         for added in actual_set.difference(&expected_set) {
@@ -2358,4 +2387,256 @@ fn both_corpus_halves_pick_entry_points_through_one_predicate() {
             );
         }
     }
+}
+
+/// A worked-example citation never reaches the published prose.
+///
+/// `// Example: @AAA-###` is bookkeeping for `check_doc_drift.sh examples`, addressed to
+/// whoever maintains the examples. Rendered into a function's description it is a bare
+/// tracker tag with no link and no explanation, which CLAUDE.md § User-facing output
+/// rules out — and it leaked onto 27 shipped pages before anyone read one (#1341).
+///
+/// A citation INSIDE displayed source is correct and stays: the source browser pages show
+/// the library's own text, and the tag is part of it. So the guard reads every page with
+/// the comment spans removed, which is exactly "the prose a reader is shown".
+///
+/// This is the end-to-end half of the invariant `documentation::without_example_citations`
+/// enforces per line. It reads the COMMITTED HTML, so it also fails when the pages are
+/// stale against a generator that has learned to strip them.
+#[test]
+fn no_worked_example_citation_is_rendered_as_prose() {
+    let mut leaked: Vec<String> = Vec::new();
+    let mut pages = 0usize;
+    for entry in fs::read_dir("doc").expect("doc/ is readable") {
+        let path = entry.expect("readable entry").path();
+        if path.extension().is_none_or(|e| e != "html") {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        pages += 1;
+        for prose in strip_comment_spans(&text) {
+            for (offset, _) in prose.match_indices("Example: @") {
+                let tail: String = prose[offset..].chars().take(60).collect();
+                leaked.push(format!("{}: {tail}", path.display()));
+            }
+        }
+    }
+    assert!(pages > 100, "expected the generated pages, saw {pages}");
+    assert!(
+        leaked.is_empty(),
+        "a worked-example citation is rendered as prose on {} page section(s); \
+         regenerate with `cargo run --bin gendoc`:\n  {}",
+        leaked.len(),
+        leaked.join("\n  ")
+    );
+}
+
+/// The page text with `<span class="cm">…</span>` (displayed source comments) removed.
+fn strip_comment_spans(html: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = html;
+    while let Some(open) = rest.find("<span class=\"cm\">") {
+        out.push(rest[..open].to_string());
+        rest = &rest[open..];
+        match rest.find("</span>") {
+            Some(close) => rest = &rest[close + "</span>".len()..],
+            None => return out,
+        }
+    }
+    out.push(rest.to_string());
+    out
+}
+
+/// The control: with the comment spans left in, the source browsers DO carry citations.
+///
+/// Without this, `no_worked_example_citation_is_rendered_as_prose` would still pass if the
+/// stripper ever swallowed the whole page, or if the pages stopped being generated at all.
+#[test]
+fn the_source_browsers_still_show_the_citations_in_their_source() {
+    let text = fs::read_to_string("doc/lib-random-src.html").expect("the random source page");
+    assert!(
+        text.contains("Example: @RND-001"),
+        "the source browser shows the library's own comments verbatim"
+    );
+    assert!(
+        strip_comment_spans(&text)
+            .iter()
+            .all(|p| !p.contains("Example: @")),
+        "…and every one of them sits inside a comment span"
+    );
+}
+
+/// Pages this repo generates carry no internal tracker tag in their reader-facing prose.
+///
+/// `@PLN…`, `@P###` and `loft#…` name a plan, a P-issue and an issue. A reader of the
+/// published reference cannot open any of them, so a tag in a description is a dead end
+/// that reads as the reader's ignorance — CLAUDE.md § User-facing output rules them out
+/// of what a command prints, and DOC_QUALITY.md § D says the same for the pages (#1348).
+///
+/// The exclusions below are the whole difficulty of this guard: each one is a place where
+/// the same characters are NOT a leak, and a guard that excluded one case too many would
+/// pass over the thing it exists to catch. Each is therefore justified, and
+/// [`the_tag_guard_still_sees_a_leak_in_prose`] proves the filter still fires.
+#[test]
+fn no_internal_tracker_tag_reaches_the_reference_prose() {
+    let mut leaked: Vec<String> = Vec::new();
+    let mut pages = 0usize;
+    for entry in fs::read_dir("doc").expect("doc/ is readable") {
+        let path = entry.expect("readable entry").path();
+        if path.extension().is_none_or(|e| e != "html") {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        if page_is_exempt(&name) {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        pages += 1;
+        for prose in strip_comment_spans(&text) {
+            for tag in internal_tags(&prose) {
+                leaked.push(format!("{}: {tag}", path.display()));
+            }
+        }
+    }
+    // The library pages are exempt and there are many of them, so the floor is over what
+    // REMAINS — the stdlib sections, the topic chapters and the site pages. A count that
+    // collapsed would mean the exemption had swallowed the population.
+    assert!(pages > 50, "expected the generated pages, saw {pages}");
+    assert!(
+        leaked.is_empty(),
+        "an internal tracker tag is published as prose in {} place(s). A reader cannot \
+         open one — state the rule instead, and keep the tag in the commit or the issue:\n  {}",
+        leaked.len(),
+        leaked.join("\n  ")
+    );
+}
+
+/// Pages where these characters are not a leak, and why each is genuinely different.
+fn page_is_exempt(name: &str) -> bool {
+    match name {
+        // The feature catalogue and the print sheet that embeds it: `@F…` IS the subject
+        // here, one per catalogue entry. Excluding them costs nothing, because a PLAN tag
+        // on those pages is still caught — `internal_tags` never matches `@F`.
+        "33-features.html" | "print.html" => false,
+        // Single-file app exports. The tags sit in embedded JavaScript and loft source —
+        // the page's own runtime shim — which a reader meets as a running program, not as
+        // documentation.
+        "brick-buster.html"
+        | "playground.html"
+        | "gallery-run.html"
+        | "kernel-differential.html"
+        | "kernel-swap.html" => true,
+        // Quotes real `--explain` output, which prints `[dead-code lint · @F100]`. The doc
+        // is faithful; whether the compiler should print a catalogue id is a question about
+        // the OUTPUT, not about this page.
+        "34-running.html" => true,
+        // Rendered from the registry's stored `api` field, which is derived from each
+        // library's own source. Not editable from this repo (#1342 routes the same way).
+        n => n.starts_with("lib-"),
+    }
+}
+
+/// The tag families a READER cannot resolve. `@F`/`@I` are deliberately absent: the
+/// feature catalogue is published, so a feature id has somewhere to land.
+fn internal_tags(prose: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for (i, _) in prose.match_indices('@') {
+        let rest = &prose[i + 1..];
+        for fam in ["PLN", "PLAN"] {
+            if let Some(d) = rest.strip_prefix(fam)
+                && d.starts_with(|c: char| c.is_ascii_digit())
+            {
+                found.push(format!("@{fam}{}", digits(d)));
+            }
+        }
+        // `@P` followed by two or more digits is a P-issue; `@PLN3` is caught above and
+        // `@PLAN` cannot reach here because `L` is not a digit.
+        if let Some(d) = rest.strip_prefix('P')
+            && d.starts_with(|c: char| c.is_ascii_digit())
+            && digits(d).len() >= 2
+        {
+            found.push(format!("@P{}", digits(d)));
+        }
+    }
+    for (i, _) in prose.match_indices("loft#") {
+        let d = digits(&prose[i + 5..]);
+        if !d.is_empty() {
+            found.push(format!("loft#{d}"));
+        }
+    }
+    found
+}
+
+fn digits(s: &str) -> String {
+    s.chars().take_while(char::is_ascii_digit).collect()
+}
+
+/// The control: the filter still finds a tag in ordinary prose.
+///
+/// Without this, `no_internal_tracker_tag_reaches_the_reference_prose` would pass if
+/// `internal_tags` ever stopped matching, or if the exemption list grew to cover
+/// everything — the two ways a guard over a shrinking population goes quiet.
+#[test]
+fn the_tag_guard_still_sees_a_leak_in_prose() {
+    let sample = "Number of characters in the text (@PLN110) — the human count.";
+    assert_eq!(internal_tags(sample), vec!["@PLN110".to_string()]);
+    assert_eq!(
+        internal_tags("kept as a shim (loft#1003) and @P259 besides"),
+        vec!["@P259".to_string(), "loft#1003".to_string()]
+    );
+    assert!(
+        internal_tags("the dead-code lint is @F100").is_empty(),
+        "a feature id is published and resolvable, so it is not in this family"
+    );
+    assert!(
+        !page_is_exempt("stdlib-file-system.html"),
+        "the page that carried 42 of them must be covered"
+    );
+    assert!(
+        !page_is_exempt("20-logging.html"),
+        "the topic pages must be covered"
+    );
+}
+
+/// Every `#[ignore]` reason says HOW the test runs instead — by hand (`--ignored`), on a
+/// nightly job, or on the platforms that can (`Windows`) — so an ignore is a routing, never
+/// a resting place.  Read off the same baseline `A-ignores` reads; a reason that only says
+/// WHY (`heavy`, `a measurement`) fails here until it also says where the test runs.
+#[test]
+fn every_ignore_reason_says_how_it_runs() {
+    let baseline = fs::read_to_string("tests/ignored_tests.baseline").expect("read the baseline");
+    let markers = [
+        "--ignored",
+        "miri.yml",
+        "ci.yml",
+        "on demand",
+        "manually",
+        "by hand",
+        "Windows",
+    ];
+    let mut silent: Vec<String> = Vec::new();
+    for line in baseline.lines() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let (key, reason) = line.split_once('\t').unwrap_or((line, ""));
+        if !markers.iter().any(|m| reason.contains(m)) {
+            silent.push(format!("{key}\t{reason}"));
+        }
+    }
+    assert!(
+        silent.is_empty(),
+        "{} ignore reason(s) say why but not how the test runs instead (name `--ignored`, the \
+         nightly job, or the platform):\n{}",
+        silent.len(),
+        silent.join("\n")
+    );
 }

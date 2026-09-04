@@ -235,10 +235,30 @@ struct Definition {
   c_sig: text, // @PLN24 the declared C signature, e.g. "int(void*)"
 }
 
+// One retained import (src/data.rs::AppliedImport).  `rebuild_indices` can
+// reconstruct every definition only under its OWN source, so the cross-source
+// bindings a `use` creates are replayed from this list — a warm load that did
+// not carry it lost every `use lib::*` name (loft#1359).
+struct AppliedImport {
+  lib_source: integer,
+  into_source: integer,
+  name: text, // "" = wildcard `use lib;` / `use lib::*`
+  bind: text, // the local name a selective import binds (`use lib::name as bind`)
+}
+
+// One `use` short name or alias -> source number (src/data.rs::Data.use_names).
+// Not derivable from the definitions: an alias names a source, not a definition.
+struct UseName {
+  name: text,
+  source: integer,
+}
+
 struct Data {
   // src/data.rs::Data (the stored core)
   definitions: vector<Definition>,
   source: integer,
+  imports: vector<AppliedImport>,
+  use_names: vector<UseName>,
 }
 
 // ---- Database type schema (src/database) ------------------------------------

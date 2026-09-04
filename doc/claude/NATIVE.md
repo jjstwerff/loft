@@ -155,6 +155,13 @@ baked in at compile time. So the emission order is load-bearing: **the type
 created Nth by `init()` must be the compiler's type N.** One type created a
 position early or late renames every id after it.
 
+`Type::name` is the schema KEY that order is keyed by — `typedef.rs` builds wrapper names
+from it and `state/mod.rs` looks stores up by it — so re-spelling how a keyed type RENDERS
+(`index<Rec,[("id", true)]>` to the source's `index<Rec[id]>`) re-identifies the type:
+`init()` replays a different order and the emitted Rust references a temp no line binds
+(rustc E0425, three `lazy_sql_source` failures, two steps from the cause; loft#923). A
+user-facing rendering needs a function of its own; `name` is not it.
+
 Nothing used to check this, and the failures it produced named the wrong thing.
 A `f#read as u16` returned null because its `db_tp` had come to point at a
 struct, while the other widths out of the same handle stayed right; a keyed

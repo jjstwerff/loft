@@ -218,7 +218,7 @@ impl State {
         data: &mut Data,
         program_store: Option<&(Stores, crate::keys::DbRef)>,
     ) {
-        let logging = !data.def(def_nr).position().file.starts_with("default/");
+        let logging = !crate::portable_path::is_stdlib_source(&data.def(def_nr).position().file);
         let console = false; //logging;
         let mut stack = Stack::new(data.def(def_nr).variables().clone(), data, def_nr, logging);
         // @PLN11 G2/M6 — read the body's SHAPE (null / empty-block) from the
@@ -2309,6 +2309,14 @@ impl State {
             // `OpFreeRef` can only refuse it loudly (`#306`).  @FR-H-Free's `store(r) ≠ 0`
             // side condition is what separates the two frees; see `Stores::free_displaced`.
             let nullable_local = matches!(stack.function.tp(v), Type::Optional(_));
+            // loft#1336 / @FR-O-Witness — a local whose OWNER WITNESS releases its stores.
+            // It is never-free, so `owned_ref` above is false and none of the frees below
+            // are emitted for it; but the COPY arms further down must still run, because
+            // @FR-B-Copy does not depend on who frees: a whole-value bind is independent.
+            // Every copy into such a local lands in a FRESH store (the slot is reset before
+            // the allocation), since the local may be holding a VIEW at that moment and an
+            // in-place `OpDatabase` would write the copy into the viewed record.
+            let witnessed = stack.function.owner_witness(v).is_some();
             let mut stash_old_for_post_free = false;
             if owned_ref && (rhs_reads_v || rhs_is_new_record || nullable_local) {
                 let free_pos = stack.var_pos(v);
@@ -2381,7 +2389,7 @@ impl State {
                 self.code_add(tp_nr);
                 return;
             }
-            if owned_ref && !s1_substituted {
+            if (owned_ref || witnessed) && !s1_substituted {
                 // when the value is a call whose return is tied to a passed
                 // buffer/param, the callee returns via a hidden __ref_N that is
                 // reused across calls — or a BORROW of a param's store (e.g.
@@ -2407,8 +2415,12 @@ impl State {
                 // fallthrough: `CallRef` then `PutRef`, with no `OpDatabase`, no
                 // `OpCopyRecord` and no @P290 bracket.  `--native` had it right through
                 // `output_set_witnessed`, so the two backends disagreed about the same IR.
+                // Through `base()` — a nullable destination is the same storage behind a
+                // nullability marker (@FR-L-Null), and asked bare this arm left `c: S? =
+                // keep(other)` on `set_var`'s plain `OpPutRef`: an ALIAS of the argument,
+                // where @FR-B-Copy says the bound variable is independent (loft#1336).
                 if let Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) =
-                    stack.function.tp(v).clone()
+                    stack.function.tp(v).base().clone()
                     && !stack.function.is_argument(v)
                     && matches!(value.unspan(), Value::Call(_, _) | Value::CallRef(_, _))
                     && let Some(fn_nr) =
@@ -2448,7 +2460,18 @@ impl State {
                     // returned dep names a VISIBLE param), not the inline visible-dep
                     // scan; identical verdict, one fewer per-site re-derivation
                     // (siblings at 1845/2582 already read it).
-                    && !(stash_old_for_post_free && stack.data.def(fn_nr).returns_borrowed_view())
+                    //
+                    // The question is whether the CALL reads `v` — `rhs_reads_v` — and not
+                    // whether the post-free is routed through the guarded form.  That
+                    // routing (`stash_old_for_post_free`) is also taken for a NULLABLE
+                    // local and for an `OpNewRecord` right-hand side, neither of which
+                    // means the result may be `v`'s own store; asked through it, every
+                    // nullable record local reassigned from a borrowed-view call kept the
+                    // raw pointer, and a `-> S?` result chosen by an `if` (its lifted arm
+                    // temp is declared nullable and assigned in the arm) aliased the
+                    // callee's argument field on this backend alone — `--native` copies
+                    // through its own arm (loft#1346, @FR-O-NoDiverge).
+                    && !(rhs_reads_v && stack.data.def(fn_nr).returns_borrowed_view())
                 {
                     let tp_nr = stack.data.def(d_nr).known_type();
                     // Plan-04 Phase B.3.f: allocate fresh store directly
@@ -2473,7 +2496,10 @@ impl State {
                     // see the copy emission below — so the call's arguments
                     // still see v's old store.  For every other shape the
                     // re-init stays here, before the copy sequence.
-                    if !stash_old_for_post_free {
+                    // A witnessed local whose value READS it keeps its slot until the
+                    // call has run (@FR-O-Detach) and takes the fresh store afterwards.
+                    let alloc_after = stash_old_for_post_free || (witnessed && rhs_reads_v);
+                    if !alloc_after {
                         let slot_offset = stack.var_pos(v);
                         stack.add_op("OpInitRef", self);
                         self.code_add(slot_offset);
@@ -2579,6 +2605,12 @@ impl State {
                     // on the eval stack (its slot offset is taken there);
                     // OpCopyRefOrNull's slot offset is taken after it pops src.
                     self.generate(value, stack, false);
+                    if witnessed && rhs_reads_v {
+                        // The call is done with the old store; a fresh one, never the
+                        // record the local may be VIEWING.
+                        stack.add_op("OpInitRef", self);
+                        self.code_add(stack.var_pos(v));
+                    }
                     stack.add_op("OpDatabase", self);
                     self.code_add(stack.var_pos(v));
                     self.code_add(tp_nr);
@@ -2646,10 +2678,18 @@ impl State {
                 // held a view of a collection element, that freed the whole
                 // collection's store mid-program.  No 0x8000 free-source: src
                 // stays owned by its own scope.
-                if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+                // Read through `base()` on BOTH sides — `S?` is `Optional(Reference(S))`, the
+                // same storage behind a nullability marker (@FR-L-Null), and the bare spelling
+                // sent a nullable destination to `set_var`'s plain `OpPutRef`: an ALIAS,
+                // where @FR-B-Copy says the bound variable is independent (`cur: Node? = a;
+                // cur = b; cur.value = 9` reached `b`, loft#1336).  A nullable SOURCE takes
+                // `OpBindOrCopy` with itself as witness, exactly as the first bind does: a
+                // present source is copied into a fresh store, an absent one leaves the
+                // destination null rather than holding a record that reads PRESENT.
+                if let Type::Reference(d_nr, _) = stack.function.tp(v).base().clone()
                     && let Value::Var(src) = value.unspan()
                     && *src != v
-                    && let Type::Reference(src_d, _) = stack.function.tp(*src)
+                    && let Type::Reference(src_d, _) = stack.function.tp(*src).base()
                     && d_nr == *src_d
                 {
                     let tp_nr = stack.data.def(d_nr).known_type();
@@ -2664,19 +2704,29 @@ impl State {
                     let slot_offset = stack.var_pos(v);
                     stack.add_op("OpInitRef", self);
                     self.code_add(slot_offset);
-                    stack.add_op("OpDatabase", self);
-                    self.code_add(slot_offset);
-                    self.code_add(tp_nr);
-                    let copy_nr = stack.data.def_nr("OpCopyRecord");
-                    let copy_val = Value::Call(
-                        copy_nr,
-                        vec![
-                            Value::Var(*src),
-                            Value::Var(v),
-                            Value::Int(i32::from(tp_nr)),
-                        ],
-                    );
-                    self.generate(&copy_val, stack, false);
+                    if matches!(stack.function.tp(*src), Type::Optional(_)) {
+                        self.generate(&Value::Var(*src), stack, false);
+                        let witness_pos = stack.var_pos(*src);
+                        stack.add_op("OpVarRef", self);
+                        self.code_add(witness_pos);
+                        stack.add_op("OpBindOrCopy", self);
+                        self.code_add(stack.var_pos(v));
+                        self.code_add(tp_nr);
+                    } else {
+                        stack.add_op("OpDatabase", self);
+                        self.code_add(slot_offset);
+                        self.code_add(tp_nr);
+                        let copy_nr = stack.data.def_nr("OpCopyRecord");
+                        let copy_val = Value::Call(
+                            copy_nr,
+                            vec![
+                                Value::Var(*src),
+                                Value::Var(v),
+                                Value::Int(i32::from(tp_nr)),
+                            ],
+                        );
+                        self.generate(&copy_val, stack, false);
+                    }
                     // @PLN130 — reassignment `v = src`, both same-struct References (#306).
                     crate::copy_manifest::record(
                         stack.def_nr,
@@ -2707,7 +2757,11 @@ impl State {
                 // `scopes.rs` stripped them: @FR-B-View's materialise clause fired because the
                 // container is disturbed while this view is live.  A view that kept its deps
                 // is not `owned_ref` and still aliases.
-                if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+                // Not for a witnessed local (loft#1336): the materialise clause is decided
+                // from the FINAL dep list, which its per-`Set` witness cannot follow, so such
+                // a local keeps every projection an alias on both backends.
+                if owned_ref
+                    && let Type::Reference(d_nr, _) = stack.function.tp(v).base().clone()
                     && !stash_old_for_post_free
                     && crate::generation::container_element_base(stack.data, value).is_some()
                 {
@@ -2872,6 +2926,12 @@ impl State {
             // owns rather than bind the interior pointer.  The materialise is what PREVENTS
             // the container-wide free described below; it emits no free of its own.
             && stack.function.tp(v).depend().is_empty()
+            // Not for a WITNESSED local (loft#1336, @FR-O-Witness): its deps are empty
+            // here only because a later whole-value copy stripped them, and the
+            // container-wide free this arm guards against is one such a local never
+            // emits.  Its projections stay views on both backends, so the witness — which
+            // classifies a projection as a view — cannot lose the store this would mint.
+            && stack.function.owner_witness(v).is_none()
             && crate::generation::container_element_base(stack.data, value).is_some()
         {
             // @PLN130 F1 — MATERIALISE an element read into a store `v` owns.
@@ -2897,6 +2957,8 @@ impl State {
             // copying for one would leave an owner nobody frees; the guard is against a
             // stranded allocation, and the arm releases nothing.
             && stack.function.tp(v).depend().is_empty()
+            // Not for a witnessed local, for the element arm's reason above.
+            && stack.function.owner_witness(v).is_none()
         {
             // T1.8c: tuple destructuring `(q1, q2) = expr` — when an element
             // is Type::Reference, deep-copy the record to avoid aliasing.

@@ -989,9 +989,7 @@ fn collect_lib_dirs(args: &[String]) -> Vec<String> {
     while i + 1 < args.len() {
         if args[i] == "--lib" {
             let raw = &args[i + 1];
-            let abs = std::fs::canonicalize(raw)
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| raw.clone());
+            let abs = loft::portable_path::plain_canonical_str(raw);
             if !dirs.contains(&abs) {
                 dirs.push(abs);
             }

@@ -73,8 +73,8 @@ fn outer_combined() -> iterator<integer> {
   yield 2;
 }
 
-// Delegating to a generator that takes an ARGUMENT is written as a plain
-// forwarding loop rather than 'yield from' — see the note in that section.
+// Delegating to a generator that takes an ARGUMENT: a plain forwarding loop
+// means the same thing as 'yield from scaled_by(4)', and either spelling works.
 fn scaled_by(factor: integer) -> iterator<integer> {
   yield factor;
   yield factor * 10;
@@ -174,11 +174,8 @@ fn main() {
   }
   assert(yf_total == 33, "yield from: 1+10+20+2={yf_total}");
 
-  // ⚠ 'yield from' works today only for a sub-generator that takes NO
-  // arguments; with an argument it will not compile on --native, though the
-  // interpreter runs it (loft#1277).  Until that closes, forward such a
-  // generator with a plain loop — 'for v in sub(arg) { yield v; }', which
-  // means the same thing and works on both backends.
+  // A forwarding loop — 'for v in sub(arg) { yield v; }' — means the same thing as
+  // 'yield from sub(arg)'; both work on both backends.
   fwd_total = 0;
   for n in forwards_with_argument() {
     fwd_total += n;

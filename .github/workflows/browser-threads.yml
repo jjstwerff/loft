@@ -54,9 +54,16 @@ on:
       - 'Cargo.toml'
       - '.github/workflows/browser-threads.yml'
   workflow_dispatch:
+  # Called by `release-gate.yml`: one deliberate run of every nightly against ONE
+  # commit, ending in one verdict (the release evidence — RELEASE.md § The nightlies).
+  # A called workflow sees its CALLER's event, which is a dispatch or a probe push and
+  # never `pull_request`, so it takes the same full path the schedule takes.
+  workflow_call:
 
+# The group carries the CALLER's workflow name so a leg of `release-gate.yml` neither
+# collides with nor cancels a standalone run on the same ref.
 concurrency:
-  group: browser-threads-${{ github.ref }}
+  group: browser-threads-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:

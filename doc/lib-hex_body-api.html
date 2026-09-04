@@ -35,12 +35,10 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">pose_of</span>(value: <span class="ty"><a href="stdlib-types.html">float</a></span>, lx: <span class="ty"><a href="stdlib-types.html">float</a></span>, ly: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
 <p>FORWARD KINEMATICS (phase B): a point <code>(lx, ly)</code> in a part's LOCAL frame, posed by rotating it through the joint's angle.  A PURE FUNCTION of <code>(value, lx, ly)</code> — it reads no stored state, no elapsed time, no call count, and no previous value.  Two different paths to the same <code>value</code> therefore give byte-identical output, which is <code>I6</code> and the precondition for <code>I9</code>'s replay.</p>
-<p>Example: @HXB-001</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wheel_value</span>(travel: <span class="ty"><a href="stdlib-types.html">float</a></span>, radius: <span class="ty"><a href="stdlib-types.html">float</a></span>, slip: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
 <p>A WHEEL is a revolute joint whose value is DERIVED from how far it has travelled (phase C): <code>value = travel / (2πr)</code>.  Because the value is a function of travel and not an accumulation of steps, the no-slip identity is exact by construction.  <code>slip</code> is the deliberate defect knob — 0 for a true roll; non-zero is a skid, and it is the control that keeps <code>wheel_skid</code> honest.</p>
-<p>Example: @HXB-007</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wheel_angle</span>(value: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
@@ -49,17 +47,14 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wheel_skid</span>(radius: <span class="ty"><a href="stdlib-types.html">float</a></span>, value: <span class="ty"><a href="stdlib-types.html">float</a></span>, travel: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
 <p>THE SKID — the contact point's slip, <code>|r·θ − travel|</code>.  For a value derived by <code>wheel_value</code> with <code>slip = 0</code> this is **machine-ε, not algebraic zero** — and that distinction was measured, not assumed: <code>travel → value → r·θ</code> is a float round-trip (a divide by <code>2πr</code> then a multiply by it), which f64 does not close bit-for-bit, so the residual is ~1 ulp of <code>travel</code>.  This is the BODY'S SOLE FLOAT STEP — the wheel's <code>ε_seam</code> (<code>SPEC</code> **I-FSEAM**, <code>X53</code>): the pose/roll computation is exactly where imprecision is licensed, bounded by machine ε and nowhere else. It is NOT a <code>P4</code> violation: <code>P4</code> governs the R1 geometry round trip, which is integer and exact; a wheel's roll is kinematics, which is the float frame.  Drive <code>θ</code> independently of <code>travel</code> — the spec's *&quot;spin a wheel off-travel&quot;* — and the skid is a real distance, orders of magnitude above ε.</p>
-<p>Example: @HXB-007</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">joint_fits</span>(j: <span class="en">Joint</span>, value: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
 <p>THE DOORSTEP (<code>K-FIT</code> for a joint): a value inside the joint's limits fits.</p>
-<p>Example: @HXB-002</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">joint_offer</span>(j: <span class="en">Joint</span>, value: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
 <p>The OFFER a refusal owes — the nearest admissible value.  A joint value is ordinal, so clamping to the limit is a real correction the editor can show, not a silent snap to a different thing.</p>
-<p>Example: @HXB-002</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">joint_residual</span>(j: <span class="en">Joint</span>, value: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
@@ -75,12 +70,10 @@
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rig_bone3</span>(r: <span class="en">Rig</span>, parent: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ox: <span class="ty"><a href="stdlib-types.html">float</a></span>, oy: <span class="ty"><a href="stdlib-types.html">float</a></span>, oz: <span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="bi"><a href="stdlib-text.html">len</a></span>: <span class="ty"><a href="stdlib-types.html">float</a></span>,</code></pre>
 <p>Append one bone in SPACE, growing the rig's parallel field vectors in place.</p>
 <p>⚠ Eleven parameters is the eight of <code>hex_part::Hinge</code> plus a parent, a length and the rig — the family's own shape rather than a shorter one invented here.</p>
-<p>Example: @HXB-004</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rig_bone</span>(r: <span class="en">Rig</span>, parent: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ox: <span class="ty"><a href="stdlib-types.html">float</a></span>, oy: <span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="bi"><a href="stdlib-text.html">len</a></span>: <span class="ty"><a href="stdlib-types.html">float</a></span>,</code></pre>
 <p>Append one bone in the PLANE — the special case, and its signature is unchanged from 0.1.0.  A planar bone is one at <code>oz = 0</code> about <code>(0, 0, 1)</code>, which is exactly the axis the 2-D code left implicit.</p>
-<p>Example: @HXB-001</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rig_count</span>(r: <span class="en">Rig</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
@@ -92,17 +85,14 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rig_planar</span>(r: <span class="en">Rig</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
 <p>Is the whole rig planar?  The question <code>rig_world_seg</code> implicitly asks of every rig it is handed, made available to a caller that wants to know.</p>
-<p>Example: @HXB-005</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rig_joint</span>(r: <span class="en">Rig</span>, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Joint</span></code></pre>
 <p>The joint at bone <code>i</code>, as a <code>Joint</code> carrying its limits (value defaults to 0 — the neutral pose).</p>
-<p>Example: @HXB-002</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rig_admissible</span>(r: <span class="en">Rig</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
 <p>ADMISSIBLE — topological (root is bone 0 with parent -1, every other parent is earlier), and every joint limit is ordered <code>lo &lt;= hi</code>.  This is the rig's doorstep: <code>fits?</code> for a whole rig.</p>
-<p>Example: @HXB-004 Example: @HXB-008</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rig_write</span>(r: <span class="en">Rig</span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
@@ -111,14 +101,12 @@
 <p>⚠⚠ A spatial bone writes <code>bone3</code> rather than a longer <code>bone</code> line, and that is the whole compatibility decision — MEASURED against the shipped 0.1.0 reader rather than reasoned about:</p>
 <p>extra words appended to a <code>bone</code> line  -&gt;  0.1.0 reads 1 bone the same rig under the tag <code>bone3</code>     -&gt;  0.1.0 reads 0 bones</p>
 <p>0.1.0's parser checks the keywords it knows and never the word COUNT, so appending fields makes an old reader silently return the bone's PLANAR PROJECTION — a rig quietly flattened, which is exactly the failure this library's *&quot;a lenient reader would void the byte diff&quot;* rule exists to stop. A new tag makes the same reader refuse the whole rig, which <code>rig_admissible</code> then rejects.  Loud beats tidy.</p>
-<p>Example: @HXB-008</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rig_read</span>(t: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">Rig</span></code></pre>
 <p>STRICT PARSER — accepts exactly what <code>rig_write</code> emits, refuses anything else by returning an empty rig (which <code>rig_admissible</code> then rejects).  A lenient reader would void the byte diff.</p>
 <p>THAT WAS A CLAIM BEFORE IT WAS A TEST, and it was wrong nine ways: <code>len 1.0</code>, <code>+1.5</code>, <code>01.5</code>, <code>1.50</code>, <code>1.5e0</code>, an empty field, a trailing space and an extra field were all ADMITTED and then re-written differently — and <code>len x</code> became <code>len 0</code>, a BONE THAT IS NOT THERE, admitted into the model without a word.  What pins it now is a RE-SPELLING IDENTITY: a field is a number only if printing the parse reproduces the original characters, and a line is a record only if it carries exactly the fields the writer emits.</p>
 <p>⚠ WHAT THIS PARSER DOES NOT CHECK IS THE PARENT, and an earlier note here said it did.  A forward, absent or duplicate-root parent round-trips FAITHFULLY — nothing is repaired, the byte diff still means what it says — so it is not the reader's to refuse.  It is <code>rig_admissible</code>'s, which is the rig's doorstep and catches every one of them.  Reading a rig is not the same as being allowed to pose it.</p>
-<p>Example: @HXB-008</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rig_eq</span>(a: <span class="en">Rig</span>, b: <span class="en">Rig</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
@@ -128,7 +116,6 @@
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rig_world_seg</span>(r: <span class="en">Rig</span>, values: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">float</a></span>&gt;, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
 <p>The world segment of bone <code>i</code> at the given joint values: <code>(x0, y0)</code> its base, <code>(x1, y1)</code> its tip. Composes the tree from the root (bones are topological, so ancestors are computed first).</p>
 <p>⚠⚠ PLANAR RIGS ONLY, and it says so with numbers rather than a refusal.  This walk composes joints by ADDING ANGLES, so it reads neither <code>rg_oz</code> nor the stored axis: hand it a bone hinged about <code>+y</code> and it answers as though that hinge were about <code>+z</code>.  The rig can be perfectly ADMISSIBLE, the call returns four ordinary floats, and nothing says the body it describes is not the body you built — measured on a two-bone arm, the tip is 2.5 away at a quarter turn and 3.2 at three quarters, on a bone 2 long.  <code>rig_planar</code> is the precondition; a spatial rig belongs on <code>rig_world_frame3</code> / <code>rig_world_seg3</code>, and its proxy has to be derived from those.</p>
-<p>Example: @HXB-001 Example: @HXB-005</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Frame</span></code></pre>
@@ -142,24 +129,20 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rig_world_frame3</span>(r: <span class="en">Rig</span>, values: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">float</a></span>&gt;, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Frame</span></code></pre>
 <p>The world frame of bone <code>i</code> at the given joint values.  ⚠ One tree walk; pose as many points through it as you like with <code>frame_point</code>.</p>
-<p>Example: @HXB-003</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">frame_point</span>(f: <span class="en">Frame</span>, lx: <span class="ty"><a href="stdlib-types.html">float</a></span>, ly: <span class="ty"><a href="stdlib-types.html">float</a></span>, lz: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
 <p>Where a point in the bone's LOCAL frame lands in the world.</p>
-<p>Example: @HXB-003</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rig_world_point3</span>(r: <span class="en">Rig</span>, values: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">float</a></span>&gt;, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
 <p>The one-shot door: pose ONE point of bone <code>i</code>.  ⚠ It walks the tree, so a caller posing many points should hold a <code>Frame</code> instead.</p>
-<p>Example: @HXB-003</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rig_world_seg3</span>(r: <span class="en">Rig</span>, values: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">float</a></span>&gt;, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
 <p>── FORWARD KINEMATICS IN SPACE (<code>G1b</code>) ──────────────────────────────────────</p>
 <p>The world segment of bone <code>i</code> IN THREE DIMENSIONS: <code>(x0,y0,z0)</code> its base, <code>(x1,y1,z1)</code> its tip.  The 2-D sibling above is not replaced and not re-expressed — see the header for what that would have cost.</p>
 <p>⚠ Since 0.3.0 this is TWO POINTS of the bone's own frame and nothing more: its base is the frame's origin and its tip is <code>(len, 0, 0)</code> in it.  One implementation of the walk, and the numbers are unchanged — adding a rotated <code>(0,0,0)</code> is an exact <code>+ 0.0</code>.</p>
-<p>Example: @HXB-003</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Obb</span></code></pre>
@@ -169,7 +152,6 @@
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">bone_obb</span>(r: <span class="en">Rig</span>, values: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">float</a></span>&gt;, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>, w: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Obb</span></code></pre>
 <p>THE PROXY of bone <code>i</code>: the OBB that bounds its capsule of half-width <code>w</code>.  Length grows by <code>w</code> at each end to cover the rounded caps; width is <code>w</code>.</p>
 <p>⚠ IT IS BUILT ON <code>rig_world_seg</code>, so it is PLANAR-ONLY for the same reason and inherits the same silence: on a spatial rig this boxes a bone that is somewhere else, and <code>I4</code>'s containment — a proxy never misses an overlap — does not hold.  Check <code>rig_planar</code> first.</p>
-<p>Example: @HXB-005 Example: @HXB-006</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">obb_contains</span>(o: <span class="en">Obb</span>, px: <span class="ty"><a href="stdlib-types.html">float</a></span>, py: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
@@ -183,7 +165,6 @@
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">bone_shape_has</span>(r: <span class="en">Rig</span>, values: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">float</a></span>&gt;, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>, w: <span class="ty"><a href="stdlib-types.html">float</a></span>,</code></pre>
 <p>The bone's SHAPE: is a world point within <code>w</code> of its segment (inside the capsule)?</p>
 <p>⚠ Planar-only, like <code>bone_obb</code>: it asks <code>rig_world_seg</code>.</p>
-<p>Example: @HXB-006</p>
 </div>
 
   </article>

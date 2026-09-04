@@ -1613,21 +1613,41 @@ causing filesystem races.
 The lock is poisoning-tolerant (`unwrap_or_else(|e| e.into_inner())`): a panicking test
 releases the lock and the next test can proceed.
 
-### SUITE_SKIP — skipping known-broken docs files
+### Every skip says why, how it runs instead, and when it ends
 
-The `SUITE_SKIP` const in `tests/wrap.rs` lists `tests/docs/` files that are currently broken and
-should not block the `dir` test. The `dir` test skips any file whose name is in this list
-and prints a note explaining why:
+An ignore or a skip is a ROUTING, never a resting place: the test still runs somewhere, or a
+named condition removes the entry. Each class has one home and a guard.
 
-```rust
-const SUITE_SKIP: &[&str] = &[
-    // (all previously skipped files have been fixed — see CHANGELOG.md)
-];
-```
-
-`last` runs `16-parser.loft` without a trace; `parser_debug` runs it with a full execution
-trace and is marked `#[ignore]` because the trace takes ~100 s. To add a new entry: append
-the filename and a comment with the issue number. Remove it once the underlying issue is fixed.
+- **`#[ignore = "…"]` and `#[cfg_attr(<cfg>, ignore = "…")]`** — every one in `tests/*.rs`
+  and `src/**/*.rs` is listed in `tests/ignored_tests.baseline`
+  (`doc_hygiene::ignored_tests_baseline_is_current` fails on any drift; regenerate with
+  `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`), and every reason
+  names the run it rides — `doc_hygiene::every_ignore_reason_says_how_it_runs` accepts
+  `--ignored` (by hand, with the command), a nightly job (`miri.yml`'s `release-gate-sweeps`,
+  `ci.yml`'s `test` job step "Differential oracle"), `on demand` / `manually`, or a platform
+  (`Windows`: the `cfg_attr` ignores whose guard is the resource cap the platform lacks).
+  `make release-checklist`'s `A-ignores` reads the same file. A reason that only says WHY
+  (`heavy`, `a measurement`) fails the guard until it also says where the test runs.
+- **Suite skip lists** — `wrap.rs::{SUITE_SKIP, WASM_SKIP, LIB_PKGS_SKIP, LIB_TESTS_SKIP}`,
+  `native.rs::{NATIVE_SKIP, SCRIPTS_NATIVE_SKIP, LIB_PKGS_NATIVE_SKIP, LIB_TESTS_NATIVE_SKIP}`,
+  `html_wasm.rs::{LIB_PKGS_WASM_SKIP, LIB_TESTS_WASM_SKIP, LIB_PKGS_NODE_SKIP,
+  LIB_PKGS_WASMTIME_SKIP}`. An entry carries the open issue that explains it and the
+  condition that removes it. Today every list is empty except the `html_wasm` platform
+  limits: `server` (a listener; a browser/WASI guest has no accept — by
+  construction), `hex_world` on node (no filesystem; ends with a JS-host VirtFS bridge),
+  `imaging` on wasmtime (no canvas codec; ends with a pure-wasm PNG decoder), `input` on
+  wasmtime (the graphics crate is absent from the wasip2 sysroot; ends when it is packaged).
+  **Check an entry's blocker STATE before trusting it**: `input` sat in
+  `LIB_PKGS_NATIVE_SKIP` for three months after both its blockers closed, `191-source-dir`
+  named `#268` a quarter after it closed, `19-threading` was "the WASM threading model
+  differs" while it ran green under wasmtime, and both `web/http.loft` entries named a file
+  no suite walks — four inert entries that read as four open gaps.
+- **`tests-network/`** — the `web` fixture keeps its live-network tests
+  (`tests/fixtures/libs/web/tests-network/http.loft` and the `ws_*.loft` echo regressions) in
+  a directory no suite walks, because they need a reachable host. Run them by hand against
+  the echo server in `tools/zt-c-web-staging/README.md` § Verification, from a copy OUTSIDE
+  the lib tree (inside it, `--lib` auto-discovery double-resolves). The class ends when CI
+  gains a network leg.
 
 ### LOFT_DUMP — controlling debug output in docs/scripts tests
 
@@ -2455,19 +2475,33 @@ allocator behaviour.
 ### Recipe
 
 ```bash
-# 1. Build test binaries (debug profile keeps the boundary checks for
-#    crates other than loft, but the real value is valgrind's redzones).
-cargo test --no-run
-
-# 2. Run unit + integration tests under valgrind.  Skip threading-heavy
-#    tests if they are too slow under instrumentation; valgrind is
-#    typically 5-10x slower than a normal run.
-for t in target/debug/deps/loft-*; do
-    [ -x "$t" ] || continue
-    valgrind --error-exitcode=1 --leak-check=no \
-             --track-origins=yes "$t" --test-threads=1 || exit 1
-done
+scripts/valgrind-sweep.sh              # every script + document, interpreter AND native
+scripts/valgrind-sweep.sh tests/docs   # one tree, or a list of files
 ```
+
+One command, one verdict, per-file logs in `target/vg/`.  It runs `loft --interpret` on every
+file (`--tests` for `tests/scripts`, whose files have no `main`) and, for `tests/docs`, builds
+each document with `loft --native` and hands the cached binary in `<dir>/.loft/cache/` to
+memcheck directly — the compiled program is where the native runtime's `unsafe` runs, and
+`--trace-children` cannot reach it without also tracing rustc.  About fifteen minutes on
+24 cores; `VG_JOBS` bounds the parallel memchecks (each takes ~200 MB).
+
+Two decisions are built in, and both are measurements rather than taste:
+
+- **Only an invalid access or a DEFINITELY lost block is red.**  Rust's hashbrown tables and
+  boxed strings keep interior pointers, so every process-lifetime table — the parser's
+  `Data`, the native emitter registry — reads as "possibly lost" at exit: 179 such records on
+  a run with no defect in it.  `--errors-for-leak-kinds=definite` is that decision spelled
+  where valgrind reads it; a possibly-lost record is still in the log for anyone who wants it.
+  The one suppression, `scripts/valgrind.supp`, is the deliberate interning of a declared
+  text field default — bounded, one block per field — and nothing else: the LSan file also
+  hides the four text-construction frames on the premise that they leak only on a fault
+  path, and this sweep measured that premise false (a text returned from a call on two arms,
+  or read straight out of a vector element, loses one buffer PER CALL with no fault at all).
+- **A leaked or over-freed STORE is not a valgrind error.**  The store arena is one valid
+  allocation (DEBUG.md § Debugging store-ownership bugs), so that half of the release's
+  memory gate is `M-leaks` under `LOFT_STRICT_STORES=1`, and this sweep does not pretend to
+  cover it.
 
 ### When to run
 
@@ -2848,6 +2882,35 @@ that passed on the very build it was written to catch:
   `tests/scripts` guard passes `--tests` on the pre-fix binary while the same shapes as a
   plain program print `Warning: 1 stores not freed at program exit`.
 
+**A `--lib <dir>` override is DROPPED when the working directory has its own `lib/`, so a
+probe against a modified copy of a library measures the original.** Resolution is
+first-wins and the cwd-relative `lib/` is probed before `--lib`
+(`parser/mod.rs::lib_path`), so the flag cannot reach any name `lib/` also provides —
+silently, since a dropped flag raises nothing. Measured 2026-09-04 on loft#1339: three
+runs of a patched `lib/parser.loft` copy, launched from the repo root with `--lib <copy>`,
+all scored the UNMODIFIED tree; a copy with a line of non-loft appended to it ran clean
+through the same command. It surfaced only because an instrumented probe printed nothing.
+The control that settles it is a copy that CANNOT run — corrupt the file you are pointing
+at, and if the run stays clean the flag was never honoured. Then either work from a
+directory with no `lib/` of its own, or point the entry script somewhere else; loft#1352
+tracks the precedence, with loft#930 and loft#963 as the two other ways the same flag goes
+missing.
+
+**A bare `--native` run does not leak-check, so "native is clean" is a control that never
+fired — and reporting it as a BACKEND DIVERGENCE puts a false claim in the tracker.** The
+native leak check is opt-in (`LOFT_NATIVE_LEAK_CHECK`, emitted by
+`generation/mod.rs::NATIVE_LEAK_CHECK_TAIL`); with it unset the generated binary never
+looks, so it prints nothing whether or not a store leaked. DEBUG.md documents how to arm
+it; the trap is one step further on, at the moment the unarmed silence is written down as
+a measurement. Measured 2026-09-04 on loft#1344: a hand matrix over six consumers scored
+`interpret leak / native clean` for four of them, and the issue was filed claiming the two
+backends disagree. `make falsify` — which arms the variable — reported the native leak on
+the same guard, and re-running the matrix with `LOFT_NATIVE_LEAK_CHECK=1` gave leaks at
+exactly the same four consumers on BOTH backends. The divergence never existed. Two things
+follow: arm the variable before any native leak cell, and treat a disagreement between your
+own comparison and `make falsify` as the tool being right until you have shown otherwise —
+it builds and runs the control the way the suite does, which is the whole reason it exists.
+
 **A probe that FAILS TO PARSE reads as a silent pass, and the "did it run?" check can be
 fooled by the error itself.** Measured 2026-09-02 while crossing the six defended-fault-site
 spellings of `D-op-5`: four cells carried a literal `\n` into the loft source, failed to
@@ -3182,6 +3245,59 @@ because nothing is parsed after the `?`, while `h?[k] = v` lost it to the index 
 feature, not only the minimal one.
 
 ---
+
+**A control that reddens a DIFFERENT test has found a dead gate, not a working control.**
+@PLN144 P4's control — accumulate elapsed time as float seconds instead of integer
+microseconds — was built to break the 30/60 Hz agreement cell; the suite went red on the
+ping-pong cell instead, and chasing that gap proved the 30/60 Hz cell cannot see float
+accumulation at all (at 12 fps the two schedules agree at every sample out to 60 000 ticks).
+The pass/fail bit is the wrong reading; the NAME is the reading. Write down which test must go
+red BEFORE running a control, assert on that name, and when a different one fires, treat the
+named test as unable to fail on its own subject. The cure there was a second cell that TICKS
+(eight `advance(100000)`) rather than jumps (one `advance(800000)`), because only the repeated
+addition can see `0.7999999999999999` land on frame 7 where 8 is right.
+
+**A temp probe named after a HASH of its source shares a truncation window.**
+`tests/use_analysis.rs` named each probe file by a hash of its program text, with a comment
+saying that is what keeps parallel tests apart — and three tests sharing one `const …_SRC`
+resolved to the SAME path. Identical final bytes do not make the WINDOW safe: `fs::write`
+truncates to zero first, and under nextest each test is its own process, so one test's spawned
+`loft` can open the file mid-rewrite and analyse an empty program — a borrow base derived from
+nothing, on whatever schedule the runner picks. Name a probe after the TEST, not its content.
+
+**A stale test binary masks a diagnostic-message change.** After changing a compiler-emitted
+message, a local `cargo test --test X` or `find_problems.sh` run can report green while CI's
+clean build fails: the test binary was not relinked after the `src/` edit, so inline
+`.error("…old wording…")` assertions still matched the old output. It cost two CI round-trips
+on one PR. After changing any compiler output, run the affected test binary from a build you
+watched relink, or `cargo clean -p loft` first.
+
+**A leak the DRIVER reports beats one inferred from memory growth.** To prove a cursor's
+scope-end hook finalises its `sqlite3_stmt *`, ask the library: `sqlite3_close` answers
+`SQLITE_BUSY` while any statement on the connection is unfinalised, so the fixture abandons
+forty cursors mid-walk, closes, and asserts the connection reported nothing — a return code
+computed by the library on every run, and proved to FAIL with `OpDrop` renamed away. It also
+caught a second thing the test was not looking for: a round-trip fixture closing a connection
+with its cursor live, which refused the close and left the database locked. Before writing a
+growth-threshold leak harness, look for the API that already refuses to proceed while the
+resource is held (`sqlite3_close`/`SQLITE_BUSY`, `PQfinish`, `close(2)` on a busy fd) and
+store the refusal where the caller already looks.
+
+**A per-item marker on stdout cannot attribute a fault printed on stderr.** `tests/wrap.rs`
+announces each script with `println!` and every runtime complaint — `BUG (#306)`, warnings,
+crash reports — goes to stderr; stdout is block-buffered when it is not a tty, so the
+interleaving you read is a buffering artefact that names the wrong script. loft#920 was
+attributed to `296-file-error-paths.loft` that way; `LOFT_TRACE_SCRIPT=1` puts the marker on
+stderr, and the real answer was `75-native-stub.loft`, whose DELIBERATE panic was the cause.
+Put the marker on the stream the fault uses.
+
+**`raise()` is not a fault, so it cannot test a fatal-signal handler end to end.** loft's crash
+reporter arms SIGSEGV/SIGABRT/SIGBUS with `SA_RESETHAND`: the handler reports, the disposition
+resets, and the default action takes the process — but only a real faulting INSTRUCTION
+re-executes after the handler and re-raises. `libc::raise(SIGSEGV)` runs the handler and then
+RETURNS, and the child exits normally. Fault for real in a forked child
+(`std::ptr::write_volatile(std::ptr::null_mut::<u8>(), 1)`, volatile so it cannot be optimised
+into something that never faults) and assert `WIFSIGNALED`.
 
 ## Diagnostic tiers — what `--deny-warnings` may fail on
 

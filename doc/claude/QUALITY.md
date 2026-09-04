@@ -479,10 +479,13 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 379 | 355 | **24** |
+| 387 | 363 | **24** |
 
-`scripts/ir_walker_audit.py unspan` re-measures it, and
+loft#1356 added two peeling sites (the eager factory's tail scan reads a `Return` and a `Set` through their `Span`), loft#1357 one — the statement scan in `scopes::convert` takes a `Span` off an `if` whose condition consumes a `??` temp, so it can put the evaluated condition back under the same position.  `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
+It moved from 384 · 360 to 385 · 361 with loft#1354's `arm_moves_a_live_tuple_local`, which
+discriminates on `Value::Var` and `Value::Block` to find the local an `if` arm hands over — it
+peels first, so it lands on the seeing-through side and leaves the opaque column where it was.
 
 ⚠ **The row moved from 344 · 327 · 17 to 356 · 332 · 24 with nothing about the code changing,
 and the reason is worth keeping: the census USED TO DEPEND ON FORMATTING.** `DISCRIM` ends in
@@ -1489,7 +1492,7 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 43 | **9** | 34 |
+| 44 | **10** | 34 |
 
 (`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
 so the row cannot go stale — the same arrangement the `unspan` table has.)
@@ -1497,6 +1500,12 @@ so the row cannot go stale — the same arrangement the `unspan` table has.)
 loft#1186 moved it to 41 · 8 with `parser::node_place_root`, the arm-level half of the join
 reading: it resolves a projection by op name AND carries the `TupleGet` spelling, so it lands
 on the handling side and leaves the third column where it was.
+loft#1345 moved it to 44 · 10 the same way: the vector materialiser's new projection leaf
+(`materialize_vector_arms_collect`) copies a projected arm into the return buffer, and it was
+written for BOTH spellings from the start — the screen asked, before the row was updated,
+whether a tuple element viewed through `q.0` could reach a `-> vector<T>?` return, and it can
+(`tests/scripts/1345-…loft`'s tuple-element cell), so the leaf handles `TupleGet` and the
+third column stays where it was.
 
 loft#1195 moved it to 42 · 8 · **34** with `parser::field_place`, which reads a comprehension
 destination as a PLACE (root variable + `OpGetField` offsets) and does not carry the
@@ -2442,9 +2451,9 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 695 | 338 | 5 | **352** |
+| 702 | 345 | 5 | **352** |
 
-The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.  It happened again on the 2026-09-03 join — one side carried `684 | 330 | 5 | 349` and the other `687 | 331 | 5 | 351`, and the tree that holds both measures `689 | 332 | 5 | 352`; the 2026-09-03 evening join (D-bind-11 onto the #1318 tree) measured `692 | 333 | 5 | 354`, loft#1327's opaque-fn-ref clause moved one function off the opaque column, and the D-own-8 closure moved two more onto the peeled one — one arm peeled (`gen_set_first_at_tos`'s null-init) beside two new scope-pass predicates.  The tree that holds BOTH measures `694 | 337 | 5 | 352`, which is neither side's number: two branches each adding predicates cannot have their counts added, because the audit classifies FUNCTIONS and a merged body is one function however many branches touched it.  loft#1333 then moved it to `695 | 338 | 5 | 352` with `scopes::mixed_ownership_locals`, the pre-scan that asks whether a binding is assigned a VIEW on one path and a delivered collection on another; it reads `function.tp(v).base()`, so it peels the wrapper and lands on the seeing-through side, leaving the opaque column where it was.
+The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.  It happened again on the 2026-09-03 join — one side carried `684 | 330 | 5 | 349` and the other `687 | 331 | 5 | 351`, and the tree that holds both measures `689 | 332 | 5 | 352`; the 2026-09-03 evening join (D-bind-11 onto the #1318 tree) measured `692 | 333 | 5 | 354`, loft#1327's opaque-fn-ref clause moved one function off the opaque column, and the D-own-8 closure moved two more onto the peeled one — one arm peeled (`gen_set_first_at_tos`'s null-init) beside two new scope-pass predicates.  The tree that holds BOTH measures `694 | 337 | 5 | 352`, which is neither side's number: two branches each adding predicates cannot have their counts added, because the audit classifies FUNCTIONS and a merged body is one function however many branches touched it.  loft#1333 then moved it to `695 | 338 | 5 | 352` with `scopes::mixed_ownership_locals`, the pre-scan that asks whether a binding is assigned a VIEW on one path and a delivered collection on another; it reads `function.tp(v).base()`, so it peels the wrapper and lands on the seeing-through side, leaving the opaque column where it was.  loft#1335 moved one function the other way, from opaque to seeing-through — `697 | 341 | 5 | 351` — because `fnref_result_type` stopped listing the shapes it bridges and asks `Type::base()` / `borrow_deps` instead, which is the cure that closed it.  loft#1349 added one opaque function, `Parser::boxed_tuple_return` — `698 | 341 | 5 | 352` — which matches `Type::Tuple` bare on purpose: a nullable tuple is not a shape it boxes, so peeling there would be a wrong answer rather than a wider one.  loft#1357 added two on the seeing-through side — `700 | 343 | 5 | 352` — `Parser::lambda_text_buffer_var` and `scopes::any_text_return_buffer`, both asking which hidden attribute is a `RefVar(Text)` buffer, the one home the text-return deliveries read.
 
 The most recent movement is loft#1327's, and it goes the right way for the ordinary reason: the
 new clause asks `is_dbref(ret_type.base())` of a fn-ref call's return, so the function it sits in
@@ -2699,7 +2708,7 @@ third time by REPAIR rather than by addition: `assign_var_nr` decides whether a 
 the variable it writes through, its own router already asked through `.base()`, and the
 disagreement between the two was an internal compiler error on `n.t += "cd"` for a `text?`
 field.  loft#1207 moved it twice more, to 659 · 305 · 349, for the fourth and fifth time by
-REPAIR: `is_collection` and `keyed_field_kt`.
+REPAIR: `is_collection` and `keyed_field_kt`.  loft#1354 then moved it to 698 · 341 with `arm_moves_a_live_tuple_local`, which asks whether an `if` arm hands over a tuple carrying text: it reads the element types through `.base()`, so it sees through the wrapper and the opaque column is unchanged.
 
 Those five repairs are worth reading as ONE finding rather than five, and the reading is
 what the CALLER half exists to give.  `is_keyed`, `assign_var_nr`, `collection_element`,

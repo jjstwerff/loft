@@ -448,3 +448,59 @@ fn test() {
         vars.tp(elm).depend()
     );
 }
+
+/// loft#1335 — a fn-ref call's return records what it borrows in the CALLER's space, for
+/// every kind of return that can borrow.
+///
+/// `fnref_result_type` maps the lambda's declared return deps (attribute indices, callee
+/// space) through the actual arguments into frame variables; a hand-written list of shapes
+/// did that for text, vector, struct and enum and handed every other kind back verbatim.  A
+/// keyed return then reached the caller still naming attribute 0, which in the caller's frame
+/// is whichever variable holds that number.  With a SCALAR parameter first, that variable is
+/// the scalar, which carries no deps at all, so the function's own return read as OWNED — a
+/// caller adopting it would adopt the argument's store.  The debug-assertions gate saw the
+/// half of it a join makes visible (`dep-space violation: union of Attr deps with Frame
+/// deps`); this asserts the FACT (`formal/ownership.md` O-Move), in a build that always runs:
+/// the enclosing function's return must name the parameter the lambda's result borrows, and
+/// nothing else.  `x` first is what makes the wrong index observable — with `bag` at index 0
+/// the two spellings coincide.  The vector return is the control: it was mapped before, and
+/// its answer is what the keyed and optional returns must match.  A tuple return is mapped
+/// element-wise by the same code, but a named function cannot hand a fn-ref's tuple back as
+/// its tail (`expected __tuple<…>, got (…) on return from block`, a standing refusal), so
+/// that kind has no cell here.
+#[test]
+fn a_fn_ref_return_borrows_the_argument_in_the_callers_space_for_every_kind() {
+    for (label, ret, body) in [
+        ("vector (control)", "vector<integer>", "q.vs"),
+        ("keyed", "hash<Fk1335[k]>", "q.m"),
+        ("optional keyed", "hash<Fk1335[k]>?", "q.m"),
+        ("optional struct", "Fbag1335?", "q"),
+    ] {
+        let script = format!(
+            "struct Fk1335 {{ k: integer, v: integer }}
+struct Fbag1335 {{ m: hash<Fk1335[k]>, vs: vector<integer> }}
+fn pick(x: integer, bag: Fbag1335) -> {ret} {{
+    assert(x == 1);
+    h = fn(q: Fbag1335) -> {ret} {{ {body} }};
+    h(bag)
+}}
+fn test() {{ bag = Fbag1335 {{ m: [Fk1335 {{ k: 3, v: 41 }}], vs: [5, 6] }}; pick(1, bag); assert(len(bag.m) == 1); }}"
+        );
+        let (_state, data) = build(&script);
+        let pick = data.def_nr("n_pick");
+        let attrs = data.def(pick).attributes();
+        let bag_attr = attrs
+            .iter()
+            .position(|a| a.name == "bag")
+            .expect("`bag` is a parameter of pick") as u16;
+        let mut deps = data.def(pick).returned().depend();
+        deps.sort_unstable();
+        assert_eq!(
+            deps,
+            vec![bag_attr],
+            "{label}: pick's return must record exactly the parameter its fn-ref result borrows \
+             (attribute {bag_attr}, `bag`); got {deps:?} — attribute 0 is the scalar `x`, and an \
+             empty list reads as an owned store the caller may adopt"
+        );
+    }
+}

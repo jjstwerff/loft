@@ -1272,6 +1272,9 @@ or build a local and use that."
         } else {
             Type::Void
         };
+        // A lifetime-bearing tuple return is boxed exactly as a named function's is
+        // (loft#1349) — see `Parser::boxed_tuple_return`.
+        let result = self.boxed_tuple_return(result);
         if self.first_pass {
             self.data.set_returned(d_nr, result);
         }
@@ -1569,10 +1572,15 @@ or build a local and use that."
             } else {
                 Type::Void
             };
+            // A lifetime-bearing tuple return is boxed exactly as a named function's is
+            // (loft#1349) — see `Parser::boxed_tuple_return`; the same step on both
+            // passes, so the signature does not move between them.
+            let known = self.boxed_tuple_return(known);
             self.data.set_returned(d_nr, known);
         } else if !result.is_unknown() && !matches!(result, Type::Void) {
             // On second pass, force-update the return type from hint or annotation.
-            self.data.definitions[d_nr as usize].returned = result.clone();
+            let boxed = self.boxed_tuple_return(result.clone());
+            self.data.definitions[d_nr as usize].returned = boxed;
         }
 
         self.vars
@@ -2019,8 +2027,8 @@ or build a local and use that."
     /// mutating scalar captures will hit a type-mismatch
     /// diagnostic at the first `n = …` site (RHS scalar vs LHS
     /// `Reference(__cell_<T>, _)`).  No existing test exercises
-    /// mutating-scalar-capture closures (they're broken pre-02d
-    /// and the matrix cells are still `#[ignore]`d), so the
+    /// mutating-scalar-capture closures beyond the cells of
+    /// `tests/mut_closure_matrix.rs`, which run by default, so the
     /// regression net stays green.
     ///
     /// `change_var_type` (in `src/parser/expressions.rs`) is
@@ -4329,26 +4337,14 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
             ls.push(p.clone());
             p = Value::Insert(ls);
         }
-        // #247: a CAPTURING closure stored into a collection is not supported
-        // yet (the co-located 16B closure-record layout is deferred —
-        // @P213/@P214) and currently CRASHES at runtime ("Write to read-only
-        // store"). Cleanly reject the statically-detectable shapes — a direct
-        // capturing lambda, or a local that holds one — instead of crashing.
-        // (A capturing closure RETURNED from a call, e.g. `[make(1)]`, has type
-        // `fn()->T` indistinguishable from a non-capturing fn-ref and still
-        // reaches the runtime path — that needs the deferred layout work.)
-        if !self.first_pass && matches!(in_t, Type::Function(_, _, _)) {
-            let capturing = elem_capturing_lambda || self.fn_ref_source_captures(&p);
-            if capturing {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "a capturing closure cannot be stored in a collection yet — the \
-                     co-located closure-record layout is deferred (@P213/@P214); hold the \
-                     captured state separately (e.g. a struct field) and store a \
-                     non-capturing fn that reads it"
-                );
-            }
+        // A collection takes non-capturing lambdas only (DESIGN_DECISIONS.md C116):
+        // refuse the statically-detectable capturing shapes — a direct lambda, a
+        // local holding one, a closure factory's return — at the literal.
+        if !self.first_pass
+            && matches!(in_t, Type::Function(_, _, _))
+            && (elem_capturing_lambda || self.fn_ref_source_captures(&p))
+        {
+            self.refuse_capturing_closure_in_collection();
         }
         res.push(p.clone());
         None
@@ -4370,6 +4366,23 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
     /// a synthesized closure record); the second half is the two source shapes it cannot
     /// see through, a LOCAL and a CALL, where the capture is a fact about the source
     /// rather than about this expression.
+    /// The ONE refusal for a capturing closure headed into a collection element,
+    /// raised by the collection literal and by the element assignment alike.  A
+    /// collection has one element layout and each capture set is its own record
+    /// shape, so the element slot holds a plain fn-ref only; a struct FIELD holds a
+    /// capturing closure, which is the route the message names
+    /// (DESIGN_DECISIONS.md C116).
+    pub(crate) fn refuse_capturing_closure_in_collection(&mut self) {
+        diagnostic!(
+            self.lexer,
+            Level::Error,
+            "a capturing closure cannot be stored in a collection: a collection has one \
+             element layout and each capture set is its own record shape — hold it in a \
+             struct field, or store a non-capturing fn that reads the state from a \
+             struct field"
+        );
+    }
+
     pub(crate) fn fn_ref_source_captures(&self, p: &Value) -> bool {
         if super::find_capturing_fn_ref(&self.data, p).is_some() {
             return true;

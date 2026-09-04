@@ -26,11 +26,11 @@
 <div class="section-desc"><p>Functions for working with text (UTF-8 strings) and character values.</p></div>
 <div class="item">
 <pre><code>pub fn len(both: text) -&gt; integer</code></pre>
-<p>Number of characters (Unicode code points) in the text (@PLN110) — the human count, as in every mainstream language. For a byte length (bounds checks, the limit of byte-positioned indexing / slicing) use `size`.</p>
+<p>Number of characters (Unicode code points) in the text — the human count, as in every mainstream language. For a byte length (bounds checks, the limit of byte-positioned indexing / slicing) use `size`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn size(both: text) -&gt; integer</code></pre>
-<p>Number of bytes in the text (@PLN110). This is the bound for byte-positioned operations: `s[i]`, slices `s[a..b]`, and `find`/`rfind` all use byte offsets. For the human character count use `len`.</p>
+<p>Number of bytes in the text. This is the bound for byte-positioned operations: `s[i]`, slices `s[a..b]`, and `find`/`rfind` all use byte offsets. For the human character count use `len`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn len(both: character) -&gt; integer</code></pre>
@@ -48,7 +48,7 @@
 <div class="item">
 <pre><code>pub fn starts_with_at(self: text, pos: integer, prefix: text) -&gt; boolean</code></pre>
 <p>Functions for searching, transforming, and classifying text and character values. Character classification functions return true only if every character in the text satisfies the condition. The single-character variants test one code point. (`starts_with` / `ends_with` moved to `02_files.loft` so the path helpers there can call them; both still available as `text.starts_with` / `text.ends_with`.) Returns true if self contains `prefix` starting at byte position `pos`.  Sugar over `self[pos..pos + prefix.size()] == prefix` for the common &quot;is this token at this offset?&quot; pattern in scanners / parsers.  Returns false (not an error) when pos + prefix.size() exceeds self.size() — same shape as `starts_with` for the &quot;prefix too long for input&quot; case.</p>
-<p>Faster than comparing characters one at a time for a known prefix at `pos`. Example: @STD-001</p>
+<p>Faster than comparing characters one at a time for a known prefix at `pos`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn char_slice(self: text, from: integer, to: integer) -&gt; text</code></pre>
@@ -71,11 +71,11 @@
 </div>
 <div class="item">
 <pre><code>pub fn find(self: text, value: text) -&gt; integer?</code></pre>
-<p>Returns the byte index of the first occurrence of value, or null if not found. Use to locate substrings before slicing.  Nullable: null when value is absent (@PLN102 keystone step 4 — the type is honest about the not-found case).</p>
+<p>Returns the byte index of the first occurrence of value, or null if not found. Use to locate substrings before slicing.  Nullable: null when value is absent (the type is honest about the not-found case).</p>
 </div>
 <div class="item">
 <pre><code>pub fn rfind(self: text, value: text) -&gt; integer?</code></pre>
-<p>Returns the byte index of the last occurrence of value, or null if not found. Use to find file extensions or the last path separator.  Nullable: null when value is absent (@PLN102 keystone step 4 — the type is honest about not-found).</p>
+<p>Returns the byte index of the last occurrence of value, or null if not found. Use to find file extensions or the last path separator.  Nullable: null when value is absent (the type is honest about not-found).</p>
 </div>
 <div class="item">
 <pre><code>pub fn contains(self: text, value: text) -&gt; boolean</code></pre>
@@ -151,11 +151,11 @@
 </div>
 <div class="item">
 <pre><code>pub fn join(self: vector&lt;text&gt;, sep: text) -&gt; text</code></pre>
-<p>Joins parts with sep between each consecutive pair. Returns &quot;&quot; for an empty vector. Use to build comma-separated lists, path segments, or any delimited output. Example: @STD-003</p>
+<p>Joins parts with sep between each consecutive pair. Returns &quot;&quot; for an empty vector. Use to build comma-separated lists, path segments, or any delimited output.</p>
 </div>
 <div class="item">
 <pre><code>pub fn byte_at(self: text, i: integer) -&gt; integer</code></pre>
-<p>These two are TEXT functions that happen to sit after the Environment marker. Re-opening the section files them under Text in the generated reference, which is where a reader looks for them — `text_from_bytes` existed for two releases and was reported as missing (loft#748) because `doc/stdlib-text.html` did not list it.  Declaring the section rather than MOVING the definitions is deliberate: definition order is the order types are minted, and the native `init()` replays that order, so relocating `vector&lt;u8&gt;`'s first mention shifts every type id after it (loft#739 / #742).  A comment cannot. Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text[i]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  ~5-10× faster than `text[i]` for pure-ASCII checks.</p>
+<p>Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text[i]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  ~5-10× faster than `text[i]` for pure-ASCII checks.</p>
 </div>
 <div class="item">
 <pre><code>pub fn text_from_bytes(bytes: vector&lt;u8&gt;) -&gt; text</code></pre>
@@ -163,7 +163,7 @@
 </div>
 <div class="item">
 <pre><code>pub fn chr(cp: integer) -&gt; text</code></pre>
-<p>Build a one-character text from a Unicode CODE POINT — the inverse of the `ch as integer` that text iteration already gives you, and the code-point twin of text_from_bytes' byte route.  Use when you have a number and need the character it names: decoding an escape (`\u{...}`, an HTML entity), walking a code-point table, or reassembling text a code point at a time. chr(65)      &quot;A&quot;     chr(233)    &quot;é&quot; chr(20013)   &quot;中&quot;    chr(128512) &quot;😀&quot; A code point that names no character answers the EMPTY text, never a crash: a surrogate (D800-DFFF), anything past U+10FFFF, a negative number — and also 0, because `character` uses 0 as its null and text iteration stops there, so a NUL built here could not be read back.  If you need an embedded NUL, go through the byte route: `text_from_bytes([0])` carries one. Example: @STD-002</p>
+<p>Build a one-character text from a Unicode CODE POINT — the inverse of the `ch as integer` that text iteration already gives you, and the code-point twin of text_from_bytes' byte route.  Use when you have a number and need the character it names: decoding an escape (`\u{...}`, an HTML entity), walking a code-point table, or reassembling text a code point at a time. chr(65)      &quot;A&quot;     chr(233)    &quot;é&quot; chr(20013)   &quot;中&quot;    chr(128512) &quot;😀&quot; A code point that names no character answers the EMPTY text, never a crash: a surrogate (D800-DFFF), anything past U+10FFFF, a negative number — and also 0, because `character` uses 0 as its null and text iteration stops there, so a NUL built here could not be read back.  If you need an embedded NUL, go through the byte route: `text_from_bytes([0])` carries one.</p>
 </div>
 
   </article>

@@ -55,12 +55,6 @@ const NATIVE_SKIP: &[&str] = &[];
 
 /// Script files to skip in native mode.
 const SCRIPTS_NATIVE_SKIP: &[&str] = &[
-    // Struct yields from a generator's LOOP body are interpreter-only for
-    // now: the native eager-collect factory cannot preserve per-yield
-    // snapshots (values silently alias), so --native rejects the shape with
-    // a compile_error naming the alternatives (#481).  The interp half runs
-    // under wrap.
-    "447-coroutine-yield-borrow.loft",
     // 135-vector-u8-concat.loft was here for @P316 (`vector<u8>` element read
     // with `?? <int>` mis-compiled); @P316 is fixed, so 135 now runs natively
     // and doubles as the @P316 regression guard.
@@ -317,6 +311,16 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
     }
     let start_def = p.data.definitions();
     p.parse(&entry.to_string_lossy(), false);
+    // Two sources may each declare a function of the same name, and emitted Rust is one
+    // flat namespace.  `namespace_colliding_native_fns` is what settles that — the lowest
+    // source keeps the bare name, the rest become `n_s<N>_<name>` — and its own contract is
+    // that it runs after the two-pass parse and BEFORE a native emit.  Every `--native`
+    // path in `main.rs` calls it; this harness did not, so it emitted from a `Data` the
+    // compiler would never hand the generator: a module's own `main` stayed `n_main` beside
+    // the entry's, `duplicate_fn_names` saw a duplicate that no real build has, and the
+    // entry was emitted under a disambiguated ident while the template called the bare
+    // name (loft#1351).
+    p.data.namespace_colliding_native_fns();
     for l in p.diagnostics.lines() {
         println!("{l}");
     }
@@ -324,16 +328,42 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
         return Err(Error::from(std::io::ErrorKind::InvalidData));
     }
     scopes::check(&mut p.data, &mut p.database);
+    // Two sources may each declare a function of the same name, and emitted Rust is one
+    // flat namespace.  `namespace_colliding_native_fns` is what settles that — the lowest
+    // source keeps the bare name, the rest become `n_s<N>_<name>` — and its own contract is
+    // that it runs after the two-pass parse and BEFORE a native emit.  Every `--native`
+    // path in `main.rs` calls it; this harness did not, so it emitted from a `Data` the
+    // compiler would never hand the generator: a module's own `main` stayed `n_main` beside
+    // the entry's, `duplicate_fn_names` saw a duplicate that no real build has, and the
+    // entry was emitted under a disambiguated ident while the template called the bare
+    // name (loft#1351).
+    p.data.namespace_colliding_native_fns();
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let end_def = p.data.definitions();
-    let main_nr = p.data.def_nr("n_main");
+    // The ENTRY FILE's `main`, not any `main` in the table.  `def_nr` is a global lookup
+    // and `use` parses a module's definitions into the same table, so a library that
+    // happens to declare `fn main()` could win it — and the generated Rust then called an
+    // `n_main` that was never emitted (`cannot find function n_main in this scope`,
+    // loft#1351).  `MAIN_SOURCE` is the entry; `2..` are the modules it imported.
+    let main_nr = (start_def..end_def)
+        .find(|d| {
+            let def = p.data.def(*d);
+            def.name == "n_main" && def.source() == loft::data::MAIN_SOURCE
+        })
+        .unwrap_or(end_def);
     let has_main = main_nr < end_def;
 
     // Collect zero-parameter user functions as test entry points.
     let mut test_fns: Vec<(u32, String)> = Vec::new();
     for d_nr in start_def..end_def {
         let def = p.data.def(d_nr);
+        // Same narrowing, same reason: an imported module's zero-parameter void function
+        // is not this file's test.  `is_corpus_entry_point` excludes the STDLIB by path
+        // but says nothing about a `use`d library.
+        if def.source() != loft::data::MAIN_SOURCE {
+            continue;
+        }
         // `Definition::is_corpus_entry_point` is the ONE answer, shared with
         // `tests/wrap.rs`.  This side used to ask a WIDER question — no return filter — so
         // every zero-parameter value-returning function in a main-less corpus file ran here
@@ -3967,48 +3997,18 @@ fn native_tuple_return_script() -> std::io::Result<()> {
 /// `native_utils::add_native_extern_flags` in the test runner, which recovered
 /// graphics/shapes/server/web/moros_render/moros_sim).  Tracked under @P321.
 const LIB_PKGS_NATIVE_SKIP: &[&str] = &[
-    // crypto — FIXED (@P321a): sha256/base64/hmac wired into codegen_runtime.rs.
-    // arguments — FIXED (@P321b): OpSetText with a null value now stores the null
-    // pointer instead of emitting `(()).to_string()`.  Regression:
-    // tests/scripts/repro_p321b.loft.
-    // random — FIXED (@P321f): wired `n_rand_seed` into codegen_runtime (was a
-    // void empty-stub no-op) AND fixed `n_rand_indices` to store 8-byte (i64)
-    // elements matching how `vector<integer>` is read.
-    // moros_editor — FIXED (@P321e): a text-returning match fn `.to_string()`'d
-    // its result into a `__ret_N` local and returned `Str::new(&local)`
-    // (dangling); the return now routes a text-LOCAL value through `stores.scratch`.
-    // moros_ui — FIXED (@P321g): a `&`-ref-param call on an assignment RHS
-    // (`x = route_click(p, st.es_tools, …)`) arrived as `Span(Insert([Set(__ref_N,
-    // …), Call]))`; output_set's S35 hoist matched only a bare `Insert`, so it
-    // fell through to the brace-less Insert arm → `let x = let __ref_N = …; call`
-    // (let in expression position).  output_set now unspans before the S35 check.
-    // imaging — FIXED (@P321c): the native direct-call codegen now forwards a
-    // LoftStore + converts struct `Reference` ARGS to LoftRef
-    // (`output_native_direct_call`), so a store-mutating package `#native` fn
-    // (`load_png(path, image)`) gets the full 4-arg ABI.  The cdylib's
-    // hardcoded field offsets were also wrong; `loft generate` now emits
-    // offsets from the canonical struct schema (`Stores::position`/`size`)
-    // instead of a separate layout calc, and lib/imaging/native matches them.
-    // input — design draft landed 2026-06-01 (LAVITION W.13); runtime blocked
-    // on @P391 (cross-package constructor lands in CONST_STORE).  Un-skip once
-    // @P391 ships.
-    "input",
+    // (empty) An entry here names a package whose tests do not compile or run
+    // under `--native`, the open issue that explains it, and the condition that
+    // removes it.  Every package listed before ran green again by 2026-06.
 ];
 
 /// Specific library test FILES skipped under `--native` (the rest of the
 /// package DOES compile), keyed `"<pkg>/<file>.loft"`.
 const LIB_TESTS_NATIVE_SKIP: &[&str] = &[
-    // Network: live HTTPS to httpbin.org — same reason as the interpreter skip
-    // (wrap.rs::LIB_TESTS_SKIP).  Not a native gap.
-    "web/http.loft",
-    // @P321d FIXED 2026-05-23: nested vector index `m.a[0].b[2]` no longer
-    // emits two live `&mut stores` borrows (E0499) — the OpGetVector /
-    // OpVectorRef `#rust` templates bind `@r` to a local before the call.
-
-    // @P333 FIXED 2026-05-26: `moros_render/geometry.loft` +
-    // `moros_sim/persistence.loft` no longer hardcode `/tmp/` — they use
-    // CWD-relative filenames + `delete()`, so they run on Windows too.  The
-    // Windows skips are removed (macOS + Linux already passed).
+    // (empty) The `web` fixture's network tests live in `tests-network/`, which no
+    // suite walks (TESTING.md § Every skip says why, how it runs instead, and when
+    // it ends) — nothing to list.  An entry here needs the open issue that explains
+    // it and the condition that removes it.
 ];
 
 /// True if `entry` (a `lib/<pkg>/tests/<file>.loft` path) is skipped under the

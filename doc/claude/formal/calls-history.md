@@ -6,8 +6,210 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — `D-call-7` closed 2026-09-02, the last one standing. `D-call-6` was opened
-and closed the same day by the reference review of chapter 31.
+OPEN: **0** — `D-call-12` opened and closed 2026-09-04 (loft#1357, the residue of
+`D-call-9` under the release valgrind sweep), the same day as `D-call-10` and `D-call-11`
+(loft#1345, loft#1347), `D-call-9` (loft#1338) and `D-call-8` (loft#1337); before them
+`D-call-7` closed 2026-09-02 and `D-call-6` was opened and closed the same day by the
+reference review of chapter 31.
+
+### D-call-12 — OPENED AND CLOSED (2026-09-04, loft#1357): eight shapes still minted a text buffer nothing released
+
+`(F-Call)` and `(F-Ret)` again, measured this time by the release's valgrind sweep
+(`scripts/valgrind-sweep.sh`) after `D-call-9` closed: 11 corpus files still lost one
+`String` per call on the interpreter, every value right on both backends, and the CI leak
+gate blind to all of them by suppression.  Not one defect but eight sites that each
+answered the question *"who releases this buffer?"* for the shapes they were written
+against and not for the one in front of them:
+
+- a LAMBDA that already held its one hidden `&text` buffer (`parse_return` took it) had
+  its tail promotion declined on pass 2 — the gate keyed on an `__acc`/`__tret`
+  attribute such a lambda never minted — so `fn(n) -> text { return cap ?? "x" }` returned
+  its `??` temp as a view; and a lambda with two text locals returned the unpromoted one
+  bare.  Closed: the gate reads the buffer the lambda holds, the accumulator / bind temp
+  stays a local and is MOVED into that buffer, and a returned bare text local is delivered
+  through the buffer and freed (`free_vars`; `free_copied_text_sources` now frees the
+  returned local it copied — the sweep had suppressed it as handed up);
+- a nullable text LOCAL returned (`t = text_src(i, s); return t`): the ownership oracle
+  followed the binding to the argument `text_src` borrows and called the copy safe — right
+  for the store, wrong for the `String` a text `Set` copies into.  Closed in the orphan
+  predicate (`text_return_orphan_risk`), not the oracle, whose store answer the
+  `ownership_oracle` suite pins;
+- an early `return` inside a LOOP of a generic monomorph (`for v in it { return v; } d`):
+  the rewriter that routes early returns into `__tret` stopped at `Loop`/`Iter`/`Drop`;
+- a `-> S?` generic FORWARDER: promoted while its tail call still named the nested
+  TEMPLATE (not a text call), and never asked again once `instantiate_nested_generics`
+  retargeted it — `try_generic_instantiation` asks again, only where nothing was promoted;
+- a tail that READS its own buffer (`rest[0..3]` of the promoted `rest`; a `match` arm
+  yielding the work text) fell to the `__ret_N` residual — now staged into the temp,
+  moved into the buffer, and the temp freed (`any_text_return_buffer`);
+- a `??` temp consumed by a SCALAR tail (`len(s.name ?? "")`, `t.0 + len(t.1 ?? "")`) —
+  case b's "the tail is the returned value" premise holds only when the block yields the
+  TEXT; the scalar is hoisted first and the temp freed.  And one consumed by an `if`
+  CONDITION whose arm returns took its free after the statement the return never
+  reached — the condition is evaluated into a boolean, the temp freed, then the branch;
+- a `par` loop's `_ = e` over `vector<text>` was marked never-free as a borrowed view of
+  the element — a text binding copies, so it owns;
+- a `parallel { … }` arm's formatted argument was built in the WORKER's copy of the frame,
+  which nothing freed — each arm frees the `__work_N` texts it wrote, on the worker.
+
+Two instrument findings closed with it: the text ledger was per-thread (a worker's orphan
+read as "NO text leak") and silent under `--tests`; it is one ledger for the process now and
+reports at the end of a suite.  Measured: 11 red files → 0 under the sweep; the guard
+`tests/scripts/1357-every-text-buffer-a-frame-mints-is-released.loft` (24 cells, 7 controls)
+99 orphaned buffers → 0 by hand under `LOFT_TEXT_TIMELINE=1`, every value byte-identical on
+both backends before and after; `tests/text_buffer_ledger.rs` scores it.  The sweep's last
+red file, `85-yield-resume`, was the TEST RUNNER rather than the program: a `main` that
+`yield_frame`s hands control back after each frame, the CLI resumes it until it finishes,
+and `run_tests` scored the first frame as the whole test and abandoned the frame with its
+formatted texts unreleased — the sweep runs every script under `--tests`, which is why a
+direct run never showed it.  The runner resumes now, as the CLI does.
+
+### D-call-11 — OPENED AND CLOSED (2026-09-04, loft#1347): a lambda declared `-> vector<T>?` lost the `?` when its tail was delivered
+
+`(F-Return)` returns the tail, and storing a non-null value where `τ?` is declared is the
+widening every named function performs.  Two vector-delivery legs — the borrow-copy of a
+projected tail (`copy_borrow_tail_into_retbuf`) and the forwarder copy (`emit_forward_copy_409`)
+— re-set the function's returned type as a BARE vector, dropping the declared `?`, where
+`ref_return` keeps it.  A named function survived that (nothing reads its signature against a
+variable), but a lambda's Function type is built from the def's returned type, so a lambda
+`fn(q: Bag) -> vector<integer>? { q.items }` published `-> vector<integer>` on the pass that
+delivered and `-> vector<integer>?` on the pass that did not, and the variable holding it was
+refused as a type change — while the named twin compiled.  A `-> S?` lambda with a non-null
+record tail was refused the same way.
+
+**Closed at the two legs, by the one rewrap `ref_return` already applies**
+(`set_delivered_vector_return`: the deps belong to the storage and the `?` to the value).
+Guard `tests/scripts/1347-a-lambda-declared-nullable-heap-accepts-a-non-null-tail.loft` —
+the vector, record and whole-argument lambdas, the null-arm twin, the scalar and text
+controls, the named twins; the control build refuses the file at parse time (exit 1 → 0 on
+both backends).
+
+### D-call-10 — OPENED AND CLOSED (2026-09-04, loft#1345): a `-> vector<T>?` function handed up a projection of its argument as the view
+
+`(F-Ret)` says a returned whole heap value is owned, never a view.  The buffered non-null
+vector return copies a projected tail (`Delivery::CopyBorrow`, row 104), but a nullable
+return always branches on its null arm and reached the vector materialiser instead, whose
+leaf cases were a local vector and a call carrying its own buffer — a projecting arm
+(`if q.rec.y > 0 { q.items } else { null }`) matched neither and escaped as the view.  The
+caller's bind then aliased the callee's argument field on both backends, whether the callee
+was named or a fn-ref and whether the result was bound or chosen by an `if`; the non-null
+twin copied throughout, which located the gap at the nullable delivery.
+
+**Closed in the materialiser, with a projection leaf**: a field, element or keyed projection
+(`use_analysis::is_projection_op`) is appended into the buffer — `OpClearVector(w);
+OpAppendVector(w, <projection>); w` — and nothing is freed, because the source is the
+argument's store.  Guard `tests/scripts/1345-a-nullable-vector-return-of-a-projection-is-copied.loft`
+(named and fn-ref callees; plain bind, `if` join, a loop with a filler allocation; a field and
+an element-of-field projection; the null arm; the non-null controls and the bind-then-rebind
+workaround), falsified at `dd46146c` on both backends.  Held fixed and filed apart: a lambda's
+lifetime TUPLE takes no synthetic-tuple rewrite at all (loft#1349), and a named function's
+tuple result refuses to join a tuple literal (loft#1350).
+
+
+### D-call-9 — OPENED AND CLOSED (2026-09-04, loft#1338): an early text return was delivered as a view of an orphaned local
+
+`(F-Call)` says the frame frees every local it owns when it drops, and `(F-Ret)` says a
+returned value is handed out through the return-buffer, never as a view of a local.  A text
+function's block tail met both: `text_return` promotes the tail's accumulator, work text or
+built local to a hidden `&text` parameter the CALLER owns, and the tail writes it.  An EARLY
+`return` did not.  `return lo(n) ?? ""`, `return lo_n(n)`, `return t[0][0]`, `return s.name`
+inside an `if` arm, a loop body, a `match` arm, a nested arm or a recursion base case reached
+the scope pass with frees to run before the value could leave, and `free_vars` (and its
+block-tail twin in `insert_free`) copied the value into a frame-local `__ret_N` String marked
+`skip_free`, under a comment that called the orphan fine "because the caller copies
+immediately".  The right characters came back, the String never did — one per call on the
+interpreter, 600 blocks definitely lost in valgrind for the issue's 300-iteration loop, and a
+second buffer per call where the value was a `??` (its `__ncc_N` temp is `skip_free` for the
+same premise).  `--native` collapses the temp into a direct `return`, so only one backend
+leaked, and nothing said so: the LSan gate's `append_text` suppression rests on the premise
+that those frames leak only on a fault path, and 14 corpus scripts leaked with no fault in
+them.
+
+A tail that VIEWS a local — `t[0][0]`, `ts[0][0]` through a slice, a self-recursive call —
+had the same orphan for a second reason: the loft#568 orphan predicate classified only the
+block tail, so a function whose only owned return was an early one was never flagged, and
+the targeted promotion (@PLN104 Phase A) deferred the `view-of-local` class outright with a
+note that a bare rebind had crashed `553 textslice`.  And a third defect sat under both: the
+predicate, and `--native`'s own return-buffer choice, read ANY `RefVar(Text)` attribute as the
+hidden buffer — a user-written `&text` parameter is one too — so `fn f(s: &text, c) -> text {
+if c { return mk() } … }` was left unbuffered on the interpreter and, on `--native`, had its
+returned text written INTO `s`: the caller's variable changed, silently, with the return value
+right.
+
+**Closed at the chokepoint that minted the orphan, and at the one home of the buffer
+question.**  Where a text return must be hoisted past frees and the function holds a hidden
+`&text` buffer the value does not read, both hoist sites now write each arm of the value into
+that buffer (`push_text_arms_into`, per arm so native's arm types stay uniform), free the
+`__work_N` / `__ncc_N` temps the copy drained, run the frees, and return the buffer.  The
+`__ret_N` copy remains only for a function with no buffer at all, and is documented as the
+residual it is.  The orphan predicate classifies every `return` site (`early_return_ownerships`),
+a null arm excluded because `OpConvTextFromNull()` is a sentinel with nothing behind it — the
+first cut counted it, promoted `text_src(i, tag) { if i == 0 { return null } return tag }`, and
+that made its direct-call caller leak the way its local-bind sibling already did; and the
+targeted promotion promotes the view-of-local and join-of-local classes, which `Set(__tret,
+view)` materialises through the interpreter's own `OpAppendText` copy — `553 textslice` is
+green on both backends.  The buffer question reads `Definition::text_work_buffers` (hidden
+only) at all six sites that had restated it ([IMPLEMENTATIONS.md](IMPLEMENTATIONS.md) § The
+text return buffer).
+
+Measured: the issue's program 600 → 0 blocks under valgrind, two probe matrices of 27 cells
+27 + 23 → 0 orphans, nine of the issue's fourteen corpus scripts → 0, the other five (a
+tuple-of-text return, a generic monomorph inside a `par` worker, an iterator `?` discharge)
+unchanged at their baseline counts — other shapes, held fixed here and named in the LSan
+suppression they still hide behind.  Every value byte-identical on both backends before and
+after.  Guard `tests/scripts/1338-an-early-text-return-is-delivered-through-the-caller-buffer.loft`
+(29 cells, six controls, the `&text` negative cell) with `tests/early_text_return.rs` scoring
+the text ledger; falsified at `3d8f2b9e` — native exit 1 → 0 on the `&text` cell, interpret
+106 orphaned buffers → 0 by hand under `LOFT_TEXT_TIMELINE=1`, inert on the six channels
+`make falsify` scores.  Side finding filed: loft#1343 (a boolean `match` with both arms warns
+nullable-into-non-null).
+
+### D-call-8 — OPENED AND CLOSED (2026-09-04, loft#1337): a view of a local escaped through a nullable return
+
+`(F-Ret)` says a whole heap value is handed out OWNED, never a view of a local.  A dense
+return has a delivery buffer and `ref_return`'s copy leg lands every arm in it; a nullable
+record return has none — a `-> S?` is delivered as the DbRef its tail yields — so what escapes
+is exactly what `classify_reference_delivery` decides, and two shapes got past it on both
+backends:
+
+```loft
+fn walked() -> Node? { …; cur: Node? = a; cur = cur.next; cur }        // views b, a local
+fn arm(take: boolean) -> Leaf? { t = Tree{…}; if take { t.l } else { null } }
+```
+
+The first: `cur = cur.next` leaves the local a SELF-dep, and `return_views_local` walks the
+deps of the return sources with the sources already in its `seen` set — so the one dep it
+should have read as *a record reached through my own field, which may be any store this frame
+frees* was skipped and the local read as an owner.  The caller received `b`'s record after
+`b`'s exit free; `LOFT_STRICT_STORES` names it, a plain run answers the stale value or the
+next allocation's.  The second: `return_projects_into_local` stopped at the `if`, the arm's
+projection was never seen, the selector chose `Rename` on a function with nothing to rename
+onto, and the tail was demoted to a discarded statement plus `return null` — `--native`
+printed `null`, the interpreter a reused record — with a literal on the other arm as much as
+with a `null`.  Every other arm kind beside a `null` was already right (a literal, an owned
+local, a parameter, a view BOUND to a local first), which is what located the gap at the
+direct projection.
+
+**Closed at the selector, by its own `MaterializeView` cell.**  A self-dep on a user local
+(never on a work-ref, whose self-dep is the ownership marker) reads as a view; an `if` arm is
+a tail where there is no buffer; and the buffer-less materialise is made PER ARM
+(`materialize_view_arms`): every arm that is not PROVABLY owned or null is copied into one
+work-ref (`return_leaf_is_owned_or_null` — a `null`, an argument, an owned local, a struct
+literal, a callee that mints its own store are handed up as they are; a projection, a keyed
+lookup, a lifted temporary's element, a join are copied), and a nullable LOCAL source copies
+only where present — both emitters' `OpCopyRecord` leaves an allocated EMPTY record for a
+null source, presence standing in for absence.  The leaf rule is stated in that direction
+on purpose: the first cut copied what LOOKED like a view (a field or vector projection, a
+viewing local), which is narrower than the criterion that had selected `MaterializeView`,
+and a keyed element of an inline call's temporary went out raw again — the `882` poison
+cells caught it.  The dense route is untouched: its arm walk and copy leg already satisfy
+the rule, and the `if` recursion is gated on the buffer's absence so the dense IR is
+byte-identical.
+
+Guard: `tests/scripts/1337-a-view-of-a-local-returned-through-a-nullable-return-is-copied.loft`
+— the two shapes, the walk that ends at null, eight nullable controls and the two dense twins,
+each read after a filler allocation so a handed-up view would read the filler; both backends;
+falsified at `c0a09c95`.  Found while widening loft#1336's matrix, and held fixed there.
 
 ### D-call-6 — OPENED AND CLOSED (2026-09-01, loft#1286): the `&` lint could not see a forward
 
@@ -293,3 +495,14 @@ each was found by moving an axis the previous one held fixed.
   parameter contract (`F-Param*`) is exactly what the ownership register (ownership.md, 0 open)
   and the sandbox raw-write rule ([capabilities.md](capabilities.md), 0 open) are built on, so it
   has the strongest standing cross-checks in the spec.
+
+## Carried by calls.md until 2026-09-04
+
+The rules doc used to carry these beside its `OPEN` line — closure summaries, and notes on
+the times the count read 0 over a live entry.  They are timeline, so they moved here
+unchanged; [calls.md](calls.md) now states only what is open.
+
+### the status line formal/README.md's area table carried until 2026-09-04
+
+**0 open** (2026-08-22) — args left-to-right; scalar params by-value, heap params share (mutate-through visible, whole reassign local, `&` writes back); returns independent. `(F-Drop)` was added and D-call-1 opened and closed the same day: a function DECLARED void whose body ends in a VALUE ran on `--interpret` and would not compile on `--native` (a bare rustc `E0308` about a temporary `.rs` file). Filed as a design call; the IR had already chosen — a void tail is wrapped in `Value::Drop` on both backends — and only the BLOCK's type had not followed it. Gated on the function-body context, which is where two attempts broke: the same `Void` is a decision in a declared-void function and a PLACEHOLDER in a lambda (whose return is inferred from the block type) and in a statement-position block (which may be an enclosing block's value) (loft#1075). `(F-Block)` was written down beside it and D-call-2 opened and closed the same day: a `{ … }` block whose value someone reads dropped its OWN tail, so `fn f() -> integer { { 5 } }` answered null on `--interpret` and `0` on `--native` while the function type-checked — the block's type is its tail's type, and only the value was thrown away (loft#1076)
+

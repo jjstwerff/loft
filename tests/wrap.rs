@@ -50,15 +50,12 @@ static WRAP_LOCK: Mutex<()> = Mutex::new(());
 /// its own CI runs it.  Both moved out (@PLN149 step 9), and the list emptied.
 const SUITE_SKIP: &[&str] = &[];
 
-/// Docs files that are known to fail in `--native-wasm` mode.
+/// Docs files skipped in `--native-wasm` mode.  An entry carries the open issue
+/// that explains it and the condition that removes it (TESTING.md § Every skip
+/// says why, how it runs instead, and when it ends).
 const WASM_SKIP: &[&str] = &[
-    "19-threading.loft", // todo!(); WASM threading model differs
-    // #255 / @PLN9 Phase 1w: the wasm `source_dir()` anchor IS wired now (the
-    // host working directory via `current_dir()` — the WASI preopen).  191 stays
-    // skipped because it can't be run under wasm yet: it `print()`s, which hits
-    // #268 (wasip2 codegen calls undeclared `loft_host_print`).  (Also moot today
-    // — `wasm_dir` sweeps tests/docs, not tests/scripts.)  Un-skip when #268 lands.
-    "191-source-dir.loft",
+    // (empty) `19-threading.loft` sat here as "the WASM threading model differs"
+    // long after it compiled and ran green under wasmtime.
 ];
 
 /// Compile a `.loft` file to a WebAssembly binary via the loft codegen + rustc, then
@@ -599,30 +596,18 @@ const SCRIPTS_LEAK_ALLOW: &[&str] = &[];
 /// display or block forever — none today (no lib test creates a window or runs
 /// an unbounded poll/accept loop; the `server` test is listen+close).
 const LIB_TESTS_SKIP: &[&str] = &[
-    // Network-dependent: makes live HTTPS calls to httpbin.org, so it fails in
-    // offline CI (an empty response parses out-of-bounds).  Not a code bug — an
-    // external-service integration test that can't run headless/offline.
-    "web/http.loft",
-    // @P333 FIXED 2026-05-26: `moros_render/geometry.loft` +
-    // `moros_sim/persistence.loft` previously hardcoded `/tmp/` paths (absent on
-    // Windows → file-open error → bounds panic) and were skipped here.  Both now
-    // write to CWD-RELATIVE filenames + `delete()` after use (the same portable
-    // convention as `lib/graphics/tests/scene_glb.loft`), so they run on every
-    // platform — the Windows skips are removed.
+    // (empty) The network tests of the `web` fixture live in `tests-network/`, a
+    // directory no suite walks (TESTING.md § Every skip says why, how it runs
+    // instead, and when it ends), so no entry is needed for them.  An entry here
+    // needs the open issue that explains it and the condition that removes it.
 ];
 
 /// Library packages skipped wholesale (chunk-level), with rationale.  The
 /// in-process suite aborts on the first SIGSEGV, so a chunk with multiple
 /// interpreter crashes can't be run file-by-file here.
 const LIB_PKGS_SKIP: &[&str] = &[
-    // (empty) — `input` un-gated 2026-06-04.  Its two blockers are both fixed:
-    // #248 (@P391: cross-package struct ctor + inline heap-call method arg →
-    // CONST_STORE panic; interpreter `scan_args` force-lift, regression
-    // `tests/scripts/188-…`) and #266 (nested `&self` method call's writes not
-    // persisting on `--interpret`; `convert` no longer re-wraps an already-
-    // borrowed reference receiver in `OpCreateStack`, regression
-    // `tests/scripts/189-issue-266-nested-self-method.loft`).  `lib/input`'s
-    // `01-basics` now passes on both `--interpret` and `--native`.
+    // (empty) An entry here names a package whose tests crash the in-process
+    // suite, the open issue that explains it, and the condition that removes it.
 ];
 
 /// Returns true if `entry` (a `lib/<pkg>/tests/<file>.loft` path) is in the

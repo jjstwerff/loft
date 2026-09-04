@@ -1,0 +1,131 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Every text buffer a frame mints is released: by the frame, or by the caller it is
+// delivered to.  @FR-F-Call says a frame frees the locals it owns when it drops, and
+// @FR-F-Ret says an owned text return is handed out through the caller's hidden `&text`
+// buffer, never as a view of a local.  Each cell below answered the right value on both
+// backends while the interpreter orphaned one `String` per call (loft#1357 — the release
+// valgrind sweep's residue after loft#1338), because a delivery site, a scope-exit free,
+// or the `??` temp's consumer-free did not reach the shape:
+//
+//   the tail promotion of a LAMBDA that already holds its one buffer (pass 2 declined it);
+//   a lambda with two text locals, one promoted, the other returned bare;
+//   a nullable text LOCAL returned (`t = f(); return t` — the oracle followed the binding
+//     to the argument `f` borrowed and called the copy safe);
+//   an early `return` inside a LOOP of a generic monomorph (the rewriter stopped at loops);
+//   a `-> U?` generic FORWARDER (promoted before its nested call named the monomorph);
+//   the `_ = e` binding of a `par` loop over `vector<text>` (marked never-free as a view);
+//   a tail that READS the buffer (`rest[0..3]` of the promoted `rest`; a `match` arm
+//     yielding the work text) — staged, then moved into the buffer;
+//   a `??` temp consumed by a SCALAR tail (`len(s.name ?? "")`) or by an `if` condition
+//     whose arm returns;
+//   a `parallel { … }` arm whose argument is a formatted string (built in the worker's copy
+//     of the frame, which nothing freed).
+//
+// Axes this file MOVES:  the function kind (named, lambda, generic monomorph, par worker);
+//                        what is returned (a local, a `??` over a capture / a local / a
+//                        field / a vector element, a slice of the buffer, a match arm, a
+//                        loop variable, a nested generic call); where the `return` stands
+//                        (tail, an `if` arm, a loop body, an `if` whose condition consumes
+//                        the temp); the declared return (`text`, `text?`, `integer`).
+// Axes it HOLDS FIXED:   single element type `text`; no coroutine text; one par thread;
+//                        two parallel arms.
+//
+// The controls are the shapes that were already clean — the named twin of each lambda
+// and generic, the sequential twin of the par loop, a scalar `if` with no `??` — and
+// they are load-bearing: every fix routes the broken shape through the machinery those
+// already used, so a delivery that broke would move them first.
+//
+// Values are asserted here; the orphan count is asserted by `tests/text_buffer_ledger.rs`,
+// which runs this file under `LOFT_TEXT_TIMELINE=1` and requires "NO text leak" — the exit
+// and assertion channels cannot see a leak whose value is right.
+//
+// @falsified-at: d399cdf4 — INERT on the six channels `make falsify` scores, because every
+// value was always right on both backends; measured by hand under LOFT_TEXT_TIMELINE=1 on
+// the joined tree's release binary (139b02ac, the same code for these paths): 99 orphaned
+// text buffers -> 0.
+struct S { name: text? }
+struct Row { names: vector<text>, values: vector<integer> }
+
+fn text_src(i: integer, tag: text) -> text? { if i == 0 { return null } return tag; }
+fn direct(i: integer, s: text) -> text? { return text_src(i, s); }
+fn local_bound(i: integer, s: text) -> text? { t = text_src(i, s); return t; }
+
+pub fn f_iter<T>(it: iterator<T>, d: T) -> T { for v in it { return v; } d }
+fn gen_text() -> iterator<text> { yield "a"; yield "b"; }
+fn first(it: iterator<text>, d: text) -> text { for v in it { return v; } d }
+
+pub fn inner<T>(x: T, c: boolean) -> T? { if c { return x; } null }
+pub fn outer<U>(s: U, c: boolean) -> U? { inner(s, c) }
+fn inner2(x: text, c: boolean) -> text? { if c { return x; } null }
+fn outer2(s: text, c: boolean) -> text? { inner2(s, c) }
+
+pub fn same<T>(x: T) -> T { x }
+pub fn count_par<T>(v: vector<T>) -> integer { n = 0; for e in v par(r = same(e), 1) { n += 1; _ = e; _ = r; } n }
+fn same_t(x: text) -> text { x }
+fn count_par_t(v: vector<text>) -> integer { n = 0; for e in v par(r = same_t(e), 1) { n += 1; _ = e; _ = r; } n }
+fn count_seq(v: vector<text>) -> integer { n = 0; for e in v { n += 1; _ = e; } n }
+
+fn count() -> iterator<integer> { yield 1; yield 2; yield 3; }
+fn two() -> iterator<integer> { yield 2; yield 5; }
+fn dispatch(g: iterator<integer>) -> text { match g { [1, args: integer *] => "call/{args.len()}", _ => "?" } }
+
+fn field(line: text, key: text) -> text {
+  marker = "<{key}>";
+  at = find(line, marker);
+  if at < 0 { return ""; }
+  rest = line[at + size(marker)..];
+  rest[0..3]
+}
+
+fn tup_tail(n: integer) -> integer { t: (integer, text?) = (n, "ab"); t.0 + len(t.1 ?? "") }
+fn fld_tail(s: S) -> integer { len(s.name ?? "") }
+fn fld_ret(s: S) -> integer { return len(s.name ?? ""); }
+fn fld_bound(s: S) -> integer { x = len(s.name ?? ""); x }
+fn from_field(s: S) -> text { return s.name ?? "x"; }
+
+fn OpIndex(self: Row, name: text) -> integer {
+  for i in 0..len(self.names) { if (self.names[i] ?? "") == name { return self.values[i] ?? -1; } }
+  return -1;
+}
+fn find_idx(names: vector<text>, k: text) -> integer { for i in 0..len(names) { if names[i] == k { return i; } } -1 }
+fn drop_text(t: text) { _ = len(t); }
+
+fn main() {
+  cap: text = "alpha";
+  pick = fn(n: integer) -> text { return cap ?? "pick-fallback"; };
+  lpick = fn(n: integer) -> text { lloc: text = "foxtrot"; return lloc ?? "l-fallback"; };
+  tpick = fn(n: integer) -> text { ta: text = "golf"; tb: text = "hotel"; if n > 0 { return tb; } return ta; };
+  cpick = fn(n: integer) -> text { return direct(n, "dd") ?? "none"; };
+  s = S { name: "abc" };
+  w = Row { names: ["id", "score"], values: [7, 91] };
+  for i in 0..3 {
+    assert(pick(i) == "alpha", "a lambda returning a captured text through `??`: {pick(i)}");
+    assert(lpick(i) == "foxtrot", "a lambda whose `??` reads the local it promoted: {lpick(i)}");
+    assert(tpick(0) == "golf" && tpick(1) == "hotel", "two text locals in a lambda: {tpick(0)} {tpick(1)}");
+    assert(cpick(i) == (if i == 0 { "none" } else { "dd" }), "a lambda returning a call under `??`: {cpick(i)}");
+    assert((local_bound(i, "tag") ?? "N") == (if i == 0 { "N" } else { "tag" }), "a nullable text local returned: {local_bound(i, \"tag\") ?? \"N\"}");
+    assert((direct(i, "tag") ?? "N") == (if i == 0 { "N" } else { "tag" }), "control — the call returned straight");
+    assert(f_iter(gen_text(), "") == "a", "a generic's early return of a loop variable: {f_iter(gen_text(), \"\")}");
+    assert(first(gen_text(), "") == "a", "control — the named twin");
+    assert((outer("sss", true) ?? "N") == "sss" && (outer("sss", false) ?? "N") == "N", "a generic forwarder of a nested generic");
+    assert((outer2("sss", true) ?? "N") == "sss" && (outer2("sss", false) ?? "N") == "N", "control — the named forwarder");
+    assert(count_par(["a", "b", "c"]) == 3, "a generic par loop discarding text elements");
+    assert(count_par_t(["d", "e"]) == 2, "a par loop discarding text elements");
+    assert(count_seq(["f", "g", "h"]) == 3, "control — the sequential loop");
+    assert(dispatch(count()) == "call/2" && dispatch(two()) == "?", "a match over an iterator yielding the work text: {dispatch(count())} {dispatch(two())}");
+    assert(field("x<a>123,<b>4", "a") == "123" && field("zz", "zz") == "", "a slice of the promoted buffer after an early literal return: {field(\"x<a>123,<b>4\", \"a\")}");
+    assert(tup_tail(i) == i + 2, "a scalar tail consuming a `??` over a tuple element: {tup_tail(i)}");
+    assert(fld_tail(s) == 3 && fld_ret(s) == 3 && fld_bound(s) == 3, "a scalar consuming a `??` over a field: tail, return, bound");
+    assert(from_field(s) == "abc", "control — the `??` returned as text");
+    assert(w["id"] == 7 && w["score"] == 91 && w["zz"] == -1, "an `if` condition consuming a `??` whose arm returns: {w[\"id\"]} {w[\"score\"]} {w[\"zz\"]}");
+    assert(find_idx(["id", "score"], "score") == 1, "control — the condition without `??`");
+    outer_n = 42 + i;
+    parallel {
+      drop_text("A{outer_n}");
+      drop_text("B{outer_n}");
+    }
+  }
+  println("1357 text buffers ok");
+}

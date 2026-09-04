@@ -120,20 +120,8 @@ decided boundary, so it belongs here as a scope rule, not as a deviation to clos
 
 ## Deviations
 
-**OPEN: 0.**  `D-gen-4` closed 2026-09-02 (loft#1275): a bound-method stub is keyed by
-`(name, arity)`, so one bound set holds two SIGNATURES of one name and an interface may declare
-`-` at both arities.  The record, and the four closed deviations, are in the companion
-[interfaces-history.md](interfaces-history.md).
-
-⚠ **Closed for an OPERATOR, and the residue is a rule the language keeps rather than a
-deviation.**  An operator's arity is fixed by its SYNTAX, so the call site asks for the exact
-stub.  A named method resolves its RECEIVER before its arguments are parsed, so `x.sizer()` has
-no arity to ask with, and one bound set requiring `sizer` at two arities is refused at the
-declaration — which is `(G-Iface)` satisfied and a *parsing* order, not a rule bent.  Separately
-a CONCRETE receiver has no arity in its method key either, so a user type provides one arity of
-`-` and not both; that is why the shipped surface puts binary subtraction in `Subtractable`
-rather than adding it to `Numeric`, where it would have taken satisfaction away from every user
-type that provides `OpMul` and unary `OpMin` today.
+**OPEN: 0.**  Every deviation this doc has carried is closed; the record, and the four closed
+deviations, are in the companion [interfaces-history.md](interfaces-history.md).
 
 ## Conformance
 

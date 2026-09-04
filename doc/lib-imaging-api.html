@@ -28,7 +28,7 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Pixel</span></code></pre>
 <p>Data per pixel of a PNG image. Fields r, g, b hold red, green and blue intensity and <code>a</code> holds opacity, each 0–255.  The channels are const, so a pixel is REPLACED (<code>img.data[i] = Pixel{…}</code>), never edited in place, and <code>limit(0, 255)</code> is a range rather than a clamp — a value outside it stores 0.</p>
-<p>**<code>a</code> defaults to 255, and the default is load-bearing.** An omitted field takes its type's zero, and zero alpha is INVISIBLE — so without the declared default every <code>Pixel{r, g, b}</code> ever written would silently become fully transparent (loft#914's <code>omitted-field-zero</code> in its purest form).  With it, code that predates alpha keeps meaning what it meant: opaque. Example: @IMG-003 — replacing a pixel, and why the local you read it into is a view of its slot rather than a snapshot. Example: @IMG-004 — the range is not a clamp: doubling a bright channel stores 0, so brightening turns the brightest pixels black.</p>
+<p>**<code>a</code> defaults to 255, and the default is load-bearing.** An omitted field takes its type's zero, and zero alpha is INVISIBLE — so without the declared default every <code>Pixel{r, g, b}</code> ever written would silently become fully transparent (loft#914's <code>omitted-field-zero</code> in its purest form).  With it, code that predates alpha keeps meaning what it meant: opaque.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">value</span>(self: <span class="en">Pixel</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
@@ -45,7 +45,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Image</span></code></pre>
-<p>Database structure with image data. The actual data is in height rows of width length: <code>data</code> is one FLAT vector in row-major order, so the pixel at (x, y) is <code>data[y * width + x]</code>, and <code>len(data) == width * height</code> always holds on an image <code>png()</code> handed back. Example: @IMG-001 — the addressing rule, and what the null check buys.</p>
+<p>Database structure with image data. The actual data is in height rows of width length: <code>data</code> is one FLAT vector in row-major order, so the pixel at (x, y) is <code>data[y * width + x]</code>, and <code>len(data) == width * height</code> always holds on an image <code>png()</code> handed back.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">save_png</span>(self: const <span class="en">Image</span>, path: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
@@ -53,7 +53,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">png</span>(self: <span class="en"><a href="stdlib-file-system.html">File</a></span>) -&gt; <span class="en">Image</span></code></pre>
-<p>Decodes a PNG file and returns an Image. Returns null when there is nothing to decode — the path does not exist, names a directory, or holds bytes this decoder cannot read.  So the answer is either a complete image (<code>len(data) == width * height</code>) or null; there is no half-filled Image to guard against.  Any PNG colour type loads: greyscale and palette files are expanded to RGBA, and **alpha is carried** — a file with no alpha channel arrives fully opaque (<code>a == 255</code>), never transparent. Use to load sprite sheets or textures. Example: @IMG-001 — the three ways to get null, and the completeness the null check buys past it. Example: @IMG-002 — every colour type arrives as RGBA, and a source without an alpha channel is opaque rather than invisible.</p>
+<p>Decodes a PNG file and returns an Image. Returns null when there is nothing to decode — the path does not exist, names a directory, or holds bytes this decoder cannot read.  So the answer is either a complete image (<code>len(data) == width * height</code>) or null; there is no half-filled Image to guard against.  Any PNG colour type loads: greyscale and palette files are expanded to RGBA, and **alpha is carried** — a file with no alpha channel arrives fully opaque (<code>a == 255</code>), never transparent. Use to load sprite sheets or textures.</p>
 </div>
 
   </article>

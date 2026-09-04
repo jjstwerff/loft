@@ -27,30 +27,30 @@
 <p class="lib-legend">7 public items, in source order. Generated from the registry index, which re-derives them from the package source at publish time — so a signature here is the one that version actually ships.</p>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rand</span>(lo: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hi: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span>?</code></pre>
-<p>Returns a random integer in [lo, hi] (inclusive). Returns null when lo &gt; hi or when either argument is null. Draws from the ONE hidden generator every call site shares — see <code>rand_seed</code>. Example: @RND-001 — why a seeded global sequence is not yours, and what a RandStream gives instead.</p>
+<p>Returns a random integer in [lo, hi] (inclusive). Returns null when lo &gt; hi or when either argument is null. Draws from the ONE hidden generator every call site shares — see <code>rand_seed</code>.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rand_seed</span>(seed: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
-<p>Seeds the thread-local random number generator with the given value. Call this before rand() or rand_indices() to get reproducible sequences — but note that it fixes what the GENERATOR produces, not what you receive: it is shared, so one <code>rand()</code> from anywhere else shifts everything after it.  When reproducibility is a requirement rather than a convenience, own a stream. Example: @RND-001 — a foreign draw between two of yours, and the same interruption against a RandStream.</p>
+<p>Seeds the thread-local random number generator with the given value. Call this before rand() or rand_indices() to get reproducible sequences — but note that it fixes what the GENERATOR produces, not what you receive: it is shared, so one <code>rand()</code> from anywhere else shifts everything after it.  When reproducibility is a requirement rather than a convenience, own a stream.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rand_indices</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;</code></pre>
-<p>Returns a vector of n integers [0, 1, ..., n-1] in a random order. Useful for random iteration, shuffling, or sampling without replacement. Returns an empty vector when n is 0 or null. Example: @RND-001 — this draws from the shared global generator too.</p>
+<p>Returns a vector of n integers [0, 1, ..., n-1] in a random order. Useful for random iteration, shuffling, or sampling without replacement. Returns an empty vector when n is 0 or null.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">RandStream</span></code></pre>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">seed_stream</span>(seed: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">RandStream</span></code></pre>
-<p>Seed an independent stream. Any integer seed is valid (negative and zero included); equal seeds give equal streams, different seeds give decorrelated streams. Example: @RND-001 — the reason to prefer this over <code>rand_seed</code>. Example: @RND-003 — equal seeds replay exactly, so a recorded seed is a recorded run.</p>
+<p>Seed an independent stream. Any integer seed is valid (negative and zero included); equal seeds give equal streams, different seeds give decorrelated streams.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">get</span>(self: <span class="en">RandStream</span>, lo: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hi: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span>?</code></pre>
-<p>A random integer in [lo, hi] (inclusive) from THIS stream, advancing it. Returns null when lo &gt; hi (the same contract as the global rand()). Example: @RND-002 — assigning a stream COPIES it, passing one to a function LINKS it, so a helper that draws spends the caller's sequence.</p>
+<p>A random integer in [lo, hi] (inclusive) from THIS stream, advancing it. Returns null when lo &gt; hi (the same contract as the global rand()).</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">indices</span>(self: <span class="en">RandStream</span>, n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;</code></pre>
-<p>A random permutation of [0, 1, ..., n-1] from THIS stream (Fisher-Yates), advancing it by exactly n - 1 draws. Empty when n is 0, negative or null (the same contract as rand_indices()). Example: @RND-003 — a shuffle is a countable number of draws, so inserting one shifts the rest of the sequence by a known amount rather than adding noise.</p>
+<p>A random permutation of [0, 1, ..., n-1] from THIS stream (Fisher-Yates), advancing it by exactly n - 1 draws. Empty when n is 0, negative or null (the same contract as rand_indices()).</p>
 </div>
 
   </article>

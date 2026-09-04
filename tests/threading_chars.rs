@@ -863,54 +863,32 @@ fn run() -> integer {
     .result(Value::Int(36));
 }
 
-// ── Capturing-closure-in-vector canary (DESIGN.md D11a row 8 verification) ──
-//
-// D11a row 8 was originally optimistic about `vector<fn(...) -> T>`.  This
-// canary pins the actual behaviour: capturing lambdas with **heterogeneous**
-// captured environments cannot be stored in a `vector<fn(...) -> T>` even
-// before par is reached.
-//
-// Failure modes (verified 2026-05-04):
-// - Shorthand `|x| { x * a }`: parser emits "No common type
-//   function([unknown(0)], void, [])" because the shorthand has no context
-//   for `x`'s type when stored in a vector slot.
-// - Explicit `fn(x: integer) -> integer { x * a }`: interp panics with
-//   "Write to locked store at rec=549 fld=0" during vector construction;
-//   `--native` codegen rejects the assignment with a `(u32, DbRef)` vs `i64`
-//   type mismatch.
-//
-// The fix is upstream of par — in the lambda → vector storage path — so the
-// closing phase is NOT plan-06 phase 1 (which closed the par dispatch
-// surface for fn-refs and remains valid for non-capturing forms via
-// `par_vec_of_fns_input_t4`).  Filed against plan-15 phase-04ish work:
-// closure-DbRef heterogeneity in vector storage.
+// A collection element is a plain fn-ref (DESIGN_DECISIONS.md C116): a capturing
+// lambda is refused at the literal, and the message names the struct-field route.
+// The non-capturing element beside it is the shape that passes, so the refusal is
+// about the CAPTURE, not about a lambda in a vector.  (loft#1358)
 
 #[test]
-#[ignore = "vector<capturing-fn> with heterogeneous captures rejected at vector-construction; not a par-side bug.  See DESIGN.md D11a row 8 (split row)."]
 fn par_vec_of_capturing_fns_t4() {
-    // Each lambda captures a distinct scalar `n` and applies `f(10)`.
-    // Expected once the underlying vector storage works:
-    // 10*2 + 10*3 + 10*4 + 10*5 = 140.
     code!(
         "fn apply(f: fn(integer) -> integer) -> integer { f(10) }
 fn run() -> integer {
     a = 2;
-    b = 3;
-    c = 4;
-    d = 5;
     fs: vector<fn(integer) -> integer> = [
-        |x| { x * a },
-        |x| { x * b },
-        |x| { x * c },
-        |x| { x * d }
+        |x| { x * 2 },
+        |x| { x * a }
     ];
     total = 0;
     for f in fs par(r = apply(f), 4) { total += r; }
     total
 }"
     )
-    .expr("run()")
-    .result(Value::Int(140));
+    .error(
+        "a capturing closure cannot be stored in a collection: a collection has one element \
+         layout and each capture set is its own record shape — hold it in a struct field, or \
+         store a non-capturing fn that reads the state from a struct field at \
+         par_vec_of_capturing_fns_t4:6:22",
+    );
 }
 
 // ── Tuple-arity coverage canaries (phase 9 inventory follow-up) ──

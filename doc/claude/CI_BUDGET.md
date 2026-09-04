@@ -107,6 +107,18 @@ recorded separately rather than folded in.
 **Measured on 24 cores.** Full run: **572 s**, of which `cargo nextest` is ~478–572 s and the
 three builds ~130 s. So the test step is the whole question.
 
+**When a gate DIES, ask who signalled it before asking why.** Two `make ci` runs ended on
+2026-09-04 with `make: *** [Makefile: ci] Terminated` — SIGTERM, so not the kernel OOM
+killer or `systemd-oomd`, which send SIGKILL and print `Killed` — with no OOM record in the
+journal and every checkout's tooling killing only by recorded pid. Both had been started as an
+agent tool's background task, which makes the gate a child of that tool's process tree and
+lets anything that stops the tree stop the gate. `scripts/ci-run.sh start` is the launcher for
+a reason: it detaches the gate (`setsid nohup`), records the signal a wrapper receives, and,
+with `strace` on the PATH, runs `make` under a signals-only trace so the sender's pid, uid and
+`si_code` land in `target/gate-signals.log`, beside a process-table snapshot taken the moment
+`make` dies (`target/gate-killer-snapshot.txt`). `scripts/ci-run.sh status` then answers
+KILLED with the sender named, instead of a verdict-less `result.txt`.
+
 **Run a 19-second triple FIRST when the change touches parser diagnostics, guards or docs.**
 `make ci` stops at its first failure, so each cycle surfaces exactly ONE new problem and costs
 the full ten minutes to do it. Measured over one afternoon's work on the nullable-collection
@@ -381,7 +393,7 @@ does not belong on a PR, however cheap it is.**
 |---|---|---|
 | **per PR** (`ci.yml`) | full suite ubuntu + macOS, ASan UAF/OOB (ubuntu), `stack_align_guard`, browser build+probe, Clippy, Format, Doc hygiene, CodeQL, feature catalogue, contract-goldens drift, API compat, several advisory doc jobs | `pull_request` |
 | **push to main** | everything above **plus the real `Test (windows-latest)` leg** (~53 min) | `push: main` |
-| **nightly 04:00** (`miri.yml`) | Miri ×2, ASan UAF/OOB ×2, ASan interpreter leak ×2, POISON arena-UAF, TSan, native-backend ASan, debug-assertions, toolchain matrix (beta+nightly), doc index hygiene, library health, stale-plan audit | `schedule` |
+| **nightly 04:00** (`miri.yml`) | Miri ×2, ASan UAF/OOB ×2, ASan interpreter leak ×2, POISON arena-UAF, TSan, native-backend ASan, debug-assertions, valgrind memcheck sweep (release binary, both backends), release-gate sweeps (the ignored ownership fuzz replay + SI-2 check), toolchain matrix (beta+nightly), doc index hygiene, library health, stale-plan audit | `schedule` |
 | **nightly 04:30** | `registry-validation` — every published package installed + tested on both backends | `schedule` |
 | **nightly 06:17 + on `src/**`,`default/**`** | `revalidate-libs` — every published lib against this loft, plus the warning dashboard | `schedule`, `push`, `pull_request` |
 | **nightly 07:00** | `lib-branch-report` — unmerged branches across the library repos | `schedule` |
@@ -391,6 +403,50 @@ does not belong on a PR, however cheap it is.**
 | **Mondays 06:00** | `repro-build` — reproducible-build check (weekly, not nightly) | `schedule` |
 | **library repos** | one `library-ci` per repo, all callers of `library-ci-reusable.yml`, and **`ci / <package>` is a REQUIRED check on every repo's `main`** (41 contexts, one per package; `strict` off, so a PR need not be rebased onto a moved `main`, and `enforce_admins` off, so the owner's direct pushes to `main` still land — the way every library fix reaches it today): the per-package test matrix, plus a repo-level **`unreleased work`** job — a branch ahead of the default branch with no PR, a PR nobody has touched, or a `loft.toml` version the registry has never seen, each red after 14 days without activity (`scripts/unreleased-work.py`, `stale-days` to tune) | `push: main`, `pull_request` |
 | **on demand only** | `ci-probe` (where CI time goes) and `gate-probe` (re-runs the debug-assertions sweep and the browser UI gate on a real 4-vCPU runner, each beside a cell proving it can still FAIL). Measurement, never gates, never on a PR | `workflow_dispatch`, or push to the `ci-probe` / `gate-probe` branch |
+| **on demand — the release evidence** | `release-gate` — every row above that is a nightly (`ci.yml` full matrix incl. Windows + round-trip + oracle, `miri.yml` all gates, `registry-validation`, `revalidate-libs`, `browser-threads`, `repro-build`) called as reusable workflows against ONE commit, ending in one `verdict` job that is red if any leg is not `success` — advisory PR jobs included. `make release-gate` dispatches and waits; `make release-checklist` reads the run for HEAD's sha. Never on a PR, never scheduled, never tags (§ The schedule is not a clock) | `workflow_dispatch`, or push to the `release-gate-probe` branch |
+
+## The schedule is not a clock — the release gate (2026-09-04)
+
+Two measurements, both from `gh run list`, decided this:
+
+- **A scheduled run starts when GitHub gets to it.** The `ci.yml` daily is `cron: 0 3`
+  and its last twenty runs STARTED between 03:34 and 14:45 UTC — 07:34, 08:45, 09:36,
+  13:24, 14:45 on consecutive days. It also tests whatever `main` is at that moment.
+  So "wait for tonight's nightly" is a wait of unknown length for an answer about an
+  unknown commit.
+- **The nightly-only legs are where a merge is found red.** The required checks on
+  `main` are `Test (ubuntu/macos/windows)`, `Clippy` and `Format`, and on a PR the
+  macOS and Windows legs are placeholders; the round-trip pair, the oracle and the
+  browser asyncify/render tests are off the PR path by design (§ The rule that decides
+  placement). Push-to-main's full matrix was red on each of the last eight merges, the
+  daily on twenty of twenty, and the reds were macOS/Windows-only tests plus a codegen
+  invariant in the debug-assertions gate — deep-internals changes that pass the ubuntu
+  PR gate and fail on the legs that only run after the merge.
+
+The **release gate** (`release-gate.yml`) is the deliberate counterpart: the six
+nightlies called as reusable workflows (`workflow_call`, the pattern
+`library-ci-reusable.yml` already uses) against one commit, with a `verdict` job that
+reads every leg's result from `needs` and is red on anything that is not `success`.
+Three properties are load-bearing:
+
+- **It cannot drift from the nightly**, because it does not restate the nightly — it
+  calls it. A gate added to `miri.yml` is in the release gate the same commit.
+- **A called workflow sees its CALLER's event**, so each nightly takes the path its own
+  `workflow_dispatch` takes (full matrix, non-PR extras) with no `mode` plumbing through
+  its conditions. The one input that exists, `miri.yml`'s `from_gate`, keeps `notify`
+  and `daily-status` with the schedule: a candidate run must neither open nor
+  auto-CLOSE the nightly's tracking issue. The concurrency groups of `ci.yml`,
+  `revalidate-libs.yml` and `browser-threads.yml` carry `github.workflow` (the caller's
+  name) so a gate leg neither queues behind nor cancels a standalone run on the same ref.
+- **What a PR shows as advisory is blocking here.** A called workflow's result is
+  `success` only if every job in it succeeded, so the seven advisory `ci.yml` jobs count
+  without a list of names to keep in step.
+
+It is the release's evidence (`A-release-gate` on `make release-checklist`, keyed by
+HEAD's commit), not a replacement for the schedule: a red nightly is still fixed the
+day it appears, or the gate finds a month of them at once. Cost is the nightlies' own
+— `ci.yml` 37–82 min, `miri.yml` 22–34 min, the rest under 15 — in parallel, so about
+an hour and a half of wall clock for a release that happens monthly.
 
 ## Where the time goes — measured
 
@@ -720,6 +776,27 @@ A single scheduled workflow, after the others, writing **one job summary**:
 Its own conclusion goes red **only** on the blocking class, so a README badge for
 that one workflow answers "is anything blocking?" without opening anything. Cost
 is API calls — well under a minute.
+
+### Reading a red nightly — the day it appears
+
+The release gate does not change the daily discipline: a red nightly is fixed the day it
+appears, because the legs that run only there — macOS, Windows, the oracle, the sanitizer
+and invariant gates — are where a deep-internals change is found red, and each unfixed one
+masks the next. Three things make the reading honest:
+
+- **Read the run's ref before debugging it** — `gh run view <id> --json headBranch,headSha`.
+  The nightly runs `main`, and a commit on your branch may already have closed it: loft#1133
+  was auto-filed from the debug-assertions gate and did not reproduce on a working tree whose
+  fix had landed sixteen minutes after the nightly started. "Cannot reproduce" reads as
+  flakiness when it is a fix you already have.
+- **Build a control at that sha without touching your tree** — `git archive <sha> | tar -x
+  -C <dir>`: no worktree, no branch, no index change. Confirm the failure there with the
+  gate's exact command, copied byte-for-byte from the workflow yaml; then attribute the
+  fixing commit by reading the diff, and verify by running the same command on your tree.
+- **A separate `CARGO_TARGET_DIR` needs the stdlib beside the binary.** Every test that
+  SPAWNS the loft binary fails with *"cannot load standard library"* until
+  `ln -sfn <repo>/default <target>/release/default` — four harness artefacts read as
+  findings before that was known.
 
 ## Phasing
 

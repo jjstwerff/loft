@@ -67,9 +67,20 @@ leak:decode_from_cache
 # it only surfaces in-process (the dozens of `should_panic` / `.error()` fixtures and the
 # `raise(...)` scripts).  Freeing in-flight text on the abort path would need the
 # coroutine-style zeroing/double-drop discipline on the hot call path — a risky change out
-# of proportion to a non-production leak.  Non-faulting execution frees text normally, so
-# these frames only ever fire on the fault path.  The four text-construction entry points
+# of proportion to a non-production leak.  The four text-construction entry points
 # (bare names — `fill::append_text` etc. mangle to `...11append_text` on the macOS leg):
+#
+# ⚠ These lines hide MORE than the fault path, and the premise that they did not was
+# measured false (loft#1338): a non-faulting program that returned text from an early
+# `return` or a view of a local orphaned one `String` per call through the SAME frames,
+# and this gate said nothing — 14 corpus scripts leaked with no fault in them.  The
+# residue that followed (loft#1357: a lambda's `??` return, a nullable text local, a
+# generic's loop-variable return and its nested forwarder, a par loop's text discard, a
+# tail reading its own buffer, a `??` temp consumed by a scalar or an `if` condition, a
+# `parallel` arm's formatted argument) is closed too — 11 corpus scripts to 0 under the
+# release sweep.  What this gate still cannot see is the CLASS: `scripts/valgrind-sweep.sh`
+# (RELEASE.md § Memory safety) and `LOFT_TEXT_TIMELINE=1` are the instruments for it, and
+# `tests/text_buffer_ledger.rs` holds the line.
 leak:append_text
 leak:format_text
 leak:format_long

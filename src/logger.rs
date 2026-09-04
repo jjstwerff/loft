@@ -540,9 +540,9 @@ fn source_base_for(main_loft_file: &str) -> Option<PathBuf> {
     if dir.as_os_str().is_empty() {
         return None;
     }
-    // Canonicalised so the strip works against the absolute form a record carries; a path
-    // that cannot be canonicalised is used as-is rather than dropped.
-    Some(std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()))
+    // Canonicalised, in the plain spelling a record's absolute path carries, so the strip
+    // matches; a path that cannot be canonicalised is used as-is rather than dropped.
+    Some(crate::portable_path::plain_canonical(dir))
 }
 
 fn parse_config_str(content: &str, conf_dir: &Path) -> RuntimeLogConfig {

@@ -287,6 +287,10 @@ const CODES: &[(&str, &str)] = &[
         "fn main() { print(\"needs a project manifest and an installed registry package\"); }",
     ),
     (
+        "lib-flag-outranked",
+        "fn main() { print(\"needs a cwd lib/ and a --lib directory that both provide one name\"); }",
+    ),
+    (
         "persist-bind-through-field",
         "struct Inner { k: integer }\n\
          struct Outer { items: hash<Inner[k]> }\n\
@@ -333,6 +337,15 @@ const NO_MINIMAL_TRIGGER: &[(&str, &str)] = &[
         // which builds both and pins the declared / undeclared pair.
         "undeclared-dependency",
         "requires a project manifest plus a registry-resolved package",
+    ),
+    (
+        // loft#1352 — fires only when a `--lib` directory AND an earlier probe (a cwd
+        // `lib/`, a declared dependency, the script's own directory) both provide the
+        // `use`d name, which is two directories and a flag. Covered instead by
+        // `tests/lib_flag_outranked.rs`, which builds both and pins the reported /
+        // honoured pair with a corrupted copy behind the flag.
+        "lib-flag-outranked",
+        "requires a cwd lib/ plus a --lib directory providing the same name",
     ),
     (
         // loft#940 — fires only for a LIBRARY source (@PLN102 C97 module-scoping). The same
@@ -433,6 +446,10 @@ const EDIT_BLOCKED: &[(&str, &str)] = &[
     (
         "undeclared-dependency",
         "the cure is running `loft install <pkg>`, which edits the manifest rather than the source",
+    ),
+    (
+        "lib-flag-outranked",
+        "the cure is where the command is RUN from, or where the override file lives — not an edit to any source span",
     ),
     (
         "read-size-not-element-multiple",

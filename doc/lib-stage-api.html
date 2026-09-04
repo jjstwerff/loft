@@ -80,12 +80,12 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">node_add</span>(self: <span class="en">Stage</span>, parent: <span class="ty"><a href="stdlib-types.html">integer</a></span>, p: const <span class="en">Place</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
 <p>Add a node and answer its index.  <code>parent</code> is -1 for a root.</p>
-<p>⚠ Refuses a forward parent reference by answering -1.  <code>compose</code> is a single forward pass, so a child placed before its parent would read an unwritten world transform — silently, and the frame would look almost right. Example: @STG-002 — the tree is a flat array and a forward parent reference is refused, because <code>compose</code> is a single forward pass that would otherwise read an unwritten parent and answer plausibly.</p>
+<p>⚠ Refuses a forward parent reference by answering -1.  <code>compose</code> is a single forward pass, so a child placed before its parent would read an unwritten world transform — silently, and the frame would look almost right.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">compose</span>(self: <span class="en">Stage</span>)</code></pre>
 <p>Derive every node's world affine in one forward pass.</p>
-<p>A node's local transform is  T(x, y) . R(rot) . S(sx, sy) . T(-ox, -oy), which is what makes the ORIGIN the anchor: the local point (ox, oy) maps exactly to (x, y), so a sprite whose origin sits at its feet stands up from where it is placed.  World = parent's world composed with that. Example: @STG-003 — deriving is the caller's to trigger; skipping it renders the previous state, which reads as input lag rather than as a missing call.</p>
+<p>A node's local transform is  T(x, y) . R(rot) . S(sx, sy) . T(-ox, -oy), which is what makes the ORIGIN the anchor: the local point (ox, oy) maps exactly to (x, y), so a sprite whose origin sits at its feet stands up from where it is placed.  World = parent's world composed with that.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">depth_cue</span>(self: <span class="en">Stage</span>, near: <span class="ty"><a href="stdlib-types.html">float</a></span>, far: <span class="ty"><a href="stdlib-types.html">float</a></span>, far_scale: <span class="ty"><a href="stdlib-types.html">float</a></span>,</code></pre>
@@ -106,7 +106,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">bounds_of</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Bounds</span></code></pre>
-<p>A node's axis-aligned bounds in world space. Example: @STG-007 — a clip inherits, intersects, and is axis-aligned.</p>
+<p>A node's axis-aligned bounds in world space.</p>
 <p>⚠ AXIS-ALIGNED, so a ROTATED clipper clips to its bounding box rather than to its turned rectangle.  A scissor is axis-aligned in hardware and there is no honest way to make it otherwise; a rotated clip needs a stencil, which this arc does not have.  Stated rather than discovered.</p>
 </div>
 <div class="item">
@@ -115,7 +115,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">world_origin</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">P2</span></code></pre>
-<p>Where the node's ORIGIN is — the point A7's depth key sorts on. Example: @STG-001 — a node is anchored by its origin, so a sprite whose origin sits at its feet stands up from where it was placed.</p>
+<p>Where the node's ORIGIN is — the point A7's depth key sorts on.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">UiRect</span></code></pre>
@@ -139,7 +139,6 @@
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">render</span>(list: const <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">DrawRect</span>&gt;, cv: graphics::<span class="en">Canvas</span>)</code></pre>
 <p>Paint a command list onto a software canvas.</p>
 <p>⚠ THE ALPHA BYTE IS ADDED HERE, and it has to be.  A <code>DrawRect</code> carries 0xRRGGBB — <code>lavition_ui</code> says so, and keeps it a plain integer so it needs no graphics dependency — while <code>graphics::Canvas</code> reads 0xAARRGGBB and treats a missing top byte as FULLY TRANSPARENT.  That is graphics' own trap: the colour looks right in the source and paints nothing.  One <code>| 0xff000000</code> at the boundary is the whole fix, and it belongs at the boundary rather than in every caller.</p>
-<p>Example: @GFX-001</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">opaque</span>(colour: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
@@ -151,7 +150,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">batches</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Batch</span>&gt;</code></pre>
-<p>Split the visible nodes into runs, in scene order. Example: @STG-004 — adjacent runs only, never sorted, and what the interleave costs: four sprites across two atlases are four draws, cured by packing.</p>
+<p>Split the visible nodes into runs, in scene order.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">pack_instances</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt;</code></pre>
@@ -189,7 +188,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">pick</span>(self: const <span class="en">Stage</span>, sx: <span class="ty"><a href="stdlib-types.html">float</a></span>, sy: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>The topmost node under this screen point, or -1. Example: @STG-006 — picking samples alpha, so a click falls through a hole.</p>
+<p>The topmost node under this screen point, or -1.</p>
 <p>Walks the draw order BACKWARDS, so the node drawn last — the one on top — is tested first, and insertion order breaks a tie the same way it does when drawing.  One order, two consumers: a pick that disagreed with the picture would be worse than no pick at all.</p>
 </div>
 <div class="item">
@@ -198,7 +197,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">release</span>(self: <span class="en">Stage</span>, sx: <span class="ty"><a href="stdlib-types.html">float</a></span>, sy: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>A release answers the node that took the PRESS, wherever the pointer is now. Example: @STG-005 — why a hit test alone is not input routing.</p>
+<p>A release answers the node that took the PRESS, wherever the pointer is now.</p>
 <p>⚠ THE CAPTURE IS THE POINT, and it is the half everyone forgets.  Without it a button fires when you press it and slide away, and never fires when you press it and drift a pixel — both of which feel broken and neither of which a rect test can explain.  A release with nothing captured answers -1.</p>
 </div>
 <div class="item">
@@ -346,7 +345,6 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_time</span>(self: <span class="en">Stage</span>, t: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
-<p>Example: @STG-008 — ambient motion is free, out of step, and visual only. Advance the ambient clock.  Does NOT dirty the instance buffer — that is the whole point of deriving the phase rather than stepping it.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">time_of</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>

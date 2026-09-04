@@ -1174,22 +1174,33 @@ impl Parser {
             // both passes.)
             && (self.first_pass
                 || self.def_has_tret_attr()
-                || self.force_tret.contains(&self.context));
+                || self.force_tret.contains(&self.context)
+                || self.lambda_text_buffer_var().is_some());
         if do_tret_bind {
             let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
             if tv != u16::MAX {
                 let last = l.len() - 1;
+                // The same move as the accumulator below: a lambda that already holds its
+                // buffer keeps `__tret` a local and delivers through the buffer.
+                let ret = match self.lambda_text_buffer_var() {
+                    Some(buf) if buf != tv => buf,
+                    _ => tv,
+                };
                 if matches!(l[last].unspan(), Value::Return(_)) {
                     // explicit `return <call>` → `Set(__tret, call); return __tret`
-                    let ret =
-                        std::mem::replace(&mut l[last], Value::Return(Box::new(Value::Var(tv))));
-                    l.insert(last, crate::data::v_set(tv, Self::peel_to_inner_call(ret)));
+                    let call =
+                        std::mem::replace(&mut l[last], Value::Return(Box::new(Value::Var(ret))));
+                    l.insert(last, crate::data::v_set(tv, Self::peel_to_inner_call(call)));
                 } else {
                     // bare `<call>` tail → `Set(__tret, call); __tret`
-                    let call = std::mem::replace(&mut l[last], Value::Var(tv));
+                    let call = std::mem::replace(&mut l[last], Value::Var(ret));
                     l.insert(last, crate::data::v_set(tv, call));
                 }
-                t = Type::Text(Deps::frame1(tv));
+                if ret != tv {
+                    let last = l.len() - 1;
+                    l.insert(last, crate::data::v_set(ret, Value::Var(tv)));
+                }
+                t = Type::Text(Deps::frame1(ret));
             }
         }
         // @PLN85 unified fix — a value-yielding `if`/`match` text tail (match
@@ -1258,7 +1269,9 @@ impl Parser {
             // infer stably, make pass 2 FOLLOW pass 1: promote on pass 2 only where pass 1
             // already minted the `__acc` attribute.  Pass 1 evaluates the verdict directly
             // and the attribute it mints persists, so a stable tail still promotes twice.
-            && (self.first_pass || self.def_has_acc_attr());
+            && (self.first_pass
+                || self.def_has_acc_attr()
+                || self.lambda_text_buffer_var().is_some());
         // `LOFT_DBG_ACC=1` — one line per pass per text-returning function, printing every
         // term of the gate above.  It is what located loft#1099: the two lines for one
         // function differ in `optOk` alone, which is how a non-pass-stable term shows
@@ -1312,6 +1325,16 @@ impl Parser {
             } else {
                 Type::Text(Deps::none())
             };
+            // A lambda carries at most ONE hidden text buffer (`holds_text_work_buf`), and
+            // `parse_return` may already have taken it before this tail asks, so `text_return`
+            // declines to promote this accumulator (`SkipSecondTextBuf`) and it stays a
+            // local.  That is the right outcome: the scope pass delivers a returned text
+            // local through the buffer the lambda holds (`free_vars`, @FR-F-Ret), staged
+            // where the value reads that buffer.  What must not happen is the gate above
+            // declining to accumulate at all on pass 2 — that left `return cap ?? "x"` as a
+            // view of its `??` temp, one orphaned `String` per call (loft#1357).  Writing
+            // the arms straight into the buffer is not an option either: `return lloc ??
+            // "x"` reads the very buffer `lloc` was promoted to.
             let av = self.create_unique("__acc", &acc_type);
             if av != u16::MAX {
                 let last = l.len() - 1;
@@ -1340,12 +1363,24 @@ impl Parser {
                 // documents this leading `Set` as load-bearing for exactly the same
                 // reason; the tail promotion was missing it.
                 l.insert(last, crate::data::v_set(av, Value::Text(String::new())));
+                // A lambda already holding its one buffer cannot promote `av` to a second
+                // (`SkipSecondTextBuf`), so `av` stays a local: move its bytes into that
+                // buffer and return the buffer.  The local then takes its ordinary
+                // scope-exit free.  Returning `av` itself handed up a view of a local the
+                // frame never freed — one orphaned `String` per call (loft#1357).
+                let ret = match self.lambda_text_buffer_var() {
+                    Some(buf) if buf != av => {
+                        l.push(crate::data::v_set(buf, Value::Var(av)));
+                        buf
+                    }
+                    _ => av,
+                };
                 l.push(if is_ret {
-                    Value::Return(Box::new(Value::Var(av)))
+                    Value::Return(Box::new(Value::Var(ret)))
                 } else {
-                    Value::Var(av)
+                    Value::Var(ret)
                 });
-                t = Type::Text(Deps::frame1(av));
+                t = Type::Text(Deps::frame1(ret));
             }
         }
         t = self.block_result(context, result, &t, &mut l, &last_expr_peek.position);
@@ -1689,8 +1724,21 @@ impl Parser {
             // bodies whose final expression is `if cond { (a, b) } else
             // { (c, d) }` left two tuple leaves and convert would then
             // fail with Tuple → Reference(__tuple<…>).
+            //
+            // loft#1350 — the same boxing for an `else` ARM.  The else arm is parsed against
+            // the then arm's type, and a then arm that CALLS a function returning a lifetime
+            // tuple yields the synthetic struct; a literal or a tuple local on the other arm
+            // is a stack tuple, and `convert` has no route from one spelling to the other —
+            // "expected __tuple<vector<integer>,text>, got (vector<integer>, text) on else",
+            // for a program that reads as one type to its author.  Box the arm into its own
+            // work-ref, exactly as a function tail is, and let `parse_if` join two records.
+            // Only a tuple whose element types spell the SAME synthetic name is boxed; a
+            // different shape keeps the refusal, which is then about the elements.
+            // The work-ref an `else` arm was boxed into (loft#1350) — the arm's own
+            // ownership fact, read where the arm's type is settled below.
+            let mut boxed_arm_w: Option<u16> = None;
             let tuple_rewritten = !self.first_pass
-                && context == "return from block"
+                && (context == "return from block" || context == "else")
                 && matches!(t, Type::Tuple(_))
                 && tail_has_tuple_leaf(l[last].unspan(), &self.vars)
                 && matches!(result, Type::Reference(d, _) if self.data.def(*d).name().starts_with("__tuple<"))
@@ -1700,8 +1748,32 @@ impl Parser {
                     } else {
                         unreachable!()
                     };
-                    self.rewrite_tail_tuple_to_synthetic_struct(synthetic_d_nr, &mut l[last]);
-                    true
+                    if context == "else" {
+                        let same_shape = if let Type::Tuple(elems) = t {
+                            let names: Vec<String> =
+                                elems.iter().map(|e| e.name(&self.data)).collect();
+                            format!("__tuple<{}>", names.join(","))
+                                == self.data.def(synthetic_d_nr).name()
+                        } else {
+                            false
+                        };
+                        if same_shape {
+                            let ref_tp = Type::Reference(synthetic_d_nr, Deps::none());
+                            let w = self.vars.work_refs(&ref_tp, &mut self.lexer);
+                            let kt = self.data.def(synthetic_d_nr).known_type();
+                            self.rewrite_tail_tuple_with_work_ref(
+                                synthetic_d_nr,
+                                kt,
+                                w,
+                                &mut l[last],
+                            );
+                            boxed_arm_w = Some(w);
+                        }
+                        same_shape
+                    } else {
+                        self.rewrite_tail_tuple_to_synthetic_struct(synthetic_d_nr, &mut l[last]);
+                        true
+                    }
                 };
             // P236: when the body's tail is a `Value::If(...)` (or
             // `match`, which lowers to nested `If`) and the function
@@ -1905,6 +1977,10 @@ impl Parser {
                 // one — which is also what lets `parse_if` see that the two differ.
                 let honest = if sibling_variant {
                     t.clone()
+                } else if let Some(w) = boxed_arm_w {
+                    // The arm was boxed into `w` (loft#1350): its value is that work-ref,
+                    // and naming it is the same mint marker a struct-literal arm carries.
+                    result.with_deps(&Deps::frame1(w))
                 } else {
                     result.with_deps_of(t)
                 };
@@ -2615,8 +2691,7 @@ impl Parser {
             Type::Vector(Box::new(elm_ty.clone()), Deps::frame1(buf_var)),
             "fwd_copy_409",
         );
-        let dep = Deps::attrs(vec![buf_attr]);
-        self.data.definitions[self.context as usize].returned = Type::Vector(Box::new(elm_ty), dep);
+        self.set_delivered_vector_return(elm_ty, buf_attr);
     }
 
     /// Plan-14 phase 07 (P234 runtime): rewrite a body-tail
@@ -7590,7 +7665,28 @@ impl Parser {
         }
         self.lexer.token("}");
 
-        let chain = self.build_scalar_chain(v, subject_type, has_wildcard, &result_type, arms);
+        // `(M-Exhaust)` is stated for an enum, and a boolean is the one scalar whose domain
+        // a match can spell out in full: `true` and `false`, each an unguarded arm, leave
+        // nothing for a fall-through to answer.  Without this the chain ended in the typed
+        // null every wildcard-less scalar match carries for the value no arm matched, and
+        // the join read that leaf as a nullable arm — `-> text { match w { true => …,
+        // false => … } }` warned nullable-into-non-null on both backends while the same
+        // choice spelled as an `if` was quiet (loft#1343).  The last arm becomes the
+        // fallback, exactly as a trailing `_` would.
+        let bool_exhaustive = *subject_type == Type::Boolean
+            && !has_wildcard
+            && arms.iter().all(|(_, _, _, guard)| guard.is_none())
+            && [true, false].iter().all(|b| {
+                arms.iter()
+                    .any(|(pat, _, _, _)| matches!(pat, Some(Value::Boolean(x)) if x == b))
+            });
+        let chain = self.build_scalar_chain(
+            v,
+            subject_type,
+            has_wildcard || bool_exhaustive,
+            &result_type,
+            arms,
+        );
         *code = v_block(
             vec![v_set(v, subject), chain],
             result_type.clone(),
@@ -9506,17 +9602,32 @@ impl Parser {
         }
     }
 
+    /// The variable of the one hidden text buffer a LAMBDA already holds — the `__work_ret`
+    /// the fn-ref ABI hands it, or a buffer an earlier promotion in the same body took —
+    /// or `None` for a named function or a lambda that has none yet.  The tail promotions
+    /// read it as their pass-2 gate: a lambda whose `return` took the buffer on pass 1
+    /// never minted an `__acc` / `__tret` attribute, so the attribute-based gate declined
+    /// on pass 2 and the tail was never rewritten at all.
+    fn lambda_text_buffer_var(&self) -> Option<u16> {
+        if !self.holds_text_work_buf() {
+            return None;
+        }
+        let def = self.data.def(self.context);
+        def.attributes()
+            .iter()
+            .find(|a| {
+                a.hidden && matches!(&a.typedef, Type::RefVar(t) if matches!(**t, Type::Text(_)))
+            })
+            .map(|a| self.vars.var(&a.name))
+            .filter(|&v| v != u16::MAX)
+    }
+
     fn holds_text_work_buf(&self) -> bool {
         self.data
             .def(self.context)
             .name()
             .starts_with("n___lambda_")
-            && self
-                .data
-                .def(self.context)
-                .attributes()
-                .iter()
-                .any(|a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))))
+            && self.data.def(self.context).text_work_buffers() > 0
     }
 
     pub(crate) fn text_return(&mut self, ls: &[u16]) {
@@ -9804,6 +9915,17 @@ impl Parser {
             let early_promotable = l[..tail_ix]
                 .iter()
                 .any(|op| self.early_text_return_orphans(op, l));
+            // `LOFT_DBG_ACC=1` — the monomorph twin of `parse_block`'s gate line: every term
+            // of the decision, one line per monomorph.
+            if std::env::var_os("LOFT_DBG_ACC").is_some() {
+                eprintln!(
+                    "[acc-mono] fn={} pass1={} tail_promotable={tail_promotable}                      early_promotable={early_promotable} if_acc={} tail={:?}",
+                    self.data.def(d_nr).name(),
+                    self.first_pass,
+                    self.monomorph_if_acc_ok(d_nr, l, &bl.result),
+                    l.last().map(|t| self.classify_text_return(t, l)),
+                );
+            }
             if tail_promotable || early_promotable {
                 let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
                 if tv != u16::MAX {
@@ -9983,8 +10105,7 @@ impl Parser {
             .iter()
             .copied()
             .filter(|&d| {
-                crate::use_analysis::text_return_orphan_risk(&self.data, d)
-                    == Some("owned-by-value")
+                crate::use_analysis::text_return_orphan_risk(&self.data, d).is_some()
                     && !addr_taken.contains(&d)
             })
             .collect();
@@ -10206,6 +10327,21 @@ impl Parser {
                     Self::rewrite_text_returns_into(o, tv);
                 }
             }
+            // A `return` inside a loop body is a delivery site like any other: `for v in it {
+            // return v; } d` handed the loop variable up as a view of a local the loop's own
+            // free never reached on that path (loft#1357), because this walk stopped at the
+            // loop.  `Drop` wraps a statement whose value is discarded and can hold one too.
+            Value::Loop(bl) => {
+                for o in &mut bl.operators {
+                    Self::rewrite_text_returns_into(o, tv);
+                }
+            }
+            Value::Iter(_, a, b, c) => {
+                Self::rewrite_text_returns_into(a, tv);
+                Self::rewrite_text_returns_into(b, tv);
+                Self::rewrite_text_returns_into(c, tv);
+            }
+            Value::Drop(inner) => Self::rewrite_text_returns_into(inner, tv),
             _ => {}
         }
     }
@@ -10508,6 +10644,20 @@ impl Parser {
 
     fn return_views_local(&self, ls: &[u16]) -> bool {
         let attr_names = &self.data.def(self.context).attr_names;
+        // A SELF-dep on a user local is the mark a self-read rebind leaves (`cur = cur.next`,
+        // #328): the local views a record reached through its own field, which may be any
+        // store this frame frees — a sibling local's, as in a walker over a chain built
+        // here.  The walk below cannot see it, because the local is already in `seen`, so
+        // it read as an owner and the view was handed up raw (loft#1337, @FR-F-Ret).  A
+        // mint's self-dep (a work-ref) is the ownership marker, not a view.
+        if ls.iter().any(|&v| {
+            v < self.vars.count()
+                && !attr_names.contains_key(self.vars.name(v))
+                && !self.var_is_mint(v)
+                && self.vars.tp(v).depend().contains(&v)
+        }) {
+            return true;
+        }
         let mut work: Vec<u16> = ls.to_vec();
         let mut seen: std::collections::HashSet<u16> = work.iter().copied().collect();
         let mut i = 0;
@@ -10678,8 +10828,83 @@ impl Parser {
     fn materialize_view_return(&mut self, td: u32, tail: &mut Value) -> u16 {
         let ref_tp = Type::Reference(td, Deps::none());
         let w = self.vars.work_refs(&ref_tp, &mut self.lexer);
-        self.materialize_return_into(td, tail, w);
+        if self.return_buffer().is_none() {
+            // A buffer-less return (`-> S?`) is delivered as the DbRef the tail yields, so
+            // the copy is made only on the arms that VIEW something this frame frees: a
+            // `null` arm stays null and an owned arm is handed up as it is (loft#1337).
+            self.materialize_view_arms(td, tail, w);
+        } else {
+            self.materialize_return_into(td, tail, w);
+        }
         w
+    }
+
+    /// The per-arm form of [`Self::materialize_return_into`]: walk the tail through its
+    /// `if` arms and blocks, and rewrite exactly the leaves that view a store this frame
+    /// frees — a projection rooted at a local, or a local whose deps view one (a self-dep
+    /// included).  Every rewritten arm lands in the ONE work-ref `w`; only one arm runs, and
+    /// an arm that was not rewritten never allocates it.
+    fn materialize_view_arms(&mut self, td: u32, tail: &mut Value, w: u16) {
+        match tail {
+            Value::Return(inner) | Value::Drop(inner) => self.materialize_view_arms(td, inner, w),
+            Value::Span(b) => self.materialize_view_arms(td, &mut b.1, w),
+            Value::If(_, t, f) => {
+                self.materialize_view_arms(td, t, w);
+                self.materialize_view_arms(td, f, w);
+            }
+            Value::Block(bl) => {
+                if let Some(last) = bl.operators.last_mut() {
+                    self.materialize_view_arms(td, last, w);
+                }
+            }
+            Value::Insert(ops) => {
+                if let Some(last) = ops.last_mut() {
+                    self.materialize_view_arms(td, last, w);
+                }
+            }
+            leaf => {
+                if !self.return_leaf_is_owned_or_null(leaf) {
+                    self.materialize_return_into(td, leaf, w);
+                }
+            }
+        }
+    }
+
+    /// Is this return leaf something a `-> S?` return may hand up AS IT IS — a `null`, an
+    /// owned local or parameter, a struct literal, or a call that mints its own store?
+    ///
+    /// The leaf rule of [`Self::materialize_view_arms`], stated in the direction @FR-F-Ret
+    /// makes safe: everything NOT provably owned is copied.  A projection of any kind, a keyed
+    /// lookup, a lifted call temporary's element, a joined value — none of these can be shown
+    /// to own the store they yield, so each is copied before it escapes.  Stating the rule
+    /// the other way — copy what LOOKS like a view — is what let a keyed element of an
+    /// inline call's temporary slip through as an owner (the `882` poison cells).
+    fn return_leaf_is_owned_or_null(&self, leaf: &Value) -> bool {
+        match leaf.unspan() {
+            Value::Null => true,
+            Value::Var(v) => {
+                *v >= self.vars.count()
+                    || self.vars.is_argument(*v)
+                    || !self.return_views_local(&[*v])
+            }
+            Value::Call(d, args) => {
+                let name = self.data.def(*d).name();
+                if name == "OpNullRefSentinel" && args.is_empty() {
+                    return true;
+                }
+                // A loft-defined callee that mints its own store hands it up; one whose
+                // return is tied to a passed buffer or argument does not.
+                self.data.def(*d).is_loft_defined() && self.data.def(*d).return_adopts_fresh_store()
+            }
+            // A struct literal builds into a work-ref of this frame, which the return
+            // transfers (`collect_return_sources` names it); a block that ends in anything
+            // else is judged by its tail.
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .is_some_and(|t| self.return_leaf_is_owned_or_null(t)),
+            _ => false,
+        }
     }
 
     /// `materialize_view_return` for a block used as a VALUE — the same owned-copy
@@ -10711,7 +10936,15 @@ impl Parser {
         let kt = self.data.def(td).known_type();
         let copy_d = self.data.def_nr("OpCopyRecord");
         let orig = std::mem::replace(tail, Value::Null);
-        *tail = crate::data::v_block(
+        // A NULLABLE local as the source (`cur: Node?` after a walk) may hold nothing, and
+        // `OpCopyRecord` of a null source leaves the destination an allocated EMPTY record —
+        // presence standing in for absence.  Copy only where the source is present; the
+        // absent arm hands up the sentinel (loft#1337).
+        let absent_guard = match orig.unspan() {
+            Value::Var(v) if matches!(self.vars.tp(*v), Type::Optional(_)) => Some(*v),
+            _ => None,
+        };
+        let copy = crate::data::v_block(
             vec![
                 crate::data::v_set(w, Value::Null),
                 self.cl("OpDatabase", &[Value::Var(w), Value::Int(i32::from(kt))]),
@@ -10721,6 +10954,14 @@ impl Parser {
             Type::Reference(td, Deps::frame1(w)),
             "materialized_view_return",
         );
+        *tail = match absent_guard {
+            Some(v) => crate::data::v_if(
+                self.cl("OpRefIsNull", &[Value::Var(v)]),
+                self.cl("OpNullRefSentinel", &[]),
+                copy,
+            ),
+            None => copy,
+        };
         // @PLN130 — parser-emitted materialisation: `return f.field` must publish an OWNED
         // record, not a view into a frame-local. See `ParserMaterialise`.
         crate::copy_manifest::record(
@@ -11105,7 +11346,7 @@ impl Parser {
 
     /// `create_stack` is `OpCreateStack`'s def_nr, threaded in rather than looked
     /// up per leaf — see the leaf arm for what it decides.
-    pub(super) fn push_text_arms_into(op: &mut Value, av: u16, create_stack: u32) {
+    pub(crate) fn push_text_arms_into(op: &mut Value, av: u16, create_stack: u32) {
         match op {
             Value::Span(b) => Self::push_text_arms_into(&mut b.1, av, create_stack),
             Value::Return(inner) | Value::Drop(inner) => {
@@ -11511,6 +11752,14 @@ impl Parser {
             Value::Insert(ops) => ops
                 .last()
                 .is_some_and(|t| self.return_projects_into_local(t)),
+            // An ARM of the tail is a tail too — `if take { t.l } else { null }` hands up
+            // `t.l` on one path.  A function WITH a return buffer copies every arm into it
+            // through `ref_return`'s copy leg, so only the buffer-less return (`-> S?`, a
+            // nullable record has no buffer) asks here, and it materialises per arm
+            // (loft#1337, @FR-F-Ret).
+            Value::If(_, t, f) if self.return_buffer().is_none() => {
+                self.return_projects_into_local(t) || self.return_projects_into_local(f)
+            }
             // A TUPLE element read is a projection like the two op calls below, spelled as
             // a `Value` variant: it carries its base as a var NUMBER, so no call pattern
             // can see it. Rooted at a local, its store dies at scope exit like any other.
@@ -11859,6 +12108,35 @@ impl Parser {
                 *op = Value::Insert(seq);
                 true
             }
+            // A PROJECTION arm — `q.items`, `v[i]`, a keyed lookup — yields a view of a
+            // store this frame does not own, and @FR-F-Ret says a returned whole heap value
+            // is owned, never a view.  The buffered non-null return copies such a tail
+            // (`Delivery::CopyBorrow`), but a nullable return always branches on its null
+            // arm, and the projecting arm reached this walk as a call carrying no hidden
+            // buffer, which the arm below has nothing to substitute — so the view escaped
+            // and the caller's bind aliased the callee's argument field (loft#1345).  Copy
+            // the projection's elements into `w`; the source is the argument's store, so
+            // nothing is freed here.
+            //
+            // Both spellings of a projection: the call (`OpGetField` / `OpGetVector` /
+            // `OpVectorRef` / `OpGetRecord`) and a tuple element (`TupleGet`), which carries
+            // its base as a variable number and is a view of that tuple's store the same way.
+            Value::TupleGet(_, _) => {
+                let rec_tp = self.append_elem_tp(elm);
+                let proj = std::mem::replace(op, Value::Null);
+                let clear = self.cl("OpClearVector", &[Value::Var(w)]);
+                let append = self.cl("OpAppendVector", &[Value::Var(w), proj, Value::Int(rec_tp)]);
+                *op = Value::Insert(vec![clear, append, Value::Var(w)]);
+                true
+            }
+            Value::Call(d, _) if crate::use_analysis::is_projection_op(&self.data, *d) => {
+                let rec_tp = self.append_elem_tp(elm);
+                let proj = std::mem::replace(op, Value::Null);
+                let clear = self.cl("OpClearVector", &[Value::Var(w)]);
+                let append = self.cl("OpAppendVector", &[Value::Var(w), proj, Value::Int(rec_tp)]);
+                *op = Value::Insert(vec![clear, append, Value::Var(w)]);
+                true
+            }
             Value::Call(_, _) => {
                 // #437/@PLN85 cluster V cluster I-b (O-Move): a Call-terminal arm
                 // (`head(0,value)`) writes its OWN hidden `__ref_N` buffer, which
@@ -12034,9 +12312,27 @@ impl Parser {
             Type::Vector(Box::new(elm_ty.clone()), Deps::frame1(buf_var)),
             "borrow_tail_copy_104",
         );
-        self.data.definitions[self.context as usize].returned =
-            Type::Vector(Box::new(elm_ty), Deps::attrs(vec![buf_attr]));
+        self.set_delivered_vector_return(elm_ty, buf_attr);
         true
+    }
+
+    /// Record that this function's vector result is delivered through `buf_attr`, keeping
+    /// the DECLARED `?`.
+    ///
+    /// The deps belong to the storage and the `?` to the value, so re-typing one must not
+    /// drop the other (`ref_return` says the same).  Two delivery legs re-set the returned
+    /// type as a bare vector, and a lambda declared `-> vector<T>?` whose tail was such a
+    /// delivery then published `fn(Bag) -> vector<integer>` on the pass that delivered and
+    /// `-> vector<integer>?` on the pass that did not — refused as a type change of the
+    /// variable holding it, while the named twin compiled (loft#1347).
+    fn set_delivered_vector_return(&mut self, elm_ty: Type, buf_attr: u16) {
+        let delivered = Type::Vector(Box::new(elm_ty), Deps::attrs(vec![buf_attr]));
+        let declared = self.data.def(self.context).returned();
+        self.data.definitions[self.context as usize].returned = if declared.ret_promo_peels() {
+            Type::optional(delivered)
+        } else {
+            delivered
+        };
     }
 
     fn chain_site_set_shape(ret: &Type, tail: &mut Value, w: u16) {
