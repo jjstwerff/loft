@@ -1839,6 +1839,17 @@ pub interface Walkable {
   fn children(self: Self) -> vector<Self>
 }
 
+// Every node reachable from `wk_root` in breadth-first order: the root, then its
+// children, then theirs.  `T` is any type declaring `fn children(self: T) -> vector<T>`
+// — writing that bare function is what makes a type `Walkable`, with nothing to register.
+//
+// `cap` bounds the ANSWER, not just the effort: at most `cap` nodes come back (the root
+// alone when `cap` is 0 or 1) and the walk stops there.  That bound is what makes this
+// total on a structure that has a cycle or no end, so pass a count you would accept as an
+// answer rather than a number picked to be large.
+//
+// Nodes are not de-duplicated — the walk carries no visited set, so a node reached by two
+// parents is returned twice.
 // Example: @STD-006
 pub fn tree_walk < T: Walkable > (wk_root: T, cap: integer) -> vector<T> {
   wk_order = [wk_root];

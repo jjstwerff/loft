@@ -4221,7 +4221,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 <div class="item">
 <pre><code>pub fn starts_with_at(self: text, pos: integer, prefix: text) -&gt; boolean</code></pre>
 <p>Functions for searching, transforming, and classifying text and character values. Character classification functions return true only if every character in the text satisfies the condition. The single-character variants test one code point. (`starts_with` / `ends_with` moved to `02_files.loft` so the path helpers there can call them; both still available as `text.starts_with` / `text.ends_with`.) Returns true if self contains `prefix` starting at byte position `pos`.  Sugar over `self[pos..pos + prefix.size()] == prefix` for the common &quot;is this token at this offset?&quot; pattern in scanners / parsers.  Returns false (not an error) when pos + prefix.size() exceeds self.size() — same shape as `starts_with` for the &quot;prefix too long for input&quot; case.</p>
-<p>Faster than comparing characters one at a time for a known prefix at `pos`. Example: @STD-001</p>
+<p>Faster than comparing characters one at a time for a known prefix at `pos`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn char_slice(self: text, from: integer, to: integer) -&gt; text</code></pre>
@@ -4324,7 +4324,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </div>
 <div class="item">
 <pre><code>pub fn join(self: vector&lt;text&gt;, sep: text) -&gt; text</code></pre>
-<p>Joins parts with sep between each consecutive pair. Returns &quot;&quot; for an empty vector. Use to build comma-separated lists, path segments, or any delimited output. Example: @STD-003</p>
+<p>Joins parts with sep between each consecutive pair. Returns &quot;&quot; for an empty vector. Use to build comma-separated lists, path segments, or any delimited output.</p>
 </div>
 <div class="item">
 <pre><code>pub fn byte_at(self: text, i: integer) -&gt; integer</code></pre>
@@ -4336,7 +4336,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </div>
 <div class="item">
 <pre><code>pub fn chr(cp: integer) -&gt; text</code></pre>
-<p>Build a one-character text from a Unicode CODE POINT — the inverse of the `ch as integer` that text iteration already gives you, and the code-point twin of text_from_bytes' byte route.  Use when you have a number and need the character it names: decoding an escape (`\u{...}`, an HTML entity), walking a code-point table, or reassembling text a code point at a time. chr(65)      &quot;A&quot;     chr(233)    &quot;é&quot; chr(20013)   &quot;中&quot;    chr(128512) &quot;😀&quot; A code point that names no character answers the EMPTY text, never a crash: a surrogate (D800-DFFF), anything past U+10FFFF, a negative number — and also 0, because `character` uses 0 as its null and text iteration stops there, so a NUL built here could not be read back.  If you need an embedded NUL, go through the byte route: `text_from_bytes([0])` carries one. Example: @STD-002</p>
+<p>Build a one-character text from a Unicode CODE POINT — the inverse of the `ch as integer` that text iteration already gives you, and the code-point twin of text_from_bytes' byte route.  Use when you have a number and need the character it names: decoding an escape (`\u{...}`, an HTML entity), walking a code-point table, or reassembling text a code point at a time. chr(65)      &quot;A&quot;     chr(233)    &quot;é&quot; chr(20013)   &quot;中&quot;    chr(128512) &quot;😀&quot; A code point that names no character answers the EMPTY text, never a crash: a surrogate (D800-DFFF), anything past U+10FFFF, a negative number — and also 0, because `character` uses 0 as its null and text iteration stops there, so a NUL built here could not be read back.  If you need an embedded NUL, go through the byte route: `text_from_bytes([0])` carries one.</p>
 </div>
 <h2 id="stdlib-collections">Collections</h2>
 <p class="section-desc">Operations on vector&lt;T&gt; — the primary ordered collection type. Vectors are grown by appending with += and elements are accessed by index. All structures are passed by reference instead of by value</p>
@@ -4412,15 +4412,15 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 <h2 id="stdlib-vector-aggregates">Vector aggregates</h2>
 <div class="item">
 <pre><code>pub fn min_of &lt; T: Ordered &gt; (v: vector&lt;T&gt;) -&gt; T?</code></pre>
-<p>Smallest element in a vector, or null when the vector is empty (@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op &lt;). Example: @STD-004</p>
+<p>Smallest element in a vector, or null when the vector is empty (@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op &lt;).</p>
 </div>
 <div class="item">
 <pre><code>pub fn max_of &lt; T: Ordered &gt; (v: vector&lt;T&gt;) -&gt; T?</code></pre>
-<p>Largest element in a vector, or null when the vector is empty (@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op &lt;). Example: @STD-004</p>
+<p>Largest element in a vector, or null when the vector is empty (@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op &lt;).</p>
 </div>
 <div class="item">
 <pre><code>pub fn sum &lt; T: Addable &gt; (v: vector&lt;T&gt;, init: T? = null) -&gt; T</code></pre>
-<p>Sum of vector elements.  Works on any Addable type.  `init` is the identity to start from; leave it out and the element type's own zero is used (0, 0.0, &quot;&quot;). Example: sum([10, 20, 12], 0) == 42 Example: sum([10, 20, 12]) == 42 Example: @STD-005</p>
+<p>Sum of vector elements.  Works on any Addable type.  `init` is the identity to start from; leave it out and the element type's own zero is used (0, 0.0, &quot;&quot;). Example: sum([10, 20, 12], 0) == 42 Example: sum([10, 20, 12]) == 42</p>
 <p>@PLN102 arc C — `init` gained its default so `sum_of(v)` can be REWRITTEN to `sum(v)`: `superseded-call` offers that rename and `loft fix` verifies every edit by compiling the result, so while `init` was required the only `#superseded` symbol loft ships had its fix rejected on every program (loft#1003).  A literal default is not spellable here (`init: T = 0` is &quot;expected T, got integer&quot;), so it is the nullable-with-discharge form, which needs loft#1016's per-monomorph `construct_default(T)`.  Additive: every existing `sum(v, init)` call is unchanged.</p>
 </div>
 <div class="item">
@@ -4432,7 +4432,9 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </div>
 <div class="item">
 <pre><code>pub fn tree_walk &lt; T: Walkable &gt; (wk_root: T, cap: integer) -&gt; vector&lt;T&gt;</code></pre>
-<p>Example: @STD-006</p>
+<p>Every node reachable from `wk_root` in breadth-first order: the root, then its children, then theirs.  `T` is any type declaring `fn children(self: T) -&gt; vector&lt;T&gt;` — writing that bare function is what makes a type `Walkable`, with nothing to register.</p>
+<p>`cap` bounds the ANSWER, not just the effort: at most `cap` nodes come back (the root alone when `cap` is 0 or 1) and the walk stops there.  That bound is what makes this total on a structure that has a cycle or no end, so pass a count you would accept as an answer rather than a number picked to be large.</p>
+<p>Nodes are not de-duplicated — the walk carries no visited set, so a node reached by two parents is returned twice.</p>
 </div>
 <h2 id="stdlib-assertions-that-report-both-sides">Assertions that report both sides</h2>
 <div class="item">
@@ -4533,7 +4535,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </div>
 <div class="item">
 <pre><code>pub fn ok(self: FileResult) -&gt; boolean</code></pre>
-<p>True when the result is `FileResult.Ok`. Use to test a file op for success. Example: @STD-012</p>
+<p>True when the result is `FileResult.Ok`. Use to test a file op for success.</p>
 </div>
 <div class="item">
 <pre><code>pub struct File {
@@ -4557,11 +4559,11 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </div>
 <div class="item">
 <pre><code>pub fn content(self: File) -&gt; text?fs#read</code></pre>
-<p>Reads the entire file as a UTF-8 text value. Use for small configuration files or scripts. Example: @STD-010</p>
+<p>Reads the entire file as a UTF-8 text value. Use for small configuration files or scripts.</p>
 </div>
 <div class="item">
 <pre><code>pub fn lines(self: File) -&gt; vector&lt;text&gt; fs#read</code></pre>
-<p>Par-safe: reads the file into a worker-local store; the host bridge serialises filesystem access. Reads the file and splits it into lines. Strips trailing '\r' so CRLF files (Windows) and LF files (Unix) produce identical results. Use when processing line-by-line (logs, CSV, etc.). Example: @STD-011</p>
+<p>Par-safe: reads the file into a worker-local store; the host bridge serialises filesystem access. Reads the file and splits it into lines. Strips trailing '\r' so CRLF files (Windows) and LF files (Unix) produce identical results. Use when processing line-by-line (logs, CSV, etc.).</p>
 </div>
 <div class="item">
 <pre><code>pub fn path_sep() -&gt; character</code></pre>
@@ -4609,11 +4611,11 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </div>
 <div class="item">
 <pre><code>pub fn list_dir(path: text) -&gt; vector&lt;text&gt; ?fs#read</code></pre>
-<p>Lists the entry NAMES of directory `path` (base names, not full paths), sorted.  @PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct from an EMPTY directory, `[]`); discharge with `?? []` to keep the old shape. Use to enumerate a directory; join with `path` to build full child paths. Example: @STD-010</p>
+<p>Lists the entry NAMES of directory `path` (base names, not full paths), sorted.  @PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct from an EMPTY directory, `[]`); discharge with `?? []` to keep the old shape. Use to enumerate a directory; join with `path` to build full child paths.</p>
 </div>
 <div class="item">
 <pre><code>pub fn read_bytes(path: text) -&gt; vector&lt;u8&gt; ?fs#read</code></pre>
-<p>Reads the whole file `path` as raw bytes.  @PLN102 H4 — a MISSING / unreadable file reads as NULL (distinct from an EMPTY file, `[]`); discharge with `?? []` to keep the old shape.  Binary-exact (round-trips with write_bytes); use for non-UTF-8 data — for text prefer `file(path).content()`. Example: @STD-010</p>
+<p>Reads the whole file `path` as raw bytes.  @PLN102 H4 — a MISSING / unreadable file reads as NULL (distinct from an EMPTY file, `[]`); discharge with `?? []` to keep the old shape.  Binary-exact (round-trips with write_bytes); use for non-UTF-8 data — for text prefer `file(path).content()`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn write_bytes(path: text, bytes: vector&lt;u8&gt;) -&gt; boolean fs#update</code></pre>
@@ -4675,7 +4677,6 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 <p>Give back the free space at the END of a store-rooted collection's store, and return the BYTES handed back (0 when there was nothing to give). For a store bound with `store_persist_bind` that is the FILE shrinking; otherwise it is memory returned to the allocator. Records are never moved, so every reference into the collection stays valid.</p>
 <p>You say when, because only the program knows whether a drop is permanent: a collection that shrinks and grows again would just pay to re-grow. Read `store_memory()` first, and read it as a RANKING rather than a quantity: its `tail%` says which store is worth reclaiming, and it is NOT the size of the return. A reclaimed store lands at `tail 11%` — a growth reserve the allocator keeps — so what comes back is `tail% - 11%` of the resulting capacity, never the whole tail. Measured across eight shapes with tails from 13% to 60%: at a 13% tail the report suggests ~36 KB and the call hands back 5832 bytes. Treat a reading near 11% as nothing to get back, not a little. Its `inner%` is the space BETWEEN records, which this does not touch — though the number RISES after a reclaim, because the capacity it is a percentage of has shrunk.</p>
 <p>WHERE the drop was matters as much as how big it was. `mergeable` counts adjacent free neighbours that never coalesced, so it measures how CONTIGUOUS the drop was, and that is exactly the part this call can fix: the same 2000 records dropped contiguously merge 2004 free blocks down to 7 and hand back 25400 bytes, while dropped alternately they leave 1997 blocks standing forever — the live records between them are what keeps them apart — and hand back 16312.</p>
-<p>Example: @FTR-001 Example: @FTR-002</p>
 <p>You do NOT need this to right-size a file at the END of a run. A bound store keeps its file AS the live arena, and the arena's capacity grows by 7/3 and never shrinks by itself — so mid-run the file is a rung on a ladder, not a measure of content, and can sit 57% above what it holds. Releasing the collection hands that tail back on its own, so the file a program leaves behind follows its content whether or not this was ever called (loft#752). Call it MID-RUN, when a live set has dropped for good and the memory (or the disk) is wanted back before the end. world: hash&lt;Hex[q, r]&gt; = [] store_persist_bind(world, &quot;world.store&quot;) // …a region is unloaded for good… store_reclaim(world)          // the file follows what the world holds NOW Returns 0, changing nothing, for a store that is read-only, shares another store's memory, or carries a `store_durable_seal` sidecar — truncating behind that sidecar's back would report a healthy store as corrupt.</p>
 </div>
 <div class="item">
@@ -4984,7 +4985,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 <div class="item">
 <pre><code>pub fn json_parse(raw: text) -&gt; JsonValue</code></pre>
 <p>Parse JSON text into a `JsonValue` tree.  Malformed input returns `JNull`; the error trail is accessible via `json_errors()`.  All six variants materialise (primitives, arrays, objects, nested containers); the entire tree lives in one store and frees as one unit when the root `DbRef` leaves scope.</p>
-<p>```loft match json_parse(raw) { JObject { fields } =&gt; for f in fields { handle(f) }, JArray  { items }  =&gt; for v in items  { handle(v) }, JNull              =&gt; println(&quot;parse error: {json_errors()}&quot;), _                  =&gt; println(&quot;unexpected root kind&quot;), } ``` Example: @STD-007</p>
+<p>```loft match json_parse(raw) { JObject { fields } =&gt; for f in fields { handle(f) }, JArray  { items }  =&gt; for v in items  { handle(v) }, JNull              =&gt; println(&quot;parse error: {json_errors()}&quot;), _                  =&gt; println(&quot;unexpected root kind&quot;), } ```</p>
 </div>
 <div class="item">
 <pre><code>pub fn json_errors() -&gt; text</code></pre>
@@ -5062,20 +5063,20 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </div>
 <div class="item">
 <pre><code>pub fn json_array(items: vector&lt;JsonValue&gt;) -&gt; JsonValue</code></pre>
-<p>Q4 constructor — build a JsonValue set to the `JArray` variant carrying the supplied items.  Each element is deep-copied into the new tree's arena via the shared `dbref_to_parsed` walker, so nested containers and arena-origin subtrees (e.g. a captured `field()` result) embed correctly.  Empty input produces a real empty JArray. Example: @STD-008</p>
+<p>Q4 constructor — build a JsonValue set to the `JArray` variant carrying the supplied items.  Each element is deep-copied into the new tree's arena via the shared `dbref_to_parsed` walker, so nested containers and arena-origin subtrees (e.g. a captured `field()` result) embed correctly.  Empty input produces a real empty JArray.</p>
 </div>
 <div class="item">
 <pre><code>pub fn json_object(fields: vector&lt;JsonField&gt;) -&gt; JsonValue</code></pre>
-<p>Build a JsonValue set to the `JObject` variant carrying the supplied fields.  Each field's value deep-copies via the same `dbref_to_parsed` walker as `json_array`, so a JObject can carry captured-subtree JArray / JObject values.  Empty input produces a real empty JObject. Example: @STD-008</p>
+<p>Build a JsonValue set to the `JObject` variant carrying the supplied fields.  Each field's value deep-copies via the same `dbref_to_parsed` walker as `json_array`, so a JObject can carry captured-subtree JArray / JObject values.  Empty input produces a real empty JObject.</p>
 </div>
 <div class="item">
 <pre><code>pub fn struct_from_jsonvalue(v: JsonValue, struct_kt: integer) -&gt; JsonValue</code></pre>
 <p>Internal walker — populate a struct of the given `struct_kt` (known-type number) from a JsonValue.  Compile-time codegen for `Struct.parse(JsonValue)` emits exactly one call to this function regardless of struct shape; the runtime walker uses `stores.types[struct_kt].parts` to dispatch on each field's declared type (primitive, nested struct, JsonValue passthrough, or vector). Path-qualified schema-side diagnostics on type mismatches go to `json_errors()`.  Users should not call this directly — write `MyStruct.parse(value)` instead.</p>
-<p>Return type is declared as `JsonValue` here purely because it shares the same DbRef byte layout as the actual `reference[T]` the walker produces — the compile-time codegen at `parse_type_parse` overrides the type to `reference[T]` for the caller while the stack accounting remains correct. Example: @STD-009</p>
+<p>Return type is declared as `JsonValue` here purely because it shares the same DbRef byte layout as the actual `reference[T]` the walker produces — the compile-time codegen at `parse_type_parse` overrides the type to `reference[T]` for the caller while the stack accounting remains correct.</p>
 </div>
 <div class="item">
 <pre><code>pub fn struct_to_json(self_ref: JsonValue, struct_kt: integer) -&gt; text</code></pre>
-<p>Populates json_errors on type mismatches.  Allocates the result struct into worker stores → par-safe; no parent state writes. P54 Q3 second half — serialise any user struct to canonical JSON. Backs the parser-side intercept for `instance.to_json()`; the `field == &quot;to_json&quot;` rewrite in `src/parser/fields.rs` lowers the method call to `n_struct_to_json(self_ref, struct_kt)`.  Walks `stores.types[struct_kt].parts` via `Stores::show_json` (which reuses the existing `ShowDb` schema walker) and produces RFC 8259 JSON text.  String fields are escaped (`&quot;` / `\` / control bytes); nested structs and vectors recurse; `JsonValue`-typed fields render their inline subtree verbatim.  The first parameter is declared as `JsonValue` purely so the parser type-system accepts the synthesised call regardless of the actual receiver's struct type — the runtime only reads the `struct_kt` discriminant for dispatch. Example: @STD-009</p>
+<p>Populates json_errors on type mismatches.  Allocates the result struct into worker stores → par-safe; no parent state writes. P54 Q3 second half — serialise any user struct to canonical JSON. Backs the parser-side intercept for `instance.to_json()`; the `field == &quot;to_json&quot;` rewrite in `src/parser/fields.rs` lowers the method call to `n_struct_to_json(self_ref, struct_kt)`.  Walks `stores.types[struct_kt].parts` via `Stores::show_json` (which reuses the existing `ShowDb` schema walker) and produces RFC 8259 JSON text.  String fields are escaped (`&quot;` / `\` / control bytes); nested structs and vectors recurse; `JsonValue`-typed fields render their inline subtree verbatim.  The first parameter is declared as `JsonValue` purely so the parser type-system accepts the synthesised call regardless of the actual receiver's struct type — the runtime only reads the `struct_kt` discriminant for dispatch.</p>
 </div>
 <div class="item">
 <pre><code>pub fn struct_to_json_pretty(self_ref: JsonValue, struct_kt: integer) -&gt; text</code></pre>

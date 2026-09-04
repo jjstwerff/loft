@@ -29,27 +29,22 @@
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_write</span>(f: <span class="en">Form</span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
 <p>── C2/C4: the layout ──────────────────────────────────────────────────────</p>
 <p>One element per line, single-space separators, no trailing space. Fields in declaration order: <code>stencil &lt;name&gt; h0 &lt;n&gt;</code> then one <code>side &lt;i&gt; len &lt;l&gt; turn &lt;t&gt;</code> per side, in index order.</p>
-<p>Example: @HXF-001</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_canon</span>(f: <span class="en">Form</span>) -&gt; <span class="en">Form</span></code></pre>
 <p>THE CANONICAL SPELLING — smallest <code>(turns, lens, h0)</code> over the n cyclic starts.</p>
-<p>Example: @HXF-004</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_canon_text</span>(f: <span class="en">Form</span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
 <p>The canonical text of a form, whichever corner it happened to be written from.</p>
-<p>Example: @HXF-004</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_read_name</span>(t: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
 <p>The name a text was written with. It is NOT part of the model — <code>Form</code> has no name field — so a round trip carries it only if the caller carries it.  Names are ONE WORD: the layout puts <code>h0</code> in the third field, so a name with a space writes a text this reader refuses.</p>
-<p>Example: @HXF-003</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_read</span>(t: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">Form</span></code></pre>
 <p>Parse a canonical text back into a Form. Returns a 0-sided form if the text does not have the canonical shape — the caller checks, and the gate treats that as a refusal.</p>
-<p>Example: @HXF-002</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_eq</span>(a: <span class="en">Form</span>, b: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
@@ -68,7 +63,6 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">head_n2_4</span>(h: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
 <p>4 * the squared world length of the step — EDGE_N2_4 or VERTEX_N2_4, exactly.</p>
-<p>Example: @HXF-007</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">head_is_edge</span>(h: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
@@ -126,7 +120,6 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_closes</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
 <p>Law J.  Both conditions, and a side count that can bound a region at all.</p>
-<p>Example: @HXF-006</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">perp_k</span>(_k: <span class="ty"><a href="stdlib-types.html">integer</a></span>, m: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
@@ -208,7 +201,6 @@
 <p>NON-SIMPLE walks — a repeated vertex, so the &quot;polygon&quot; crosses or touches itself and has no well-defined inside. NON-CONVEX forms — which VIOLATE LAW F.  Measured over the 70 simple non-convex 4-sided forms: 62 of 70 at unit scale, and still 36 of 70 grown five times, draw a field that some OTHER form also draws.  <code>draw</code> is not injective there, so no recovery — hull, tracing, or anything else — can tell them apart. Scaling shrinks the failure but never removes it.</p>
 <p>THAT IS A MODEL-SPACE LIMIT, NOT A METHOD LIMIT, and it is why the fix is at the DOORSTEP (<code>K-FIT</code>): the editor refuses a non-convex stencil at authoring time rather than letting one be drawn and fail to come back.  <code>DESIGN.md</code> §5.2 — a restriction the census finds is a fact to record, not a defect to engineer away.</p>
 <p>A convex form is exactly one whose turns are all POSITIVE: every exterior angle turning the same way, summing to one revolution.  A turn of 0 is a straight join, which is a re-spelling of a longer side rather than a corner, so it is refused too.</p>
-<p>Example: @HXF-005</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_is_simple</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
@@ -217,7 +209,6 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_admissible</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
 <p>THE ADMISSION RULE, as A4 leaves it: closed (law J), simple, and convex.</p>
-<p>Example: @HXF-005</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">cell_x</span>(q: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>

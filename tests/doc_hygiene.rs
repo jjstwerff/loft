@@ -2359,3 +2359,82 @@ fn both_corpus_halves_pick_entry_points_through_one_predicate() {
         }
     }
 }
+
+/// A worked-example citation never reaches the published prose.
+///
+/// `// Example: @AAA-###` is bookkeeping for `check_doc_drift.sh examples`, addressed to
+/// whoever maintains the examples. Rendered into a function's description it is a bare
+/// tracker tag with no link and no explanation, which CLAUDE.md § User-facing output
+/// rules out — and it leaked onto 27 shipped pages before anyone read one (#1341).
+///
+/// A citation INSIDE displayed source is correct and stays: the source browser pages show
+/// the library's own text, and the tag is part of it. So the guard reads every page with
+/// the comment spans removed, which is exactly "the prose a reader is shown".
+///
+/// This is the end-to-end half of the invariant `documentation::without_example_citations`
+/// enforces per line. It reads the COMMITTED HTML, so it also fails when the pages are
+/// stale against a generator that has learned to strip them.
+#[test]
+fn no_worked_example_citation_is_rendered_as_prose() {
+    let mut leaked: Vec<String> = Vec::new();
+    let mut pages = 0usize;
+    for entry in fs::read_dir("doc").expect("doc/ is readable") {
+        let path = entry.expect("readable entry").path();
+        if path.extension().is_none_or(|e| e != "html") {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        pages += 1;
+        for prose in strip_comment_spans(&text) {
+            for (offset, _) in prose.match_indices("Example: @") {
+                let tail: String = prose[offset..].chars().take(60).collect();
+                leaked.push(format!("{}: {tail}", path.display()));
+            }
+        }
+    }
+    assert!(pages > 100, "expected the generated pages, saw {pages}");
+    assert!(
+        leaked.is_empty(),
+        "a worked-example citation is rendered as prose on {} page section(s); \
+         regenerate with `cargo run --bin gendoc`:\n  {}",
+        leaked.len(),
+        leaked.join("\n  ")
+    );
+}
+
+/// The page text with `<span class="cm">…</span>` (displayed source comments) removed.
+fn strip_comment_spans(html: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = html;
+    while let Some(open) = rest.find("<span class=\"cm\">") {
+        out.push(rest[..open].to_string());
+        rest = &rest[open..];
+        match rest.find("</span>") {
+            Some(close) => rest = &rest[close + "</span>".len()..],
+            None => return out,
+        }
+    }
+    out.push(rest.to_string());
+    out
+}
+
+/// The control: with the comment spans left in, the source browsers DO carry citations.
+///
+/// Without this, `no_worked_example_citation_is_rendered_as_prose` would still pass if the
+/// stripper ever swallowed the whole page, or if the pages stopped being generated at all.
+#[test]
+fn the_source_browsers_still_show_the_citations_in_their_source() {
+    let text = fs::read_to_string("doc/lib-random-src.html").expect("the random source page");
+    assert!(
+        text.contains("Example: @RND-001"),
+        "the source browser shows the library's own comments verbatim"
+    );
+    assert!(
+        strip_comment_spans(&text)
+            .iter()
+            .all(|p| !p.contains("Example: @")),
+        "…and every one of them sits inside a comment span"
+    );
+}

@@ -83,11 +83,11 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">ws_handler</span>(url: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">WsHandler</span></code></pre>
 <p>Open a WebSocket session.  Returns null only if the URL is malformed; transient connection failures (server not yet up, network blip) are absorbed by the auto-reconnect loop in the Rust layer, so this call always returns a usable handle for any well-formed <code>ws://...</code> or <code>wss://...</code> URL.</p>
-<p><code>wss://</code> (TLS) works on BOTH targets: the browser uses the platform WebSocket (which has always spoken wss), and since web 0.3.2 the native client dials TLS through rustls with certificate validation ON by default (default port 443).  For a self-signed dev endpoint, set <code>LOFT_WS_INSECURE_SKIP_VERIFY=1</code> in the native process — an explicit opt-out, never a URL option, so it cannot be baked into a deployed config by accident. Example: @WEB-003 — a handle is not a connection; ask the traffic, not the handle.</p>
+<p><code>wss://</code> (TLS) works on BOTH targets: the browser uses the platform WebSocket (which has always spoken wss), and since web 0.3.2 the native client dials TLS through rustls with certificate validation ON by default (default port 443).  For a self-signed dev endpoint, set <code>LOFT_WS_INSECURE_SKIP_VERIFY=1</code> in the native process — an explicit opt-out, never a URL option, so it cannot be baked into a deployed config by accident.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">send</span>(self: <span class="en">WsHandler</span>, msg: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
-<p>Send a text message to the server.  Returns true on success; false means the connection is currently in backoff / reconnecting and the caller may retry after the next <code>pump()</code>. Example: @WEB-003 — this false, not a null handle, is what reports the link down.</p>
+<p>Send a text message to the server.  Returns true on success; false means the connection is currently in backoff / reconnecting and the caller may retry after the next <code>pump()</code>.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">send_binary</span>(self: <span class="en">WsHandler</span>, msg: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
@@ -115,7 +115,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">pack_reset</span>()</code></pre>
-<p>Empty the per-thread pack buffer.  Call before each blob. Example: @WEB-001 — reset, append in wire order, take (which moves, not reads).</p>
+<p>Empty the per-thread pack buffer.  Call before each blob.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">pack_u8</span>(b: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
@@ -131,11 +131,11 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">pack_take</span>() -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
-<p>Take the contents of the pack buffer and return them as a <code>text</code> whose UTF-8 bytes are exactly the buffer bytes.  Resets the buffer. Example: @WEB-001 — the three-step protocol, and the NUL that interpolation drops.</p>
+<p>Take the contents of the pack buffer and return them as a <code>text</code> whose UTF-8 bytes are exactly the buffer bytes.  Resets the buffer.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call"><a href="stdlib-text.html">byte_at</a></span>(idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, t: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>Read the byte at <code>idx</code> of the text payload.  Out-of-range (negative or past the end) returns -1.  Use to decode binary frames received via <code>try_recv</code> / <code>pump</code>.  Argument order is (idx, t) — the C-ABI auto-marshal in src/extensions.rs supports (I32, Text) -&gt; I32 but not (Text, I32) -&gt; I32. Example: @WEB-002 — why the bounds test is <code>&lt; 0</code> and never <code>== 0</code>.</p>
+<p>Read the byte at <code>idx</code> of the text payload.  Out-of-range (negative or past the end) returns -1.  Use to decode binary frames received via <code>try_recv</code> / <code>pump</code>.  Argument order is (idx, t) — the C-ABI auto-marshal in src/extensions.rs supports (I32, Text) -&gt; I32 but not (Text, I32) -&gt; I32.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">WsGroupEvent</span></code></pre>

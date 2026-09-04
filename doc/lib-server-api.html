@@ -38,11 +38,11 @@
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">listen</span>(port: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Server</span></code></pre>
 <p>Bind a TCP listener on <code>port</code> and return the server.</p>
 <p>Failing to take the port is FATAL here, deliberately.  The native listener answers -1 when the bind fails, and a <code>Server</code> built on -1 is indistinguishable from a healthy one at every call site: <code>run</code> spins forever on an empty event pump, so the process reports itself up and serves nobody.  Worse, that state is invisible from OUTSIDE the process too — a readiness probe that connects to the port reaches whoever DID win the bind and reports success — so the failure surfaces somewhere else entirely, as a client that hangs or talks to a stranger's server.</p>
-<p>Use <code>try_listen</code> when losing the port is an outcome you mean to handle: retrying on another port, or scanning a range. Example: @SRV-001 — halting door vs recoverable door, and why <code>bound()</code> is not optional.</p>
+<p>Use <code>try_listen</code> when losing the port is an outcome you mean to handle: retrying on another port, or scanning a range.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">try_listen</span>(port: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Server</span></code></pre>
-<p>Like <code>listen</code>, but hands back an UNBOUND server instead of halting when the port cannot be taken.  Check <code>bound()</code> before using it: every other method on an unbound server does nothing, quietly. Example: @SRV-001 — the retry shape: try_listen, then bound(), then use it.</p>
+<p>Like <code>listen</code>, but hands back an UNBOUND server instead of halting when the port cannot be taken.  Check <code>bound()</code> before using it: every other method on an unbound server does nothing, quietly.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">listen_on</span>(addr: <span class="ty"><a href="stdlib-types.html">text</a></span>, port: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Server</span></code></pre>
@@ -88,7 +88,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">header</span>(self: <span class="en">Request</span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
-<p>Look up a request header case-insensitively (e.g. &quot;Range&quot;, &quot;Origin&quot;, &quot;If-None-Match&quot;); returns &quot;&quot; if absent. Values containing ':' (an Origin URL, a date) are rejoined intact. Example: @SRV-002 — why a hand-rolled <code>h.split(':')[1]</code> over <code>headers</code> loses the port.</p>
+<p>Look up a request header case-insensitively (e.g. &quot;Range&quot;, &quot;Origin&quot;, &quot;If-None-Match&quot;); returns &quot;&quot; if absent. Values containing ':' (an Origin URL, a date) are rejoined intact.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">respond_with_headers</span>(self: <span class="en">Request</span>, status: <span class="ty"><a href="stdlib-types.html">integer</a></span>, body: <span class="ty"><a href="stdlib-types.html">text</a></span>, headers: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">text</a></span>&gt;)</code></pre>
@@ -100,11 +100,11 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">serve_range</span>(self: <span class="en">Request</span>, body: <span class="ty"><a href="stdlib-types.html">text</a></span>, extra: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">text</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
-<p>Serve a byte range of <code>body</code> when the request carries a Range header, adding <code>extra</code> headers (CORS / ETag) to the 206 or 416. Returns true if a range response was sent; false when there is no Range header (the caller serves the full body). Single-range &quot;bytes=off-last&quot; / open-ended &quot;bytes=off-&quot; only. Example: @SRV-003 — the boolean says WHO answered; false is the case you must handle.</p>
+<p>Serve a byte range of <code>body</code> when the request carries a Range header, adding <code>extra</code> headers (CORS / ETag) to the 206 or 416. Returns true if a range response was sent; false when there is no Range header (the caller serves the full body). Single-range &quot;bytes=off-last&quot; / open-ended &quot;bytes=off-&quot; only.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">serve_data</span>(self: <span class="en">Request</span>, body: <span class="ty"><a href="stdlib-types.html">text</a></span>, etag: <span class="ty"><a href="stdlib-types.html">text</a></span>, origin: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
-<p>One-call helper to serve a (possibly binary) resource with full byte-range + CORS + HEAD + conditional support — the server counterpart to the web client's http_get_range / http_size. <code>etag</code> &quot;&quot; skips conditional; <code>origin</code> &quot;&quot; skips CORS. Example: @SRV-003 — this one takes every branch, so it is always true and always final.</p>
+<p>One-call helper to serve a (possibly binary) resource with full byte-range + CORS + HEAD + conditional support — the server counterpart to the web client's http_get_range / http_size. <code>etag</code> &quot;&quot; skips conditional; <code>origin</code> &quot;&quot; skips CORS.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">respond_html</span>(self: <span class="en">Request</span>, body: <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>

@@ -8066,7 +8066,7 @@ pub fn starts_with_at(self: text, pos: integer, prefix: text) -> boolean
 ```
 
 Functions for searching, transforming, and classifying text and character values. Character classification functions return true only if every character in the text satisfies the condition. The single-character variants test one code point. (`starts\_with` / `ends\_with` moved to `02\_files.loft` so the path helpers there can call them; both still available as `text.starts\_with` / `text.ends\_with`.) Returns true if self contains `prefix` starting at byte position `pos`.  Sugar over `self\[pos..pos + prefix.size()\] == prefix` for the common "is this token at this offset?" pattern in scanners / parsers.  Returns false (not an error) when pos + prefix.size() exceeds self.size() — same shape as `starts\_with` for the "prefix too long for input" case.
-Faster than comparing characters one at a time for a known prefix at `pos`. Example: \@STD-001
+Faster than comparing characters one at a time for a known prefix at `pos`.
 
 ```rust
 pub fn char_slice(self: text, from: integer, to: integer) -> text
@@ -8219,7 +8219,7 @@ True if the character is a control character.
 pub fn join(self: vector<text>, sep: text) -> text
 ```
 
-Joins parts with sep between each consecutive pair. Returns "" for an empty vector. Use to build comma-separated lists, path segments, or any delimited output. Example: \@STD-003
+Joins parts with sep between each consecutive pair. Returns "" for an empty vector. Use to build comma-separated lists, path segments, or any delimited output.
 
 ```rust
 pub fn byte_at(self: text, i: integer) -> integer
@@ -8237,7 +8237,7 @@ Build a text from the raw UTF-8 bytes of a vector\<u8\> — the inverse of byte\
 pub fn chr(cp: integer) -> text
 ```
 
-Build a one-character text from a Unicode CODE POINT — the inverse of the `ch as integer` that text iteration already gives you, and the code-point twin of text\_from\_bytes' byte route.  Use when you have a number and need the character it names: decoding an escape (`\\u{...}`, an HTML entity), walking a code-point table, or reassembling text a code point at a time. chr(65)      "A"     chr(233)    "é" chr(20013)   "中"    chr(128512) "😀" A code point that names no character answers the EMPTY text, never a crash: a surrogate (D800-DFFF), anything past U+10FFFF, a negative number — and also 0, because `character` uses 0 as its null and text iteration stops there, so a NUL built here could not be read back.  If you need an embedded NUL, go through the byte route: `text\_from\_bytes(\[0\])` carries one. Example: \@STD-002
+Build a one-character text from a Unicode CODE POINT — the inverse of the `ch as integer` that text iteration already gives you, and the code-point twin of text\_from\_bytes' byte route.  Use when you have a number and need the character it names: decoding an escape (`\\u{...}`, an HTML entity), walking a code-point table, or reassembling text a code point at a time. chr(65)      "A"     chr(233)    "é" chr(20013)   "中"    chr(128512) "😀" A code point that names no character answers the EMPTY text, never a crash: a surrogate (D800-DFFF), anything past U+10FFFF, a negative number — and also 0, because `character` uses 0 as its null and text iteration stops there, so a NUL built here could not be read back.  If you need an embedded NUL, go through the byte route: `text\_from\_bytes(\[0\])` carries one.
 
 == Collections
 
@@ -8353,19 +8353,19 @@ Number of elements in the trie.
 pub fn min_of < T: Ordered > (v: vector<T>) -> T?
 ```
 
-Smallest element in a vector, or null when the vector is empty (\@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op \<). Example: \@STD-004
+Smallest element in a vector, or null when the vector is empty (\@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op \<).
 
 ```rust
 pub fn max_of < T: Ordered > (v: vector<T>) -> T?
 ```
 
-Largest element in a vector, or null when the vector is empty (\@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op \<). Example: \@STD-004
+Largest element in a vector, or null when the vector is empty (\@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op \<).
 
 ```rust
 pub fn sum < T: Addable > (v: vector<T>, init: T? = null) -> T
 ```
 
-Sum of vector elements.  Works on any Addable type.  `init` is the identity to start from; leave it out and the element type's own zero is used (0, 0.0, ""). Example: sum(\[10, 20, 12\], 0) == 42 Example: sum(\[10, 20, 12\]) == 42 Example: \@STD-005
+Sum of vector elements.  Works on any Addable type.  `init` is the identity to start from; leave it out and the element type's own zero is used (0, 0.0, ""). Example: sum(\[10, 20, 12\], 0) == 42 Example: sum(\[10, 20, 12\]) == 42
 \@PLN102 arc C — `init` gained its default so `sum\_of(v)` can be REWRITTEN to `sum(v)`: `superseded-call` offers that rename and `loft fix` verifies every edit by compiling the result, so while `init` was required the only `\#superseded` symbol loft ships had its fix rejected on every program (loft\#1003).  A literal default is not spellable here (`init: T = 0` is "expected T, got integer"), so it is the nullable-with-discharge form, which needs loft\#1016's per-monomorph `construct\_default(T)`.  Additive: every existing `sum(v, init)` call is unchanged.
 
 ```rust
@@ -8382,7 +8382,9 @@ pub interface Walkable
 pub fn tree_walk < T: Walkable > (wk_root: T, cap: integer) -> vector<T>
 ```
 
-Example: \@STD-006
+Every node reachable from `wk\_root` in breadth-first order: the root, then its children, then theirs.  `T` is any type declaring `fn children(self: T) -\> vector\<T\>` — writing that bare function is what makes a type `Walkable`, with nothing to register.
+`cap` bounds the ANSWER, not just the effort: at most `cap` nodes come back (the root alone when `cap` is 0 or 1) and the walk stops there.  That bound is what makes this total on a structure that has a cycle or no end, so pass a count you would accept as an answer rather than a number picked to be large.
+Nodes are not de-duplicated — the walk carries no visited set, so a node reached by two parents is returned twice.
 
 == Assertions that report both sides
 
@@ -8515,7 +8517,7 @@ Result of a filesystem-mutating operation (delete, move, mkdir). Use ok() to get
 pub fn ok(self: FileResult) -> boolean
 ```
 
-True when the result is `FileResult.Ok`. Use to test a file op for success. Example: \@STD-012
+True when the result is `FileResult.Ok`. Use to test a file op for success.
 
 ```rust
 pub struct File {
@@ -8543,13 +8545,13 @@ A handle to a filesystem entry. Fields: path (full path), size (file size in byt
 pub fn content(self: File) -> text?fs#read
 ```
 
-Reads the entire file as a UTF-8 text value. Use for small configuration files or scripts. Example: \@STD-010
+Reads the entire file as a UTF-8 text value. Use for small configuration files or scripts.
 
 ```rust
 pub fn lines(self: File) -> vector<text> fs#read
 ```
 
-Par-safe: reads the file into a worker-local store; the host bridge serialises filesystem access. Reads the file and splits it into lines. Strips trailing '\\r' so CRLF files (Windows) and LF files (Unix) produce identical results. Use when processing line-by-line (logs, CSV, etc.). Example: \@STD-011
+Par-safe: reads the file into a worker-local store; the host bridge serialises filesystem access. Reads the file and splits it into lines. Strips trailing '\\r' so CRLF files (Windows) and LF files (Unix) produce identical results. Use when processing line-by-line (logs, CSV, etc.).
 
 ```rust
 pub fn path_sep() -> character
@@ -8621,13 +8623,13 @@ Returns true if `path` exists and is a regular file. Use to confirm a directory 
 pub fn list_dir(path: text) -> vector<text> ?fs#read
 ```
 
-Lists the entry NAMES of directory `path` (base names, not full paths), sorted.  \@PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct from an EMPTY directory, `\[\]`); discharge with `?? \[\]` to keep the old shape. Use to enumerate a directory; join with `path` to build full child paths. Example: \@STD-010
+Lists the entry NAMES of directory `path` (base names, not full paths), sorted.  \@PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct from an EMPTY directory, `\[\]`); discharge with `?? \[\]` to keep the old shape. Use to enumerate a directory; join with `path` to build full child paths.
 
 ```rust
 pub fn read_bytes(path: text) -> vector<u8> ?fs#read
 ```
 
-Reads the whole file `path` as raw bytes.  \@PLN102 H4 — a MISSING / unreadable file reads as NULL (distinct from an EMPTY file, `\[\]`); discharge with `?? \[\]` to keep the old shape.  Binary-exact (round-trips with write\_bytes); use for non-UTF-8 data — for text prefer `file(path).content()`. Example: \@STD-010
+Reads the whole file `path` as raw bytes.  \@PLN102 H4 — a MISSING / unreadable file reads as NULL (distinct from an EMPTY file, `\[\]`); discharge with `?? \[\]` to keep the old shape.  Binary-exact (round-trips with write\_bytes); use for non-UTF-8 data — for text prefer `file(path).content()`.
 
 ```rust
 pub fn write_bytes(path: text, bytes: vector<u8>) -> boolean fs#update
@@ -8713,7 +8715,6 @@ pub fn store_reclaim(r: reference) -> integer fs#update
 Give back the free space at the END of a store-rooted collection's store, and return the BYTES handed back (0 when there was nothing to give). For a store bound with `store\_persist\_bind` that is the FILE shrinking; otherwise it is memory returned to the allocator. Records are never moved, so every reference into the collection stays valid.
 You say when, because only the program knows whether a drop is permanent: a collection that shrinks and grows again would just pay to re-grow. Read `store\_memory()` first, and read it as a RANKING rather than a quantity: its `tail%` says which store is worth reclaiming, and it is NOT the size of the return. A reclaimed store lands at `tail 11%` — a growth reserve the allocator keeps — so what comes back is `tail% - 11%` of the resulting capacity, never the whole tail. Measured across eight shapes with tails from 13% to 60%: at a 13% tail the report suggests ~36 KB and the call hands back 5832 bytes. Treat a reading near 11% as nothing to get back, not a little. Its `inner%` is the space BETWEEN records, which this does not touch — though the number RISES after a reclaim, because the capacity it is a percentage of has shrunk.
 WHERE the drop was matters as much as how big it was. `mergeable` counts adjacent free neighbours that never coalesced, so it measures how CONTIGUOUS the drop was, and that is exactly the part this call can fix: the same 2000 records dropped contiguously merge 2004 free blocks down to 7 and hand back 25400 bytes, while dropped alternately they leave 1997 blocks standing forever — the live records between them are what keeps them apart — and hand back 16312.
-Example: \@FTR-001 Example: \@FTR-002
 You do NOT need this to right-size a file at the END of a run. A bound store keeps its file AS the live arena, and the arena's capacity grows by 7/3 and never shrinks by itself — so mid-run the file is a rung on a ladder, not a measure of content, and can sit 57% above what it holds. Releasing the collection hands that tail back on its own, so the file a program leaves behind follows its content whether or not this was ever called (loft\#752). Call it MID-RUN, when a live set has dropped for good and the memory (or the disk) is wanted back before the end. world: hash\<Hex\[q, r\]\> = \[\] store\_persist\_bind(world, "world.store") // …a region is unloaded for good… store\_reclaim(world)          // the file follows what the world holds NOW Returns 0, changing nothing, for a store that is read-only, shares another store's memory, or carries a `store\_durable\_seal` sidecar — truncating behind that sidecar's back would report a healthy store as corrupt.
 
 ```rust
@@ -9139,7 +9140,7 @@ pub fn json_parse(raw: text) -> JsonValue
 ```
 
 Parse JSON text into a `JsonValue` tree.  Malformed input returns `JNull`; the error trail is accessible via `json\_errors()`.  All six variants materialise (primitives, arrays, objects, nested containers); the entire tree lives in one store and frees as one unit when the root `DbRef` leaves scope.
-```loft match json\_parse(raw) { JObject { fields } =\> for f in fields { handle(f) }, JArray  { items }  =\> for v in items  { handle(v) }, JNull              =\> println("parse error: {json\_errors()}"), \_                  =\> println("unexpected root kind"), } ``` Example: \@STD-007
+```loft match json\_parse(raw) { JObject { fields } =\> for f in fields { handle(f) }, JArray  { items }  =\> for v in items  { handle(v) }, JNull              =\> println("parse error: {json\_errors()}"), \_                  =\> println("unexpected root kind"), } ```
 
 ```rust
 pub fn json_errors() -> text
@@ -9255,26 +9256,26 @@ Non-finite inputs touch json\_errors state.  Otherwise pure construction into wo
 pub fn json_array(items: vector<JsonValue>) -> JsonValue
 ```
 
-Q4 constructor — build a JsonValue set to the `JArray` variant carrying the supplied items.  Each element is deep-copied into the new tree's arena via the shared `dbref\_to\_parsed` walker, so nested containers and arena-origin subtrees (e.g. a captured `field()` result) embed correctly.  Empty input produces a real empty JArray. Example: \@STD-008
+Q4 constructor — build a JsonValue set to the `JArray` variant carrying the supplied items.  Each element is deep-copied into the new tree's arena via the shared `dbref\_to\_parsed` walker, so nested containers and arena-origin subtrees (e.g. a captured `field()` result) embed correctly.  Empty input produces a real empty JArray.
 
 ```rust
 pub fn json_object(fields: vector<JsonField>) -> JsonValue
 ```
 
-Build a JsonValue set to the `JObject` variant carrying the supplied fields.  Each field's value deep-copies via the same `dbref\_to\_parsed` walker as `json\_array`, so a JObject can carry captured-subtree JArray / JObject values.  Empty input produces a real empty JObject. Example: \@STD-008
+Build a JsonValue set to the `JObject` variant carrying the supplied fields.  Each field's value deep-copies via the same `dbref\_to\_parsed` walker as `json\_array`, so a JObject can carry captured-subtree JArray / JObject values.  Empty input produces a real empty JObject.
 
 ```rust
 pub fn struct_from_jsonvalue(v: JsonValue, struct_kt: integer) -> JsonValue
 ```
 
 Internal walker — populate a struct of the given `struct\_kt` (known-type number) from a JsonValue.  Compile-time codegen for `Struct.parse(JsonValue)` emits exactly one call to this function regardless of struct shape; the runtime walker uses `stores.types\[struct\_kt\].parts` to dispatch on each field's declared type (primitive, nested struct, JsonValue passthrough, or vector). Path-qualified schema-side diagnostics on type mismatches go to `json\_errors()`.  Users should not call this directly — write `MyStruct.parse(value)` instead.
-Return type is declared as `JsonValue` here purely because it shares the same DbRef byte layout as the actual `reference\[T\]` the walker produces — the compile-time codegen at `parse\_type\_parse` overrides the type to `reference\[T\]` for the caller while the stack accounting remains correct. Example: \@STD-009
+Return type is declared as `JsonValue` here purely because it shares the same DbRef byte layout as the actual `reference\[T\]` the walker produces — the compile-time codegen at `parse\_type\_parse` overrides the type to `reference\[T\]` for the caller while the stack accounting remains correct.
 
 ```rust
 pub fn struct_to_json(self_ref: JsonValue, struct_kt: integer) -> text
 ```
 
-Populates json\_errors on type mismatches.  Allocates the result struct into worker stores → par-safe; no parent state writes. P54 Q3 second half — serialise any user struct to canonical JSON. Backs the parser-side intercept for `instance.to\_json()`; the `field == "to\_json"` rewrite in `src/parser/fields.rs` lowers the method call to `n\_struct\_to\_json(self\_ref, struct\_kt)`.  Walks `stores.types\[struct\_kt\].parts` via `Stores::show\_json` (which reuses the existing `ShowDb` schema walker) and produces RFC 8259 JSON text.  String fields are escaped (`"` / `\\` / control bytes); nested structs and vectors recurse; `JsonValue`-typed fields render their inline subtree verbatim.  The first parameter is declared as `JsonValue` purely so the parser type-system accepts the synthesised call regardless of the actual receiver's struct type — the runtime only reads the `struct\_kt` discriminant for dispatch. Example: \@STD-009
+Populates json\_errors on type mismatches.  Allocates the result struct into worker stores → par-safe; no parent state writes. P54 Q3 second half — serialise any user struct to canonical JSON. Backs the parser-side intercept for `instance.to\_json()`; the `field == "to\_json"` rewrite in `src/parser/fields.rs` lowers the method call to `n\_struct\_to\_json(self\_ref, struct\_kt)`.  Walks `stores.types\[struct\_kt\].parts` via `Stores::show\_json` (which reuses the existing `ShowDb` schema walker) and produces RFC 8259 JSON text.  String fields are escaped (`"` / `\\` / control bytes); nested structs and vectors recurse; `JsonValue`-typed fields render their inline subtree verbatim.  The first parameter is declared as `JsonValue` purely so the parser type-system accepts the synthesised call regardless of the actual receiver's struct type — the runtime only reads the `struct\_kt` discriminant for dispatch.
 
 ```rust
 pub fn struct_to_json_pretty(self_ref: JsonValue, struct_kt: integer) -> text

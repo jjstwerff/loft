@@ -29,42 +29,34 @@
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">arc_fill</span>(cq: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cr: <span class="ty"><a href="stdlib-types.html">integer</a></span>, n24: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
 <p>Fill the disk of shell <code>n24</code> about (cq, cr): every cell whose 4·squared-distance is at most <code>n24</code>.  Entirely integer — the comparison that decides membership never touches a float.</p>
 <p><code>n24</code> is a SHELL, not a radius.  Hand it a value no <code>(k,m)</code> realises and it draws the shell below without a word — <code>arc_shells_upto</code> is the grid to snap to first.</p>
-<p>Example: @HXS-001</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">arc_shell_max</span>(cells: <span class="en">HexSet</span>, cq: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cr: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
 <p>The outermost shell actually occupied, measured about (cq, cr).  This is the recoverable radius parameter — the largest <code>N</code> present, not the continuous radius that was authored.</p>
-<p>Example: @HXS-001</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">arc_is_disk</span>(cells: <span class="en">HexSet</span>, cq: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cr: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
 <p>Is the set EXACTLY the disk of its own outermost shell about (cq, cr)?  A tower must be, and a blob will not be — this is what stops an arbitrary round-ish region being read as an arc.</p>
-<p>Example: @HXS-001 Example: @HXS-009</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">arc_recover_centre</span>(cells: <span class="en">HexSet</span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">boolean</a></span>)</code></pre>
 <p>Recover the centre: the unique cell about which the set IS a disk.  Searched over the cells of the set itself — a disk's centre is always one of its own cells — so this is O(cells²) and needs no guess.  Returns <code>found = false</code> when the region is not a disk about any of them, which is the R2 answer for a shape that is not an arc.</p>
-<p>Example: @HXS-001</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">arc_shells_upto</span>(n24: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;</code></pre>
 <p>The shells that actually exist out to <code>n24</code>, ascending — the admissible radius grid, i.e. <code>Sep</code> made concrete.  A value of <code>N</code> that no <code>(k,m)</code> realises is not a shell and cannot be authored.</p>
-<p>Example: @HXS-001</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">arc_wedge_has</span>(cq: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cr: <span class="ty"><a href="stdlib-types.html">integer</a></span>, q: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
 <p>Is cell (q,r) inside the angular wedge running CCW from ray <code>lo</code> up to ray <code>hi</code>, about centre (cq,cr)?  The wedge must span less than 180°, so <code>lo</code> and <code>hi</code> bound one contiguous arc.</p>
-<p>Example: @HXS-009</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">arc_door_wedge</span>(cells: <span class="en">HexSet</span>, edges: <span class="en">EdgeSet</span>, cq: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cr: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
 <p>Place a door on the wall: re-material every boundary edge whose inside cell lies in the wedge to <code>mat</code>.  Annotation only — no cell or edge is removed — so the disk, and therefore the recovered centre and shell, are untouched.  Returns the number of edges marked.  The arc analog of <code>place_opening</code>.</p>
-<p>Example: @HXS-009</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">arc_door_edges</span>(cells: <span class="en">HexSet</span>, edges: <span class="en">EdgeSet</span>, mat: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
 <p>Recover the door: count the boundary edges carrying <code>mat</code>, each exactly once (only the inside cell of a boundary edge is in the set, so iterating inside cells visits every boundary edge once).  This is the R1 read of the feature straight off storage.</p>
-<p>Example: @HXS-009</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">box_cos</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
@@ -75,7 +67,6 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">box_orbit</span>(rot: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
 <p>Which of the two orbits <code>rot</code> belongs to: 0 = the EDGE family (<code>Plan</code>'s six), 1 = the VERTEX family. Members of one orbit are exact lattice rotations of each other; members of different orbits are not related by any exact map.</p>
-<p>Example: @HXS-006</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Box</span></code></pre>
@@ -95,44 +86,37 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">box_fill</span>(b: <span class="en">Box</span>, cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>Example: @HXS-006</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">box_ring_out</span>(cells: <span class="en">HexSet</span>, ring: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
 <p>── THE THICK WALL — a castle, not a cottage ───────────────────────────────</p>
 <p>A cottage wall is an EDGE: it costs no floor, and 27 cells of house stay 27 cells of house. A castle wall is different in kind — it is GROUND, wide enough to stand and walk on, with an inside and an outside. So it is a ring of whole CELLS, and the only question is which side of the selection it takes.</p>
 <p><code>box_ring_out</code> puts it OUTSIDE: the user's selection is the courtyard, untouched, and the wall is the ring of cells around it. This is the one that matches the editor's gesture — what you select is what you get to keep.</p>
-<p>Example: @HXS-007</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">box_ring_in</span>(cells: <span class="en">HexSet</span>, ring: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
 <p><code>box_ring_in</code> takes it from INSIDE instead: the outermost layer of the selection becomes wall and the courtyard shrinks. Same ring, opposite side — a town wall drawn to a surveyed outer boundary wants this one.</p>
-<p>Example: @HXS-007</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">flood_outside</span>(wall: <span class="en">HexSet</span>, out: <span class="en">HexSet</span>)</code></pre>
 <p>── DOES THE WALL HOLD? ────────────────────────────────────────────────────</p>
 <p>A ring that looks closed and is not is the exact defect <code>SPEC</code> I3's control names — &quot;2 components, 0 enclosed, yet still 12/12 equivariant&quot;. For a thick wall the honest test is not to count cells but to try to WALK IN: flood the outside and see whether it reaches the courtyard. One hole and it does.</p>
 <p>Relaxation rather than a queue: the region is a box, so sweeping until nothing changes terminates in at most its perimeter in passes, and it needs no auxiliary storage.</p>
-<p>Example: @HXS-007</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">leak_count</span>(inner: <span class="en">HexSet</span>, out: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
 <p>How many cells of <code>inner</code> the outside flood reached. Zero means the wall holds.</p>
-<p>Example: @HXS-007</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">line_hexes</span>(x0: <span class="ty"><a href="stdlib-types.html">float</a></span>, y0: <span class="ty"><a href="stdlib-types.html">float</a></span>, x1: <span class="ty"><a href="stdlib-types.html">float</a></span>, y1: <span class="ty"><a href="stdlib-types.html">float</a></span>, cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
 <p>── A THICK LINE — the town wall that is not a box ─────────────────────────</p>
 <p>Same wall, no enclosure: a run of cells one hex wide, for a curtain wall or a rampart. The cells are those the segment passes THROUGH — a hex is on the line iff the segment enters it — so the chain is connected by construction and exactly one cell wide.</p>
 <p>Stepping is by a third of a cell, which cannot skip one: consecutive samples are 0.577 wu apart at most while a hex is 1.732 wu across, so every cell the segment crosses is sampled at least twice.</p>
-<p>Example: @HXS-007</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_connected</span>(cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
 <p>Is every cell of the set reachable from every other, stepping only within the set? A wall with a gap is not a wall; this is what makes &quot;one hex wide&quot; mean a CHAIN.</p>
 <p>CONNECTED IS NOT CLOSED.  A ring with one cell taken out is still one connected chain, so this answers true on a wall you can walk straight through.  For an ENCLOSURE the verdict is <code>flood_outside</code> + <code>leak_count</code>; this one is the contract for an open run.</p>
-<p>Example: @HXS-007</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Wall</span></code></pre>
@@ -146,11 +130,9 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_is_exact</span>(d24: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
 <p>An even d24 is one of the 12 exact headings; an odd one is an in-between.</p>
-<p>Example: @HXS-002</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_new</span>(d24: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ox: <span class="ty"><a href="stdlib-types.html">float</a></span>, oy: <span class="ty"><a href="stdlib-types.html">float</a></span>, half: <span class="ty"><a href="stdlib-types.html">float</a></span>, mat: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Wall</span></code></pre>
-<p>Example: @HXS-008</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_angle_nominal</span>(d24: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
@@ -158,7 +140,6 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_angle_actual</span>(d24: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
-<p>Example: @HXS-002</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_offset_signed</span>(w: <span class="en">Wall</span>, px: <span class="ty"><a href="stdlib-types.html">float</a></span>, py: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
@@ -190,7 +171,6 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_edge_gap</span>(q: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>, dir: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
 <p>THE CHECK THAT WOULD HAVE CAUGHT IT: how far the midpoint of edge <code>dir</code> sits from the midpoint between the two cell centres it is supposed to separate.  Zero for every direction, or the edge table and the neighbour table disagree.</p>
-<p>Example: @HXS-004</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hex_corner_tri_a</span>(q: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ci: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
@@ -210,18 +190,15 @@
 <p>ALONG-NESS.  For a marked edge between cells C and N, the vector C-&gt;N is PERPENDICULAR to the edge.  An edge lying ALONG the wall therefore has C-&gt;N pointing ACROSS the wall — a small <code>|C-&gt;N . wall_dir|</code>.  The old picket marked edges lying ACROSS the wall, whose C-&gt;N pointed ALONG it — <code>|C-&gt;N . wall_dir| ~ 1</code>.</p>
 <p>⚠ THAT MAKES THE WORST <code>|dot|</code> A DISCRIMINATOR ON HALF THE DIRECTIONS ONLY.  On the twelve EXACT headings it tops out at 0.5 (N = 3) or 0.866 (N = 1), and nothing reaches 0.9.  On the twelve IN-BETWEEN ones it reads **0.97** on completely correct output: a shallow line has to cross the vertical edge between two cells of the SAME row wherever it steps up, and that edge's dot is <code>cos(13.9 deg)</code>.  Measured, 3 of a 25-edge run are above 0.9.  So this number describes the WOBBLE; it does not deliver a verdict, and a gate that thresholds it flags a correct in-between wall.</p>
 <p>The verdict is the CHAIN property below — two degree-1 vertices, no branches — which is exact and holds for all 24 directions.</p>
-<p>Example: @HXS-004</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_chain_ends</span>(edges: <span class="en">EdgeSet</span>, q0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r0: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
 <p>ONE CHAIN.  The marked edges form a connected path iff, keyed by their shared hex vertices (exact triangle-lattice integers), exactly two vertices have degree 1 (the ends) and none has degree &gt; 2.  A picket comb of k disjoint edges has 2k degree-1 vertices — so this separates a chain from a comb with no tolerance.  Returns the number of degree-1 vertices (2 for a single chain, 0 for empty, 4 after a break, 2k for a comb).</p>
 <p>⚠ TWO WALLS MEETING AT A CORNER USUALLY DO NOT FUSE, so this is 4 and not 2 for an L — each wall keeps its own two ends.  That is a fact about the marking and not a defect: a consumer reading it as *the marking is broken* will refuse a shape somebody drew on purpose.</p>
-<p>Example: @HXS-004</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_chain_branches</span>(edges: <span class="en">EdgeSet</span>, q0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r0: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
 <p>Any vertex where three or more marked edges meet — a branch, which a straight wall's boundary never has.  Non-zero means the marking is not a simple path.</p>
-<p>Example: @HXS-004</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">WallChain</span></code></pre>
@@ -246,14 +223,13 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">tri_n2</span>(d24: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
 <p>N = |v|^2 / S^2 for direction <code>d24</code> — an exact integer, never a float comparison. The direction's <code>N</code>.  Only THREE values occur over the 24 — measured, not assumed.</p>
-<p>Example: @HXS-002</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">is_square</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">commensurable</span>(n1: <span class="ty"><a href="stdlib-types.html">integer</a></span>, n2: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
-<p>Are the two directions' lattice-line spacings COMMENSURABLE — i.e. can integer counts of rows in each ever be exactly equal?  Only if sqrt(N2/N1) is rational, i.e. N1*N2 square. Example: @HXS-002</p>
+<p>Are the two directions' lattice-line spacings COMMENSURABLE — i.e. can integer counts of rows in each ever be exactly equal?  Only if sqrt(N2/N1) is rational, i.e. N1*N2 square.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">tri_class</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
@@ -275,15 +251,14 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_run_ok</span>(d24: <span class="ty"><a href="stdlib-types.html">integer</a></span>, a0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, p: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
 <p>THE DOORSTEP ITSELF.  <code>p</code> periods of <code>d24</code> from (a0,b0): admissible or not.</p>
-<p>Example: @HXS-003</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_min_p</span>(d24: <span class="ty"><a href="stdlib-types.html">integer</a></span>, a0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b0: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>The smallest admissible run from this vertex in this direction — the editor's snap unit. -1 if the start is not a vertex at all. Example: @HXS-003</p>
+<p>The smallest admissible run from this vertex in this direction — the editor's snap unit. -1 if the start is not a vertex at all.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_snap_p</span>(d24: <span class="ty"><a href="stdlib-types.html">integer</a></span>, a0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, want: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>A REFUSAL NAMES ITS RESTRICTION (K-FIT): given a wanted length in periods, the nearest admissible one, searching outward so ties go to the shorter run.  0 if none exists. Example: @HXS-003</p>
+<p>A REFUSAL NAMES ITS RESTRICTION (K-FIT): given a wanted length in periods, the nearest admissible one, searching outward so ties go to the shorter run.  0 if none exists.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">tri_x</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, _b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
@@ -294,7 +269,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_run_len</span>(d24: <span class="ty"><a href="stdlib-types.html">integer</a></span>, p: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
-<p>The world length of <code>p</code> periods of <code>d24</code>, in world units. Example: @HXS-003</p>
+<p>The world length of <code>p</code> periods of <code>d24</code>, in world units.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_from_run</span>(d24: <span class="ty"><a href="stdlib-types.html">integer</a></span>, a0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, p: <span class="ty"><a href="stdlib-types.html">integer</a></span>, mat: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Wall</span></code></pre>
@@ -303,11 +278,10 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hex_scale_round</span>(x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
 <p>Nearest HEX-SCALE lattice point (vertex OR centre) to a world point, in triangle coordinates.  The hex-scale lattice is spanned by e1 = (sqrt3/2, 1/2) and e2 = (0, 1), which is (a,b) = (3i, 3j) — a triangular lattice of spacing 1 wu.</p>
-<p>Example: @HXS-008</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">nearest_vertex</span>(x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
-<p>SNAP 1: the nearest HEX VERTEX to an arbitrary world point, in triangle coordinates. Example: @HXS-008</p>
+<p>SNAP 1: the nearest HEX VERTEX to an arbitrary world point, in triangle coordinates.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">run_end_dist</span>(d24: <span class="ty"><a href="stdlib-types.html">integer</a></span>, a0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, p: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
@@ -315,22 +289,20 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">snap_run_d24</span>(a0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, tx: <span class="ty"><a href="stdlib-types.html">float</a></span>, ty: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>SNAP 2, direction part: the direction whose best legal endpoint lands nearest the target. Example: @HXS-008</p>
+<p>SNAP 2, direction part: the direction whose best legal endpoint lands nearest the target.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">snap_run_p</span>(d24: <span class="ty"><a href="stdlib-types.html">integer</a></span>, a0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, tx: <span class="ty"><a href="stdlib-types.html">float</a></span>, ty: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>SNAP 2, length part: the legal period count in that direction nearest the target. 0 when nothing legal was found, which the caller must treat as a refusal. Example: @HXS-008</p>
+<p>SNAP 2, length part: the legal period count in that direction nearest the target. 0 when nothing legal was found, which the caller must treat as a refusal.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_nearest_d24</span>(deg: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
 <p>The direction in <code>D</code> nearest a world angle in degrees.  The inverse of <code>wall_angle_actual</code>, and it must be asked of the ACTUAL angles rather than of the nominal 15-degree multiples: half of <code>D</code> sits 1.1021 degrees off its nominal (@HXS-002), so the nearest-nominal answer and the nearest-actual answer differ on a band around every in-between.  Monotone and complete over a full turn — 24 boundaries, each +1.</p>
-<p>Example: @HXS-010</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">snap_run_from_heading</span>(a0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, deg: <span class="ty"><a href="stdlib-types.html">float</a></span>,</code></pre>
 <p>The run an author reaches by AIMING: from vertex (a0,b0), facing <code>deg</code>, wanting <code>dist</code> world units.  Returns <code>(d24, p)</code> — the same pair the endpoint snap returns, so both idioms hand the rest of the library one shape of answer.</p>
 <p><code>p = 0</code> is a REFUSAL and the caller must treat it as one: it means no legal run exists from that anchor in that direction near that length, which happens when (a0,b0) is not a vertex at all, or when <code>dist</code> is shorter than the smallest admissible run.</p>
-<p>Example: @HXS-010</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_offset_of</span>(w: <span class="en">Wall</span>, px: <span class="ty"><a href="stdlib-types.html">float</a></span>, py: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
@@ -341,22 +313,20 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_mesh_stray</span>(w: <span class="en">Wall</span>, edges: <span class="en">EdgeSet</span>, q0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r0: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
-<p>The worst perpendicular stray of any emitted segment endpoint, over the marked field. Only edges whose midpoint lies within the run are measured — past the ends there is no line to be near. Example: @HXS-008</p>
+<p>The worst perpendicular stray of any emitted segment endpoint, over the marked field. Only edges whose midpoint lies within the run are measured — past the ends there is no line to be near.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_mesh_segments</span>(edges: <span class="en">EdgeSet</span>, q0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r0: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
-<p>How many distinct segments the mesh emitter would produce for the marked field — the vertex count of moros' wall mesh divided by the per-edge quad, i.e. the segment count. Example: @HXS-005</p>
+<p>How many distinct segments the mesh emitter would produce for the marked field — the vertex count of moros' wall mesh divided by the per-edge quad, i.e. the segment count.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_read_ends</span>(edges: <span class="en">EdgeSet</span>, q0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, wq: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hq: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
 <p>The two degree-1 vertices of the marked chain, in triangle coordinates.  <code>ok</code> is false unless there are exactly two — a fragmented or branching marking is REFUSED, never averaged into an answer.</p>
-<p>Example: @HXS-005</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_read_run</span>(edges: <span class="en">EdgeSet</span>, q0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, wq: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hq: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
 <p>Recover the whole run: direction, anchor and period count, all exact integers.  One period of <code>d24</code> displaces a run by <code>3·tri(d24)</code>, so the endpoint displacement pins both <code>d24</code> and <code>p</code>; the answer is canonicalised to the end that gives <code>p &gt; 0</code>.  <code>ok</code> is false when the marking is not a single chain, or when no direction divides the displacement — an unreadable field is REFUSED, not approximated (law **P4**).</p>
 <p>WHAT IT CANNOT RECOVER IS THE ORIENTATION, because the field does not store one: A-to-B and B-to-A mark the identical edges.  The answer is canonicalised to <code>p &gt; 0</code>, so the direction comes back as <code>d24</code> OR as <code>d24 + 12</code> with the other endpoint as the anchor — both naming the same wall.  <code>read.d == d</code> is therefore the wrong round-trip assertion; compare the ENDPOINTS.</p>
-<p>Example: @HXS-005</p>
 </div>
 
   </article>

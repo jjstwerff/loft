@@ -48,7 +48,7 @@
 <div class="item">
 <pre><code>pub fn starts_with_at(self: text, pos: integer, prefix: text) -&gt; boolean</code></pre>
 <p>Functions for searching, transforming, and classifying text and character values. Character classification functions return true only if every character in the text satisfies the condition. The single-character variants test one code point. (`starts_with` / `ends_with` moved to `02_files.loft` so the path helpers there can call them; both still available as `text.starts_with` / `text.ends_with`.) Returns true if self contains `prefix` starting at byte position `pos`.  Sugar over `self[pos..pos + prefix.size()] == prefix` for the common &quot;is this token at this offset?&quot; pattern in scanners / parsers.  Returns false (not an error) when pos + prefix.size() exceeds self.size() — same shape as `starts_with` for the &quot;prefix too long for input&quot; case.</p>
-<p>Faster than comparing characters one at a time for a known prefix at `pos`. Example: @STD-001</p>
+<p>Faster than comparing characters one at a time for a known prefix at `pos`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn char_slice(self: text, from: integer, to: integer) -&gt; text</code></pre>
@@ -151,7 +151,7 @@
 </div>
 <div class="item">
 <pre><code>pub fn join(self: vector&lt;text&gt;, sep: text) -&gt; text</code></pre>
-<p>Joins parts with sep between each consecutive pair. Returns &quot;&quot; for an empty vector. Use to build comma-separated lists, path segments, or any delimited output. Example: @STD-003</p>
+<p>Joins parts with sep between each consecutive pair. Returns &quot;&quot; for an empty vector. Use to build comma-separated lists, path segments, or any delimited output.</p>
 </div>
 <div class="item">
 <pre><code>pub fn byte_at(self: text, i: integer) -&gt; integer</code></pre>
@@ -163,7 +163,7 @@
 </div>
 <div class="item">
 <pre><code>pub fn chr(cp: integer) -&gt; text</code></pre>
-<p>Build a one-character text from a Unicode CODE POINT — the inverse of the `ch as integer` that text iteration already gives you, and the code-point twin of text_from_bytes' byte route.  Use when you have a number and need the character it names: decoding an escape (`\u{...}`, an HTML entity), walking a code-point table, or reassembling text a code point at a time. chr(65)      &quot;A&quot;     chr(233)    &quot;é&quot; chr(20013)   &quot;中&quot;    chr(128512) &quot;😀&quot; A code point that names no character answers the EMPTY text, never a crash: a surrogate (D800-DFFF), anything past U+10FFFF, a negative number — and also 0, because `character` uses 0 as its null and text iteration stops there, so a NUL built here could not be read back.  If you need an embedded NUL, go through the byte route: `text_from_bytes([0])` carries one. Example: @STD-002</p>
+<p>Build a one-character text from a Unicode CODE POINT — the inverse of the `ch as integer` that text iteration already gives you, and the code-point twin of text_from_bytes' byte route.  Use when you have a number and need the character it names: decoding an escape (`\u{...}`, an HTML entity), walking a code-point table, or reassembling text a code point at a time. chr(65)      &quot;A&quot;     chr(233)    &quot;é&quot; chr(20013)   &quot;中&quot;    chr(128512) &quot;😀&quot; A code point that names no character answers the EMPTY text, never a crash: a surrogate (D800-DFFF), anything past U+10FFFF, a negative number — and also 0, because `character` uses 0 as its null and text iteration stops there, so a NUL built here could not be read back.  If you need an embedded NUL, go through the byte route: `text_from_bytes([0])` carries one.</p>
 </div>
 
   </article>

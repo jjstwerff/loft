@@ -36,7 +36,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">field_digest</span>(cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;</code></pre>
-<p>THE DIGEST: the lexicographically smallest of the 12 oriented, translated, sorted key vectors. Two cell sets have the same digest **iff** one is an orientation-image of the other — which is exactly &quot;the same stencil&quot;, and makes law I visible from the census side. Example: @HXV-001</p>
+<p>THE DIGEST: the lexicographically smallest of the 12 oriented, translated, sorted key vectors. Two cell sets have the same digest **iff** one is an orientation-image of the other — which is exactly &quot;the same stencil&quot;, and makes law I visible from the census side.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">digest_eq</span>(a: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;, b: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
@@ -53,23 +53,22 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_key_noturn</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
-<p>Example: @HXV-002</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">count_digest</span>(cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>The DEGRADED digest for the second control: cell COUNT alone. A census keyed on a summary instead of the shape collides immediately — both level-1 triangle classes have 3 cells — which is what proves the real digest is carrying the weight. Example: @HXV-002</p>
+<p>The DEGRADED digest for the second control: cell COUNT alone. A census keyed on a summary instead of the shape collides immediately — both level-1 triangle classes have 3 cells — which is what proves the real digest is carrying the weight.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">turns_cyclic_eq</span>(a: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;, b: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
 <p>Are two turn sequences the SAME CLOSED CYCLE, written from a different corner?</p>
-<p>A cycle has no distinguished first corner: <code>[2,5,5]</code>, <code>[5,5,2]</code> and <code>[5,2,5]</code> are one shape walked from three different starting points.  The enumeration cannot know that — it sweeps (h0, turns) — so the census MUST, or it reports a stencil as several and its collisions as law F failures.  This is the census discovering a requirement on the canonical text (S6): fixing the winding (C3) is not enough, the starting CORNER has to be fixed too. Example: @HXV-006</p>
+<p>A cycle has no distinguished first corner: <code>[2,5,5]</code>, <code>[5,5,2]</code> and <code>[5,2,5]</code> are one shape walked from three different starting points.  The enumeration cannot know that — it sweeps (h0, turns) — so the census MUST, or it reports a stencil as several and its collisions as law F failures.  This is the census discovering a requirement on the canonical text (S6): fixing the winding (C3) is not enough, the starting CORNER has to be fixed too.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">field_exact</span>(cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;</code></pre>
 <p>── THE FAITHFUL DIGEST — a different question, and it must be a different function ─</p>
 <p><code>field_digest</code> above quotients by orientation, because the CENSUS asks &quot;how many distinct SHAPES does this level hold?&quot; and an orientation-image is the same stencil (law I).</p>
 <p>LAW F ASKS SOMETHING ELSE: is <code>draw</code> injective — do two distinct models produce two distinct FIELDS? That is about the cells actually written, not about the shape class. A stencil at h0=0 and the same stencil at h0=6 draw genuinely different cells; the shape digest calls them equal, and law F would look violated when nothing is wrong.</p>
-<p>So the corpus <code>.f</code> uses THIS one: the field exactly as drawn, no orientation quotient and no translation quotient (every entry is drawn at the same anchor, so position is part of the answer). Using the census digest here reported 17 false law F failures on a 10-entry corpus before the distinction was drawn. Example: @HXV-001</p>
+<p>So the corpus <code>.f</code> uses THIS one: the field exactly as drawn, no orientation quotient and no translation quotient (every entry is drawn at the same anchor, so position is part of the answer). Using the census digest here reported 17 false law F failures on a 10-entry corpus before the distinction was drawn.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">field_exact_text</span>(cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
@@ -79,7 +78,7 @@
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">field_norm</span>(cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;</code></pre>
 <p>The TRANSLATION-normalised, orientation-SENSITIVE digest — orientation 0 only.</p>
 <p>This is the one <code>rebuild</code> matches on: a recovered stencil must be the same shape at the same heading (h0 is authored, X39), but WHERE it was drawn is placement's business, so position is quotiented and orientation is not. Three digests now, three questions:</p>
-<p>field_digest   quotient orientation + translation   &quot;how many SHAPES?&quot;        (census, law I) field_exact    quotient nothing                     &quot;is draw INJECTIVE?&quot;      (corpus, law F) field_norm     quotient translation only            &quot;which STENCIL is this?&quot;  (rebuild, R1) Example: @HXV-001</p>
+<p>field_digest   quotient orientation + translation   &quot;how many SHAPES?&quot;        (census, law I) field_exact    quotient nothing                     &quot;is draw INJECTIVE?&quot;      (corpus, law F) field_norm     quotient translation only            &quot;which STENCIL is this?&quot;  (rebuild, R1)</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">field_norm_text</span>(cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
@@ -93,16 +92,16 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">forms_upto</span>(maxlen: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Form</span>&gt;</code></pre>
-<p>Every admitted 3-sided form with all side lengths in 1..maxlen, canonicalised and deduplicated. Example: @HXV-009</p>
+<p>Every admitted 3-sided form with all side lengths in 1..maxlen, canonicalised and deduplicated.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">forms_at_level</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Form</span>&gt;</code></pre>
-<p>Only the forms NEW at this level — longest side exactly <code>n</code>. Example: @HXV-009</p>
+<p>Only the forms NEW at this level — longest side exactly <code>n</code>.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">turns_reverse_eq</span>(a: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;, b: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
 <p>Is <code>b</code> a cyclic shift of <code>a</code> REVERSED — the signature of a MIRROR pair?</p>
-<p>The flip is one of the 12 orientations (<code>O</code> = 6 rotations x {id, flip}), and mirroring a turtle walk reverses its turn sequence.  At level 1 this never shows: every admitted form has equal sides, so it is achiral and its mirror is just a rotation.  Unequal sides make a form and its mirror genuinely different texts — <code>turn 3,5,4</code> against <code>turn 3,4,5</code> — that draw mirror-image fields and therefore share a SHAPE digest.  That is law **I**, not a law F failure. Example: @HXV-007</p>
+<p>The flip is one of the 12 orientations (<code>O</code> = 6 rotations x {id, flip}), and mirroring a turtle walk reverses its turn sequence.  At level 1 this never shows: every admitted form has equal sides, so it is achiral and its mirror is just a rotation.  Unequal sides make a form and its mirror genuinely different texts — <code>turn 3,5,4</code> against <code>turn 3,4,5</code> — that draw mirror-image fields and therefore share a SHAPE digest.  That is law **I**, not a law F failure.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">forms_sides</span>(sides: <span class="ty"><a href="stdlib-types.html">integer</a></span>, maxlen: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Form</span>&gt;</code></pre>
@@ -114,7 +113,6 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">fit_chunk</span>(f: <span class="en">Form</span>) -&gt; <span class="en">HexSet</span></code></pre>
-<p>Example: @HXV-003</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Rebuilt</span></code></pre>
@@ -122,7 +120,7 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">candidate_forms</span>() -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Form</span>&gt;</code></pre>
 <p>The candidate space: A1/A2 (3 sides, len &lt;= LEVEL) plus A3 (side counts 4..6 at len 1).</p>
-<p>ENUMERATING THIS IS THE EXPENSIVE PART, so callers that recover many fields must build it ONCE and pass it to <code>rebuild_with</code>. <code>rebuild</code> re-enumerates on every call, which is fine for a single lookup and quadratic waste over a corpus. Example: @HXV-004</p>
+<p>ENUMERATING THIS IS THE EXPENSIVE PART, so callers that recover many fields must build it ONCE and pass it to <code>rebuild_with</code>. <code>rebuild</code> re-enumerates on every call, which is fine for a single lookup and quadratic waste over a corpus.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">level1_forms</span>() -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Form</span>&gt;</code></pre>
@@ -130,7 +128,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rebuild</span>(cells: <span class="en">HexSet</span>) -&gt; <span class="en">Rebuilt</span></code></pre>
-<p>THE ROUTINE. Match the field against every admitted form, translation-normalised — WHERE it was drawn is placement's business (the <code>place</code> element), not the stencil's. Example: @HXV-005</p>
+<p>THE ROUTINE. Match the field against every admitted form, translation-normalised — WHERE it was drawn is placement's business (the <code>place</code> element), not the stencil's.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rebuild_with</span>(cand: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Form</span>&gt;, cells: <span class="en">HexSet</span>) -&gt; <span class="en">Rebuilt</span></code></pre>
@@ -157,12 +155,11 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">index_build</span>(cand: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Form</span>&gt;) -&gt; <span class="en">RecoveryIndex</span></code></pre>
-<p>Example: @HXV-002</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rebuild_indexed</span>(idx: <span class="en">RecoveryIndex</span>, cand: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Form</span>&gt;, cells: <span class="en">HexSet</span>) -&gt; <span class="en">Rebuilt</span></code></pre>
 <p>THE FAST PATH: one probe. A hit is an exact R1 answer — the digest IS the field, compared in full, so this is the same exactness the scan gave, not a heuristic narrowing.</p>
-<p>A MISS falls back to the scan, and only then, purely to compute the R2 residual. R2 is the exceptional path (content no grammar form draws), so paying O(N) there costs nothing in practice and keeps <code>rho &gt; 0</code> a real measurement rather than a placeholder. Example: @HXV-008</p>
+<p>A MISS falls back to the scan, and only then, purely to compute the R2 residual. R2 is the exceptional path (content no grammar form draws), so paying O(N) there costs nothing in practice and keeps <code>rho &gt; 0</code> a real measurement rather than a placeholder.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rebuild_indexed_text</span>(idx: <span class="en">RecoveryIndex</span>, cand: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Form</span>&gt;,</code></pre>
@@ -182,7 +179,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rebuild_construct</span>(cells: <span class="en">HexSet</span>) -&gt; <span class="en">Rebuilt</span></code></pre>
-<p>THE ROUTINE: recover the form from the field, then verify by re-drawing it. Example: @HXV-003 Example: @HXV-004</p>
+<p>THE ROUTINE: recover the form from the field, then verify by re-drawing it.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rebuild_construct_text</span>(cells: <span class="en">HexSet</span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>

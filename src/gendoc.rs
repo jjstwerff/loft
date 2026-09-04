@@ -8,7 +8,7 @@
 use loft::documentation::typst_escape;
 use loft::documentation::{
     StdlibSection, TopicSource, build_nav, gather_topic_info, generate_docs, get_topic_sources,
-    is_example_tag, page_html, render_topic_body, render_topic_typst,
+    is_example_tag, page_html, render_topic_body, render_topic_typst, without_example_citations,
 };
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -427,10 +427,16 @@ fn esc(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// A doc comment's lines as display paragraphs, blank-line separated.
+///
+/// Worked-example citations are dropped first: they are bookkeeping addressed to
+/// whoever maintains the examples, and this is the one path the stdlib section pages,
+/// the print sheet and the PDF all render through.
 fn group_paragraphs(lines: &[String]) -> Vec<String> {
+    let lines = without_example_citations(lines);
     let mut result = Vec::new();
     let mut current = String::new();
-    for line in lines {
+    for line in &lines {
         if line.is_empty() {
             if !current.is_empty() {
                 result.push(current.trim().to_string());
@@ -1504,6 +1510,9 @@ fn numbered_source<S: std::hash::BuildHasher>(
 /// matters — kept as-is the text renders with the author's terminal width baked in, which
 /// is not a line break they chose for a browser.
 fn doc_paragraphs(doc: &str) -> String {
+    // Citations are dropped by LINE before the split, because a citation is appended to
+    // the prose paragraph above it rather than given one of its own.
+    let doc = without_example_citations(&doc.lines().collect::<Vec<_>>()).join("\n");
     let mut out = String::new();
     for para in doc.split("\n\n") {
         let joined = para

@@ -212,6 +212,69 @@ fn opens_example_tag(trimmed: &str) -> bool {
         .is_some_and(is_example_tag)
 }
 
+/// Does this doc line OPEN a worked-example citation (`Example: @AAA-### — what it shows`)?
+///
+/// A citation points a maintainer at the call site that teaches this item; it is
+/// bookkeeping for `check_doc_drift.sh examples`, the sibling of the `@AAA-###`
+/// DEFINITION [`opens_example_tag`] drops. The reader of a published page never asked
+/// for it, and CLAUDE.md § User-facing output keeps tracker tags out of what a command
+/// prints — a rendered citation is a bare tag with no link and no explanation.
+///
+/// Accepts the line with or without its `//`, because the two shapes are both real: the
+/// stdlib and package extractors hand on comment text already stripped, while a caller
+/// reading source lines has not stripped it. A predicate that silently matched only one
+/// of them is how the second renderer would start publishing what the first hides.
+#[must_use]
+pub fn opens_example_citation(line: &str) -> bool {
+    let text = line.trim_start();
+    let text = text.strip_prefix("//").map_or(text, str::trim_start);
+    text.strip_prefix("Example:")
+        .map(str::trim_start)
+        .and_then(|t| t.strip_prefix('@'))
+        .is_some_and(is_example_tag)
+}
+
+/// A doc comment's lines with every worked-example citation removed.
+///
+/// One home for "a citation is not prose", because the renderers that must agree on it
+/// are three pages apart: the stdlib sections, the print sheet and the PDF all reach it
+/// through `group_paragraphs`, and the library API pages through `doc_paragraphs`. A
+/// renderer that disagreed would publish the citations the others hide.
+///
+/// A citation is a BLOCK, not a line: 51 of the 377 in the shipped distribution wrap
+/// onto continuation lines, so dropping the opener alone would leave the tail behind as
+/// a sentence fragment — a worse page than the one this fixes. The block runs from its
+/// opener to the next blank line, the next citation, or the end of the comment.
+///
+/// The terminating blank is KEPT: it separates the citation's paragraph from whatever
+/// follows, and swallowing it would weld two paragraphs of real prose together.
+///
+/// Only a line that OPENS with the citation is bookkeeping. A tag written INSIDE a
+/// sentence is the author's prose and stays — `graphics::rgba` explains a hex literal
+/// "(a hand-written hex literal — @GFX-001)", and `hex_shape` cites `(@HXS-002)` in the
+/// middle of a measurement. A predicate that matched any tag would cut both sentences in
+/// half.
+#[must_use]
+pub fn without_example_citations<S: AsRef<str>>(lines: &[S]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut in_citation = false;
+    for line in lines {
+        let text = line.as_ref();
+        if opens_example_citation(text) {
+            in_citation = true;
+            continue;
+        }
+        if in_citation {
+            if !text.trim().is_empty() {
+                continue;
+            }
+            in_citation = false;
+        }
+        out.push(text.to_string());
+    }
+    out
+}
+
 /// Is this line part of the header block a topic opens with, rather than its prose?
 ///
 /// The block is attribution, provenance and directives. Provenance matters because a
@@ -2052,6 +2115,78 @@ fn main() {
         assert!(
             body.contains("A heading"),
             "a heading after the tag survives: {body}"
+        );
+    }
+
+    /// A citation is a BLOCK: the opener and the lines it wraps onto both go, and the
+    /// blank that ends it stays so the paragraphs either side do not weld together.
+    #[test]
+    fn a_worked_example_citation_is_dropped_with_its_continuation_lines() {
+        let doc = vec![
+            "The topmost node under this screen point, or -1.",
+            "Example: @STG-006 — picking samples alpha, so a click falls",
+            "through a hole.",
+            "",
+            "Walks the draw order BACKWARDS, so the node drawn last is tested first.",
+        ];
+        let kept = without_example_citations(&doc);
+        assert_eq!(
+            kept,
+            vec![
+                "The topmost node under this screen point, or -1.".to_string(),
+                String::new(),
+                "Walks the draw order BACKWARDS, so the node drawn last is tested first."
+                    .to_string(),
+            ],
+            "opener and continuation go, the separating blank stays"
+        );
+    }
+
+    /// The control the block rule needs: a tag written INSIDE a sentence is the author's
+    /// prose, not bookkeeping, so only a line that OPENS with the citation is dropped.
+    /// A predicate that matched any tag would cut `hex_shape`'s measurement in half.
+    #[test]
+    fn a_tag_inside_a_sentence_is_prose_and_survives() {
+        let doc = vec!["half of `D` sits 1.1021 degrees off its nominal (@HXS-002), so the"];
+        assert_eq!(
+            without_example_citations(&doc),
+            vec![doc[0].to_string()],
+            "a mid-sentence tag is the author's prose"
+        );
+        assert!(!opens_example_citation(doc[0]));
+    }
+
+    /// Consecutive citations are one run, and a citation that ends the comment needs no
+    /// terminator — the two shapes that make up most of the distribution's 377.
+    #[test]
+    fn consecutive_citations_all_go_and_a_trailing_one_needs_no_blank() {
+        let doc = vec![
+            "Seed an independent stream.",
+            "Example: @RND-001 — the reason to prefer this over `rand_seed`.",
+            "Example: @RND-003 — equal seeds replay exactly.",
+        ];
+        assert_eq!(
+            without_example_citations(&doc),
+            vec!["Seed an independent stream.".to_string()]
+        );
+    }
+
+    /// Both input shapes reach the predicate: the extractors hand on stripped comment
+    /// text, a caller reading source lines has not stripped the `//`.
+    #[test]
+    fn the_citation_predicate_accepts_a_line_with_or_without_its_comment_marker() {
+        assert!(opens_example_citation("Example: @STD-012"));
+        assert!(opens_example_citation(
+            "// Example: @STD-012 — trailing prose"
+        ));
+        assert!(opens_example_citation("  //   Example:  @STD-012"));
+        assert!(
+            !opens_example_citation("Example: see rand_seed"),
+            "prose that merely opens with the word is not a citation"
+        );
+        assert!(
+            !opens_example_citation("Example: @PLN3"),
+            "a plan tag is not the worked-example shape"
         );
     }
 

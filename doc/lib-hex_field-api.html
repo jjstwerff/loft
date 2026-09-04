@@ -123,7 +123,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hex_at</span>(px: <span class="ty"><a href="stdlib-types.html">float</a></span>, py: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
-<p>World point -&gt; the cell that contains it.  The exact inverse of the centre map (lattice_k / lattice_m), by the standard axial-fractional + cube-round route.  Gated two ways in sighttest: it must round-trip every cell of a chunk, and it must agree cell for cell with hex_grid::px_to_hex, which is the canonical convention this whole plan follows. Example: @HXL-006</p>
+<p>World point -&gt; the cell that contains it.  The exact inverse of the centre map (lattice_k / lattice_m), by the standard axial-fractional + cube-round route.  Gated two ways in sighttest: it must round-trip every cell of a chunk, and it must agree cell for cell with hex_grid::px_to_hex, which is the canonical convention this whole plan follows.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">corner_k</span>(i: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
@@ -148,12 +148,12 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_circle</span>(w: <span class="ty"><a href="stdlib-types.html">integer</a></span>, radius: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">HexSet</span></code></pre>
 <p>Euclidean disk: the hex CENTRE must lie within <code>radius</code> world units of the origin. Compared in squared lattice units to keep it integer until the final test.</p>
-<p>⚠ <code>radius</code> IS NOT IN HEX STEPS.  A world unit here is the one the lattice defines — x = k·√3/2, y = m/2 — in which a hex has CIRCUMRADIUS 1 and two neighbouring centres are √3 ≈ 1.732 apart.  So <code>form_circle(w, 3.0)</code> is 13 cells while <code>form_hexdisk(w, 3)</code> is 37: the same 3, two units, a factor of √3 between them.  To ask for n hex steps, pass <code>n * 1.7320508075688772</code> — <code>form_circle(w, 2·√3)</code> and <code>form_hexdisk(w, 2)</code> are the same 19 cells. Example: @HXL-005</p>
+<p>⚠ <code>radius</code> IS NOT IN HEX STEPS.  A world unit here is the one the lattice defines — x = k·√3/2, y = m/2 — in which a hex has CIRCUMRADIUS 1 and two neighbouring centres are √3 ≈ 1.732 apart.  So <code>form_circle(w, 3.0)</code> is 13 cells while <code>form_hexdisk(w, 3)</code> is 37: the same 3, two units, a factor of √3 between them.  To ask for n hex steps, pass <code>n * 1.7320508075688772</code> — <code>form_circle(w, 2·√3)</code> and <code>form_hexdisk(w, 2)</code> are the same 19 cells.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_octagon</span>(w: <span class="ty"><a href="stdlib-types.html">integer</a></span>, apothem: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">HexSet</span></code></pre>
 <p>Regular octagon, apothem <code>a</code>, one flat side on the world x-axis (canonical orientation — an octagon is 8-fold symmetric and the grid is 6-fold, so the orientation is FROZEN, not free).</p>
-<p><code>apothem</code> is in the same lattice world units as <code>form_circle</code>'s radius — hex circumradius 1, so a hex STEP is √3 — not in hex steps. Example: @HXL-005</p>
+<p><code>apothem</code> is in the same lattice world units as <code>form_circle</code>'s radius — hex circumradius 1, so a hex STEP is √3 — not in hex steps.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wall_count</span>(s: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
@@ -161,7 +161,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">trace</span>(s: <span class="en">HexSet</span>) -&gt; <span class="en">VecMap</span></code></pre>
-<p>Trace the boundary into ordered closed loops.  Each boundary edge is emitted directed corner_i -&gt; corner_i+1, which gives every loop a consistent orientation (outer one way, enclosed holes the other) — what a fill rule and a triangulator both need. Example: @HXL-001</p>
+<p>Trace the boundary into ordered closed loops.  Each boundary edge is emitted directed corner_i -&gt; corner_i+1, which gives every loop a consistent orientation (outer one way, enclosed holes the other) — what a fill rule and a triangulator both need.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">shoelace2</span>(v: <span class="en">VecMap</span>, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
@@ -169,15 +169,14 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">outline_count</span>(v: <span class="en">VecMap</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>How many loops enclose area — one per connected component of the cell set.  Exposed because <code>validate</code> deliberately no longer insists on exactly one (see there): a caller that knows its form is a single piece can still assert <code>outline_count(v) == 1</code>, and a caller tracing a world chunk can ask how many pieces landed in it. Example: @HXL-003</p>
+<p>How many loops enclose area — one per connected component of the cell set.  Exposed because <code>validate</code> deliberately no longer insists on exactly one (see there): a caller that knows its form is a single piece can still assert <code>outline_count(v) == 1</code>, and a caller tracing a world chunk can ask how many pieces landed in it.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">shoelace_total</span>(v: <span class="en">VecMap</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>Example: @HXL-002</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">validate</span>(v: <span class="en">VecMap</span>, cells: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>Returns 0 when the vector map is safe to consume; otherwise a failure code: 1 no loops   2 degenerate loop   3 segment is not a hex edge 4 area round-trip failed         5 no outer loop at all 6 a vertex repeats (the outline touches itself) Example: @HXL-003 Example: @HXL-004</p>
+<p>Returns 0 when the vector map is safe to consume; otherwise a failure code: 1 no loops   2 degenerate loop   3 segment is not a hex edge 4 area round-trip failed         5 no outer loop at all 6 a vertex repeats (the outline touches itself)</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">HexDoc</span></code></pre>
@@ -189,7 +188,7 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">doc_write_edges</span>(</code></pre>
-<p>As doc_write, plus the wall layer.  The EDGE payload is the halo grid — gw*gh*3 slots — because an edge on the chunk boundary belongs to a cell outside it, and dropping those would silently open the walls of every stamped building's rim. Example: @HXL-012</p>
+<p>As doc_write, plus the wall layer.  The EDGE payload is the halo grid — gw*gh*3 slots — because an edge on the chunk boundary belongs to a cell outside it, and dropping those would silently open the walls of every stamped building's rim.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">doc_write_all</span>(</code></pre>
@@ -197,7 +196,6 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">doc_read</span>(path: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">HexDoc</span></code></pre>
-<p>Example: @HXL-010 Example: @HXL-011</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">lattice_to_cell</span>(k: <span class="ty"><a href="stdlib-types.html">integer</a></span>, m: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
@@ -228,11 +226,11 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">stencil_rotate</span>(st: <span class="en">Stencil</span>, n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Stencil</span></code></pre>
-<p>Rotate a whole stencil n × 60° about its own (0,0), re-fitting the extent to whatever the rotated cells need. Example: @HXL-007</p>
+<p>Rotate a whole stencil n × 60° about its own (0,0), re-fitting the extent to whatever the rotated cells need.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">stencil_mirror</span>(st: <span class="en">Stencil</span>) -&gt; <span class="en">Stencil</span></code></pre>
-<p>Reflect a whole stencil (k -&gt; -k).  With the six rotations this is the other half of the TWELVE orientations: six placements, and the remaining six reached by flipping.  Handed content — an L-shaped house, a staircase — needs it, and it is exact for the same reason the rotation is. Example: @HXL-007</p>
+<p>Reflect a whole stencil (k -&gt; -k).  With the six rotations this is the other half of the TWELVE orientations: six placements, and the remaining six reached by flipping.  Handed content — an L-shaped house, a staircase — needs it, and it is exact for the same reason the rotation is.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">stencil_rotate_deg</span>(st: <span class="en">Stencil</span>, deg: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Stencil</span></code></pre>
@@ -276,19 +274,18 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">edgeset_new</span>(q0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, w: <span class="ty"><a href="stdlib-types.html">integer</a></span>, h: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">EdgeSet</span></code></pre>
-<p>Example: @HXL-008</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">edge_key</span>(qa: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ra: <span class="ty"><a href="stdlib-types.html">integer</a></span>, qb: <span class="ty"><a href="stdlib-types.html">integer</a></span>, rb: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
-<p>The doubled midpoint — an edge's identity, independent of which cell names it. Example: @HXL-008</p>
+<p>The doubled midpoint — an edge's identity, independent of which cell names it.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">edge_set_mat</span>(e: <span class="en">EdgeSet</span>, qa: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ra: <span class="ty"><a href="stdlib-types.html">integer</a></span>, qb: <span class="ty"><a href="stdlib-types.html">integer</a></span>, rb: <span class="ty"><a href="stdlib-types.html">integer</a></span>, mat: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
-<p>The storage slot for an edge, or -1.  PUBLIC because a consumer building its own accessors on this layer cannot address storage it cannot index — crawler's apply_features and its junction arbitration write by index.  Exposing the slot is cheaper than exporting a get/set pair for every access pattern they have. Unconditional write — the last writer wins.  The write POLICY is deliberately the caller's: first-writer-wins is <code>if edge_mat(...) == 0 { edge_set_mat(...) }</code> at the call site, where the reader can see which rule is in force. Example: @HXL-009</p>
+<p>The storage slot for an edge, or -1.  PUBLIC because a consumer building its own accessors on this layer cannot address storage it cannot index — crawler's apply_features and its junction arbitration write by index.  Exposing the slot is cheaper than exporting a get/set pair for every access pattern they have. Unconditional write — the last writer wins.  The write POLICY is deliberately the caller's: first-writer-wins is <code>if edge_mat(...) == 0 { edge_set_mat(...) }</code> at the call site, where the reader can see which rule is in force.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">edgeset_refused</span>(e: <span class="en">EdgeSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>Writes this layer refused because the material was outside 0..EDGE_MAT_MAX.  Non-zero means a wall a caller asked for is absent — check it wherever material ids are derived rather than written as literals. Example: @HXL-009</p>
+<p>Writes this layer refused because the material was outside 0..EDGE_MAT_MAX.  Non-zero means a wall a caller asked for is absent — check it wherever material ids are derived rather than written as literals.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">edge_mat</span>(e: <span class="en">EdgeSet</span>, qa: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ra: <span class="ty"><a href="stdlib-types.html">integer</a></span>, qb: <span class="ty"><a href="stdlib-types.html">integer</a></span>, rb: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>

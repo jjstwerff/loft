@@ -46,14 +46,14 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">step_x</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>, y: <span class="ty"><a href="stdlib-types.html">integer</a></span>, d: <span class="ty"><a href="stdlib-types.html">integer</a></span>, k: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>Offset coord <code>k</code> steps from (x, y) along hex axis <code>d</code>. Example: @GRM-005 — step_x/step_y are a PAIR on the same (x, y); row parity is why step_x needs the y argument.</p>
+<p>Offset coord <code>k</code> steps from (x, y) along hex axis <code>d</code>.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">step_y</span>(_x: <span class="ty"><a href="stdlib-types.html">integer</a></span>, y: <span class="ty"><a href="stdlib-types.html">integer</a></span>, d: <span class="ty"><a href="stdlib-types.html">integer</a></span>, k: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">idx_at</span>(cidx: <span class="ty">hash</span>&lt;<span class="en">CellRef</span>[ck]&gt;, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>, y: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
-<p>snap index of the cell at (x, y), or -1 if none.  (<code>cidx</code> not <code>index</code> — <code>index</code> is a reserved keyed-collection-type keyword in loft.) Example: @GRM-005 — a miss is the -1 sentinel, so guard with <code>&gt;= 0</code>, not a null test.</p>
+<p>snap index of the cell at (x, y), or -1 if none.  (<code>cidx</code> not <code>index</code> — <code>index</code> is a reserved keyed-collection-type keyword in loft.)</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">nbr_count_idx</span>(cidx: <span class="ty">hash</span>&lt;<span class="en">CellRef</span>[ck]&gt;, cx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cy: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
@@ -104,11 +104,11 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">field_remove_cell</span>(f: <span class="en">ChunkField</span>, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>, y: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
-<p>Edit — REMOVE an existing cell: drop it from the spatial index (cidx) and its chunk bucket, then mark its chunk (+ halo border) dirty.  The MIRROR of field_add_cell, sharing mark_borders so a removal flows through the IDENTICAL incremental rebuild path as a paint.  The coord slot in xs/ys is deliberately LEFT in place (not compacted): cell indices the field already handed out stay stable, so a consumer's parallel per-cell arrays (e.g. the projector's bloom births, indexed by cell index) are not invalidated.  The orphaned slot is never read again — its index is in no bucket and no longer in cidx — and re-painting the same coord allocates a FRESH index (field_add_cell appends), so identity is never reused. Example: @GRM-003 — the indices a consumer already holds stay valid across a removal; a repaint is a new one.</p>
+<p>Edit — REMOVE an existing cell: drop it from the spatial index (cidx) and its chunk bucket, then mark its chunk (+ halo border) dirty.  The MIRROR of field_add_cell, sharing mark_borders so a removal flows through the IDENTICAL incremental rebuild path as a paint.  The coord slot in xs/ys is deliberately LEFT in place (not compacted): cell indices the field already handed out stay stable, so a consumer's parallel per-cell arrays (e.g. the projector's bloom births, indexed by cell index) are not invalidated.  The orphaned slot is never read again — its index is in no bucket and no longer in cidx — and re-painting the same coord allocates a FRESH index (field_add_cell appends), so identity is never reused.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">clear_dirty</span>(f: <span class="en">ChunkField</span>)</code></pre>
-<p>Clear the dirty index after a rebuild (@P307 OpClearKeyed: in-place free). Example: @GRM-001 — where <code>clear_dirty</code> sits in the edit → collect → rebuild cycle, and what skipping it costs.</p>
+<p>Clear the dirty index after a rebuild (@P307 OpClearKeyed: in-place free).</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">dirty_count</span>(f: <span class="en">ChunkField</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
@@ -125,11 +125,11 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">all_inputs</span>(f: <span class="en">ChunkField</span>, halo_k: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">ChunkInput</span>&gt;</code></pre>
-<p>One ChunkInput per chunk that holds cells (the full-build work-list). Reads the wired-in <code>f.buckets</code> (no re-partition). Example: @GRM-002 — emit for <code>cell_ixs</code>, only READ <code>halo_ixs</code>; the partition that makes border geometry appear exactly once.</p>
+<p>One ChunkInput per chunk that holds cells (the full-build work-list). Reads the wired-in <code>f.buckets</code> (no re-partition).</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">collect_dirty_inputs</span>(f: <span class="en">ChunkField</span>, halo_k: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">ChunkInput</span>&gt;</code></pre>
-<p>One ChunkInput per DIRTY chunk (the incremental-rebuild work-list). Iterates ONLY the dirty set and looks up each dirty chunk's bucket — so the cost is O(dirty chunks × their cells), independent of total N.  A dirty chunk with no owned cells (a halo-marked empty neighbour) is skipped.  Clear the dirty index after rebuilding. Example: @GRM-001 — the edit → collect → rebuild → clear cycle end to end.</p>
+<p>One ChunkInput per DIRTY chunk (the incremental-rebuild work-list). Iterates ONLY the dirty set and looks up each dirty chunk's bucket — so the cost is O(dirty chunks × their cells), independent of total N.  A dirty chunk with no owned cells (a halo-marked empty neighbour) is skipped.  Clear the dirty index after rebuilding.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">GroupKey</span></code></pre>
@@ -149,7 +149,7 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">collect_dirty_groups</span>(f: <span class="en">ChunkField</span>, group_dim: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">GroupInput</span>&gt;</code></pre>
 <p>One GroupInput per DIRTY group (the incremental re-upload work-list). A group is dirty if any of its chunks is dirty; its chunk_cks lists ALL its member chunks that hold cells (so the consumer reassembles the group's VBO from those chunks' CACHED meshes — unchanged chunks copied, not rebuilt).</p>
-<p>FLAT COST: derives the dirty groups from f.dirty (O(dirty)), then for each enumerates its group_dim × group_dim member chunk coords analytically and probes f.buckets — O(dirty groups × group_dim²), independent of total N. (Never scans all chunks, which would make per-edit cost grow with N.) Example: @GRM-004 — <code>chunk_cks</code> lists the group's CLEAN chunks too (copy their cached meshes); reading it as &quot;chunks to rebuild&quot; rebuilds the whole group.</p>
+<p>FLAT COST: derives the dirty groups from f.dirty (O(dirty)), then for each enumerates its group_dim × group_dim member chunk coords analytically and probes f.buckets — O(dirty groups × group_dim²), independent of total N. (Never scans all chunks, which would make per-edit cost grow with N.)</p>
 </div>
 
   </article>

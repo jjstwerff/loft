@@ -30,12 +30,10 @@
 <p>z = peak - slope*d about a point.  Clamping d at dmax is not a detail: it is what makes an eave LEVEL on a quantised footprint, where the boundary cells sit at a spread of true radii (rooftest measures the difference).</p>
 <p>AND THE CLAMP HAS ITS OWN COST, worth knowing before reaching for it: the cells it clamps become a flat plateau, and an interior cell inside that plateau PONDS.  On a quantised footprint the boundary and the interior overlap in radius, so there is no <code>dmax</code> that levels the eave and still drains — measured below.  <code>roof_hip</code> has neither problem, because it never measures a radius: the boundary is ring 0 by definition.</p>
 <p><code>cx</code>/<code>cy</code> are WORLD coordinates, not cell indices.</p>
-<p>Example: @HXR-002 Example: @HXR-003</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">roof_ridge</span>(s: <span class="en">HexSet</span>, f: <span class="en">Heights</span>, t: <span class="en">Track</span>,</code></pre>
 <p>The same profile about a ridge.  A full-length ridge gives a gable; shorten it and the ends hip in, because track_distance clamps to the segment.</p>
-<p>Example: @HXR-001</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">vault_arc</span>(s: <span class="en">HexSet</span>, f: <span class="en">Heights</span>, t: <span class="en">Track</span>, spring: <span class="ty"><a href="stdlib-types.html">float</a></span>, radius: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
@@ -47,7 +45,6 @@
 <p>Every cell rises at a constant slope from its NEAREST EAVE, which is the definition of a hip roof. On a circular footprint that is a cone; on an octagonal one a pyramid; on an L-shaped hall a properly mitred hip-and-valley. The FORM is entirely the footprint's shape — there is one function here, not a catalogue, and that is the whole reason &quot;roof forms&quot; stopped being a list.</p>
 <p>Driving it from the FOOTPRINT rather than from the ideal circle is also what makes the eave level. Boundary cells are at ring 0 by definition, whatever their true radius. Drive a cone from each cell's own radius instead and the eave inherits the footprint's roundness deviation, wobbling by slope x that spread — rooftest measures both, because the failure is invisible until you look at the eave rather than the apex.</p>
 <p>Multi-source BFS inward from the boundary, on the pre-allocated array + index-write idiom (appending while a head pointer walks the same vector is the broken shape).</p>
-<p>Example: @HXR-002</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">dome</span>(s: <span class="en">HexSet</span>, f: <span class="en">Heights</span>, cx: <span class="ty"><a href="stdlib-types.html">float</a></span>, cy: <span class="ty"><a href="stdlib-types.html">float</a></span>, base: <span class="ty"><a href="stdlib-types.html">float</a></span>, radius: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
@@ -55,11 +52,9 @@
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">vault_groin</span>(s: <span class="en">HexSet</span>, f: <span class="en">Heights</span>, t1: <span class="en">Track</span>, t2: <span class="en">Track</span>,</code></pre>
-<p>Example: @HXR-004</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">vault_cloister</span>(s: <span class="en">HexSet</span>, f: <span class="en">Heights</span>, t1: <span class="en">Track</span>, t2: <span class="en">Track</span>,</code></pre>
-<p>Example: @HXR-004</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">clear_height</span>(fl: <span class="en">Heights</span>, so: <span class="en">Heights</span>, q: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
@@ -69,13 +64,11 @@
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">roof_ponds</span>(s: <span class="en">HexSet</span>, f: <span class="en">Heights</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
 <p>PONDING — the roof's correctness invariant, and the analogue of a stair's monotonicity. An INTERIOR cell (all six neighbours in the footprint) every one of whose neighbours is strictly higher is a local minimum: water collects and never leaves. A roof that sheds has none. Boundary cells are exempt — they drain off the eave, which is their job.</p>
 <p>A zero here is not &quot;no local minima&quot;: a hollow on the BOUNDARY is not counted.</p>
-<p>Example: @HXR-005</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">eave_spread</span>(s: <span class="en">HexSet</span>, f: <span class="en">Heights</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
 <p>The spread of eave heights around a footprint's boundary — 0 for a level eave.</p>
 <p>THE INSTRUMENT FOR THE FAILURE NOTHING ELSE SEES: a roof built from the wrong distance source still has an apex, still is not flat and still sheds water.  This is the number that moves.</p>
-<p>Example: @HXR-002 Example: @HXR-003</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">RoofFit</span></code></pre>
@@ -101,7 +94,6 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">roof_match</span>(s: <span class="en">HexSet</span>, f: <span class="en">Heights</span>, tol: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">RoofFit</span></code></pre>
 <p>Decide what the field IS.  A plane wins ties: it is the simpler statement, and a cone fitted to a flat roof would put its apex somewhere arbitrary.</p>
-<p>Example: @HXR-006 ⛔ **AND WHEN NOTHING FITS, IT SAYS SO — <code>ROOF_UNKNOWN</code>.**  This returned the least-bad of the three with <code>rf_kind</code> naming a shape the field is NOT, and the residual was the only signal that it was a fallback rather than a recovery.  Measured on fields THIS PACKAGE DRAWS: a <code>roof_ridge</code> gable comes back <code>ROOF_CONE</code> at residual **1.209**, with an apex of 6.318 where the truth is 6.0 and a slope of 0.409 where it is 0.5; a <code>roof_hip</code> comes back <code>ROOF_CONE</code> at **0.615**.  <code>roof_eval</code> then evaluates that cone into a surface that is not the roof.</p>
 <p>⚠ **THE BEST CANDIDATE'S PARAMETERS ARE KEPT**, because *which* shape came closest and by how much is what a caller diagnoses with.  What changes is that <code>rf_kind</code> no longer CLAIMS one — <code>roof_eval</code> draws nothing for <code>ROOF_UNKNOWN</code> — so a fallback can no longer be mistaken for a recovery by a caller that reads the kind and trusts it.</p>
 <p>⚠ **NO EXISTING RECOVERY CHANGES.**  A candidate within <code>tol</code> returns exactly as before; only the path where all three were already wrong is affected, which is precisely the population that was being told the wrong thing.</p>
 <p>⚠ **AND THE MISSING KIND IS NAMED RATHER THAN GUESSED AT**: this package DRAWS a ridge, a hip and three vaults, and fits a plane, a cone and a dome.  A ridge is the cone's own profile about a SEGMENT instead of a point, so <code>roof_ridge_fit</code> is a well-specified addition — until it exists, a gable is honestly unknown rather than dishonestly a cone.</p>
@@ -109,7 +101,6 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">roof_eval</span>(fit: <span class="en">RoofFit</span>, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
 <p>The recovered ANALYTIC surface — what a renderer should draw, at any resolution, instead of the cells it came from.</p>
-<p>Example: @HXR-006</p>
 </div>
 
   </article>
