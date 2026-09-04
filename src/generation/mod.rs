@@ -621,6 +621,11 @@ pub struct Output<'a> {
     /// inside a ForLoopBody pushes the DbRef as-is — `as i64` there was
     /// the #481 native E0308/E0605.
     pub yield_collect_dbref: bool,
+    /// The store type id an eager factory snapshots each pushed handle under
+    /// (`coroutine_snapshot`); `None` when the yield is not a handle, or is a
+    /// handle kind with no standalone record (a keyed collection), which the
+    /// loop-body push then refuses.
+    pub yield_collect_snapshot_tp: Option<u16>,
     /// When set alongside `yield_collect`, the generator yields a TUPLE whose every element
     /// is carried by value, and the eager buffer holds those elements' `i64` images FLAT —
     /// one push per slot, `kinds.len()` per yield.  The `next_into` reader pops the same
@@ -1439,6 +1444,7 @@ impl<'a> Output<'a> {
             yield_collect: false,
             yield_collect_text: false,
             yield_collect_dbref: false,
+            yield_collect_snapshot_tp: None,
             yield_collect_kinds: None,
             yield_collect_refuse: None,
             yield_lazy_wrap: None,

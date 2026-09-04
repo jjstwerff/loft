@@ -702,12 +702,31 @@ fn persistent_field_names(
 /// Nothing is emitted for a generator with no owned heap local; the trait's no-op default
 /// stands.  `Type::Iterator` is included: a nested generator handle routes back through
 /// `OpFreeRef`, which frees that coroutine in turn.
+/// The store type id an eager factory snapshots a yielded `tp` record under: a
+/// struct's (or struct-enum's) own type, or a vector's `main_vector<T>` wrapper.
+/// `None` for a handle kind with no standalone record — a keyed collection lives
+/// inline in its parent — which keeps the loop-body refusal for exactly those.
+fn snapshot_type_id(data: &crate::data::Data, tp: &Type) -> Option<u16> {
+    let d_nr = match tp {
+        Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) => *d_nr,
+        Type::Vector(elem, _) => data.def_nr(&format!("main_vector<{}>", elem.name(data))),
+        Type::Rewritten(t) | Type::Optional(t) => return snapshot_type_id(data, t),
+        _ => return None,
+    };
+    if d_nr == u32::MAX {
+        return None;
+    }
+    let kt = data.def(d_nr).known_type();
+    (kt != u16::MAX).then_some(kt)
+}
+
 fn emit_drop_stores(
     w: &mut dyn Write,
     persistent: &[(u16, Type)],
     fields: &std::collections::HashMap<u16, String>,
     data: &crate::data::Data,
     def_nr: u32,
+    owns_snapshots: bool,
 ) -> std::io::Result<()> {
     let vars = data.def(def_nr).variables();
     let owned: Vec<String> = persistent
@@ -729,10 +748,18 @@ fn emit_drop_stores(
         })
         .map(|(v, _)| fields[v].clone())
         .collect();
-    if owned.is_empty() {
+    if owned.is_empty() && !owns_snapshots {
         return Ok(());
     }
     writeln!(w, "    fn drop_stores(&mut self, stores: &mut Stores) {{")?;
+    if owns_snapshots {
+        // An eager handle generator abandoned before exhaustion (a `break`)
+        // still holds its snapshot store.
+        writeln!(
+            w,
+            "        loft::codegen_runtime::coroutine_release_snapshots(stores, &mut self.__snap);"
+        )?;
+    }
     for name in &owned {
         writeln!(
             w,
@@ -804,6 +831,10 @@ fn emit_struct_def(
         };
         writeln!(w, "    __values: Vec<{elem_ty}>,")?;
         writeln!(w, "    __idx: usize,")?;
+        if elem_ty == "DbRef" {
+            // The store the buffered handles are copies in — see `emit_for_body_factory`.
+            writeln!(w, "    __snap: DbRef,")?;
+        }
     }
     writeln!(w, "}}\n")
 }
@@ -1086,6 +1117,15 @@ impl Output<'_> {
                 writeln!(w, "            return v;")?;
             }
             writeln!(w, "        }}")?;
+            if is_dbref {
+                // Exhaustion drops the generator without `drop_stores` (the
+                // consumer's advance just clears the table slot), so the
+                // snapshot store goes here; the abandon path has its own call.
+                writeln!(
+                    w,
+                    "        loft::codegen_runtime::coroutine_release_snapshots(stores, &mut self.__snap);"
+                )?;
+            }
             writeln!(w, "        {exhaust}")?;
             writeln!(w, "    }}")?;
             return Ok(());
@@ -1644,7 +1684,11 @@ impl Output<'_> {
             "impl loft::codegen_runtime::LoftCoroutine for {struct_name} {{"
         )?;
         self.emit_next_i64(w, &attrs, &segments, &tail, has_yf, &yield_tp)?;
-        emit_drop_stores(w, &persistent, &fields, self.data, def_nr)?;
+        let owns_snapshots = crate::data::is_dbref(&yield_tp)
+            && segments
+                .iter()
+                .any(|s| matches!(s, YieldSegment::ForLoopBody { .. }));
+        emit_drop_stores(w, &persistent, &fields, self.data, def_nr, owns_snapshots)?;
         writeln!(w, "}}\n")?;
         self.coroutine_persistent_fields = prev_persistent;
         self.coroutine_allocated_vars = prev_allocated;
@@ -1677,6 +1721,7 @@ impl Output<'_> {
                 &yield_tp,
                 &persistent,
                 &fields,
+                &tail,
             )?;
         }
         Ok(())
@@ -1695,6 +1740,7 @@ impl Output<'_> {
         yield_tp: &Type,
         persistent: &[(u16, Type)],
         fields: &std::collections::HashMap<u16, String>,
+        tail: &[Value],
     ) -> std::io::Result<()> {
         let is_text = is_text_slot(yield_tp);
         // @P326 — for-body factory must use the DbRef channel for
@@ -1704,6 +1750,11 @@ impl Output<'_> {
         // handle too.  @FR-Col-Store — one home, `data::is_dbref`.  A short list spelled
         // here routes a handle down the `next_i64` channel instead of `next_dbref`.
         let is_dbref = crate::data::is_dbref(yield_tp);
+        let snapshot_tp = if is_dbref {
+            snapshot_type_id(self.data, yield_tp)
+        } else {
+            None
+        };
         // A by-value tuple is buffered FLAT — one `i64` per slot, `kinds.len()` per yield —
         // which is what lets a tuple yield from a loop body compile at all (loft#1132).  A
         // tuple carrying a store handle, a fn-ref, and a type with no channel at all are
@@ -1798,10 +1849,19 @@ impl Output<'_> {
             self.declared.insert(*v);
         }
         writeln!(w, "    let mut __values: Vec<{vec_ty}> = Vec::new();")?;
+        if is_dbref {
+            // The generator's snapshot store: every handle pushed below is a copy
+            // claimed in it (`coroutine_snapshot`), so the buffer holds each yield's
+            // VALUE rather than a handle to a record the loop keeps rewriting.
+            // Allocated by the first push; released at exhaustion and in
+            // `drop_stores`.
+            writeln!(w, "    let mut __snap: DbRef = DbRef::NULL;")?;
+        }
         // Run each for-loop body with yield_collect enabled.
         self.yield_collect = true;
         self.yield_collect_text = is_text;
         self.yield_collect_dbref = is_dbref;
+        self.yield_collect_snapshot_tp = snapshot_tp;
         self.yield_collect_kinds.clone_from(&eager_kinds);
         self.yield_collect_refuse.clone_from(&refuse);
         for seg in segments {
@@ -1846,10 +1906,21 @@ impl Output<'_> {
                         writeln!(w, "    {stmt_code};")?;
                     }
                     let val_code = self.generate_expr_buf(val)?;
-                    writeln!(
-                        w,
-                        "    __values.push({push_wrap_open}{val_code}{push_wrap_close});"
-                    )?;
+                    if let Some(tp) = snapshot_tp {
+                        // A straight-line handle yield is snapshotted too: the record
+                        // may be rewritten between this yield and the next, and the
+                        // buffer is read only after the whole factory has run.
+                        writeln!(
+                            w,
+                            "    __values.push(loft::codegen_runtime::coroutine_snapshot(\
+                             cell, &mut __snap, {val_code}, {tp}));"
+                        )?;
+                    } else {
+                        writeln!(
+                            w,
+                            "    __values.push({push_wrap_open}{val_code}{push_wrap_close});"
+                        )?;
+                    }
                 }
                 YieldSegment::YieldFrom { pre, init } => {
                     // Eagerly drain the sub-generator.
@@ -1863,7 +1934,18 @@ impl Output<'_> {
                     writeln!(w, "        loop {{")?;
                     writeln!(w, "            let v = __sub.{sub_advance}(stores);")?;
                     writeln!(w, "            if v == {sub_exhaust} {{ break; }}")?;
-                    writeln!(w, "            __values.push(v);")?;
+                    if let Some(tp) = snapshot_tp {
+                        // The sub-generator owns what it yields and frees it when it
+                        // is exhausted, which happens right here — so this buffer
+                        // keeps its own copy.
+                        writeln!(
+                            w,
+                            "            __values.push(loft::codegen_runtime::coroutine_snapshot(\
+                             cell, &mut __snap, v, {tp}));"
+                        )?;
+                    } else {
+                        writeln!(w, "            __values.push(v);")?;
+                    }
                     writeln!(w, "        }}")?;
                     writeln!(w, "    }}")?;
                 }
@@ -1877,8 +1959,61 @@ impl Output<'_> {
         self.yield_collect = false;
         self.yield_collect_text = false;
         self.yield_collect_dbref = false;
+        self.yield_collect_snapshot_tp = None;
         self.yield_collect_kinds = None;
         self.yield_collect_refuse = None;
+        // The TAIL — everything after the last yield.  The state machine runs it on the
+        // exhausting `next()`; this factory has already run the whole body, so it runs
+        // here.  The generator's scope-exit frees of its persistent heap locals live in
+        // it (every pushed handle is a snapshot, so nothing in the buffer points into
+        // them), and so does any side effect after the loop: dropping it leaked those
+        // locals and lost a `print`.  A statement is emitted only when every local it
+        // names is in the factory's scope — set by a top-level `pre` statement,
+        // predeclared above, or a parameter; a body-scoped local is out of reach here,
+        // and its statement was never emitted before either.
+        let mut factory_scope: std::collections::HashSet<u16> =
+            to_predeclare.iter().copied().collect();
+        for seg in segments {
+            let pre = match seg {
+                YieldSegment::Simple { pre, .. }
+                | YieldSegment::YieldFrom { pre, .. }
+                | YieldSegment::ForLoopBody { pre, .. }
+                | YieldSegment::ForLoopLazy { pre, .. } => pre,
+            };
+            for stmt in pre {
+                if let Value::Set(v, _) = stmt.unspan() {
+                    factory_scope.insert(*v);
+                }
+            }
+        }
+        for op in tail {
+            // A `Return` wrapper carries no value out of a generator; keep what it wraps.
+            let op = match op.unspan() {
+                Value::Return(inner) => inner.as_ref(),
+                other => other,
+            };
+            if matches!(op.unspan(), Value::Null) {
+                continue;
+            }
+            let reachable = {
+                let vars = self.data.def(self.def_nr).variables();
+                let mut ok = true;
+                op.walk(&mut |n| {
+                    if let Value::Var(v) = n
+                        && !factory_scope.contains(v)
+                        && !vars.is_argument(*v)
+                    {
+                        ok = false;
+                    }
+                });
+                ok
+            };
+            if !reachable {
+                continue;
+            }
+            let code = self.generate_expr_buf(op)?;
+            writeln!(w, "    {code};")?;
+        }
         writeln!(w, "    Box::new({struct_name} {{")?;
         writeln!(w, "        state: 0,")?;
         for attr in attrs {
@@ -1900,9 +2035,12 @@ impl Output<'_> {
             let init = persistent_default(tp);
             writeln!(w, "        var_{n}: {init},")?;
         }
-        // ForLoopBody: value buffer + index.
+        // ForLoopBody: value buffer + index (+ the snapshot store for handles).
         writeln!(w, "        __values,")?;
         writeln!(w, "        __idx: 0,")?;
+        if is_dbref {
+            writeln!(w, "        __snap,")?;
+        }
         writeln!(w, "    }})")?;
         writeln!(w, "}}\n")
     }

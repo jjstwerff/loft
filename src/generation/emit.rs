@@ -163,35 +163,40 @@ impl Output<'_> {
                     }
                     write!(w, "}}")?;
                 } else if self.yield_collect {
-                    // Inside a ForLoopBody factory: push to the collector.
-                    write!(w, "__values.push((")?;
-                    self.output_code_node(w, node.yield_inner())?;
-                    if self.yield_collect_text {
-                        write!(w, ").to_string())")?;
-                    } else if self.yield_collect_dbref {
-                        // The factory collects EAGERLY: the whole loop runs up
-                        // front and the consumer reads the pushed DbRefs
-                        // afterwards.  For struct/vector yields that is
-                        // unsound in general — a per-iteration construction
-                        // (or any rebound local) reuses its record, so every
-                        // pushed DbRef aliases the FINAL state, silently
-                        // (probe: three yields of {7,17,27} summed to 81 on
-                        // native vs the interpreter's lazy 51).  Even view
-                        // yields are only sound when each iteration's view
-                        // targets a distinct persistent record — not
-                        // emit-decidable.  Until the native for-body factory
-                        // preserves per-yield snapshots (copy or true lazy
-                        // suspension), reject the shape loudly; the
-                        // interpreter carries the full semantics and
-                        // straight-line (non-loop) struct yields keep
-                        // working (each pushes a distinct site once).
-                        write!(w, "))")?;
+                    // Inside an eager factory: push to the collector.  The whole loop
+                    // runs before the consumer reads anything, so a HANDLE to a
+                    // per-iteration record would alias that record's final state
+                    // (three yields of {7,17,27} summed to 81 instead of 51).  A
+                    // handle yield therefore pushes a SNAPSHOT — a copy in the
+                    // generator's own store, released at exhaustion or abandonment —
+                    // which is the value at the yield, as the interpreter's lazy
+                    // suspension hands out.  COROUTINE.md § Design: lazy loop yields.
+                    if let Some(tp) = self.yield_collect_snapshot_tp {
                         write!(
                             w,
-                            "; compile_error!(\"loft --native: yielding a struct/vector value from a generator's LOOP body is not supported natively yet — the eager collector cannot preserve per-yield snapshots (values would silently alias). Run interpreted, yield from straight-line code, or materialise with a worklist (e.g. the stdlib tree_walk) instead of a generator.\")"
+                            "__values.push(loft::codegen_runtime::coroutine_snapshot(cell, &mut __snap, ("
                         )?;
+                        self.output_code_node(w, node.yield_inner())?;
+                        write!(w, "), {tp}))")?;
                     } else {
-                        write!(w, ") as i64)")?;
+                        write!(w, "__values.push((")?;
+                        self.output_code_node(w, node.yield_inner())?;
+                        if self.yield_collect_text {
+                            write!(w, ").to_string())")?;
+                        } else if self.yield_collect_dbref {
+                            // A handle kind with no standalone record to copy into (a
+                            // keyed collection lives inline in its parent) has no
+                            // snapshot form: refuse loudly rather than alias.
+                            write!(w, "))")?;
+                            write!(
+                                w,
+                                "; compile_error!(\"loft --native: a keyed collection yielded \
+                                 from a generator's LOOP body has no snapshot form — yield its \
+                                 element records instead, or run under --interpret\")"
+                            )?;
+                        } else {
+                            write!(w, ") as i64)")?;
+                        }
                     }
                 } else {
                     write!(w, "yield ")?;

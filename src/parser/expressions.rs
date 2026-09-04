@@ -1242,7 +1242,16 @@ impl Parser {
                     let elem_tp = (**inner).clone();
                     let sub_var = self.create_unique("__yf_sub", &sub_type);
                     self.vars.defined(sub_var);
-                    let item_var = self.create_unique("__yf_item", &elem_tp);
+                    // A yielded handle points INTO the sub-generator's frame store, so the
+                    // item binds as a BORROW of `__yf_sub` — the same dep the streaming
+                    // `for x in g()` gives its loop var (loft#481) — and no scope exit
+                    // frees it: an enclosing `if` arm's did, and released the frame.
+                    let item_tp = if crate::data::holds_dbref(&elem_tp) {
+                        elem_tp.with_deps(&crate::data::Deps::frame1(sub_var))
+                    } else {
+                        elem_tp.clone()
+                    };
+                    let item_var = self.create_unique("__yf_item", &item_tp);
                     self.vars.defined(item_var);
                     let op = self.data.def_nr("OpCoroutineNext");
                     let value_size =

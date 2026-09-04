@@ -4711,6 +4711,46 @@ pub fn coroutine_drop_local(stores: &mut Stores, db: DbRef, name: &str) {
     }
 }
 
+/// Copy the `tp` record `src` into the generator's snapshot store `snap` and answer the
+/// copy's handle.  An eager factory runs its whole loop before the consumer reads a
+/// value, so a pushed handle to a per-iteration local would alias the local's FINAL
+/// state; the copy pins the value as it was at the yield.  One store per generator —
+/// allocated by the first snapshot, every later one a record claimed in it — so a long
+/// loop costs records, not store slots.  A null yield stays null.
+pub fn coroutine_snapshot(
+    cell: &std::cell::UnsafeCell<Stores>,
+    snap: &mut DbRef,
+    src: DbRef,
+    tp: i32,
+) -> DbRef {
+    if src.store_nr == u16::MAX {
+        return src;
+    }
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let tp = tp as u16;
+    if snap.store_nr == u16::MAX {
+        *snap = stores.null();
+        stores.clear(snap);
+        stores.allocations[snap.store_nr as usize].set_known_type(tp);
+    }
+    // Same record shape `OpDatabase` claims: a word of header, then `size` bytes.
+    let size = stores.enum_parent_size(tp);
+    let r = stores.claim(snap, 1 + u32::from(size).div_ceil(8));
+    stores.store_mut(&r).set_u32_raw(r.rec, 4, u32::from(tp));
+    stores.set_default_value(tp, &r);
+    OpCopyRecord(cell, src, r, i32::from(tp));
+    r
+}
+
+/// Release a generator's snapshot store (see [`coroutine_snapshot`]) — at exhaustion,
+/// and from `drop_stores` when the generator is abandoned.  Idempotent.
+pub fn coroutine_release_snapshots(stores: &mut Stores, snap: &mut DbRef) {
+    if snap.store_nr != u16::MAX && (snap.store_nr as usize) < stores.allocations.len() {
+        stores.free_named(snap, "__snap");
+    }
+    *snap = DbRef::NULL;
+}
+
 /// Free a native coroutine handle: release the heap locals the generator still owns, then
 /// its slot.  A handle whose generator already exhausted names a frame that is gone, and
 /// the generation check keeps this off whatever inherited the slot (loft#835).
