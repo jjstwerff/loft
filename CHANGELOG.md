@@ -50,6 +50,11 @@ longer shows through the result.  A nullable record chosen by an `if`, or reassi
 call, is copied on the interpreter as it always was on the compiled backend.  And a lambda
 declared `-> vector<T>?` or `-> S?` accepts a non-null tail, as a named function always did.
 
+**`--lib` tells you when it lost.**  A project's own `lib/` is searched before a `--lib`
+directory, so an override passed on the command line from inside such a project was
+ignored without a word.  It still is — that order may well be right — but loft now says so,
+naming the file that answered and the one the flag would have used.
+
 **The reference is now read end to end — 40 chapters of 40.** The Standard Library section
 was the last and the worst: its generator read three of the seven `default/*.loft` files, so
 the entire JSON and reflection API — `json_parse`, `to_json`, `json_errors`, `reflect_type`,

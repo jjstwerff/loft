@@ -9,6 +9,19 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A `--lib` directory that lost to a project-local `lib/` says so (2026-09-04)
+
+loft#1352.  `use` resolution is first-wins, and a project-local `lib/`, a declared dependency
+and the script's own directory are probed before `--lib`, so the flag never reaches a name
+one of those provides — three measurements of a patched library copy passed through `--lib
+<copy>` from the repository root scored the unmodified tree, in silence.  The precedence is
+REPORTED, not moved: `lib-flag-outranked` (advice) names the file that answered and the file
+the flag provides, once per id, quiet without a flag, when the winner lies inside the flag's
+directory, and under `LOFT_NO_LIB_OUTRANKED`.  Whether the precedence itself should change is
+an owner call and is left where it is.  `tests/lib_flag_outranked.rs` pins the reported /
+honoured pair with a copy that cannot parse behind the flag, so a clean run is positive
+evidence.
+
 ### Four returns settle against the rules: a boolean match is exhaustive, a nullable vector return copies its projection, a nullable record reassigned from a call copies on the interpreter, and a nullable lambda keeps its `?` (2026-09-04)
 
 loft#1343: a `match` on a boolean spelling `true` and `false` is exhaustive — the scalar match
