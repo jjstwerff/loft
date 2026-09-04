@@ -107,6 +107,18 @@ recorded separately rather than folded in.
 **Measured on 24 cores.** Full run: **572 s**, of which `cargo nextest` is ~478–572 s and the
 three builds ~130 s. So the test step is the whole question.
 
+**When a gate DIES, ask who signalled it before asking why.** Two `make ci` runs ended on
+2026-09-04 with `make: *** [Makefile: ci] Terminated` — SIGTERM, so not the kernel OOM
+killer or `systemd-oomd`, which send SIGKILL and print `Killed` — with no OOM record in the
+journal and every checkout's tooling killing only by recorded pid. Both had been started as an
+agent tool's background task, which makes the gate a child of that tool's process tree and
+lets anything that stops the tree stop the gate. `scripts/ci-run.sh start` is the launcher for
+a reason: it detaches the gate (`setsid nohup`), records the signal a wrapper receives, and,
+with `strace` on the PATH, runs `make` under a signals-only trace so the sender's pid, uid and
+`si_code` land in `target/gate-signals.log`, beside a process-table snapshot taken the moment
+`make` dies (`target/gate-killer-snapshot.txt`). `scripts/ci-run.sh status` then answers
+KILLED with the sender named, instead of a verdict-less `result.txt`.
+
 **Run a 19-second triple FIRST when the change touches parser diagnostics, guards or docs.**
 `make ci` stops at its first failure, so each cycle surfaces exactly ONE new problem and costs
 the full ten minutes to do it. Measured over one afternoon's work on the nullable-collection
