@@ -76,13 +76,15 @@ fn the_live_host_still_gets_the_source_and_artifact_it_parses() {
     // reports the path it resolved and the test built its own from `temp_dir()`. On macOS
     // those differ: `/var` is a symlink to `/private/var`, so the driver says
     // `/private/var/folders/…/hello.loft` where this test had `/var/folders/…/hello.loft`
-    // and the prefix matched nothing. Canonicalising is not enough on its own — on Windows
-    // it yields a `\\?\C:\…` verbatim path the driver never prints — so both spellings are
-    // offered and whichever the driver used is accepted.
-    let mut candidates = vec![dir.join("hello.loft")];
-    if let Ok(resolved) = std::fs::canonicalize(&dir) {
-        candidates.push(resolved.join("hello.loft"));
-    }
+    // and the prefix matched nothing. On Windows `temp_dir()` is the 8.3 short form
+    // (`C:\Users\RUNNER~1\…`) and a bare `canonicalize` is the verbatim form
+    // (`\\?\C:\Users\runneradmin\…`) — neither is what the driver prints. The driver's own
+    // spelling is `portable_path::plain_canonical`, so the resolved candidate is built the
+    // same way, and whichever of the two the driver used is accepted.
+    let candidates = [
+        dir.join("hello.loft"),
+        loft::portable_path::plain_canonical(&dir).join("hello.loft"),
+    ];
     let artifact = candidates
         .iter()
         .find_map(|src| line.strip_prefix(&format!("ok {} ", src.display())))

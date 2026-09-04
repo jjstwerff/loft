@@ -2298,25 +2298,6 @@ fn update_packages(opts: &UpdateOpts) -> i32 {
     0
 }
 
-/// One path representation everywhere (@P296 / #460): on Windows,
-/// `fs::canonicalize` returns an extended-length `\\?\D:\…` verbatim path,
-/// while the rest of the pipeline (library `use` resolution, the #460
-/// entry-package skip, `def.position().file` prefix checks) builds and
-/// compares plain paths.  A verbatim path never equals or prefix-matches its
-/// plain twin (`VerbatimDisk` vs `Disk` components), so every canonicalized
-/// path entering the shared path space must shed the prefix.  No-op on
-/// Linux/macOS; only the `\\?\D:\…` disk form is stripped, not verbatim-UNC
-/// (`\\?\UNC\…`), which has no plain equivalent.
-fn strip_verbatim_disk(path: String) -> String {
-    if let Some(rest) = path.strip_prefix(r"\\?\")
-        && rest.as_bytes().get(1) == Some(&b':')
-    {
-        rest.to_string()
-    } else {
-        path
-    }
-}
-
 /// @PLAN12 Phase 6.11 — `loft bundle export <outdir>` writes a
 /// self-contained directory of registry artifacts (index +
 /// advisories + tarballs) that can be carried via USB / scp and
@@ -8664,9 +8645,7 @@ fn main() {
         start_repl();
     }
     // Resolve the script path to absolute before potentially changing directory.
-    let abs_file = std::path::Path::new(&file_name)
-        .canonicalize()
-        .unwrap_or_else(|_| std::path::PathBuf::from(&file_name));
+    let abs_file = portable_path::plain_canonical(std::path::Path::new(&file_name));
     let abs_file = abs_file.to_str().unwrap().to_string();
     // @P296-sibling (Windows-only): `canonicalize()` returns an
     // extended-length `\\?\D:\…` verbatim path, but library `use`
@@ -8676,8 +8655,8 @@ fn main() {
     // path while the same module loaded via `use` uses the plain form —
     // the two sources don't dedup → "Dual definition of <lib>" on
     // Windows (crystal_gold CI).  Strip the verbatim-disk prefix so every
-    // path shares one representation (see `strip_verbatim_disk`).
-    let abs_file = strip_verbatim_disk(abs_file);
+    // path shares one representation (`portable_path::plain_canonical`, which already
+    // shed the prefix above; this line is the documented reason it does).
     // --project: change working directory so file I/O is sandboxed to the project root.
     if let Some(ref proj) = project {
         if let Err(e) = env::set_current_dir(proj) {
@@ -8761,7 +8740,7 @@ fn main() {
     let lib_dirs: Vec<String> = lib_dirs
         .into_iter()
         .map(|d| {
-            strip_verbatim_disk(
+            portable_path::strip_verbatim_disk(
                 std::fs::canonicalize(&d)
                     .unwrap_or_else(|_| std::path::PathBuf::from(&d))
                     .to_string_lossy()

@@ -62,6 +62,39 @@ pub fn for_uri(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+/// `fs::canonicalize`, rendered in the ONE spelling every other path in the process uses.
+///
+/// On Windows `canonicalize` answers an extended-length verbatim path (`\\?\D:\…`), while
+/// the rest of the pipeline — library `use` resolution, the entry-package skip, a source
+/// position's `file`, the logger's project root — builds and compares plain paths.  A
+/// verbatim path never equals or prefix-matches its plain twin (`VerbatimDisk` vs `Disk`
+/// components), so every canonicalised path that enters the shared path space sheds the
+/// prefix here.  A path that cannot be canonicalised is answered as given rather than
+/// dropped.  No-op on Linux/macOS.
+#[must_use]
+pub fn plain_canonical(path: &Path) -> std::path::PathBuf {
+    let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    match abs.to_str() {
+        Some(text) => std::path::PathBuf::from(strip_verbatim_disk(text.to_string())),
+        None => abs,
+    }
+}
+
+/// Shed the `\\?\` prefix of a verbatim DISK path (`\\?\D:\…` → `D:\…`), which is the
+/// form `canonicalize` produces on Windows.  Only the disk form is stripped: verbatim-UNC
+/// (`\\?\UNC\…`) has no plain equivalent and is left as it is.  A path without the prefix
+/// is answered unchanged, so this is safe to apply to any spelling.
+#[must_use]
+pub fn strip_verbatim_disk(path: String) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\")
+        && rest.as_bytes().get(1) == Some(&b':')
+    {
+        rest.to_string()
+    } else {
+        path
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,5 +209,41 @@ mod tests {
              backslash corrupts a Unix filename that contains one:\n  {}",
             offenders.join("\n  ")
         );
+    }
+
+    #[test]
+    fn a_verbatim_disk_prefix_is_shed_and_nothing_else_is_touched() {
+        assert_eq!(
+            strip_verbatim_disk(r"\\?\C:\work\a.loft".into()),
+            r"C:\work\a.loft"
+        );
+        assert_eq!(
+            strip_verbatim_disk(r"\\?\UNC\srv\share\a.loft".into()),
+            r"\\?\UNC\srv\share\a.loft"
+        );
+        assert_eq!(
+            strip_verbatim_disk(r"C:\work\a.loft".into()),
+            r"C:\work\a.loft"
+        );
+        assert_eq!(
+            strip_verbatim_disk("/home/u/a.loft".into()),
+            "/home/u/a.loft"
+        );
+    }
+
+    #[test]
+    fn plain_canonical_answers_an_existing_path_without_a_verbatim_prefix() {
+        let dir = std::env::temp_dir();
+        let plain = plain_canonical(&dir);
+        assert!(plain.is_absolute(), "{plain:?}");
+        assert!(!plain.to_string_lossy().starts_with(r"\\?\"), "{plain:?}");
+        // The plain spelling still names the same directory.
+        assert_eq!(
+            std::fs::canonicalize(&plain).ok(),
+            std::fs::canonicalize(&dir).ok()
+        );
+        // A path that does not exist is answered as given, never dropped.
+        let missing = dir.join("no-such-dir-4c1e9a");
+        assert_eq!(plain_canonical(&missing), missing);
     }
 }

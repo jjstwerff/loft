@@ -150,10 +150,12 @@ pub fn project_root(script_path: &str) -> Option<PathBuf> {
 /// [`project_root`] from a directory that is already in hand.
 ///
 /// Canonicalized first, so the walk does not terminate prematurely on a relative `./`
-/// prefix that loops on itself.
+/// prefix that loops on itself — in the PLAIN spelling (`portable_path::plain_canonical`),
+/// because the root is what a source position's absolute `file` is stripped against, and a
+/// verbatim `\\?\D:\…` root never prefix-matches the plain path the driver records.
 #[must_use]
 pub fn project_root_from(start: &Path) -> Option<PathBuf> {
-    let abs = std::fs::canonicalize(start).unwrap_or_else(|_| start.to_path_buf());
+    let abs = crate::portable_path::plain_canonical(start);
     let mut cur = abs.as_path();
     loop {
         if cur.join("loft.toml").exists() {
