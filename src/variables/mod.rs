@@ -421,6 +421,15 @@ pub struct Function {
     /// Parse-time only: on a snapshot load `scopes::check` is skipped (the frees
     /// are already in `code`), so this map is not part of the snapshot.
     rebind_orig: HashMap<u16, u16>,
+    /// A heap-record LOCAL whose assignments MIX ownership — one hands it a store of its
+    /// own, another a view — maps to its OWNER WITNESS `__own_<name>`: a hidden reference
+    /// that names the store the local minted for as long as the local still holds it, and
+    /// the null sentinel otherwise.  The local itself is never freed (`skip_free`); every
+    /// release goes through the witness, which `scopes` maintains per RUN in the IR so both
+    /// backends translate one fact (`@FR-O-Witness`).  Set by `scopes::check`; read by the
+    /// two emitters to pick the arm that COPIES into a store the local owns, and by the
+    /// native generator to leave such a local to the IR rather than its own tracker.
+    owner_witness: HashMap<u16, u16>,
 }
 
 /// @PLN104 — swap membership of two indices in a set (for `Function::swap_variables`).
@@ -510,6 +519,7 @@ impl Function {
             done: false,
             closure_var_map: HashMap::new(),
             rebind_orig: HashMap::new(),
+            owner_witness: HashMap::new(),
         }
     }
 
@@ -683,6 +693,8 @@ impl Function {
         // stale param→witness entry.
         self.rebind_orig.clear();
         self.rebind_orig.clone_from(&other.rebind_orig);
+        self.owner_witness.clear();
+        self.owner_witness.clone_from(&other.owner_witness);
     }
 
     pub fn copy(other: &Function) -> Self {
@@ -725,6 +737,7 @@ impl Function {
             done: other.done,
             closure_var_map: other.closure_var_map.clone(),
             rebind_orig: other.rebind_orig.clone(),
+            owner_witness: other.owner_witness.clone(),
         }
     }
 
@@ -2468,6 +2481,7 @@ impl Function {
         swap_in_hset(&mut self.annotated, a, b);
         swap_map_indices(&mut self.closure_var_map, a, b);
         swap_map_indices(&mut self.rebind_orig, a, b);
+        swap_map_indices(&mut self.owner_witness, a, b);
     }
 
     /// @PLAN59 (H1): drop a var from the argument set — used to retire the
@@ -2622,6 +2636,19 @@ impl Function {
     #[must_use]
     pub fn rebind_params(&self) -> Vec<(u16, u16)> {
         self.rebind_orig.iter().map(|(&p, &o)| (p, o)).collect()
+    }
+
+    /// Record that local `v` releases its stores through the owner witness `w`
+    /// (see [`Function::owner_witness`]).  Idempotent — keyed on `v`.
+    pub fn set_owner_witness(&mut self, v: u16, w: u16) {
+        self.owner_witness.insert(v, w);
+    }
+
+    /// The owner witness of local `v`, or `None` when `v`'s ownership is static and the
+    /// ordinary free placement applies (the common case).
+    #[must_use]
+    pub fn owner_witness(&self, v: u16) -> Option<u16> {
+        self.owner_witness.get(&v).copied()
     }
 
     pub fn is_caller_hidden_buf(&self, var_nr: u16) -> bool {

@@ -1523,7 +1523,10 @@ fn collect_witness_vars(data: &crate::data::Data, def_nr: u32) -> HashSet<u16> {
         // (`ownership_of`).  The proxy only narrows the candidate set; it frees nothing.
         let is_candidate = !vars.is_argument(v)
             && matches!(vars.tp(v), Type::Reference(_, _) | Type::Enum(_, true, _))
-            && vars.tp(v).depend().is_empty();
+            && vars.tp(v).depend().is_empty()
+            // loft#1336 / @FR-O-Witness — a local the IR already tracks through its owner
+            // witness is left to the IR: two trackers of one store would free it twice.
+            && vars.owner_witness(v).is_none();
         if !is_candidate {
             return;
         }

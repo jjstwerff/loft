@@ -638,9 +638,14 @@ fn run_backend(src: &str, backend: &str, join_own: bool) -> (String, String) {
         // Post-flip the fixes are DEFAULT-ON: the on-leg actively removes the
         // opt-out so an ambient `LOFT_NO_JOIN_OWN` cannot invert the premise.
         cmd.env_remove("LOFT_NO_JOIN_OWN");
+        cmd.env_remove("LOFT_NO_OWNER_WITNESS");
     } else {
-        // The control leg (the documented pre-fix behaviour) opts out.
+        // The control leg (the documented pre-fix behaviour) opts out — of BOTH cures.
+        // loft#1336's owner witness closes the `local_source` leak on its own, so the
+        // A/B that pins join-own as the closing mechanism has to hold the witness off
+        // too, or the control leg reads clean and the gate proves nothing.
         cmd.env("LOFT_NO_JOIN_OWN", "1");
+        cmd.env("LOFT_NO_OWNER_WITNESS", "1");
     }
     let out = cmd.output().expect("spawn loft");
     let _ = std::fs::remove_file(&path);

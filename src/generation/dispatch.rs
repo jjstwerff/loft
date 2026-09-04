@@ -155,6 +155,10 @@ impl Output<'_> {
             // into it, so a proxy that answered "owner" for a borrow costs a materialisation
             // and never a release.
             && variables.tp(var).depend().is_empty()
+            // Not for a witnessed local (loft#1336, @FR-O-Witness): its ownership is a
+            // per-`Set` runtime fact the FINAL dep list cannot stand in for, so every
+            // projection stays an alias — as the interpreter's twin arm declines it too.
+            && variables.owner_witness(var).is_none()
             && crate::generation::container_element_base(self.data, to.unspan()).is_some()
     }
 
@@ -553,6 +557,28 @@ impl Output<'_> {
         // `.to_string()` conversion fires for an Optional(Text) local.
         let needs_to_string = matches!(variables.tp(var).base(), Type::Text(_));
         let name = sanitize(variables.name(var));
+        // loft#1336 / @FR-O-Witness — a local whose OWNER WITNESS releases its stores, from
+        // the IR.  Two consequences for the copy arms below: the copy lands in a FRESH store
+        // (never `OpDatabase` over what the local currently names, which may be a VIEW —
+        // the copy would be written into the viewed record), and the displaced-store free
+        // an arm carries is left out (the IR releases through the witness, by identity).
+        let witnessed = variables.owner_witness(var).is_some();
+        // At a FIRST bind the local holds the `null_named` placeholder, which the allocation
+        // is meant to consume; only a REASSIGNMENT can find a view in the slot.
+        let copy_target = |current: &str, first_bind: bool| -> String {
+            if witnessed && !first_bind {
+                "DbRef::NULL".to_string()
+            } else {
+                current.to_string()
+            }
+        };
+        let displaced_free = |free: &str| -> String {
+            if witnessed {
+                String::new()
+            } else {
+                free.to_string()
+            }
+        };
         // P198 — most operators are wrapped in Value::Span by the parser.
         // Unwrap before pattern-matching so the deep-copy emission below
         // fires for Span(Call(...)) / Span(Var(...)) RHS values.  Without
@@ -593,7 +619,17 @@ impl Output<'_> {
         // The peel is gated on the same one question the interpreter and `scopes` read
         // (`nullable_join_first_bind`), so the three cannot disagree about which binds
         // change shape.
-        let record_def = variables.tp(var).heap_def_nr().or_else(|| {
+        // Through `base()` for a REASSIGNMENT: a nullable local rebound from a callee that
+        // answers a borrow of its argument is copied like its dense twin (@FR-B-Copy,
+        // loft#1336) — asked bare, `c = keep(other)` on a `c: S?` fell to the plain
+        // assignment below and ALIASED the argument.  A FIRST bind keeps the bare question
+        // plus the join fallback loft#1106 gave it; widening that is a separate walk.
+        let record_def = if self.declared.contains(&var) {
+            variables.tp(var).base().heap_def_nr()
+        } else {
+            variables.tp(var).heap_def_nr()
+        }
+        .or_else(|| {
             crate::use_analysis::nullable_join_first_bind(
                 self.data,
                 self.def_nr,
@@ -616,7 +652,8 @@ impl Output<'_> {
             && !self.data.def(fn_nr).return_adopts_fresh_store()
         {
             let tp_nr = self.data.def(d_nr).known_type();
-            if !self.declared.contains(&var) {
+            let first_bind = !self.declared.contains(&var);
+            if first_bind {
                 self.declared.insert(var);
                 let tp_str = rust_type(variables.tp(var), &Context::Variable);
                 writeln!(
@@ -789,7 +826,11 @@ impl Output<'_> {
                 // var___lift_1`, native-only, the interpreter's own copy path unaffected).
                 // So the alias follows the destination's ownership, not the callee's
                 // return alone.
-                None if is_borrowed_view && variables.skip_free(var) => "true".to_string(),
+                // A WITNESSED local (loft#1336) is never-free for a different reason — its
+                // witness releases its stores — and it is copied into like its owned twin.
+                None if is_borrowed_view && variables.skip_free(var) && !witnessed => {
+                    "true".to_string()
+                }
                 None => PASSTHROUGH.to_string(),
             };
             // @PLN85 (the adopt-arm placeholder leak) — the ADOPT arm replaces
@@ -801,13 +842,15 @@ impl Output<'_> {
             // COPY arm already makes (it clears `_dst` in place via
             // `OpDatabase`).  A same-store adopt (the NRVO alias) and the
             // null-sentinel `_dst` are excluded by the guard.
+            let disp = displaced_free(&format!(
+                "if _dst.store_nr != u16::MAX && _dst.store_nr != _src.store_nr \
+                 {{ OpFreeRef(cell, _dst, \"{name}(displaced)\"); }} "
+            ));
+            let target = copy_target("_dst", first_bind);
             write!(
                 w,
-                "; if {adopt} {{ if _dst.store_nr != u16::MAX \
-                 && _dst.store_nr != _src.store_nr \
-                 {{ OpFreeRef(cell, _dst, \"{name}(displaced)\"); }} \
-                 var_{name} = _src; }} \
-                 else {{ var_{name} = OpDatabase(cell, _dst, {tp_nr}_i32); \
+                "; if {adopt} {{ {disp}var_{name} = _src; }} \
+                 else {{ var_{name} = OpDatabase(cell, {target}, {tp_nr}_i32); \
                  OpCopyRecord(cell,_src, var_{name}, {tp_with_free}_i32); }}{unprotect} }}"
             )?;
             // @PLN130 — a MAY-copy site: the emitted code branches on store identity at
@@ -848,7 +891,8 @@ impl Output<'_> {
         ) {
             let tp_nr = self.data.def(rec).known_type();
             let witness = sanitize(variables.name(base));
-            if !self.declared.contains(&var) {
+            let first_bind = !self.declared.contains(&var);
+            if first_bind {
                 self.declared.insert(var);
                 let tp_str = rust_type(variables.tp(var), &Context::Variable);
                 writeln!(
@@ -859,12 +903,16 @@ impl Output<'_> {
             }
             write!(w, "{{ let _dst = var_{name}; let _src = ")?;
             self.output_code_inner(w, to)?;
+            let disp = displaced_free(&format!(
+                "if _dst.store_nr != u16::MAX && _dst.store_nr != _src.store_nr \
+                 {{ OpFreeRef(cell, _dst, \"{name}(displaced)\"); }} "
+            ));
+            let target = copy_target("_dst", first_bind);
             write!(
                 w,
                 "; if _src.store_nr == u16::MAX || _src.store_nr != var_{witness}.store_nr \
-                 {{ if _dst.store_nr != u16::MAX && _dst.store_nr != _src.store_nr \
-                 {{ OpFreeRef(cell, _dst, \"{name}(displaced)\"); }} var_{name} = _src; }} \
-                 else {{ var_{name} = OpDatabase(cell, _dst, {tp_nr}_i32); \
+                 {{ {disp}var_{name} = _src; }} \
+                 else {{ var_{name} = OpDatabase(cell, {target}, {tp_nr}_i32); \
                  OpCopyRecord(cell,_src, var_{name}, {tp_nr}_i32); }} }}"
             )?;
             // A MAY-copy site: the branch is decided at run time, and the manifest asks
@@ -932,10 +980,11 @@ impl Output<'_> {
             } else {
                 String::new()
             };
+            let target = copy_target(&format!("var_{name}"), first_bind);
             write!(
                 w,
                 "if _src.rec == 0 {{ {release}var_{name} = DbRef::NULL; }} \
-                 else {{ var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32); \
+                 else {{ var_{name} = OpDatabase(cell,{target}, {tp_nr}_i32); \
                  OpCopyRecord(cell,_src, var_{name}, {tp_nr}_i32); }} }}"
             )?;
             crate::copy_manifest::record(
@@ -998,10 +1047,11 @@ impl Output<'_> {
                 } else {
                     String::new()
                 };
+                let target = copy_target(&format!("var_{name}"), first_bind);
                 write!(
                     w,
                     "if var_{src_name}.rec == 0 {{ {release}var_{name} = DbRef::NULL; }} \
-                     else {{ var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32); \
+                     else {{ var_{name} = OpDatabase(cell,{target}, {tp_nr}_i32); \
                      OpCopyRecord(cell,var_{src_name}, var_{name}, {tp_nr}_i32); }}"
                 )?;
                 crate::copy_manifest::record(
@@ -1012,7 +1062,8 @@ impl Output<'_> {
                 );
                 return Ok(());
             }
-            writeln!(w, "var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32);")?;
+            let target = copy_target(&format!("var_{name}"), first_bind);
+            writeln!(w, "var_{name} = OpDatabase(cell,{target}, {tp_nr}_i32);")?;
             self.indent(w)?;
             write!(
                 w,

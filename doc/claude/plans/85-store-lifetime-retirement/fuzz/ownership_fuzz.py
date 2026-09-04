@@ -197,10 +197,14 @@ def main():
             # raw class stays reproducible.
             os.environ["LOFT_NO_JOIN_OWN"] = "1"
             os.environ["LOFT_NO_REASSIGN_COPY"] = "1"
+            # loft#1336 added a third: the owner witness closes the local_source leak on
+            # its own, so the leak control must hold it off too or it reads CLEAN.
+            os.environ["LOFT_NO_OWNER_WITNESS"] = "1"
             v_crash = judge(crash_cell, native_replay=True)
             v_leak = judge(leak_cell, native_replay=True)
             del os.environ["LOFT_NO_JOIN_OWN"]
             del os.environ["LOFT_NO_REASSIGN_COPY"]
+            del os.environ["LOFT_NO_OWNER_WITNESS"]
             # loft#974 — the channel this cell anchors is "the program computed the wrong
             # thing", which CRASH and DIVERGENCE are only two spellings of.  WRONG is the
             # third, and it is what remained once both backends started reporting the same
@@ -209,9 +213,9 @@ def main():
                 "CRASH" in x or "DIVERGENCE" in x or "WRONG" in x for x in v_crash
             )
             leak_fires = any("LEAK" in x for x in v_leak)
-            print(f"crash-control (raw path: NO_JOIN_OWN+NO_REASSIGN_COPY) elem_accumulate/struct/heavy: "
+            print(f"crash-control (raw path: NO_JOIN_OWN+NO_REASSIGN_COPY+NO_OWNER_WITNESS) elem_accumulate/struct/heavy: "
                   f"{v_crash or 'CLEAN'}")
-            print(f"leak-control  (raw path: NO_JOIN_OWN+NO_REASSIGN_COPY) local_source/struct/none: "
+            print(f"leak-control  (raw path: NO_JOIN_OWN+NO_REASSIGN_COPY+NO_OWNER_WITNESS) local_source/struct/none: "
                   f"{v_leak or 'CLEAN'}")
             # (2) fixed config — the default gate must be CLEAN on both cells.
             f_crash = judge(crash_cell, native_replay=True)

@@ -176,6 +176,14 @@ struct Scopes<'s> {
     /// it currently holds is this frame's SOLE property.  The static answer is not available
     /// (see `nullable_locals_that_displace`), so the displaced-store free reads this instead.
     local_owns: HashMap<u16, u16>,
+    /// loft#1336 / @FR-O-Witness — a heap-record LOCAL whose assignments MIX ownership (one
+    /// hands it a store of its own, another a view) → its OWNER WITNESS `__own_<name>`, the
+    /// hidden reference that names the store the local minted for as long as the local
+    /// still holds it.  Every release of such a local's stores goes through the witness —
+    /// at the `Set` that makes the local stop naming it, or at scope exit — and the local
+    /// itself is never freed.  Keyed on every id the local is known by (the original and
+    /// any scope copy `scan_set` makes of it).  [`owner_witness_locals`] picks them.
+    owner_witness: HashMap<u16, u16>,
     /// @PLN85 `local_source` over-free fix (gated by `LOFT_JOIN_OWN`): heap slots
     /// that hold an OWNED store displaced by a later `Borrowed`/`Join` reassignment
     /// (`use_analysis::displaced_owned_slots`). For these, `scan_set` strips the
@@ -1525,6 +1533,7 @@ fn run_scan_phase(
         owned_refs: HashMap::new(),
         rbuf_witness: None,
         local_owns: HashMap::new(),
+        owner_witness: HashMap::new(),
         displaced_owned,
         views_to_materialise: collect_views_to_materialise(orig_code, orig_vars, data),
         fnref_target: collect_fnref_targets(orig_code, orig_vars),
@@ -1563,6 +1572,35 @@ fn run_scan_phase(
         scopes.var_order.push(flag);
         scopes.local_owns.insert(v, flag);
     }
+    // loft#1336 / @FR-O-Witness — the OWNER WITNESS of a local whose assignments MIX
+    // ownership.  Minted before the scan for the same reason the two flags above are: the
+    // first assignment that has to maintain it already needs somewhere to write.  The local
+    // is marked never-free (@FR-O-Override) here, so every static free site — the pre-`Set`
+    // free, the transition frees, the scope-exit sweep — declines it and the witness is the
+    // ONE thing that releases its stores.  The witness carries a self-dep: not a borrow, and
+    // not the empty list @FR-O-Proxy reads as "owner", so no site frees it on its own.
+    for v in owner_witness_locals(
+        orig_code,
+        &function,
+        data,
+        d_nr,
+        &scopes.views_to_materialise,
+    ) {
+        if !crate::keys::owner_witness_enabled() {
+            break;
+        }
+        let Some(record) = function.tp(v).base().heap_def_nr() else {
+            continue;
+        };
+        let name = format!("__own_{}", function.name(v));
+        let w = function.add_temp_var(&name, &Type::Reference(record, Deps::none()));
+        function.depend(w, w);
+        function.set_skip_free(v);
+        function.set_owner_witness(v, w);
+        scopes.var_scope.insert(w, 0);
+        scopes.var_order.push(w);
+        scopes.owner_witness.insert(v, w);
+    }
     let mut code = scopes.scan(orig_code, &mut function, data);
     // The witness starts FALSE: on entry the buffer holds the CALLER's store, which this
     // function must never release.  A transition site is reachable with no prior assignment at
@@ -1583,6 +1621,25 @@ fn run_scan_phase(
         flags.sort_unstable();
         for flag in flags.into_iter().rev() {
             bl.operators.insert(0, v_set(flag, Value::Boolean(false)));
+        }
+    }
+    // An owner witness starts at the null SENTINEL (`store_nr == u16::MAX`): before the
+    // local's first owning assignment there is no store of its own to release, and
+    // `OpFreeRef` of the sentinel is a no-op (@FR-H-FreeNull).  Spelled as the sentinel
+    // call and not as `null`, because a heap local's `= null` lowers to `OpInitRef` — a
+    // stack-record placeholder the allocator is expected to replace — and a free of THAT is
+    // the `#306` refusal.
+    if !scopes.owner_witness.is_empty()
+        && let Value::Block(bl) = &mut code
+    {
+        let mut witnesses: Vec<u16> = scopes.owner_witness.values().copied().collect();
+        witnesses.sort_unstable();
+        witnesses.dedup();
+        for w in witnesses.into_iter().rev() {
+            bl.operators.insert(
+                0,
+                v_set(w, Value::Call(data.def_nr("OpNullRefSentinel"), vec![])),
+            );
         }
     }
     // lift vars from `scan_args` are assigned inside conditional branches but
@@ -5015,6 +5072,17 @@ impl Scopes<'_> {
             }
         }
         let v = *self.var_mapping.get(&ov).unwrap_or(&ov);
+        // A scope copy of a witnessed local (`copy_variable` above) is the same binding under
+        // a new id: it keeps the witness and the never-free mark, or its own Sets would go
+        // back to the static frees the witness replaced.
+        if v != ov
+            && let Some(&w) = self.owner_witness.get(&ov)
+            && !self.owner_witness.contains_key(&v)
+        {
+            function.set_skip_free(v);
+            function.set_owner_witness(v, w);
+            self.owner_witness.insert(v, w);
+        }
         // #316 — capture BEFORE put_scope below: an ownership-transition free
         // only applies to a REassignment.
         let was_in_scope = self.var_scope.contains_key(&v);
@@ -5173,6 +5241,9 @@ impl Scopes<'_> {
                 function.tp(v),
                 Type::Reference(_, d) | Type::Enum(_, true, d) if !d.is_empty()
             )
+            // @FR-O-Proxy asks free — @FR-O-Override applies here as at every other free
+            // site: a witnessed local (loft#1336) releases through its witness only.
+            && !function.is_skip_free(v)
             && self.owned_refs.get(&v) == Some(&self.loops.len())
             && matches!(
                 self.ref_rhs_ownership(value, data),
@@ -5862,13 +5933,64 @@ impl Scopes<'_> {
                 None => v_set(flag, Value::Boolean(sole)),
             });
         }
-        if prefix.is_empty() && ls.is_empty() && witness_update.is_none() {
+        // loft#1336 / @FR-O-Witness — keep the OWNER WITNESS naming exactly the store the
+        // local minted and still holds.  Three shapes, read off the value being assigned:
+        //
+        // - the local MINTS and the value does not read it: release the witnessed store
+        //   first (the store it is about to stop naming), then point the witness at what the
+        //   local now holds;
+        // - the local MINTS from a value that READS it (`c = mk(c.x)`, a materialised
+        //   `x = x.inner`): @FR-O-Detach — the old store stays live until the value is
+        //   computed, so the release comes AFTER the `Set`, and by store identity, because
+        //   a callee that filled the store the local already owned displaced nothing;
+        // - anything else — a view, a join, a null, a store somebody else owns: the local
+        //   stops owning, so release the witnessed store where the local no longer names it.
+        //   A view INTO the witnessed store (`x = x.inner` over an owned `x`) keeps it, and
+        //   the witness keeps naming it, so scope exit still frees it exactly once.
+        //
+        // Identity, not a flag, so both backends read one fact from the IR and the two
+        // sentinels — a witness that never took a store beside a local holding none — compare
+        // EQUAL and release nothing.
+        let mut witness_ops: Vec<Value> = Vec::new();
+        if let Some(&w) = self.owner_witness.get(&v) {
+            let kind = {
+                let d_nr = self.d_nr;
+                let defs = self
+                    .fn_defs
+                    .get_or_insert_with(|| crate::use_analysis::function_defs(data, d_nr));
+                witness_set_kind(value, v, ov, function, data, d_nr, &mut |val| {
+                    crate::use_analysis::ownership_of_with(data, d_nr, val, defs)
+                })
+            };
+            let guarded_release = v_if(
+                Value::Call(
+                    data.def_nr("OpDistinctStore"),
+                    vec![Value::Var(w), Value::Var(v)],
+                ),
+                release_witness(w, data),
+                Value::Null,
+            );
+            match kind {
+                WitnessSet::Mint => {
+                    prefix.insert(0, release_witness(w, data));
+                    witness_ops.push(witness_points_at(w, v, data));
+                }
+                WitnessSet::MintReading => {
+                    witness_ops.push(guarded_release);
+                    witness_ops.push(witness_points_at(w, v, data));
+                }
+                WitnessSet::Other => witness_ops.push(guarded_release),
+            }
+        }
+        if prefix.is_empty() && ls.is_empty() && witness_update.is_none() && witness_ops.is_empty()
+        {
             Value::Set(v, Box::new(set_value))
         } else {
             let mut all = prefix;
             all.append(&mut ls);
             all.push(Value::Set(v, Box::new(set_value)));
             all.extend(witness_update);
+            all.append(&mut witness_ops);
             Value::Insert(all)
         }
     }
@@ -7157,6 +7279,14 @@ impl Scopes<'_> {
         };
         for v in vars {
             if v == ret_var || suppress_source(function, v) {
+                continue;
+            }
+            // loft#1336 / @FR-O-Witness — a witnessed local's store is released through its
+            // witness, which names it only while the local still holds it; the local itself
+            // is never-free.  A returned local is skipped above like any other: the store is
+            // handed up, and the witness is not released for it.
+            if let Some(&w) = self.owner_witness.get(&v) {
+                ls.push(release_witness(w, data));
                 continue;
             }
             // on=4 iteration scratch (`hash_scratch`): a `return` out of an exposed loop
@@ -10041,6 +10171,211 @@ fn nullable_locals_that_displace(code: &Value, function: &Function, data: &Data)
             && !function.is_argument(v)
     });
     out
+}
+
+/// Which heap-record LOCALS have assignments that MIX ownership — at least one that hands
+/// the local a store of its own and at least one that hands it a view?
+///
+/// The pre-scan answer to *"is an OWNER WITNESS worth a slot here?"* (loft#1336,
+/// `@FR-O-Witness`), asked once per function like [`nullable_locals_that_displace`].
+///
+/// **Why a witness and not the dep list.** A binding carries ONE dep list, flow-insensitively,
+/// and it records whichever assignment parsed LAST: `cur: Node? = a; cur = cur.next` leaves
+/// `cur` reading as a borrow for the whole frame, so the store the copy minted is released by
+/// nobody — and the inverse order leaves it reading as an owner while it holds a view, so the
+/// view's record is freed as if it were the local's.  Neither static answer is right for both
+/// assignments; the witness answers per RUN, by store identity.
+///
+/// A local with only owning assignments keeps the static free placement (the proxy is right
+/// for it), and one with only views has nothing to release.  Excluded on purpose: a
+/// parameter (its entry stash is the witness, `Function::rebind_orig`), a captured local (a
+/// closure reads the capture-time `DbRef`, @FR-L-CapHeap — the record takes over the free), a
+/// loop variable (bound by `Iter`, not by a `Set`), and the compiler's own temporaries.
+fn owner_witness_locals(
+    code: &Value,
+    function: &Function,
+    data: &Data,
+    d_nr: u32,
+    materialised_views: &HashMap<u16, ViewCause>,
+) -> Vec<u16> {
+    let mut defs: Option<crate::use_analysis::Defs> = None;
+    let mut minted: HashSet<u16> = HashSet::new();
+    let mut viewed: HashSet<u16> = HashSet::new();
+    fn walk(
+        node: &Value,
+        function: &Function,
+        data: &Data,
+        d_nr: u32,
+        defs: &mut Option<crate::use_analysis::Defs>,
+        minted: &mut HashSet<u16>,
+        viewed: &mut HashSet<u16>,
+    ) {
+        if let Value::Set(t, val) = node.unspan()
+            && (*t as usize) < function.count() as usize
+            && !function.name(*t).starts_with("__")
+            && !function.is_argument(*t)
+            && !function.is_captured(*t)
+            && !function.was_loop_var(*t)
+            && !matches!(function.tp(*t), Type::RefVar(_))
+            && function.tp(*t).base().heap_def_nr().is_some()
+        {
+            match witness_set_kind(val, *t, *t, function, data, d_nr, &mut |v| {
+                let defs =
+                    defs.get_or_insert_with(|| crate::use_analysis::function_defs(data, d_nr));
+                crate::use_analysis::ownership_of_with(data, d_nr, v, defs)
+            }) {
+                WitnessSet::Mint | WitnessSet::MintReading => {
+                    minted.insert(*t);
+                }
+                WitnessSet::Other => {
+                    // A view of another variable's storage.  A null or a store nobody names
+                    // is not a VIEW and does not make the ownership mixed on its own.
+                    if is_view_of_storage(val, data) {
+                        viewed.insert(*t);
+                    }
+                }
+            }
+        }
+        node.unspan()
+            .for_each_child(&mut |c| walk(c, function, data, d_nr, defs, minted, viewed));
+    }
+    walk(
+        code,
+        function,
+        data,
+        d_nr,
+        &mut defs,
+        &mut minted,
+        &mut viewed,
+    );
+    let mut out: Vec<u16> = minted
+        .intersection(&viewed)
+        .copied()
+        .filter(|v| !materialised_views.contains_key(v))
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+/// Does this value bind a VIEW of storage some other binding owns — a projection, a
+/// call answering a borrow, a join?  The `viewed` half of [`owner_witness_locals`].
+fn is_view_of_storage(value: &Value, data: &Data) -> bool {
+    match value.unspan() {
+        Value::Null => false,
+        Value::Call(nr, args) if args.is_empty() && data.def(*nr).name() == "OpNullRefSentinel" => {
+            false
+        }
+        // A whole-value copy of a heap record never views (@FR-B-Copy).
+        Value::Var(_) => false,
+        Value::Call(_, _)
+        | Value::CallRef(_, _)
+        | Value::Block(_)
+        | Value::Insert(_)
+        | Value::TupleGet(_, _) => true,
+        _ => false,
+    }
+}
+
+/// What a `Set` hands a witnessed local (see [`owner_witness_locals`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum WitnessSet {
+    /// The local MINTS a store of its own and the value does not read the local.
+    Mint,
+    /// The local MINTS a store of its own from a value that READS it, so the store it
+    /// displaces must stay live until the value is computed (@FR-O-Detach).
+    MintReading,
+    /// A view, a join, a null, or a store somebody else owns: the local stops owning.
+    Other,
+}
+
+/// Classify the value assigned to witnessed local `v` (`ov` is its pre-scan id).
+///
+/// MINTS means *both emitters give the local a store of its own here*: a whole-value copy of
+/// another heap variable (@FR-B-Copy, `gen_set_first_ref_var_copy` / native's record-copy
+/// arm); a loft-defined callee whose return does NOT adopt a fresh store, which both emitters
+/// deep-copy into the local (`state/codegen.rs`'s call-copy arm, `generation/dispatch.rs`'s
+/// `OpCopyRecord` arm); a value the oracle calls `Owned` — a minting call, an inline mint —
+/// unless that mint lands in a work-ref that frees it itself (the `c = { Object → __ref_N }`
+/// literal, whose store is the work-ref's and not solely the local's).
+///
+/// A PROJECTION is never a mint here, whatever its deps: @FR-B-View's materialise clause
+/// (a view live across a reshape of its container) is decided from the binding's FINAL dep
+/// list at codegen, which one `Set` cannot see mid-scan, so a witnessed local is kept out of
+/// that clause altogether — [`owner_witness_locals`] excludes every binding
+/// `collect_views_to_materialise` names, and both emitters decline the materialise arm for a
+/// witnessed local.  The two mechanisms never meet on one binding.
+///
+/// The fallback is `Other`, and it is the SAFE direction: a value this does not recognise as
+/// a mint is treated as a view, so the witness is released where the local stops naming it
+/// and never pointed at a store the local does not own — a retained store is recoverable, a
+/// premature free is not (@FR-O-Oracle's rule for an unnameable base).
+fn witness_set_kind(
+    value: &Value,
+    v: u16,
+    ov: u16,
+    function: &Function,
+    data: &Data,
+    d_nr: u32,
+    own: &mut impl FnMut(&Value) -> crate::use_analysis::Own,
+) -> WitnessSet {
+    let reads = value.reads_var(v) || value.reads_var(ov);
+    let mints = match value.unspan() {
+        Value::Var(src) => {
+            *src != v
+                && *src != ov
+                && (*src as usize) < function.count() as usize
+                && function.tp(*src).base().heap_def_nr().is_some()
+        }
+        Value::Call(nr, args) if args.is_empty() && data.def(*nr).name() == "OpNullRefSentinel" => {
+            false
+        }
+        Value::Call(_, _) | Value::CallRef(_, _) => {
+            let copied_by_both =
+                crate::use_analysis::callee_of(data, d_nr, value).is_some_and(|fn_nr| {
+                    data.def(fn_nr).is_loft_defined()
+                        && !data.def(fn_nr).return_adopts_fresh_store()
+                });
+            copied_by_both || matches!(own(value), crate::use_analysis::Own::Owned)
+        }
+        Value::Block(b) => {
+            let into_work_ref = b.operators.last().is_some_and(|last| {
+                matches!(last.unspan(), Value::Var(r)
+                    if (*r as usize) < function.count() as usize
+                        && (function.name(*r).starts_with("__ref_")
+                            || function.name(*r).starts_with("__rref_")))
+            });
+            !into_work_ref && matches!(own(value), crate::use_analysis::Own::Owned)
+        }
+        Value::Insert(_) => matches!(own(value), crate::use_analysis::Own::Owned),
+        _ => false,
+    };
+    if !mints {
+        WitnessSet::Other
+    } else if reads {
+        WitnessSet::MintReading
+    } else {
+        WitnessSet::Mint
+    }
+}
+
+/// Release the store an owner witness names and reset the witness to the sentinel — as ONE
+/// unit, because `OpFreeRef` of a variable does not reset its slot on the interpreter, and a
+/// witness left naming a freed store would release whatever the allocator hands that slot
+/// next.
+fn release_witness(w: u16, data: &Data) -> Value {
+    Value::Insert(vec![
+        call("OpFreeRef", w, data),
+        v_set(w, Value::Call(data.def_nr("OpNullRefSentinel"), vec![])),
+    ])
+}
+
+/// Point owner witness `w` at the store local `v` now holds — an ALIAS, where a plain
+/// `Set(w, Var(v))` would copy the record (@FR-B-Copy).
+fn witness_points_at(w: u16, v: u16, data: &Data) -> Value {
+    v_set(
+        w,
+        Value::Call(data.def_nr("OpRefAlias"), vec![Value::Var(v)]),
+    )
 }
 
 /// Does this call hand back a store the target does NOT already hold?

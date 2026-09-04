@@ -39,6 +39,82 @@ of the same join.  Face B is also this register's clearest case of a leak MASKIN
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
 
+### D-own-27 — OPENED AND CLOSED (2026-09-04, loft#1336): a local that OWNS after one assignment and VIEWS after another has no static owner
+
+`(O-Latest)` memoises ownership per assignment at its loop depth, and `(O-Proxy)` reads the
+binding's dep list — and both are STATIC readings of a binding that carries ONE dep list,
+recording whichever assignment parsed last.  A walker breaks them:
+
+```loft
+cur: Node? = a;                                   // (B-Copy): cur mints a copy of a
+while cur != null { total += cur.value; cur = cur.next; }   // (B-View): cur views b, then c
+```
+
+`cur`'s dep list reads `[cur]` (the self-dep the view rebind leaves), so `owned_ref` is false
+at every site, the pre-`Set` free and the guarded post-free are never emitted, and the
+scope-exit sweep declines — the copy leaks, on both backends, values right throughout.  The
+inverse order, `s = a.next; s = a`, leaves the list EMPTY, so the reassignment copies "in
+place" into whatever `s` names — the viewed record `b` — on `--native`, and the interpreter's
+copy arm, asked on the bare `Reference` type, skipped a `Node?` altogether and ALIASED `a`.
+
+**The filed scope was wrong three ways, and the matrix found each.**  The `reference<Node>?`
+field is not the axis (`x: Leaf? = l0; x = t.l` leaks the same), a COPY-bind is not the axis
+(`cur: Node? = mk(1, b); cur = cur.next` leaks the same, through either a dense or a nullable
+return), and the `?` on the local is not the axis either: the dense twin `x: Pair = a; x =
+x.other` released the copy at the rebind through codegen's post-free AND freed `x` at exit
+through the proxy sweep, which landed on `b`'s store — a masked over-free that read clean
+only because nothing read `b` after it.  The class is *a heap-record local with MIXED
+ownership across its assignments*, and the fact that decides its frees is per RUN.
+
+**The cure is the native emitter's own tracker, lifted into the IR.**  `generation/mod.rs`
+already kept `_own_store_<name>` for a dense, deps-empty local with an owned init and a
+borrow reassign (@PLN90, loft#495): pointed at the store the local owns after an owned
+assign, freed by identity at a borrow reassign, freed at exit.  That was the reference route
+— the dense twin was right on `--native` because of it — and it was private to one backend
+and blind to a nullable local.  `(O-Witness)` puts the same slot in the IR (`__own_<name>`,
+`scopes::owner_witness_locals`): `scan_set` classifies each assignment (`witness_set_kind` —
+a whole-value copy, a loft callee whose return both emitters copy, an `Owned` oracle answer
+that is not a literal into a work-ref) and emits the release before a mint, or after the
+`Set` by `OpDistinctStore` where the value reads the local or is a view; `get_free_vars`
+releases at scope exit; the local is marked never-free.  Two ops carry it: `OpDistinctStore`
+(the identity test — two sentinels compare EQUAL) and `OpRefAlias` (a reference as a VALUE,
+so the witness can NAME the local's store where `Set(w, Var(v))` would copy it).
+
+**Four measurements shaped it, each a wrong first cut:**
+
+1. *The witness's entry init was `= null`.*  A heap local's `= null` lowers to `OpInitRef`, a
+   stack-record placeholder, and the first release met the `#306` refusal.  It is the
+   sentinel call now.
+2. *`OpDatabase` reuses the slot's store, and at a FIRST bind that slot is the `null_named`
+   placeholder.*  Allocating fresh unconditionally leaked one untyped store per witnessed
+   local on `--native`; fresh only on a REASSIGNMENT.
+3. *A never-free local reads as the `__ncc_` hoist to native's adopt rule* (`is_borrowed_view
+   && skip_free → adopt`), so `cur = keep(other)` aliased the argument and the witness then
+   claimed `other`'s store.  The rule now excludes a witnessed local; the interpreter's twin
+   arm wanted the `?` peel (loft#1106's family) for the same cell.
+4. *A projection whose deps a LATER copy strips is materialised at codegen* (loft#778's `k =
+   a[0]; for x in a { k = x }`), and the witness — which classifies a projection as a view —
+   never learned of that store.  Both emitters now decline the materialise arms for a
+   witnessed local: its projections stay views, the container-wide free those arms guard
+   against is one it never emits, and `collect_views_to_materialise`'s bindings are never
+   witnessed, so the two mechanisms do not meet on one binding.
+
+And one trap in the GUARD, not the fix: a `reference<Node>?` field is a POINTER, and a helper
+returning `Node { next: b }` with `b` its own local hands back a dangling one — five cells
+reported use-after-free from the test's own chain builder.  Every chain is built in the frame
+that walks it.
+
+**Measured** on both backends with `LOFT_STRICT_STORES=1`: the eleven filed cells plus the
+call-mint, nested-field, dense-twin, loop-declared, one-arm, nullable-source,
+borrowing-call (over a view, and reading the local), alternating and 200-round cells — values
+right, no store retained, no over-free.  `scripts/find_problems.sh --subject scopes|store|
+codegen|runtime` green; the two `LOFT_NO_JOIN_OWN` positive controls hold the witness off
+too (`LOFT_NO_OWNER_WITNESS`), because the witness closes their `local_source` leak on its
+own and a control that cannot fire proves nothing.  Held FIXED: a returned VIEW of a local
+through a `-> S?` return (no delivery buffer, so nothing materialises it — filed apart), a
+witnessed local at a callee's hidden buffer position, and a captured local, which the
+witness declines (@FR-L-CapHeap holds).
+
 ### D-own-25 — OPENED AND CLOSED (2026-08-30, loft#1201): one delivery buffer, two owners, because a vector reads the adopt flag the other way round
 
 `@FR-O-Owner` says every heap store has exactly one owner.  `xs.map(|x| { [x, x + 1] })` gave
@@ -2182,3 +2258,21 @@ the two mechanisms that were tried and reverted, is in
 
 **0 open** — back at 0 on 2026-09-03 with D-own-8 CLOSED (every path of a bound value branch its own binding, loft#1320/#1321/#1323); it had been RE-OPENED after the 2026-07-04 zero, down to D-own-8 (a Join's ownership fact is true on one path only). D-own-16 and D-own-26 both closed 2026-09-03; D-own-26's gate had been reporting `0 violations` over its own violations for a week, because it searched for a free in a region the free cannot occur in. The ORIGINAL five stay resolved: D-own-1/2/3/4/5 ALL CLOSED; every store-lifetime decision reads the one total `deps` fact. The soundness proof heap.md's free rules rest on
 
+### D-own-27 closure summary (the chapter's own words, 2026-09-04)
+
+**D-own-27 OPENED AND CLOSED 2026-09-04** (loft#1336): a heap-record local bound by COPY
+and later rebound to a VIEW released the copy nowhere — `cur: Node? = a; cur = cur.next`
+leaked one store on both backends, a call-minted local and a plain nested-field view leaked
+identically, and the inverse order (`s = a.next; s = a`) wrote the second copy INTO the
+viewed record on `--native` and ALIASED the source on the interpreter, so `b == 1` on one
+backend and a write through `s` reaching `a` on the other.  The `?` was never the axis: the
+dense twin `x: Pair = a; x = x.other` released the copy at the rebind AND freed `x` at exit,
+which landed on `b`'s store and read clean only because nothing read `b` afterwards.  Closed
+by `(O-Witness)` above — the native emitter already carried this tracker privately
+(`_own_store_<name>`, for a dense deps-empty local); it now lives in the IR for every mixed
+local, both backends translate it, and native's private tracker is left to the hidden
+temporaries it was built for.  Guard:
+`tests/scripts/1336-a-local-with-mixed-ownership-releases-through-its-owner-witness.loft`,
+fifteen cells on both backends, falsified at `c25b444c`; the full record, including the
+four measurements that shaped the mechanism, is in
+[ownership-history.md](ownership-history.md).

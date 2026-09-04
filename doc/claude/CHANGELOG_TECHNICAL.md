@@ -9,6 +9,23 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A local whose assignments mix ownership releases through an owner witness (2026-09-04)
+
+loft#1336.  `cur: Node? = a; while cur != null { cur = cur.next }` leaked the copy `cur` took
+at the bind on both backends, and `s: Node? = a; s = a.next; s = a` wrote the second copy
+INTO the viewed record on `--native` while the interpreter aliased the source.  Neither the
+`reference` field nor the `?` nor the copy-bind was the axis: a call-minted local, a nested
+field view and the dense twin all misbehaved the same way, because a binding carries one dep
+list and it records whichever assignment parsed last.  `formal/ownership.md` gains
+`(O-Witness)`: such a local is given a hidden `__own_<name>` that names the store it minted
+while it still holds it, maintained in the IR at every assignment by store identity
+(`OpDistinctStore`, `OpRefAlias` are the two new ops) and released at scope exit; the local
+is never-free.  The native emitter's private `_own_store_` tracker was the reference route
+and now applies only to hidden temporaries; both emitters copy into such a local FRESH and
+decline the materialise arms for it.  `LOFT_NO_OWNER_WITNESS=1` is the A/B opt-out, and the
+`LOFT_NO_JOIN_OWN` positive controls set it too.  Guard: `tests/scripts/1336-…`, fifteen
+cells, falsified at `c25b444c`.  D-own-27 opened and closed; the record is in
+`ownership-history.md`.
 ### A fn-ref call's return records what it borrows, for every kind of return (2026-09-04)
 
 `Parser::fnref_result_type` maps a lambda's declared return deps — attribute indices in the

@@ -501,6 +501,7 @@ reframes the rest:
 | `@FR-O-Proxy` | empty `deps` as a stand-in for "owner" — unsound alone | `Type::depend().is_empty()`, 24 sites |
 | `@FR-O-Override` | the never-free veto that makes the proxy safe at a free | `Function::is_skip_free` |
 | `@FR-O-Latest` | latest assignment's ownership + the LOOP DEPTH it was taken at | `Scopes::owned_refs` |
+| `@FR-O-Witness` | a MIXED-ownership local's owner, per RUN, by store identity | `Scopes::owner_witness` (`owner_witness_locals`, `witness_set_kind`), `Function::owner_witness`; both emitters read the flag to copy FRESH and to decline the materialise arms |
 
 **`deps` is not the oracle.** `ownership_of` derives own-vs-borrow from the IR — a store
 mint is `Owned`, a projection is `Borrowed(base)`, a call resolves through the callee's

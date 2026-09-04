@@ -229,6 +229,8 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     length_vector,
     vector_is_null,
     ref_is_null,
+    distinct_store,
+    ref_alias,
     size_vector,
     size_struct,
     size_scalar,
@@ -2114,6 +2116,19 @@ fn vector_is_null(s: &mut State) {
 fn ref_is_null(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
     let new_value = v_r.store_nr == u16::MAX;
+    s.put_stack(new_value);
+}
+
+fn distinct_store(s: &mut State) {
+    let v_b = *s.get_stack::<DbRef>();
+    let v_a = *s.get_stack::<DbRef>();
+    let new_value = v_a.store_nr != v_b.store_nr;
+    s.put_stack(new_value);
+}
+
+fn ref_alias(s: &mut State) {
+    let v_r = *s.get_stack::<DbRef>();
+    let new_value = v_r;
     s.put_stack(new_value);
 }
 
