@@ -2027,8 +2027,8 @@ or build a local and use that."
     /// mutating scalar captures will hit a type-mismatch
     /// diagnostic at the first `n = …` site (RHS scalar vs LHS
     /// `Reference(__cell_<T>, _)`).  No existing test exercises
-    /// mutating-scalar-capture closures (they're broken pre-02d
-    /// and the matrix cells are still `#[ignore]`d), so the
+    /// mutating-scalar-capture closures beyond the cells of
+    /// `tests/mut_closure_matrix.rs`, which run by default, so the
     /// regression net stays green.
     ///
     /// `change_var_type` (in `src/parser/expressions.rs`) is

@@ -108,51 +108,81 @@ fn every_new_guard_records_its_control() {
     );
 }
 
-/// The set of `#[ignore = "..."]` entries in `tests/issues.rs` must
-/// match the committed baseline at `tests/ignored_tests.baseline`.
-/// A drift typically means one of three things worth the author's
-/// attention at review time:
-///   * An ignored test just got its underlying fix landed — the
-///     baseline entry should be deleted and the test unignored.
-///   * A new ignored spec was added for a new QUALITY.md item —
-///     the baseline should grow.
-///   * The `#[ignore = "…"]` reason string was edited — baseline
-///     should update.
+/// Every `#[ignore = "..."]` — and every `#[cfg_attr(<cfg>, ignore = "...")]` — in
+/// `tests/*.rs` and `src/**/*.rs` must match the committed baseline at
+/// `tests/ignored_tests.baseline`, keyed `<file>::<test>` because two `src/` tests share
+/// a bare name.  A drift is one of three things worth the author's attention at review:
+///   * an ignored test just got its fix landed — delete its line and un-ignore it;
+///   * a new ignored test was added — the baseline grows, with the reason it carries;
+///   * the reason string was edited — the baseline updates.
 ///
-/// Without this guard, silently-passing ignored tests and stale
-/// reason strings accumulate invisibly (the failure mode that made
-/// B5's documented symptom stale for weeks before anyone noticed).
+/// Without this guard, silently-passing ignored tests and stale reason strings
+/// accumulate invisibly — and until 2026-09 the guard read ONE file, `tests/issues.rs`,
+/// so the release checklist's `A-ignores` vouched for 1 ignore while nextest was skipping
+/// 35.  `make release-checklist` reads the same baseline, which is why a reason-less
+/// ignore is a release finding and not only a lint.
 /// Regenerate the baseline with
 /// `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`.
 #[test]
 fn ignored_tests_baseline_is_current() {
-    let src = fs::read_to_string("tests/issues.rs").expect("cannot read tests/issues.rs");
+    fn rust_files(dir: &str, out: &mut Vec<String>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                rust_files(&p.to_string_lossy(), out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    let mut files: Vec<String> = Vec::new();
+    for e in fs::read_dir("tests").expect("read tests/").flatten() {
+        let p = e.path();
+        if p.is_file() && p.extension().is_some_and(|x| x == "rs") {
+            files.push(p.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    rust_files("src", &mut files);
+    files.sort();
+
     let mut actual: Vec<(String, String)> = Vec::new();
-    let lines: Vec<&str> = src.lines().collect();
-    for (i, line) in lines.iter().enumerate() {
-        let t = line.trim_start();
-        let Some(rest) = t.strip_prefix("#[ignore") else {
-            continue;
-        };
-        let Some(rest) = rest.trim_start().strip_prefix('=') else {
-            continue;
-        };
-        let Some(start) = rest.find('"') else {
-            continue;
-        };
-        let tail = &rest[start + 1..];
-        let Some(end) = tail.rfind('"') else {
-            continue;
-        };
-        let reason = tail[..end].replace("\\\"", "\"").replace("\\\\", "\\");
-        // Scan forward up to 10 lines for the `fn NAME(` line.
-        for next in lines.iter().skip(i + 1).take(10) {
-            let nt = next.trim_start();
-            if let Some(after_fn) = nt.strip_prefix("fn ")
-                && let Some(paren) = after_fn.find('(')
-            {
-                actual.push((after_fn[..paren].to_string(), reason.clone()));
-                break;
+    for file in &files {
+        let src = fs::read_to_string(file).unwrap_or_else(|e| panic!("cannot read {file}: {e}"));
+        let lines: Vec<&str> = src.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            let t = line.trim_start();
+            // `#[ignore…]` or `#[cfg_attr(<cfg>, ignore…)]` — both carry a reason the same way.
+            let rest = if let Some(r) = t.strip_prefix("#[ignore") {
+                r
+            } else if t.starts_with("#[cfg_attr(") && t.contains("ignore") {
+                &t[t.find("ignore").unwrap() + "ignore".len()..]
+            } else {
+                continue;
+            };
+            let reason = match rest.trim_start().strip_prefix('=') {
+                Some(r) => {
+                    let Some(start) = r.find('"') else { continue };
+                    let tail = &r[start + 1..];
+                    let Some(end) = tail.rfind('"') else { continue };
+                    tail[..end].replace("\\\"", "\"").replace("\\\\", "\\")
+                }
+                None => String::new(), // a bare `#[ignore]`: no reason, and the baseline says so
+            };
+            // Scan forward up to 10 lines for the `fn NAME(` line.
+            for next in lines.iter().skip(i + 1).take(10) {
+                let nt = next.trim_start();
+                let nt = nt
+                    .strip_prefix("pub ")
+                    .map_or(nt, |r| r.trim_start_matches(|c| c != ' ').trim_start());
+                if let Some(after_fn) = nt.strip_prefix("fn ")
+                    && let Some(paren) = after_fn.find(['(', '<'])
+                {
+                    actual.push((format!("{file}::{}", &after_fn[..paren]), reason.clone()));
+                    break;
+                }
             }
         }
     }
@@ -170,9 +200,8 @@ fn ignored_tests_baseline_is_current() {
         expected.push((name.to_string(), reason.to_string()));
     }
     if actual != expected {
-        let mut msg = String::from(
-            "tests/issues.rs #[ignore] set drifted from tests/ignored_tests.baseline.\n",
-        );
+        let mut msg =
+            String::from("the #[ignore] set drifted from tests/ignored_tests.baseline.\n");
         let actual_set: std::collections::BTreeSet<_> = actual.iter().collect();
         let expected_set: std::collections::BTreeSet<_> = expected.iter().collect();
         for added in actual_set.difference(&expected_set) {

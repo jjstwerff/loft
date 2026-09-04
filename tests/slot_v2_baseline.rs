@@ -408,12 +408,9 @@ fn test() {
 // still used by a live text buffer.  Scope teardown's OpFreeText
 // corrupts the aliased slot.
 //
-// V1 is BROKEN here — this fixture is the only one in the catalogue
-// that currently ASSERTS the bug's symptom is observable.  Phase 3
-// un-`#[ignore]`s it after V2 picks a non-overlapping slot.
-//
-// Until V2 lands we cannot lock a good layout, so the fixture is
-// `#[ignore]`d and `slots("")` is a placeholder.
+// This fixture runs: the V2 allocator gives the late local a slot no live
+// text buffer shares, so scope teardown frees only what it should, and a
+// clean run IS the assertion — the symptom was a corrupted aliased slot.
 
 #[test]
 fn p185_late_local_after_inner_loop() {

@@ -1244,21 +1244,9 @@ fn repl_tracepoint_logs_and_continues() {
     );
 }
 
-/// STATUS: OPEN — these two are `#[ignore]`d reproductions, not passing guards.
-///
-/// @P293's remedy (wrap the value in a one-element vector so it is COPIED into
-/// store-resident memory) does NOT extend one level up to a vector: capturing
-/// `[(v)]` as `vector<vector<τ>>` moves the panic from `keys.rs` to
-/// `database/types.rs:71` — `Double structure type src0::main_vector<vector<integer>>`.
-/// That ties #618's main signature to the "possibly related second signature" in the
-/// report (`v = [9000000000, 0]` faulting at the same `types.rs` site): they are ONE
-/// blocker.  Each REPL capture re-parses a synthetic program into the same `Data`, so
-/// it re-registers the `main_vector<…>` wrapper struct; the collision-qualified name
-/// (`src0::…`) collides too, because both defs live in the same source.  A real fix has
-/// to make those synthetic defs unique per capture generation (or dedup them), which is
-/// the fn-return / borrowed-heap-value substrate the report names — not a call-site wrap.
-///
-/// #618 regression: `ReplSession::value_of` panicked for any **vector** binding.
+/// `ReplSession::value_of` renders EVERY binding kind — a vector, a text, a wide
+/// vector, a struct — and never panics (loft#618).  The three tests below are its
+/// guards; each was a reproduction of a crash while #618 was open.
 ///
 /// `capture_typed` runs `fn replmain_N() -> vector<τ> { … v }`, i.e. it returns a
 /// bare heap value that borrows a body local.  The fn-return deep-copy then

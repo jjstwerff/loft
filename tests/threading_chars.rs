@@ -882,11 +882,12 @@ fn run() -> integer {
 // The fix is upstream of par — in the lambda → vector storage path — so the
 // closing phase is NOT plan-06 phase 1 (which closed the par dispatch
 // surface for fn-refs and remains valid for non-capturing forms via
-// `par_vec_of_fns_input_t4`).  Filed against plan-15 phase-04ish work:
-// closure-DbRef heterogeneity in vector storage.
+// `par_vec_of_fns_input_t4`).  Tracked as loft#1358: a capturing closure
+// cannot be stored in a collection, because each capture set is its own
+// record shape and a vector has one element layout.
 
 #[test]
-#[ignore = "vector<capturing-fn> with heterogeneous captures rejected at vector-construction; not a par-side bug.  See DESIGN.md D11a row 8 (split row)."]
+#[ignore = "loft#1358: a capturing closure cannot be stored in a collection — the compiler refuses the vector literal; un-ignore when it can, or convert to guard the refusal if that becomes the decision"]
 fn par_vec_of_capturing_fns_t4() {
     // Each lambda captures a distinct scalar `n` and applies `f(10)`.
     // Expected once the underlying vector storage works:

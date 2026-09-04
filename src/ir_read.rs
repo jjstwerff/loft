@@ -1273,7 +1273,7 @@ mod tests {
     /// name.  Un-ignore once `rebuild_indices` reproduces cross-source bindings
     /// (serialize the import graph / `use_names`, then re-derive).
     #[test]
-    #[ignore = "cache_verify KNOWN GAP: rebuild_indices drops cross-source `use lib::*` import bindings + the use_names module map on a warm load"]
+    #[ignore = "loft#1359: the warm cache drops an importing source's `use lib::*` bindings and the use_names map — this test is the guard, un-ignore when rebuild_indices reproduces them"]
     fn multi_source_round_trip_preserves_derived_indices() {
         let s = std::path::MAIN_SEPARATOR;
         let mut p = crate::parser::Parser::new();
