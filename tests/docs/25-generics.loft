@@ -156,8 +156,6 @@ fn to_text(self: Money) -> text { "{self.cents}c" }
 fn test_user_type_bounds() {
   cheap = Money { cents: 300 };
   dear = Money { cents: 700 };
-  // Bind a generic's result before reading through it: consuming the value inline
-  // retains one record per call.
   best = gen_max(cheap, dear);
   assert(best.cents == 700, "Ordered on a user type: {best.cents}");
   assert(cheap < dear, "…and the bare operator, from the same definition");

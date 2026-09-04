@@ -4025,10 +4025,6 @@ const LIB_PKGS_NATIVE_SKIP: &[&str] = &[
     // hardcoded field offsets were also wrong; `loft generate` now emits
     // offsets from the canonical struct schema (`Stores::position`/`size`)
     // instead of a separate layout calc, and lib/imaging/native matches them.
-    // input — design draft landed 2026-06-01 (LAVITION W.13); runtime blocked
-    // on @P391 (cross-package constructor lands in CONST_STORE).  Un-skip once
-    // @P391 ships.
-    "input",
 ];
 
 /// Specific library test FILES skipped under `--native` (the rest of the

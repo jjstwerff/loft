@@ -100,11 +100,6 @@ fn main() {
   assert(inner == 40, "the function saw its own doubled copy: {inner}");
   assert(p.0 == 10, "and the caller's tuple is untouched: {p.0}");
 
-  // ⚠ Writing to a TEXT element of a value parameter — 'p.1 = "…"' where the
-  // parameter is '(integer, text)' — will not compile on --native today,
-  // though the interpreter runs it.  Copy the parameter into a local first and
-  // write there: 'q = p; q.1 = "…";'.
-
   // ## Tuples as reference parameters (swap in place)
   // A '&' tuple holds scalar elements only.  '&(text, …)' is refused when you
   // compile, naming the element type — text lives on the heap, and a reference
