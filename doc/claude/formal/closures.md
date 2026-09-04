@@ -177,4 +177,5 @@ the companion [closures-history.md](closures-history.md).
 Closures are a full first-class contract: construction, every container measured above, and
 re-assignment into a place that already holds one. What a closure may not do is bounded by
 two decisions rather than by gaps — one capture shape per fn-ref attribute, and no capturing
-closure inside a collection (#247/@P213) or inside a struct that a collection holds (#318).
+closure inside a collection (DESIGN_DECISIONS.md C116, loft#247) or inside a struct that a
+collection holds (#318).

@@ -42,4 +42,3 @@ tests/ownership_fuzz_gate.rs::fuzz_gate_map54_full_replay	full both-backends rep
 tests/ownership_oracle.rs::oracle_dev_free_check_ratchet	dev-tier ratchet — sweeps tests/scripts under check-dev; run on demand
 tests/ownership_oracle.rs::oracle_fact_is_backend_identical_si2	native backend needs rustc per run — the release-gate SI-2 check
 tests/ownership_oracle.rs::oracle_leak_scan_ratchet	experimental leak-scan ratchet — sweeps tests/scripts under check-leak; run on demand
-tests/threading_chars.rs::par_vec_of_capturing_fns_t4	loft#1358: a capturing closure cannot be stored in a collection — the compiler refuses the vector literal; un-ignore when it can, or convert to guard the refusal if that becomes the decision

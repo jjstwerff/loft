@@ -1373,18 +1373,11 @@ impl Parser {
                 }
                 return Value::Null;
             }
-            // A vector element (and any other four-byte fn-ref slot): no `__closure_rec`
-            // half exists to receive a captured environment, which is @P213/@P214's
-            // deferral and the refusal the collection LITERAL already gives.
+            // A vector element (and any other four-byte fn-ref slot) has no
+            // `__closure_rec` half to receive a captured environment: the same
+            // refusal the collection LITERAL gives, from its one home.
             if !self.first_pass && self.fn_ref_source_captures(val) {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "a capturing closure cannot be stored in a collection yet — the \
-                     co-located closure-record layout is deferred (@P213/@P214); hold the \
-                     captured state separately (e.g. a struct field) and store a \
-                     non-capturing fn that reads it"
-                );
+                self.refuse_capturing_closure_in_collection();
                 return Value::Null;
             }
             let (dnr_val, mut ops) = self.fn_ref_slot_dnr(val, f_type);
