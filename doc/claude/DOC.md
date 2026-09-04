@@ -174,6 +174,17 @@ If a new section is added, a new `doc/stdlib-<id>.html` file is created automati
 
 ---
 
+## Where a definition's documentation lives at run time
+
+loft keeps no doc field on a definition — the lexer discards comments — so it is easy to
+conclude that a hover or a REPL `:doc` cannot show `///` text. That conclusion is wrong.
+Every `Definition` carries `position: Position { file, line, pos }` (set at `add_def` from
+the lexer's position) pointing into real, readable source, stdlib and library definitions
+included (a stdlib symbol resolves to e.g. `default/04_stacktrace.loft:41`; `file` is
+repo-root-relative). The `///` lines directly above that line ARE the documentation, and
+reading them there is the same route `gendoc` takes. Do not add a doc field to `Definition`
+to serve a tool; read the source at the position it already records.
+
 ## See also
 - [DEVELOPMENT.md](DEVELOPMENT.md) — Development workflow and common commands
 - [CODE.md](CODE.md) — Doc-comment style rules for `pub` declarations in `default/*.loft`

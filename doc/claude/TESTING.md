@@ -3183,6 +3183,59 @@ feature, not only the minimal one.
 
 ---
 
+**A control that reddens a DIFFERENT test has found a dead gate, not a working control.**
+@PLN144 P4's control — accumulate elapsed time as float seconds instead of integer
+microseconds — was built to break the 30/60 Hz agreement cell; the suite went red on the
+ping-pong cell instead, and chasing that gap proved the 30/60 Hz cell cannot see float
+accumulation at all (at 12 fps the two schedules agree at every sample out to 60 000 ticks).
+The pass/fail bit is the wrong reading; the NAME is the reading. Write down which test must go
+red BEFORE running a control, assert on that name, and when a different one fires, treat the
+named test as unable to fail on its own subject. The cure there was a second cell that TICKS
+(eight `advance(100000)`) rather than jumps (one `advance(800000)`), because only the repeated
+addition can see `0.7999999999999999` land on frame 7 where 8 is right.
+
+**A temp probe named after a HASH of its source shares a truncation window.**
+`tests/use_analysis.rs` named each probe file by a hash of its program text, with a comment
+saying that is what keeps parallel tests apart — and three tests sharing one `const …_SRC`
+resolved to the SAME path. Identical final bytes do not make the WINDOW safe: `fs::write`
+truncates to zero first, and under nextest each test is its own process, so one test's spawned
+`loft` can open the file mid-rewrite and analyse an empty program — a borrow base derived from
+nothing, on whatever schedule the runner picks. Name a probe after the TEST, not its content.
+
+**A stale test binary masks a diagnostic-message change.** After changing a compiler-emitted
+message, a local `cargo test --test X` or `find_problems.sh` run can report green while CI's
+clean build fails: the test binary was not relinked after the `src/` edit, so inline
+`.error("…old wording…")` assertions still matched the old output. It cost two CI round-trips
+on one PR. After changing any compiler output, run the affected test binary from a build you
+watched relink, or `cargo clean -p loft` first.
+
+**A leak the DRIVER reports beats one inferred from memory growth.** To prove a cursor's
+scope-end hook finalises its `sqlite3_stmt *`, ask the library: `sqlite3_close` answers
+`SQLITE_BUSY` while any statement on the connection is unfinalised, so the fixture abandons
+forty cursors mid-walk, closes, and asserts the connection reported nothing — a return code
+computed by the library on every run, and proved to FAIL with `OpDrop` renamed away. It also
+caught a second thing the test was not looking for: a round-trip fixture closing a connection
+with its cursor live, which refused the close and left the database locked. Before writing a
+growth-threshold leak harness, look for the API that already refuses to proceed while the
+resource is held (`sqlite3_close`/`SQLITE_BUSY`, `PQfinish`, `close(2)` on a busy fd) and
+store the refusal where the caller already looks.
+
+**A per-item marker on stdout cannot attribute a fault printed on stderr.** `tests/wrap.rs`
+announces each script with `println!` and every runtime complaint — `BUG (#306)`, warnings,
+crash reports — goes to stderr; stdout is block-buffered when it is not a tty, so the
+interleaving you read is a buffering artefact that names the wrong script. loft#920 was
+attributed to `296-file-error-paths.loft` that way; `LOFT_TRACE_SCRIPT=1` puts the marker on
+stderr, and the real answer was `75-native-stub.loft`, whose DELIBERATE panic was the cause.
+Put the marker on the stream the fault uses.
+
+**`raise()` is not a fault, so it cannot test a fatal-signal handler end to end.** loft's crash
+reporter arms SIGSEGV/SIGABRT/SIGBUS with `SA_RESETHAND`: the handler reports, the disposition
+resets, and the default action takes the process — but only a real faulting INSTRUCTION
+re-executes after the handler and re-raises. `libc::raise(SIGSEGV)` runs the handler and then
+RETURNS, and the child exits normally. Fault for real in a forked child
+(`std::ptr::write_volatile(std::ptr::null_mut::<u8>(), 1)`, volatile so it cannot be optimised
+into something that never faults) and assert `WIFSIGNALED`.
+
 ## Diagnostic tiers — what `--deny-warnings` may fail on
 
 Two tiers, and the difference is contractual rather than cosmetic:

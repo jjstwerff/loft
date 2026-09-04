@@ -164,6 +164,10 @@ src/main.rs            CLI; loads default/ then user file
   e.g. `t_4text_starts_with`. Operators `OpCamelCase` (loft) → `op_snake_case` (`fill.rs`).
 - `#rust "..."` in `default/*.loft` supplies the Rust body for codegen. Full naming + null-sentinel
   rules: [CODE.md](doc/claude/CODE.md).
+- **A new op or builtin renumbers `index/target_surface.json`** — run `make surface-gen`, or
+  `make ci` fails a drift guard no targeted suite shows. It asks a PREBUILT wasm rlib which
+  methods exist, so rebuild that rlib first or it records the new builtin as unavailable in
+  the browser and commits that as derived truth.
 - stdlib load order: `01_code.loft` (operators/math/text/collections) → `02_files.loft` (I/O) →
   `03_text.loft`.
 - **Before non-trivial functionality, check the library catalogue (`make libcatalogue`) + `loft install`** — don't reimplement.
@@ -320,6 +324,10 @@ Don't scope-creep the active fix with unrelated bugs.
 they merge-conflict across files and have destroyed sessions. **Always commit before any operation
 that changes the working tree.** Compare without switching: `git diff main -- <file>`,
 `git show origin/main:<file>`.
+The plain `git checkout -- <file>` and `git checkout-index -f -- <file>` forms are the SAME
+hazard wearing an innocent name: each has reverted an hour of unstaged work while "cleaning
+up" a probe. Undo a probe or a debug `eprintln` with the inverse edit, never with git, and
+commit BEFORE inserting it.
 
 Run **`make hooks`** once per clone: the `commit-msg` hook reports an issue mentioned without a
 `Fixes #N` trailer (that trailer is what the push workflow labels `fixed-pending-merge` off — see

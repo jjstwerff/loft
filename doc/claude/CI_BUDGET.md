@@ -765,6 +765,27 @@ Its own conclusion goes red **only** on the blocking class, so a README badge fo
 that one workflow answers "is anything blocking?" without opening anything. Cost
 is API calls — well under a minute.
 
+### Reading a red nightly — the day it appears
+
+The release gate does not change the daily discipline: a red nightly is fixed the day it
+appears, because the legs that run only there — macOS, Windows, the oracle, the sanitizer
+and invariant gates — are where a deep-internals change is found red, and each unfixed one
+masks the next. Three things make the reading honest:
+
+- **Read the run's ref before debugging it** — `gh run view <id> --json headBranch,headSha`.
+  The nightly runs `main`, and a commit on your branch may already have closed it: loft#1133
+  was auto-filed from the debug-assertions gate and did not reproduce on a working tree whose
+  fix had landed sixteen minutes after the nightly started. "Cannot reproduce" reads as
+  flakiness when it is a fix you already have.
+- **Build a control at that sha without touching your tree** — `git archive <sha> | tar -x
+  -C <dir>`: no worktree, no branch, no index change. Confirm the failure there with the
+  gate's exact command, copied byte-for-byte from the workflow yaml; then attribute the
+  fixing commit by reading the diff, and verify by running the same command on your tree.
+- **A separate `CARGO_TARGET_DIR` needs the stdlib beside the binary.** Every test that
+  SPAWNS the loft binary fails with *"cannot load standard library"* until
+  `ln -sfn <repo>/default <target>/release/default` — four harness artefacts read as
+  findings before that was known.
+
 ## Phasing
 
 | phase | change | effect | status |

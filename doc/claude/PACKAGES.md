@@ -1356,6 +1356,15 @@ a dependency edit makes every dependent stale — which is the honest answer, si
 the dependent really does contain the edited code — and `dev-interpret-on-edit`
 still keeps `rustc` out of the loop until editing settles.
 
+**An auto-built cdylib links its OWN copy of libloft, so every `static` in loft exists once
+per linkage unit.** A fact reached through a `#rust` body is compiled into whichever unit
+calls it — the main binary, or `native-auto/libloft_auto_<pkg>.so` — so a process-global
+table filled by the program is EMPTY from inside the package: `c_library_available` answered
+true from the program and false from the package that declared the library, on one run, with
+both backends green. "Agrees on `--interpret` and `--native`" is two configurations of three,
+and a counter fed in one copy and drained in the other wraps (loft#862). Keep such facts in
+the store or pass them across the boundary; never in a `static`.
+
 ### Agent discovery — generated API stubs (shipped)
 
 Installed packages live outside the consumer project

@@ -315,6 +315,16 @@ reference at all. `enumerate` shadowing the name is exactly what keeps two same-
 enums apart, so the mint must stay unconditional. Guarded by the name-collision cell in
 `tests/scripts/803-forward-enum-value.loft`.
 
+**Every CONSUMER of a pass-1 placeholder needs its own pass-2 report.** The site that creates
+a stub reads as the risky half, so review lands there; the risk is spread across every reader,
+and a reader that simply does nothing writes no code to notice. loft#934: a CamelCase name
+became a speculative type stub, and `Zzz {…}`, `Zzz.x`, `y: Zzz` and `sizeof(Zzz)` each
+reported it on pass 2 — four reporters, so the mechanism looked covered — while a bare VALUE
+use had none: on pass 2 the stub EXISTS, so the "Unknown variable" branch a lowercase name
+reaches was never entered, and `fn f() -> integer { Zzz }` compiled and returned uninitialised
+memory. When adding a placeholder, list its consumers and ask what each prints when the
+placeholder is never adopted; "nothing" is the bug.
+
 ### The H5 two-pass contract — the lazy-append law
 
 `assert_pass2_def_attr_stable` (`src/parser/mod.rs`) pins the cross-pass contract. It is a
@@ -520,6 +530,14 @@ static OPERATORS: &[&[&str]] = &[
 ```
 
 `parse_operators(precedence)` handles one level; it calls `parse_operators(precedence+1)` for the right operand. At the top of the recursion, `parse_part` handles postfix `.field` and `[index]` access, and `parse_single` handles atoms.
+
+The postfix chain does not open on a `Void` subject. `if` is an expression, so a bare
+`if c { … }` STATEMENT reaches the chain like any value, and without that guard it consumed
+the `[` that opened the NEXT line — a function whose tail was `[1, 2]` had the literal parsed
+as an index on the `if`, and the diagnostic named keyed collections the program never used.
+`[` indexes a value and a `Void` expression produced none; `if c { [1,2] } else { [3,4] }[0]`
+keeps its index because its type is a vector, and `for` / `while` are statements that never
+reach the chain.
 
 ### `parse_single` — atom parsing
 

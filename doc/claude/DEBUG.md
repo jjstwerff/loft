@@ -1510,6 +1510,37 @@ on the destination actually being null"*, which is what the rule said in the fir
 
 ---
 
+**A negative result is only as good as the tree it was measured on.** A candidate fix
+rejected early can have been rejected by a DIFFERENT bug still live in the same subsystem: a
+widening was tried, answered wrong, backed out and written into an issue as a negative
+result; two commits later the real cause of that wrong answer — a slot-ordering defect in the
+same emitter — was fixed, and the widening re-applied on top was correct all along. The
+retraction was wrong too: the over-free later blamed on the same widening reproduced with it
+REVERTED. When a fix lands in a subsystem, re-run every candidate backed out of it before
+trusting the reason it was backed out; and before writing a negative result into an issue,
+run the failing cell with the change reverted — if it still fails, the change was never the
+cause.
+
+**A repro can contain the WORKING form of the same construct, and that form can repair the
+defect.** loft#1125 was filed with a dense `index<IS[k]>` local beside the nullable one that
+failed; the dense local runs the pre-registration walk that sizes the element struct, so the
+nullable one inherited a correct layout and the file as filed printed the right answer.
+Removing the dense twin refused the file instantly — the real axis was *no dense twin of this
+element type anywhere in the program*. When a filed repro is green, DELETE its sibling cells
+before concluding it was fixed, and give every cell of the guard its own element type and its
+own name, with a header sentence saying why: a guard built the natural way (one struct, a
+dense cell beside every nullable cell) passes on the broken build.
+
+**A guard that can only fire on one word size names where it can SPEAK, not where the
+corruption is.** `Store::checked_offset` raises `Store offset overflow` from
+`isize::try_from(rec * 8 + fld)` with `u32` inputs — an offset that always fits an `i64`, so
+the raise is dead on every 64-bit target and live only on wasm32. loft#950 was filed as *"the
+`--html` page traps; the interpreter, `--native` and `--native-wasm` are all green"*, which
+reads as a browser-specific defect. The same corrupted `rec` on a 64-bit build computes a
+representable offset and reads whatever lies there — the silent-wrong half of the same bug.
+Before believing "only the browser", ask whether the other targets have a guard that could
+have spoken; `LOFT_STRICT_STORES=1` is the one that speaks on all of them.
+
 ## Using the Test Framework for Quick Iteration
 
 The `code!` and `expr!` macros in `tests/testing.rs` let you write a loft program

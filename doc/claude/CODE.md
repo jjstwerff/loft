@@ -166,6 +166,29 @@ by hand (see `src/store.rs` and the `src/cache.rs` startup-cache
 encoder for the pattern), keyed/versioned so a format change is
 detected rather than misread.
 
+## Shell scripts
+
+Three shapes that read as correct and are not, each measured in this repo's own scripts:
+
+- **`"$A$'\n'$B"` does not insert a newline.** Inside double quotes `$'\n'` is the five
+  characters `$ ' \ n '`, so the last row of `$A` fuses with the first row of `$B` into one
+  unmatchable line and BOTH leave the list — positionally, so whichever row sits last is the
+  one that silently stops being an exception (`scripts/sync-fixtures.sh` reported permanent
+  drift on a file it had declared exempt one list above). Close the quote first:
+  `"$A"$'\n'"$B"`.
+- **`PIPESTATUS` is bash-only, and `/bin/sh` is `dash` on Debian-family boxes.** A
+  `sh -c '… | head; echo ${PIPESTATUS[0]}'` check compares an empty string and passes while
+  measuring nothing. Use `#!/usr/bin/env bash` with `set -o pipefail`, or build the pipe
+  yourself.
+- **Never wait on a process NAME whose text is inside the waiting script, and never `pkill`
+  by name on a shared box.** `until ! pgrep -f "make ci"` never exits: the poller's own
+  `bash -c '…'` command line contains `make ci`, and the `[m]ake` bracket only stops `pgrep`
+  matching ITSELF, not the parent shell. `pkill -f "make ci"` matched — and killed — a sibling
+  checkout's run. Wait on an artefact or a pid file instead (`make ci` records its run in
+  `.ci-running`), stop a run through the tool that started it
+  (`scripts/find_problems.sh --stop`), and before acting on a "concurrent run" claim read
+  the candidates' `readlink /proc/<pid>/cwd`.
+
 ---
 
 ## See also
