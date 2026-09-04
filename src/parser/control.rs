@@ -10508,6 +10508,20 @@ impl Parser {
 
     fn return_views_local(&self, ls: &[u16]) -> bool {
         let attr_names = &self.data.def(self.context).attr_names;
+        // A SELF-dep on a user local is the mark a self-read rebind leaves (`cur = cur.next`,
+        // #328): the local views a record reached through its own field, which may be any
+        // store this frame frees — a sibling local's, as in a walker over a chain built
+        // here.  The walk below cannot see it, because the local is already in `seen`, so
+        // it read as an owner and the view was handed up raw (loft#1337, @FR-F-Ret).  A
+        // mint's self-dep (a work-ref) is the ownership marker, not a view.
+        if ls.iter().any(|&v| {
+            v < self.vars.count()
+                && !attr_names.contains_key(self.vars.name(v))
+                && !self.var_is_mint(v)
+                && self.vars.tp(v).depend().contains(&v)
+        }) {
+            return true;
+        }
         let mut work: Vec<u16> = ls.to_vec();
         let mut seen: std::collections::HashSet<u16> = work.iter().copied().collect();
         let mut i = 0;
@@ -10678,8 +10692,83 @@ impl Parser {
     fn materialize_view_return(&mut self, td: u32, tail: &mut Value) -> u16 {
         let ref_tp = Type::Reference(td, Deps::none());
         let w = self.vars.work_refs(&ref_tp, &mut self.lexer);
-        self.materialize_return_into(td, tail, w);
+        if self.return_buffer().is_none() {
+            // A buffer-less return (`-> S?`) is delivered as the DbRef the tail yields, so
+            // the copy is made only on the arms that VIEW something this frame frees: a
+            // `null` arm stays null and an owned arm is handed up as it is (loft#1337).
+            self.materialize_view_arms(td, tail, w);
+        } else {
+            self.materialize_return_into(td, tail, w);
+        }
         w
+    }
+
+    /// The per-arm form of [`Self::materialize_return_into`]: walk the tail through its
+    /// `if` arms and blocks, and rewrite exactly the leaves that view a store this frame
+    /// frees — a projection rooted at a local, or a local whose deps view one (a self-dep
+    /// included).  Every rewritten arm lands in the ONE work-ref `w`; only one arm runs, and
+    /// an arm that was not rewritten never allocates it.
+    fn materialize_view_arms(&mut self, td: u32, tail: &mut Value, w: u16) {
+        match tail {
+            Value::Return(inner) | Value::Drop(inner) => self.materialize_view_arms(td, inner, w),
+            Value::Span(b) => self.materialize_view_arms(td, &mut b.1, w),
+            Value::If(_, t, f) => {
+                self.materialize_view_arms(td, t, w);
+                self.materialize_view_arms(td, f, w);
+            }
+            Value::Block(bl) => {
+                if let Some(last) = bl.operators.last_mut() {
+                    self.materialize_view_arms(td, last, w);
+                }
+            }
+            Value::Insert(ops) => {
+                if let Some(last) = ops.last_mut() {
+                    self.materialize_view_arms(td, last, w);
+                }
+            }
+            leaf => {
+                if !self.return_leaf_is_owned_or_null(leaf) {
+                    self.materialize_return_into(td, leaf, w);
+                }
+            }
+        }
+    }
+
+    /// Is this return leaf something a `-> S?` return may hand up AS IT IS — a `null`, an
+    /// owned local or parameter, a struct literal, or a call that mints its own store?
+    ///
+    /// The leaf rule of [`Self::materialize_view_arms`], stated in the direction @FR-F-Ret
+    /// makes safe: everything NOT provably owned is copied.  A projection of any kind, a keyed
+    /// lookup, a lifted call temporary's element, a joined value — none of these can be shown
+    /// to own the store they yield, so each is copied before it escapes.  Stating the rule
+    /// the other way — copy what LOOKS like a view — is what let a keyed element of an
+    /// inline call's temporary slip through as an owner (the `882` poison cells).
+    fn return_leaf_is_owned_or_null(&self, leaf: &Value) -> bool {
+        match leaf.unspan() {
+            Value::Null => true,
+            Value::Var(v) => {
+                *v >= self.vars.count()
+                    || self.vars.is_argument(*v)
+                    || !self.return_views_local(&[*v])
+            }
+            Value::Call(d, args) => {
+                let name = self.data.def(*d).name();
+                if name == "OpNullRefSentinel" && args.is_empty() {
+                    return true;
+                }
+                // A loft-defined callee that mints its own store hands it up; one whose
+                // return is tied to a passed buffer or argument does not.
+                self.data.def(*d).is_loft_defined() && self.data.def(*d).return_adopts_fresh_store()
+            }
+            // A struct literal builds into a work-ref of this frame, which the return
+            // transfers (`collect_return_sources` names it); a block that ends in anything
+            // else is judged by its tail.
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .is_some_and(|t| self.return_leaf_is_owned_or_null(t)),
+            _ => false,
+        }
     }
 
     /// `materialize_view_return` for a block used as a VALUE — the same owned-copy
@@ -10711,7 +10800,15 @@ impl Parser {
         let kt = self.data.def(td).known_type();
         let copy_d = self.data.def_nr("OpCopyRecord");
         let orig = std::mem::replace(tail, Value::Null);
-        *tail = crate::data::v_block(
+        // A NULLABLE local as the source (`cur: Node?` after a walk) may hold nothing, and
+        // `OpCopyRecord` of a null source leaves the destination an allocated EMPTY record —
+        // presence standing in for absence.  Copy only where the source is present; the
+        // absent arm hands up the sentinel (loft#1337).
+        let absent_guard = match orig.unspan() {
+            Value::Var(v) if matches!(self.vars.tp(*v), Type::Optional(_)) => Some(*v),
+            _ => None,
+        };
+        let copy = crate::data::v_block(
             vec![
                 crate::data::v_set(w, Value::Null),
                 self.cl("OpDatabase", &[Value::Var(w), Value::Int(i32::from(kt))]),
@@ -10721,6 +10818,14 @@ impl Parser {
             Type::Reference(td, Deps::frame1(w)),
             "materialized_view_return",
         );
+        *tail = match absent_guard {
+            Some(v) => crate::data::v_if(
+                self.cl("OpRefIsNull", &[Value::Var(v)]),
+                self.cl("OpNullRefSentinel", &[]),
+                copy,
+            ),
+            None => copy,
+        };
         // @PLN130 — parser-emitted materialisation: `return f.field` must publish an OWNED
         // record, not a view into a frame-local. See `ParserMaterialise`.
         crate::copy_manifest::record(
@@ -11511,6 +11616,14 @@ impl Parser {
             Value::Insert(ops) => ops
                 .last()
                 .is_some_and(|t| self.return_projects_into_local(t)),
+            // An ARM of the tail is a tail too — `if take { t.l } else { null }` hands up
+            // `t.l` on one path.  A function WITH a return buffer copies every arm into it
+            // through `ref_return`'s copy leg, so only the buffer-less return (`-> S?`, a
+            // nullable record has no buffer) asks here, and it materialises per arm
+            // (loft#1337, @FR-F-Ret).
+            Value::If(_, t, f) if self.return_buffer().is_none() => {
+                self.return_projects_into_local(t) || self.return_projects_into_local(f)
+            }
             // A TUPLE element read is a projection like the two op calls below, spelled as
             // a `Value` variant: it carries its base as a var NUMBER, so no call pattern
             // can see it. Rooted at a local, its store dies at scope exit like any other.

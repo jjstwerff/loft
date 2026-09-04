@@ -9,6 +9,20 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A view of a local returned through a nullable return is copied before it escapes (2026-09-04)
+
+loft#1337.  A `-> S?` return has no delivery buffer, so what is handed up is what the
+reference-delivery selector decides — and two shapes got past it on both backends: a local
+rebound through its own reference field (`cur = cur.next; cur`, a SELF-dep the view walk
+skipped) handed up a sibling local's record after its exit free, and a projection inside an
+`if` arm (`if take { t.l } else { null }`) was never seen, so the tail was demoted to
+`return null`.  `(F-Ret)` already says a whole heap value is handed out owned, never a view
+of a local.  Closed at the selector: a self-dep on a user local reads as a view, an `if` arm
+is a tail where there is no buffer, and the buffer-less materialise is made per arm — only
+the viewing arms are copied, a null arm stays null, a nullable local source copies only
+where present.  The dense route is byte-identical.  Guard: `tests/scripts/1337-…`, both
+backends, falsified at `c0a09c95`.  `D-call-8` opened and closed.
+
 ### A local whose assignments mix ownership releases through an owner witness (2026-09-04)
 
 loft#1336.  `cur: Node? = a; while cur != null { cur = cur.next }` leaked the copy `cur` took
