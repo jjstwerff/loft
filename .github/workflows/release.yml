@@ -22,12 +22,12 @@ jobs:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
           - target: x86_64-apple-darwin
-            # macos-14 is Apple Silicon, so this leg CROSS-builds and the bundle it
+            # macos-15 is Apple Silicon, so this leg CROSS-builds and the bundle it
             # produces cannot run natively on the runner that made it.  Declared here
             # rather than discovered in the smoke step: which legs can run their own
             # artifact is a fact about the matrix, and a skip nobody chose is the kind
             # that goes unnoticed.
-            os: macos-14
+            os: macos-15
             cross: rosetta
           - target: aarch64-apple-darwin
             os: macos-latest

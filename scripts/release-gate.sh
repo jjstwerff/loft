@@ -60,9 +60,10 @@ echo "release-gate: dispatched $WORKFLOW on $branch @ ${sha:0:12}"
 # minutes before calling the dispatch lost.
 run_id=""
 for _ in $(seq 1 24); do
+  # `gh --jq` takes a bare expression — no `--arg` — so the dispatch instant is spliced in.
   run_id=$(gh run list --workflow "$WORKFLOW" --commit "$sha" --limit 5 \
       --json databaseId,createdAt \
-      --jq --arg since "$since" '[.[] | select(.createdAt >= $since)] | sort_by(.createdAt) | last | .databaseId // empty')
+      --jq "[.[] | select(.createdAt >= \"$since\")] | sort_by(.createdAt) | last | .databaseId // empty")
   [ -n "$run_id" ] && break
   sleep 5
 done
