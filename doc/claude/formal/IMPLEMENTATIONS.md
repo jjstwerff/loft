@@ -797,6 +797,27 @@ side.  `tests/scripts/1338-…loft` `d5` is the cell; `Data::fnref_text_buffers`
 grammar admits no `&text` in a function type, and is recorded here so the next reader does not
 re-derive it.
 
+## Who releases a text buffer — one question, the sites that answer it (2026-09-04)
+
+The notion: *a `String` a frame minted is released by the frame, or by the caller it is
+delivered to* (@FR-F-Call / @FR-F-Ret).  There is no one home: the answer is given where
+each shape is lowered, and loft#1357 was eight of those sites answering for a neighbouring
+shape.  The sites, so the next reader can find them all:
+
+| site | releases |
+|---|---|
+| `scopes::get_free_vars` | every owned text local at scope exit (unconditional unless `skip_free`) |
+| `scopes::free_vars` — the buffer arm, the staged arm, the bare-local arm | an owned text RETURN: written into the caller's hidden buffer (per arm, staged when the value reads the buffer, moved when it is a bare local), the copied sources freed by `free_copied_text_sources` |
+| `scopes::insert_free` — the block-tail leg | the same three deliveries for an implicit tail |
+| `scopes::convert` — the statement scan | a `??` temp its statement consumed; a scalar tail's temp after the scalar is hoisted; an `if` condition's temp after the condition is evaluated; a `parallel` arm's `__work_N` on the worker |
+| `Parser::parse_block` (`do_if_acc` / `do_tret_bind`) | a lambda's accumulator or bind temp, moved into the one buffer the lambda holds |
+| `Parser::promote_monomorph_text_return` (+ the re-ask in `try_generic_instantiation`) | a monomorph's returns, routed into `__tret` — including one inside a loop |
+| `use_analysis::text_return_orphan_risk` | names the function that needs a buffer at all; a returned text LOCAL counts whatever bound it |
+| `collections.rs` (the par element accessor) | a text binding of the element is NOT marked never-free — it copies |
+
+The instrument is `LOFT_TEXT_TIMELINE=1` (one ledger per process, reported at a program's
+exit and at the end of a `--tests` run) and, for the release, `scripts/valgrind-sweep.sh`.
+
 ## Not mergeable — recorded so the question is not reopened
 
 | the pair | why they must stay apart |

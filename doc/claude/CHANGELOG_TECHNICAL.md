@@ -32,6 +32,33 @@ interpreter).  loft#1358: closed as C116 — one refusal home
 requires each reason to name the run it rides (`--ignored` by hand, a nightly job, a platform);
 the two `web/http.loft` skips were inert (the file lives in `tests-network/`, which no suite
 walks) and are gone.
+### Every text buffer a frame mints is released, and the release valgrind sweep runs nightly
+
+loft#1357 — the residue of loft#1338 under `scripts/valgrind-sweep.sh`: 11 corpus files losing
+one `String` per call on the interpreter, values right on both backends.  Eight shapes, each
+closed where its own question is asked (calls-history D-call-12): a lambda that already holds
+its one hidden `&text` buffer now accumulates / binds into a local and MOVES it into that
+buffer (`parse_block`'s `do_if_acc` / `do_tret_bind`; the pass-2 gate reads
+`lambda_text_buffer_var` because such a lambda never minted the `__acc`/`__tret` attribute the
+gate keyed on); a returned bare text local is delivered through the buffer and freed
+(`free_vars`, and `free_copied_text_sources` now frees the returned local it copied);
+`text_return_orphan_risk` flags a returned text LOCAL whatever bound it (a text `Set` copies,
+so the oracle's borrow-of-argument answer was true of the store and false of the `String`);
+`rewrite_text_returns_into` reaches a `return` inside `Loop` / `Iter` / `Drop`;
+`try_generic_instantiation` re-asks the promotion once `instantiate_nested_generics` has
+retargeted the nested call (the first ask saw the template's `-> S?`); a tail that READS its
+buffer is staged into `__ret_N`, moved, freed (`free_vars` and `insert_free`,
+`any_text_return_buffer`); a `??` temp consumed by a SCALAR tail is freed after the scalar is
+hoisted, and one consumed by an `if` CONDITION is freed after the condition is evaluated into
+a boolean (the statement scan in `convert`); a `par` loop's text binding of the element is
+not marked never-free (a text binding copies); a `parallel` arm frees the `__work_N` texts it
+wrote, on the worker; and `run_tests` resumes a frame-yielding `main` until it finishes, as
+the CLI does (it scored the first frame as the whole test and abandoned the frame's texts —
+the sweep's one remaining red file).  The text ledger (`LOFT_TEXT_TIMELINE`) is one `Mutex`
+for the process and reports under `--tests`.  Guard `tests/scripts/1357-…loft` + `tests/text_buffer_ledger.rs`
+(99 orphans → 0 by hand; inert on the six `make falsify` channels).  `miri.yml` gains the
+nightly `valgrind` job (the sweep on the release binary, both backends) and
+`release-gate-sweeps` (the two ignored tests whose reason names the release gate).
 
 ### A lambda's lifetime tuple is boxed like a named function's, a tuple result joins a tuple literal, and a nullable record from a fn-ref copies on the interpreter (2026-09-04)
 

@@ -35,8 +35,13 @@ struct TtBuf {
     cap: usize,
 }
 
+/// One ledger for the PROCESS, not per thread: a `par` worker mints and frees its buffers on
+/// its own thread (`run_to_return`), and a per-thread ledger summarised on the main thread
+/// reported "NO text leak" for a script whose worker had orphaned two (loft#1357).  Locked
+/// only when the timeline is armed; off, no hook reaches it.
+static TEXT_TL: std::sync::LazyLock<std::sync::Mutex<TextTimeline>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(TextTimeline::default()));
 thread_local! {
-    static TEXT_TL: std::cell::RefCell<TextTimeline> = std::cell::RefCell::new(TextTimeline::default());
     static TEXT_TL_ON: bool = std::env::var_os("LOFT_TEXT_TIMELINE").is_some();
     static TEXT_TL_VERBOSE: bool = std::env::var("LOFT_TEXT_TIMELINE").as_deref() == Ok("timeline");
 }
@@ -54,8 +59,10 @@ fn text_tl_grow(fn_nr: Option<u32>, before: (usize, usize), after: (usize, usize
     }
     let (bp, bc) = before;
     let (ap, ac) = after;
-    TEXT_TL.with(|t| {
-        let mut t = t.borrow_mut();
+    {
+        let mut t = TEXT_TL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // A realloc MOVED the buffer → its old allocation is gone.
         if bc > 0
             && bp != ap
@@ -87,7 +94,7 @@ fn text_tl_grow(fn_nr: Option<u32>, before: (usize, usize), after: (usize, usize
             }
             t.peak_bytes = t.peak_bytes.max(t.live_bytes);
         }
-    });
+    }
     if ac > 0 && TEXT_TL_VERBOSE.with(|b| *b) {
         eprintln!("[text-tl] grow fn={fn_nr:?} cap={ac} ptr={ap:#x} {content:?}");
     }
@@ -98,13 +105,15 @@ fn text_tl_free(fn_nr: Option<u32>, ptr: usize, cap: usize, content: &str) {
     if !text_tl_on() || cap == 0 {
         return;
     }
-    TEXT_TL.with(|t| {
-        let mut t = t.borrow_mut();
+    {
+        let mut t = TEXT_TL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(b) = t.live.remove(&ptr) {
             t.frees += 1;
             t.live_bytes -= b.cap;
         }
-    });
+    }
     if TEXT_TL_VERBOSE.with(|b| *b) {
         eprintln!("[text-tl] free fn={fn_nr:?} cap={cap} ptr={ptr:#x} {content:?}");
     }
@@ -141,8 +150,10 @@ pub fn text_timeline_summary() {
     if !text_tl_on() {
         return;
     }
-    TEXT_TL.with(|t| {
-        let t = t.borrow();
+    {
+        let t = TEXT_TL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let leaked = t.live.len();
         let verdict = if leaked == 0 {
             "NO text leak (every buffer freed)".to_string()
@@ -164,7 +175,7 @@ pub fn text_timeline_summary() {
                 b.seq, b.fn_nr, b.cap, b.content
             );
         }
-    });
+    }
 }
 
 impl State {

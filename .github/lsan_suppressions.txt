@@ -73,12 +73,14 @@ leak:decode_from_cache
 # ⚠ These lines hide MORE than the fault path, and the premise that they did not was
 # measured false (loft#1338): a non-faulting program that returned text from an early
 # `return` or a view of a local orphaned one `String` per call through the SAME frames,
-# and this gate said nothing — 14 corpus scripts leaked with no fault in them.  That class
-# is closed; three shapes named there still orphan through these frames and are hidden
-# here until they close: a tuple-of-text return, a generic monomorph's text return inside a
-# `par` worker, and an iterator `?` discharge.  `scripts/valgrind-sweep.sh` (RELEASE.md §
-# Memory safety) and `LOFT_TEXT_TIMELINE=1` are the instruments that see them; this gate
-# is not.
+# and this gate said nothing — 14 corpus scripts leaked with no fault in them.  The
+# residue that followed (loft#1357: a lambda's `??` return, a nullable text local, a
+# generic's loop-variable return and its nested forwarder, a par loop's text discard, a
+# tail reading its own buffer, a `??` temp consumed by a scalar or an `if` condition, a
+# `parallel` arm's formatted argument) is closed too — 11 corpus scripts to 0 under the
+# release sweep.  What this gate still cannot see is the CLASS: `scripts/valgrind-sweep.sh`
+# (RELEASE.md § Memory safety) and `LOFT_TEXT_TIMELINE=1` are the instruments for it, and
+# `tests/text_buffer_ledger.rs` holds the line.
 leak:append_text
 leak:format_text
 leak:format_long

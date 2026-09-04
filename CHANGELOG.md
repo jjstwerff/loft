@@ -18,6 +18,17 @@ The **say-what-you-do** release. Two threads, and they turned out to be one: eve
 the language reference was read against the compiler that ships, and most of what came back
 was not a wrong sentence but a promise nothing was keeping.
 
+**Every text buffer a frame mints is released.**  A handful of shapes answered the right
+value on both backends while the interpreter left one text buffer behind per call: a
+lambda returning a captured text through `??`, a nullable text local returned, a
+generic's early return of a loop variable and a generic forwarding a nested generic, a
+`par` loop discarding text elements, a function whose result reads its own return
+buffer, a `??` consumed by a number (`len(s.name ?? "")`) or by an `if` whose arm
+returns, and a `parallel` arm passing a formatted string.  A loop over any of them grew
+without bound.  Each now frees, or hands its text to the caller's buffer, the way the
+plain spelling always did.  The release's valgrind sweep is the instrument that saw it,
+and it now runs nightly.
+
 **A value chosen by `if`, `match` or `??` now binds like any other value.**
 `b = if c { a } else { [0, 0] }` used to alias `a` — a later write to `a` showed through
 `b` — and a branch mixing a fresh value with an existing one could leak the fresh one on

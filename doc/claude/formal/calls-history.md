@@ -6,10 +6,63 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — `D-call-10` and `D-call-11` opened and closed 2026-09-04 (loft#1345, loft#1347),
-the same day as `D-call-9` (loft#1338) and `D-call-8` (loft#1337); before them `D-call-7`
-closed 2026-09-02 and `D-call-6` was opened and closed the same day by the reference review
-of chapter 31.
+OPEN: **0** — `D-call-12` opened and closed 2026-09-04 (loft#1357, the residue of
+`D-call-9` under the release valgrind sweep), the same day as `D-call-10` and `D-call-11`
+(loft#1345, loft#1347), `D-call-9` (loft#1338) and `D-call-8` (loft#1337); before them
+`D-call-7` closed 2026-09-02 and `D-call-6` was opened and closed the same day by the
+reference review of chapter 31.
+
+### D-call-12 — OPENED AND CLOSED (2026-09-04, loft#1357): eight shapes still minted a text buffer nothing released
+
+`(F-Call)` and `(F-Ret)` again, measured this time by the release's valgrind sweep
+(`scripts/valgrind-sweep.sh`) after `D-call-9` closed: 11 corpus files still lost one
+`String` per call on the interpreter, every value right on both backends, and the CI leak
+gate blind to all of them by suppression.  Not one defect but eight sites that each
+answered the question *"who releases this buffer?"* for the shapes they were written
+against and not for the one in front of them:
+
+- a LAMBDA that already held its one hidden `&text` buffer (`parse_return` took it) had
+  its tail promotion declined on pass 2 — the gate keyed on an `__acc`/`__tret`
+  attribute such a lambda never minted — so `fn(n) -> text { return cap ?? "x" }` returned
+  its `??` temp as a view; and a lambda with two text locals returned the unpromoted one
+  bare.  Closed: the gate reads the buffer the lambda holds, the accumulator / bind temp
+  stays a local and is MOVED into that buffer, and a returned bare text local is delivered
+  through the buffer and freed (`free_vars`; `free_copied_text_sources` now frees the
+  returned local it copied — the sweep had suppressed it as handed up);
+- a nullable text LOCAL returned (`t = text_src(i, s); return t`): the ownership oracle
+  followed the binding to the argument `text_src` borrows and called the copy safe — right
+  for the store, wrong for the `String` a text `Set` copies into.  Closed in the orphan
+  predicate (`text_return_orphan_risk`), not the oracle, whose store answer the
+  `ownership_oracle` suite pins;
+- an early `return` inside a LOOP of a generic monomorph (`for v in it { return v; } d`):
+  the rewriter that routes early returns into `__tret` stopped at `Loop`/`Iter`/`Drop`;
+- a `-> S?` generic FORWARDER: promoted while its tail call still named the nested
+  TEMPLATE (not a text call), and never asked again once `instantiate_nested_generics`
+  retargeted it — `try_generic_instantiation` asks again, only where nothing was promoted;
+- a tail that READS its own buffer (`rest[0..3]` of the promoted `rest`; a `match` arm
+  yielding the work text) fell to the `__ret_N` residual — now staged into the temp,
+  moved into the buffer, and the temp freed (`any_text_return_buffer`);
+- a `??` temp consumed by a SCALAR tail (`len(s.name ?? "")`, `t.0 + len(t.1 ?? "")`) —
+  case b's "the tail is the returned value" premise holds only when the block yields the
+  TEXT; the scalar is hoisted first and the temp freed.  And one consumed by an `if`
+  CONDITION whose arm returns took its free after the statement the return never
+  reached — the condition is evaluated into a boolean, the temp freed, then the branch;
+- a `par` loop's `_ = e` over `vector<text>` was marked never-free as a borrowed view of
+  the element — a text binding copies, so it owns;
+- a `parallel { … }` arm's formatted argument was built in the WORKER's copy of the frame,
+  which nothing freed — each arm frees the `__work_N` texts it wrote, on the worker.
+
+Two instrument findings closed with it: the text ledger was per-thread (a worker's orphan
+read as "NO text leak") and silent under `--tests`; it is one ledger for the process now and
+reports at the end of a suite.  Measured: 11 red files → 0 under the sweep; the guard
+`tests/scripts/1357-every-text-buffer-a-frame-mints-is-released.loft` (24 cells, 7 controls)
+99 orphaned buffers → 0 by hand under `LOFT_TEXT_TIMELINE=1`, every value byte-identical on
+both backends before and after; `tests/text_buffer_ledger.rs` scores it.  The sweep's last
+red file, `85-yield-resume`, was the TEST RUNNER rather than the program: a `main` that
+`yield_frame`s hands control back after each frame, the CLI resumes it until it finishes,
+and `run_tests` scored the first frame as the whole test and abandoned the frame with its
+formatted texts unreleased — the sweep runs every script under `--tests`, which is why a
+direct run never showed it.  The runner resumes now, as the CLI does.
 
 ### D-call-11 — OPENED AND CLOSED (2026-09-04, loft#1347): a lambda declared `-> vector<T>?` lost the `?` when its tail was delivered
 

@@ -10,8 +10,9 @@
 # Nothing else is suppressed here on purpose.  The LSan file also suppresses the four text
 # construction entry points (`append_text`, `format_text`, `format_long`, `text_tl_fmt`) on
 # the premise that they leak only on a FAULT path; measured 2026-09-04 under this sweep, 14
-# of the 22 scripts losing an `append_text` block carry no fault at all, so that premise does
-# not hold and the class stays visible here until it is understood.
+# of the 22 scripts losing an `append_text` block carried no fault at all (loft#1338, then
+# loft#1357 for the residue), so that premise does not hold and the class stays visible
+# here: this sweep is the instrument the CI leak gate is not.
 {
    declared-text-default-is-interned-for-the-process
    Memcheck:Leak

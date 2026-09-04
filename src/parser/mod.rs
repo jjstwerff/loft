@@ -6563,6 +6563,13 @@ impl Parser {
         // Return existing instantiation if already created.
         let existing = self.data.def_nr(&mangled);
         if existing != u32::MAX {
+            if std::env::var_os("LOFT_DBG_ACC").is_some() {
+                eprintln!(
+                    "[acc-mono] existing {mangled} pass1={} buffers={}",
+                    self.first_pass,
+                    self.data.def(existing).text_work_buffers()
+                );
+            }
             return existing;
         }
         // @PLN125 A2c — a monomorph substitutes a LIST of holders, not one.  The type
@@ -6644,6 +6651,15 @@ impl Parser {
                 .push((d_nr, g_nr, bindings.clone(), concrete.clone()));
         }
         self.instantiate_nested_generics(d_nr, &concrete);
+        // The body's text-return promotion ran while its tail call still named the nested
+        // TEMPLATE (`inner(s, c)` in `outer<S>(s: S) -> S?`): not a text call, nothing to
+        // promote.  Now that the call names `inner`'s monomorph, ask again — a `-> text?`
+        // forwarder that stays unpromoted copies the callee's result into a frame-local
+        // `__ret_N` and hands up a view of it, one orphan per call (loft#1357).  Only where
+        // nothing was promoted: a second hidden buffer would move the ABI.
+        if self.data.def(d_nr).text_work_buffers() == 0 {
+            self.promote_monomorph_text_return(d_nr);
+        }
         // I6: verify the concrete type satisfies every declared bound.
         // Emit a diagnostic and return u32::MAX if any required method is missing.
         if !self.check_satisfaction(g_nr, type_nr, &bindings[1..]) {
@@ -6906,6 +6922,20 @@ impl Parser {
                 // The body is fresh, so every call it makes to ANOTHER generic has to be
                 // retargeted at that one's monomorph again.
                 self.instantiate_nested_generics(d_nr, &concrete);
+                // And the text-return promotion has to be asked again: the first
+                // instantiation asked it of the pass-1 body, whose tail call still named
+                // the nested TEMPLATE (`-> S?` — not text, so nothing to promote), and the
+                // re-derived body is what the program runs.  Only where the first pass
+                // promoted nothing — a second hidden buffer would move the ABI (loft#1357).
+                if self.data.def(d_nr).text_work_buffers() == 0 {
+                    if std::env::var_os("LOFT_DBG_ACC").is_some() {
+                        eprintln!(
+                            "[acc-mono] re-derived stale monomorph {}",
+                            self.data.def(d_nr).name()
+                        );
+                    }
+                    self.promote_monomorph_text_return(d_nr);
+                }
             }
         }
     }
@@ -7806,6 +7836,17 @@ impl Parser {
                 }
             }
         });
+        if std::env::var_os("LOFT_DBG_ACC").is_some() {
+            let names: Vec<String> = remap
+                .iter()
+                .map(|(a, b)| format!("{}->{}", self.data.def(*a).name(), self.data.def(*b).name()))
+                .collect();
+            eprintln!(
+                "[acc-mono] nested in {}: remap={names:?} short={}",
+                self.data.def(d_nr).name(),
+                short_calls.len()
+            );
+        }
         if remap.is_empty() && short_calls.is_empty() {
             return;
         }
