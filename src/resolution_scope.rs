@@ -199,7 +199,7 @@ mod tests {
         let pkg_script = root.join("pkg/src/s.loft");
         assert_eq!(
             resolution_scope(&pkg_script.to_string_lossy()),
-            ResolutionScope::Package(std::fs::canonicalize(root.join("pkg")).expect("canon"))
+            ResolutionScope::Package(crate::portable_path::plain_canonical(&root.join("pkg")))
         );
         assert_eq!(
             resolution_scope(&root.join("bare/s.loft").to_string_lossy()),

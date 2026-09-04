@@ -218,7 +218,7 @@ impl State {
         data: &mut Data,
         program_store: Option<&(Stores, crate::keys::DbRef)>,
     ) {
-        let logging = !data.def(def_nr).position().file.starts_with("default/");
+        let logging = !crate::portable_path::is_stdlib_source(&data.def(def_nr).position().file);
         let console = false; //logging;
         let mut stack = Stack::new(data.def(def_nr).variables().clone(), data, def_nr, logging);
         // @PLN11 G2/M6 — read the body's SHAPE (null / empty-block) from the

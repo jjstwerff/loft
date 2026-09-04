@@ -148,10 +148,7 @@ pub fn install(path: &str, stdlib_dir: &str, lib_dirs: &[String], running: &crat
     // #351 — the watch set: every file the program parsed (entry, modules,
     // `--lib` packages, bundles), except the stdlib and synthetic sources.
     // Pair each file with its def-source id for source-aware fn lookup.
-    let stdlib_prefix = std::path::Path::new(stdlib_dir).canonicalize().map_or_else(
-        |_| stdlib_dir.to_string(),
-        |p| p.to_string_lossy().into_owned(),
-    );
+    let stdlib_prefix = crate::portable_path::plain_canonical_str(stdlib_dir);
     let mut files: Vec<WatchedFile> = vec![WatchedFile {
         path: path.to_string(),
         last_content: content,
@@ -163,9 +160,7 @@ pub fn install(path: &str, stdlib_dir: &str, lib_dirs: &[String], running: &crat
         if f.is_empty() || f.starts_with('<') || f == path {
             continue;
         }
-        let canon = std::path::Path::new(f)
-            .canonicalize()
-            .map_or_else(|_| f.clone(), |p| p.to_string_lossy().into_owned());
+        let canon = crate::portable_path::plain_canonical_str(f);
         if canon.starts_with(&stdlib_prefix) {
             continue;
         }

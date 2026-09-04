@@ -2054,8 +2054,7 @@ impl ReplSession {
         // Parse the file **by path** (`parse`, not `parse_str`): that sets up the source dir +
         // `use` context a bare-function call needs.  Read it first for a clean io error.
         let _ = std::fs::read_to_string(path)?;
-        let abs = std::fs::canonicalize(path)
-            .map_or_else(|_| path.to_string(), |p| p.to_string_lossy().into_owned());
+        let abs = crate::portable_path::plain_canonical_str(path);
         let mut parser = Parser::new();
         parser.lib_dirs.clone_from(&self.parser.lib_dirs);
         for d in extra_lib_dirs {
@@ -2114,8 +2113,7 @@ impl ReplSession {
             if !def.name.starts_with("n_") || def.name.starts_with("n___lambda_") {
                 continue;
             }
-            if def.position.file.starts_with("default/")
-                || def.position.file.starts_with("default\\")
+            if crate::portable_path::is_stdlib_source(&def.position.file)
                 || !in_file(&def.position.file)
             {
                 continue;
@@ -2187,7 +2185,7 @@ impl ReplSession {
     pub fn run_suite(&mut self, start: &str) -> std::io::Result<Vec<(String, Vec<TestRun>)>> {
         use std::io::{Error, ErrorKind};
         // Find the package root: the nearest ancestor of `start` holding a loft.toml.
-        let abs = std::fs::canonicalize(start).unwrap_or_else(|_| std::path::PathBuf::from(start));
+        let abs = crate::portable_path::plain_canonical(std::path::Path::new(start));
         let mut root = if abs.is_dir() {
             Some(abs.as_path())
         } else {
@@ -2252,7 +2250,7 @@ impl ReplSession {
     /// back to (the `--serve` target), stored canonical.  An unreadable path leaves the
     /// sandbox `None`, so every [`write_file`](Self::write_file) is then refused.
     pub fn set_workspace_file(&mut self, path: &str) {
-        self.workspace_file = std::fs::canonicalize(path).ok();
+        self.workspace_file = crate::portable_path::try_plain_canonical(std::path::Path::new(path));
     }
 
     /// @PLN16 M5e slice 3 — save the editor's `content` to `path`, **only** if `path`
@@ -2270,8 +2268,8 @@ impl ReplSession {
         // Canonicalise the request against the sandbox: the file exists (we are overwriting
         // it), so a path that resolves anywhere else — `..`, a symlink, an absolute escape —
         // fails this equality and is refused.
-        match std::fs::canonicalize(path) {
-            Ok(p) if &p == allowed => {
+        match crate::portable_path::try_plain_canonical(std::path::Path::new(path)) {
+            Some(p) if &p == allowed => {
                 std::fs::write(allowed, content).map_err(|e| format!("write failed: {e}"))
             }
             _ => Err("path is outside the editable file".to_string()),

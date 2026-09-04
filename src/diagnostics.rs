@@ -413,8 +413,7 @@ pub enum LintScope {
 /// openable on any platform and must still compare equal to itself.
 #[must_use]
 pub fn canonical_source_path(file: &str) -> String {
-    std::fs::canonicalize(file)
-        .map_or_else(|_| file.to_string(), |p| p.to_string_lossy().into_owned())
+    crate::portable_path::plain_canonical_str(file)
 }
 
 pub struct Diagnostics {
@@ -525,7 +524,7 @@ impl Diagnostics {
     /// rather than dropped, because a missing diagnostic is the harder failure to notice.
     #[must_use]
     pub fn reaches_author(&self, file: &str) -> bool {
-        let at = || std::fs::canonicalize(file).unwrap_or_else(|_| std::path::PathBuf::from(file));
+        let at = || crate::portable_path::plain_canonical(std::path::Path::new(file));
         match &self.lint_scope {
             None => true,
             Some(LintScope::Virtual(entry)) => {

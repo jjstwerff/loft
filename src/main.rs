@@ -599,13 +599,13 @@ fn run_dep_tests(
         if let Some(p) = loft::manifest::extract_path_dep(value) {
             let candidate = from_pkg.join(p);
             if candidate.join("loft.toml").exists() {
-                return Some(candidate.canonicalize().unwrap_or(candidate));
+                return Some(portable_path::plain_canonical(&candidate));
             }
         }
         let usable = |d: &Option<PathBuf>| -> Option<PathBuf> {
             d.as_ref()
                 .filter(|c| c.join("loft.toml").exists())
-                .map(|c| c.canonicalize().unwrap_or_else(|_| c.clone()))
+                .map(|c| portable_path::plain_canonical(c))
         };
         // 2 — an asked-for lock outranks the working copy.
         if lock_first && let Some(d) = usable(&locked) {
@@ -614,7 +614,7 @@ fn run_dep_tests(
         // 3 — the sibling working copy.
         let sibling = from_pkg.join("..").join(name);
         if sibling.join("loft.toml").exists() {
-            return Some(sibling.canonicalize().unwrap_or(sibling));
+            return Some(portable_path::plain_canonical(&sibling));
         }
         // 4 — the project's own lock, filling what nothing above reached.
         usable(&locked)
@@ -3858,7 +3858,7 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
     }
 
     // Parse just enough to read definitions.
-    let abs = std::fs::canonicalize(&entry).unwrap_or_else(|_| entry.clone());
+    let abs = portable_path::plain_canonical(&entry);
     let dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
@@ -4928,9 +4928,7 @@ fn collect_lib_dirs(args: &[String]) -> Vec<String> {
     while i + 1 < args.len() {
         if args[i] == "--lib" {
             let raw = &args[i + 1];
-            let abs = std::fs::canonicalize(raw)
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| raw.clone());
+            let abs = portable_path::plain_canonical_str(raw);
             if !dirs.contains(&abs) {
                 dirs.push(abs);
             }
@@ -5110,7 +5108,7 @@ fn api_surface_of(
     if !entry.exists() {
         return Err(format!("file {file} not found"));
     }
-    let abs = std::fs::canonicalize(&entry).unwrap_or_else(|_| entry.clone());
+    let abs = portable_path::plain_canonical(&entry);
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|e| e.parent().map(std::path::Path::to_path_buf))
@@ -6255,7 +6253,7 @@ fn run_layout_command(sub: &str, file: &str) -> i32 {
         eprintln!("loft layout: file {file} not found");
         return 1;
     }
-    let abs = std::fs::canonicalize(&entry).unwrap_or_else(|_| entry.clone());
+    let abs = portable_path::plain_canonical(&entry);
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|e| e.parent().map(std::path::Path::to_path_buf))
@@ -6559,8 +6557,7 @@ fn lsp_default_dir() -> String {
     };
     // Canonicalize so recorded def paths are clean (no `..`, no `//`) — those
     // paths are shown to the user and pasted into `file:line` references.
-    std::fs::canonicalize(&dir)
-        .unwrap_or(dir)
+    portable_path::plain_canonical(&dir)
         .to_string_lossy()
         .to_string()
 }
@@ -7579,13 +7576,11 @@ fn main() {
                 lib_dirs.push(abs_src);
                 // Add parent directory so sibling packages (dependencies) are found.
                 if !manifest.dependencies.is_empty() {
-                    let parent = std::env::current_dir()
-                        .unwrap_or_default()
-                        .join("..")
-                        .canonicalize()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
+                    let parent = portable_path::plain_canonical(
+                        &std::env::current_dir().unwrap_or_default().join(".."),
+                    )
+                    .to_string_lossy()
+                    .to_string();
                     if !lib_dirs.contains(&parent) {
                         lib_dirs.push(parent);
                     }
@@ -8268,7 +8263,7 @@ fn main() {
                 // Canonicalize: the auto-native branch resolves the library via
                 // `use <name>` and filters its defs by `pkg_str` prefix, so the
                 // path the parser opens and `pkg_str` must be one form.
-                let pkg_path = std::fs::canonicalize(&pkg_path).unwrap_or(pkg_path);
+                let pkg_path = portable_path::plain_canonical(&pkg_path);
                 let manifest =
                     loft::manifest::read_manifest(&pkg_path.join("loft.toml").to_string_lossy());
                 let pkg_str = pkg_path.to_string_lossy().to_string();
@@ -8696,7 +8691,9 @@ fn main() {
                         }
                         // Add parent directory so sibling packages (deps) are found.
                         if !manifest.dependencies.is_empty() {
-                            if let Ok(parent) = search.join("..").canonicalize() {
+                            if let Some(parent) =
+                                portable_path::try_plain_canonical(&search.join(".."))
+                            {
                                 let ps = parent.to_string_lossy().to_string();
                                 if !lib_dirs.contains(&ps) {
                                     lib_dirs.push(ps);
@@ -8739,14 +8736,7 @@ fn main() {
     // prefix-match, so the entry package auto-native-compiled after all.
     let lib_dirs: Vec<String> = lib_dirs
         .into_iter()
-        .map(|d| {
-            portable_path::strip_verbatim_disk(
-                std::fs::canonicalize(&d)
-                    .unwrap_or_else(|_| std::path::PathBuf::from(&d))
-                    .to_string_lossy()
-                    .into_owned(),
-            )
-        })
+        .map(|d| portable_path::plain_canonical_str(&d))
         .collect();
     let mut p = parser::Parser::new();
     p.lib_dirs = lib_dirs;
@@ -10797,7 +10787,7 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                     if !def.name.starts_with("n_") || def.name.starts_with("n___lambda_") {
                         continue;
                     }
-                    if def.position.file.starts_with("default/") {
+                    if portable_path::is_stdlib_source(&def.position.file) {
                         continue;
                     }
                     let has_user_params = def
@@ -11618,7 +11608,7 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                 && def.native.is_empty()
                 && def.attributes.is_empty()
                 && matches!(def.returned, data::Type::Void)
-                && !def.position.file.starts_with("default/")
+                && !portable_path::is_stdlib_source(&def.position.file)
             {
                 let name = def.name.strip_prefix("n_").unwrap_or(&def.name);
                 test_names.push(name.to_string());

@@ -1041,7 +1041,7 @@ fn stdlib_file_uri(stdlib_dir: &str, rel_file: &str) -> String {
         .parent()
         .unwrap_or_else(|| Path::new(""))
         .join(rel_file);
-    let abs = std::fs::canonicalize(&path).unwrap_or(path);
+    let abs = loft::portable_path::plain_canonical(&path);
     file_uri(&abs)
 }
 

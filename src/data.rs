@@ -4067,8 +4067,7 @@ impl Definition {
         if !self.name.starts_with("n_") || self.name.starts_with("n___lambda_") {
             return false;
         }
-        if self.position.file.starts_with("default/") || self.position.file.starts_with("default\\")
-        {
+        if crate::portable_path::is_stdlib_source(&self.position.file) {
             return false;
         }
         // Only the AUTHOR's parameters count: `text_return` / `ref_return` add hidden buffers.

@@ -88,17 +88,17 @@ fn package_root_for(file: &str) -> Option<std::path::PathBuf> {
 /// Returns the path relative to the package root, so the report reads
 /// `src/regex.loft:30` rather than an absolute path nobody can scan.
 fn coverage_path(src: &str, test_file: &str, root: Option<&std::path::Path>) -> Option<String> {
-    if src.is_empty() || src.starts_with("default/") || src.starts_with("default\\") {
+    if src.is_empty() || crate::portable_path::is_stdlib_source(src) {
         return None;
     }
-    let abs = std::fs::canonicalize(src).ok()?;
-    if let Ok(t) = std::fs::canonicalize(test_file)
+    let abs = crate::portable_path::try_plain_canonical(std::path::Path::new(src))?;
+    if let Some(t) = crate::portable_path::try_plain_canonical(std::path::Path::new(test_file))
         && abs == t
     {
         return None;
     }
     let root = root?;
-    let root = std::fs::canonicalize(root).ok()?;
+    let root = crate::portable_path::try_plain_canonical(root)?;
     let rel = abs.strip_prefix(&root).ok()?;
     // This string is a REPORT — something a reader copies into an editor, and something
     // a test asserts on — not a path anything opens, so it must read the same on every
@@ -804,9 +804,7 @@ pub(crate) fn run_tests(
         let mut bases: BTreeMap<(Vec<String>, String), BaseSlot> = BTreeMap::new();
 
         for file_path in files {
-            let abs_file = file_path
-                .canonicalize()
-                .unwrap_or_else(|_| file_path.clone())
+            let abs_file = crate::portable_path::plain_canonical(file_path)
                 .to_str()
                 .unwrap_or("")
                 .to_string();
@@ -1292,9 +1290,7 @@ pub(crate) fn run_tests(
                     continue;
                 }
                 // Skip standard library / operators.
-                if def.position.file.starts_with("default/")
-                    || def.position.file.starts_with("default\\")
-                {
+                if crate::portable_path::is_stdlib_source(&def.position.file) {
                     continue;
                 }
                 // skip library functions loaded via `use`. Only run

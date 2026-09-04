@@ -284,7 +284,7 @@ pub fn mark_exports(data: &mut Data, pkg_dir: &str) -> Vec<(u32, String, String)
         let def = data.def(d);
         if !matches!(def.def_type(), DefType::Function)
             || !def.pub_visible
-            || !def.position().file.starts_with(pkg_dir)
+            || !crate::portable_path::is_under(&def.position().file, pkg_dir)
             || !def.native().is_empty()
         {
             continue;
@@ -399,7 +399,7 @@ pub fn install(
         for d in 0..data.definitions() {
             let def = data.def(d);
             if !matches!(def.def_type(), DefType::Function)
-                || !def.position().file.starts_with(pkg_dir.as_str())
+                || !crate::portable_path::is_under(&def.position().file, pkg_dir.as_str())
                 || !def.native().starts_with("loft_placed_")
             {
                 continue;
