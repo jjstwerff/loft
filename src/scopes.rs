@@ -1553,6 +1553,9 @@ fn run_scan_phase(
     // that a minting call reassigns, recording whether the store it holds is this frame's sole
     // property.  Minted BEFORE the scan for the reason the buffer's is: the first assignment
     // that has to maintain it already needs a flag to write.
+    for v in mixed_ownership_locals(orig_code, &function, data, d_nr) {
+        function.mark_borrow_arm(v);
+    }
     for v in nullable_locals_that_displace(orig_code, &function, data) {
         let name = format!("__lbo_{}", function.name(v));
         let flag = function.add_temp_var(&name, &Type::Boolean);
@@ -2141,6 +2144,22 @@ fn collect_move_dest(
 ///
 /// The `for` lowering wraps its loop in a block (`{#For block … loop {#For loop …} }`), so the
 /// statement an enclosing block holds is a `Block`, not the `Loop` itself.
+/// Does `node` contain a fn-ref call anywhere?  The cheap structural gate on
+/// [`mixed_ownership_locals`]'s oracle walk — the fact it computes is read only where a
+/// `CallRef` delivers a collection.
+fn contains_callref(node: &Value) -> bool {
+    if matches!(node.unspan(), Value::CallRef(_, _)) {
+        return true;
+    }
+    let mut found = false;
+    node.for_each_child(&mut |c| {
+        if !found && contains_callref(c) {
+            found = true;
+        }
+    });
+    found
+}
+
 fn contains_loop(node: &Value) -> bool {
     if matches!(node.unspan(), Value::Loop(_)) {
         return true;
@@ -5775,6 +5794,14 @@ impl Scopes<'_> {
             // a free site and consults @FR-O-Override like every other.
             && !function.tp(v).depend().is_empty()
             && !function.is_skip_free(v)
+            // loft#1333 — and NOT for a MIXED binding, one another path assigns a borrow.
+            // The deps this would strip are that other path's, not this delivery's: the two
+            // arms share one binding, so declaring it the owner of this buffer also declares
+            // it the owner of the store the borrow arm merely views, and the displacement
+            // free then released it.  @FR-O-Complete says the fact is per BINDING and per
+            // PATH; where one static site cannot be both, the rule names the direction —
+            // a retained buffer is recoverable, a premature free is not.
+            && !function.has_borrow_arm(v)
         {
             // A collection a closure hands back is DELIVERED — copied by the callee into the
             // buffer minted for that call — unless it is a raw view (`returns_borrowed_view`)
@@ -9884,6 +9911,88 @@ fn hidden_return_buffer_var(d_nr: u32, function: &Function, data: &Data) -> Opti
     let name = def.attributes().get(idx)?.name.clone();
     let v = function.var(&name);
     (v != u16::MAX).then_some(v)
+}
+
+/// Which heap LOCALS are assigned a BORROW on one path and an owned value on another?
+///
+/// The single ownership fact such a binding carries cannot be right for both.  Its `deps` come
+/// out EMPTY — the owned arm contributes none and the join drops the borrow's — so @FR-O-Proxy
+/// answers "owned" and the displacement free releases a store the borrow arm only borrowed.
+/// Measured: `if c { r = field_of(q) } else { r = fnref(7) }` in a loop freed `q`'s store on
+/// the iteration that took the other arm, on both backends (loft#1333).
+///
+/// **A FOREIGN base is the borrow that counts, not any non-owned verdict.** `x: vector<τ> = []`
+/// followed by `x = fnref(i)` also reads as non-owned on its first assignment, and there the
+/// base is the `__vdb_N` that very literal minted — storage `x` is the sole user of, released
+/// by that temp's own scope-exit free.  Marking such a binding withdraws the strip loft#1329
+/// needs, and every cell of its guard then exhausted the store table.  What separates them is
+/// whether the base is the binding's own literal backing
+/// ([`crate::variables::owns_literal_backing_store`]) or storage reached through somebody
+/// else — a call's return buffer carrying a view of the callee's argument, which is the c3i
+/// shape this closes.
+///
+/// **Why MIXED and not merely viewed.** A local every path views already carries a dep and
+/// declines the free on its own; it is the disagreement that produces the empty list.  Keeping
+/// the condition to mixed bindings is what stops this from suppressing frees that are correct.
+fn mixed_ownership_locals(code: &Value, function: &Function, data: &Data, d_nr: u32) -> Vec<u16> {
+    let mut viewed: HashSet<u16> = HashSet::new();
+    let mut owned: HashSet<u16> = HashSet::new();
+    fn walk(
+        node: &Value,
+        data: &Data,
+        d_nr: u32,
+        function: &Function,
+        viewed: &mut HashSet<u16>,
+        owned: &mut HashSet<u16>,
+    ) {
+        if let Value::Set(t, val) = node.unspan() {
+            match crate::use_analysis::ownership_of(data, d_nr, val) {
+                crate::use_analysis::Own::Owned => {
+                    owned.insert(*t);
+                }
+                crate::use_analysis::Own::Borrowed { base }
+                | crate::use_analysis::Own::Join { base } => {
+                    // A base that is the binding's OWN literal backing is not a foreign
+                    // borrow: `x: vector<τ> = []` lowers to a read of the `__vdb_N` this very
+                    // literal minted, and that temp's own scope-exit free releases it.  Any
+                    // other base is storage reached through somebody else — a call's return
+                    // buffer carrying a view of the callee's argument, or a named local.
+                    if base != u16::MAX
+                        && (base as usize) < function.count() as usize
+                        && !crate::variables::owns_literal_backing_store(function.name(base))
+                    {
+                        viewed.insert(*t);
+                    }
+                }
+            }
+        }
+        node.unspan()
+            .for_each_child(&mut |c| walk(c, data, d_nr, function, viewed, owned));
+    }
+    // The fact is read at ONE site — `callref_delivers_collection`'s strip — so a body with no
+    // fn-ref call cannot need it, and the oracle walk below is not free: it asks
+    // `ownership_of` per assignment, and a big vector literal is thousands of them
+    // (`issue854_a_vector_literal_compiles_in_linear_time` went from seconds to over a minute
+    // before this gate).  The structural pre-check is what keeps the cost on the bodies that
+    // can actually be wrong.
+    if !contains_callref(code) {
+        return Vec::new();
+    }
+    walk(code, data, d_nr, function, &mut viewed, &mut owned);
+    let mut out: Vec<u16> = viewed.intersection(&owned).copied().collect();
+    out.sort_unstable();
+    // ⚠ Deliberately NOT filtered on an empty dep list.  This runs BEFORE the scan, where the
+    // view arm's dep is still on the binding — the empty list is what the scan PRODUCES and
+    // what this exists to prevent, so testing for it here would drop every var that matters.
+    out.retain(|&v| {
+        v < function.count()
+            && matches!(
+                function.tp(v).base(),
+                Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
+            )
+            && !function.is_argument(v)
+    });
+    out
 }
 
 /// Which nullable heap-record LOCALS are reassigned from a call that mints?
