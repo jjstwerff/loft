@@ -2862,6 +2862,20 @@ that passed on the very build it was written to catch:
   `tests/scripts` guard passes `--tests` on the pre-fix binary while the same shapes as a
   plain program print `Warning: 1 stores not freed at program exit`.
 
+**A `--lib <dir>` override is DROPPED when the working directory has its own `lib/`, so a
+probe against a modified copy of a library measures the original.** Resolution is
+first-wins and the cwd-relative `lib/` is probed before `--lib`
+(`parser/mod.rs::lib_path`), so the flag cannot reach any name `lib/` also provides —
+silently, since a dropped flag raises nothing. Measured 2026-09-04 on loft#1339: three
+runs of a patched `lib/parser.loft` copy, launched from the repo root with `--lib <copy>`,
+all scored the UNMODIFIED tree; a copy with a line of non-loft appended to it ran clean
+through the same command. It surfaced only because an instrumented probe printed nothing.
+The control that settles it is a copy that CANNOT run — corrupt the file you are pointing
+at, and if the run stays clean the flag was never honoured. Then either work from a
+directory with no `lib/` of its own, or point the entry script somewhere else; loft#1352
+tracks the precedence, with loft#930 and loft#963 as the two other ways the same flag goes
+missing.
+
 **A bare `--native` run does not leak-check, so "native is clean" is a control that never
 fired — and reporting it as a BACKEND DIVERGENCE puts a false claim in the tracker.** The
 native leak check is opt-in (`LOFT_NATIVE_LEAK_CHECK`, emitted by
