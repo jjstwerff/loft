@@ -97,17 +97,16 @@ fn a_package_directory_documents_its_own_api() {
         !stdout.contains("0 API section"),
         "a documented `pub fn` must produce an API section; got:\n{stdout}"
     );
-    // The reported path is absolute, so it cannot be mistaken for a project subdir.
+    // The reported path is absolute, so it cannot be mistaken for a project subdir.  It is
+    // compared in the ONE spelling the CLI prints (`portable_path::plain_canonical`): on a
+    // Windows runner `temp_dir()` is the 8.3 short name (`RUNNER~1`) and `canonicalize()` the
+    // verbatim `\\?\C:\…`, and the printed plain long form matched neither.
+    let printed_dir = loft::portable_path::plain_canonical(&pkg.join("doc"))
+        .to_string_lossy()
+        .to_string();
     assert!(
-        stdout.contains(&pkg.join("doc").to_string_lossy().to_string())
-            || stdout.contains(
-                &pkg.join("doc")
-                    .canonicalize()
-                    .unwrap_or_else(|_| pkg.join("doc"))
-                    .to_string_lossy()
-                    .to_string()
-            ),
-        "the absolute output path must be printed; got:\n{stdout}"
+        stdout.contains(&printed_dir),
+        "the absolute output path must be printed ({printed_dir}); got:\n{stdout}"
     );
     let index = std::fs::read_to_string(pkg.join("doc/index.html")).expect("index.html");
     assert!(
