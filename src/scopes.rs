@@ -1194,7 +1194,7 @@ fn established_stores(stmt: &Value, function: &Function, data: &Data) -> HashSet
 }
 
 /// The variable whose scope-end DROP a plain whole-value copy `v = src` takes away, or
-/// `None` where the copy moves nothing.
+/// `None` where the copy moves nothing.  `@FR-H-Drop`: responsibility moves with a copy.
 ///
 /// `t = s` deep-copies (`@FR-B-Copy`) and leaves two records holding one resource — the
 /// failure C111 names for a container and answers with a MOVE — so the copy owns the
@@ -1203,19 +1203,21 @@ fn established_stores(stmt: &Value, function: &Function, data: &Data) -> HashSet
 /// resource (calls.md F-ParamHeap — the parameter aliases it), so it is the callee's copy,
 /// `v`, that never drops.
 ///
-/// The move is taken only for a source and a destination that are each assigned ONCE
-/// (`multi` is [`multi_assigned_in`]'s set), because the transfer set is per VARIABLE while
-/// the fact belongs to the assignment (`@FR-O-Latest`): a source rebound later would lose
-/// the drop of its NEW record, and a copy rebound later would drop neither record, since a
-/// rebind does not release what it displaces.  A captured variable is left alone for the
-/// same reason one level out — the closure record shares its slot.
+/// The fact belongs to the ASSIGNMENT, not the variable (`@FR-O-Latest`): a source rebound
+/// after the copy releases the record it displaces through [`Scopes::displaced_drop`] — no,
+/// it does not: that record's resource is the copy's now, so the rebind SKIPS it and only
+/// retires the hand-off, and the source's NEW record is its own again.  A copy rebound later
+/// releases the record it displaces the same way.  The scan keeps that order
+/// (`drop_transferred` is re-armed at every hand-off a statement makes and retired at an
+/// unconditional reassignment), which is what lets this predicate ignore how often either
+/// side is assigned.  A captured variable is left alone — the closure record shares its
+/// slot.
 ///
 /// A COMPILER BUFFER destination (`buffer_dst`: a `__ref_N` return buffer, the `__ref_p2_N`
-/// a materialised branch arm is copied into) is exempt from the destination's
-/// single-assignment and not-an-argument tests — its null placeholder at function entry
-/// is its second `Set`, a return buffer IS an argument (the caller's, adopted at the
-/// return), and its record is released with the cascade at its own free or by the caller
-/// that adopts it.  That is how `t = s; return t` releases once, in the caller.
+/// a materialised branch arm is copied into) is exempt from the not-an-argument test — a
+/// return buffer IS an argument (the caller's, adopted at the return), and its record is
+/// released with the cascade at its own free or by the caller that adopts it.  That is how
+/// `t = s; return t` releases once, in the caller.
 ///
 /// One home for the three sites that see a whole-value copy: [`collect_drop_transferred`]
 /// (the parser's `Set(v, Var(src))` and its `OpCopyRecord` into a buffer), the branch-arm
@@ -1226,7 +1228,6 @@ pub(crate) fn copy_moves_drop_from(
     data: &Data,
     v: u16,
     src: u16,
-    multi: &HashSet<u16>,
     buffer_dst: bool,
 ) -> Option<u16> {
     if v == src
@@ -1238,11 +1239,7 @@ pub(crate) fn copy_moves_drop_from(
     }
     let d = function.tp(v).base().heap_def_nr()?;
     let sd = function.tp(src).base().heap_def_nr()?;
-    if !data.copies_as(d, sd)
-        || data.drop_cascade_nr(d) == u32::MAX
-        || (!buffer_dst && multi.contains(&v))
-        || multi.contains(&src)
-    {
+    if !data.copies_as(d, sd) || data.drop_cascade_nr(d) == u32::MAX {
         return None;
     }
     Some(if function.is_argument(src) { v } else { src })
@@ -1270,13 +1267,21 @@ pub(crate) fn copy_moves_drop_from(
 /// Only a plain `Var` source can be marked: any other expression names no slot that could
 /// carry a scope-exit drop.
 fn collect_drop_transferred(code: &Value, function: &Function, data: &Data) -> HashSet<u16> {
-    let copy_d = data.def_nr("OpCopyRecord");
     let mut out: HashSet<u16> = HashSet::new();
+    code.walk(&mut |n| drop_handoff_node(n, function, data, &mut out));
+    out
+}
+
+/// The hand-offs ONE node makes, added to `out` — the body of [`collect_drop_transferred`],
+/// which the scan re-applies statement by statement so a variable handed off AFTER a
+/// reassignment retired it is armed again in scan order (the fact belongs to the
+/// assignment, `@FR-O-Latest`).
+fn drop_handoff_node(n: &Value, function: &Function, data: &Data, out: &mut HashSet<u16>) {
+    let copy_d = data.def_nr("OpCopyRecord");
     if copy_d == u32::MAX {
-        return out;
+        return;
     }
-    let multi = multi_assigned_in(code);
-    code.walk(&mut |n| {
+    {
         match n {
             Value::Call(d, args) if *d == copy_d && args.len() >= 3 => {
                 // A whole-value copy into a compiler BUFFER — the per-arm `__ref_p2_N` a
@@ -1287,8 +1292,7 @@ fn collect_drop_transferred(code: &Value, function: &Function, data: &Data) -> H
                 // arm below does not see it.
                 if let (Value::Var(src), Value::Var(dst)) = (args[0].unspan(), args[1].unspan())
                     && function.name(*dst).starts_with("__ref")
-                    && let Some(moved) =
-                        copy_moves_drop_from(function, data, *dst, *src, &multi, true)
+                    && let Some(moved) = copy_moves_drop_from(function, data, *dst, *src, true)
                 {
                     out.insert(moved);
                     return;
@@ -1319,16 +1323,14 @@ fn collect_drop_transferred(code: &Value, function: &Function, data: &Data) -> H
                 // drop to the copy; see [`copy_moves_drop_from`], which the branch-arm lift
                 // reads for its `__lift_N = a` too.
                 if let Value::Var(src) = rhs.unspan()
-                    && let Some(moved) =
-                        copy_moves_drop_from(function, data, *v, *src, &multi, false)
+                    && let Some(moved) = copy_moves_drop_from(function, data, *v, *src, false)
                 {
                     out.insert(moved);
                 }
             }
             _ => {}
         }
-    });
-    out
+    }
 }
 
 /// The work-ref a CONSTRUCTION block hands to its target, if that is what `rhs` is.
@@ -1364,31 +1366,37 @@ fn moved_source_arg(outer_call: u32, args: &[Value], data: &Data) -> Option<usiz
 }
 
 /// Does a copy into `dest` hand the source's OWNERSHIP over — i.e. will something else
-/// release it?  True for a field of a container whose type has a synthesized cascade.
+/// release it?  True for a PLACE reached from a root variable through field reads and
+/// vector element reads, at any depth (`o.h`, `o.s.h`, `v[0].h`, `o.items[i]`), when the
+/// root's type owns a droppable anywhere: its cascade recurses through fields and
+/// elements, so it reaches that place.  Read one level only, `o.s = S {…}` copied into
+/// the nested `o.s.h` and `v[0] = S {…}` into an element were not hand-offs, and the
+/// literal's work-ref released the resource a second time beside the container's cascade.
 ///
-/// The cascade coverage is the whole point of asking (see `Data::has_drop_cascade`): while
-/// enum payloads and collection elements are not cascaded yet, a copy into one of those is
-/// NOT a hand-off, so its source keeps dropping exactly as it does today. Suppressing there
-/// would turn today's early release into a silent leak — the failure mode that makes half a
-/// cascade worse than none.
+/// A path through a KEYED read is never a hand-off: a keyed collection does not release
+/// its records (`@FR-H-Drop-Not`), so the source keeps dropping there.
 pub(crate) fn copy_hands_off(dest: &Value, function: &Function, data: &Data) -> bool {
     let get_field_d = data.def_nr("OpGetField");
+    let get_vector_d = data.def_nr("OpGetVector");
+    let vector_ref_d = data.def_nr("OpVectorRef");
     if get_field_d == u32::MAX {
         return false;
     }
-    let Value::Call(d, fargs) = dest.unspan() else {
-        return false;
-    };
-    if *d != get_field_d {
-        return false;
-    }
-    // The container holding the field: the only form that names a type here is a var.
-    let Some(Value::Var(cv)) = fargs.first().map(Value::unspan) else {
-        return false;
-    };
-    match function.tp(*cv).base() {
-        Type::Reference(cd, _) | Type::Enum(cd, true, _) => data.has_drop_cascade(*cd),
-        _ => false,
+    let mut cur = dest;
+    loop {
+        let Value::Call(d, args) = cur.unspan() else {
+            return false;
+        };
+        if *d != get_field_d && *d != get_vector_d && *d != vector_ref_d {
+            return false;
+        }
+        match args.first().map(Value::unspan) {
+            Some(Value::Var(cv)) => {
+                return data.type_owns_droppable_anywhere(function.tp(*cv).base());
+            }
+            Some(inner) => cur = inner,
+            None => return false,
+        }
     }
 }
 
@@ -4674,7 +4682,8 @@ fn check_arg_ref_allocs(ir: &Value, function: &Function, fn_name: &str) {
 
 impl Scopes<'_> {
     /// The type's scope-end hook for `v`, unless a MOVE-copy already released `v`'s
-    /// store — see [`collect_drop_transferred`].  One home for the rule, because
+    /// store — see [`collect_drop_transferred`].  `@FR-H-Drop`: the owner's scope-end
+    /// clause.  One home for the rule, because
     /// both emission sites (the buffer-adoption leg and the ordinary one) must agree:
     /// a drop that runs on a released store is a use-after-free either way.
     fn scope_end_drop(&self, function: &Function, v: u16, data: &Data) -> Option<Value> {
@@ -5165,6 +5174,22 @@ impl Scopes<'_> {
         // #316 — capture BEFORE put_scope below: an ownership-transition free
         // only applies to a REassignment.
         let was_in_scope = self.var_scope.contains_key(&v);
+        // The record this reassignment DISPLACES is released through its hook before the
+        // new value lands — read here, while `owned_refs` still describes the previous
+        // assignment.
+        let displaced = if was_in_scope && *value != Value::Null {
+            let rhs_owned = matches!(self.ref_rhs_ownership(value, data), RefRhs::Owned);
+            self.displaced_drop(v, rhs_owned, function, data)
+        } else {
+            None
+        };
+        // An UNCONDITIONAL reassignment retires the hand-off of the record it displaces:
+        // what `v` holds from here on is its own to release again.  A reassignment inside a
+        // deeper scope (one arm of a branch, a loop body) is not certain to run, so the
+        // hand-off stays — the leak direction, never a second release.
+        if was_in_scope && *value != Value::Null && self.var_scope.get(&v) == Some(&self.scope) {
+            self.drop_transferred.remove(&v);
+        }
         // A redundant re-init `Set(v, Null)` for an already-in-scope var is
         // elided (Reference/Vector/Enum/Text locals don't need re-null-ing).
         // EXCEPTION (@P302): keyed collections — `s = []` lowers to
@@ -5338,9 +5363,12 @@ impl Scopes<'_> {
         {
             transition_free = Some(call("OpFreeRef", v, data));
         }
-        // Track the LATEST assignment's ownership for this var.
+        // Track the LATEST assignment's ownership for this var.  Through `base()`: a nullable
+        // record local holds the same record behind a nullability marker (`@FR-L-Null`), and
+        // the memo is what [`Self::displaced_drop`] reads for it; the transition free above
+        // keeps its own bare test and is unchanged by the wider memo.
         if matches!(
-            function.tp(v),
+            function.tp(v).base(),
             Type::Reference(_, _) | Type::Enum(_, true, _)
         ) {
             match self.ref_rhs_ownership(value, data) {
@@ -6061,17 +6089,152 @@ impl Scopes<'_> {
                 WitnessSet::Other => witness_ops.push(guarded_release),
             }
         }
-        if prefix.is_empty() && ls.is_empty() && witness_update.is_none() && witness_ops.is_empty()
+        if prefix.is_empty()
+            && ls.is_empty()
+            && witness_update.is_none()
+            && witness_ops.is_empty()
+            && displaced.is_none()
         {
             Value::Set(v, Box::new(set_value))
         } else {
-            let mut all = prefix;
+            // The snapshot of the displaced record is taken FIRST — before the transition
+            // free releases its store and before any part of the new value is computed —
+            // and its hook runs LAST, after the new value has landed, so a right-hand side
+            // that reads the old value (`s = grow(s)`) still finds the resource live.
+            let (mut all, post) = match displaced {
+                Some((pre, post)) => (pre, post),
+                None => (Vec::new(), Vec::new()),
+            };
+            all.append(&mut prefix);
             all.append(&mut ls);
             all.push(Value::Set(v, Box::new(set_value)));
             all.extend(witness_update);
             all.append(&mut witness_ops);
+            all.extend(post);
             Value::Insert(all)
         }
+    }
+
+    /// [`Self::displaced_drop`] for a statement-level `OpDatabase(v, tp)` that REBUILDS a
+    /// local's record in place.  A construction of a local not yet in scope displaces
+    /// nothing; one of a local already in scope is asked the owner question — a first
+    /// build after the declaration's null placeholder owns nothing yet, and the snapshot
+    /// is null-safe, so a first loop iteration releases nothing either.
+    fn in_place_rebuild(
+        &mut self,
+        stmt: &Value,
+        function: &mut Function,
+        data: &Data,
+    ) -> Option<(Vec<Value>, Vec<Value>)> {
+        let Value::Call(d, args) = stmt.unspan() else {
+            return None;
+        };
+        if *d != data.def_nr("OpDatabase") {
+            return None;
+        }
+        let Some(Value::Var(ov)) = args.first().map(Value::unspan) else {
+            return None;
+        };
+        let v = *self.var_mapping.get(ov).unwrap_or(ov);
+        if !self.var_scope.contains_key(&v) {
+            return None;
+        }
+        // A construction OWNS what it builds, on every iteration.
+        let ops = self.displaced_drop(v, true, function, data);
+        if self.var_scope.get(&v) == Some(&self.scope) {
+            self.drop_transferred.remove(&v);
+        }
+        ops
+    }
+
+    /// The IR that releases, through its type's hook, the record `v` is about to stop
+    /// holding — `(before, after)` the displacing statement — or `None` where `v` owns no
+    /// droppable record.  `@FR-H-Drop`: the reassignment clause.
+    ///
+    /// `OpDrop` runs *"when the value's OWNER dies"* (INTERFACES.md), and a reassignment is
+    /// that death for the record it displaces: its store is freed (a displaced free) or
+    /// rebuilt in place, and either way the resource it held is gone with no hook run.  A
+    /// file opened into a local that is later reassigned was never closed (loft#1362).
+    ///
+    /// The release is taken on a SNAPSHOT: a fresh temp is deep-copied from `v` before the
+    /// statement (null-safe — nothing is copied from an absent local), and the hook runs on
+    /// the temp after it.  The copy is what makes the order free of hazards: an in-place
+    /// rebuild (`s = S {…}` lowers to `OpDatabase(s, tp)` on the existing store) overwrites
+    /// the old bytes before anything after the statement could read them, and a right-hand
+    /// side that reads `v` must still see the resource live.  It is a copy of a record with
+    /// a droppable member — a handle, not data — so its cost is where drops are.
+    ///
+    /// The owner predicate is the transition free's: `v` is in scope, its record is OWNED
+    /// (the dep-empty proxy, `@FR-O-Override`'s never-free, the oracle's latest-assignment
+    /// fact), its drop was not handed off (`drop_transferred`), it is no witnessed
+    /// mixed-ownership local, no argument and no capture.  A view's record is somebody
+    /// else's resource and is never released here — which is why, inside a LOOP, the
+    /// latest-assignment fact from outside the loop is trusted only when THIS assignment
+    /// owns too (`rhs_owned`): on the second iteration the displaced record is the one this
+    /// statement built, and a view assigned here would otherwise be copied and released as
+    /// if it were owned.
+    fn displaced_drop(
+        &mut self,
+        v: u16,
+        rhs_owned: bool,
+        function: &mut Function,
+        data: &Data,
+    ) -> Option<(Vec<Value>, Vec<Value>)> {
+        let owned_here = match self.owned_refs.get(&v) {
+            Some(depth) => *depth == self.loops.len() || rhs_owned,
+            None => false,
+        };
+        // @FR-O-Proxy asks free — the hook is a release, and it follows only where the
+        // empty dep list says `v` OWNS the record; @FR-O-Override (`is_skip_free`) is
+        // consulted right after it, as every free on the proxy must.
+        if !owned_here
+            || function.is_argument(v)
+            || function.is_captured(v)
+            || !function.tp(v).depend().is_empty()
+            || function.is_skip_free(v)
+            || self.drop_transferred.contains(&v)
+            || self.owner_witness.contains_key(&v)
+        {
+            return None;
+        }
+        let d = function.tp(v).base().heap_def_nr()?;
+        if data.drop_cascade_nr(d) == u32::MAX {
+            return None;
+        }
+        let kt = data.def(d).known_type();
+        let tp = function.tp(v).base().without_deps();
+        self.lift_counter += 1;
+        let name = format!("__disp_{}", self.lift_counter);
+        let disp = function.add_temp_var(&name, &tp);
+        function.mark_inline_ref(disp);
+        self.var_scope.insert(disp, self.scope);
+        self.var_order.push(disp);
+        let live = Value::Call(data.def_nr("OpConvBoolFromRef"), vec![Value::Var(v)]);
+        let snapshot = Value::Insert(vec![
+            Value::Call(
+                data.def_nr("OpDatabase"),
+                vec![Value::Var(disp), Value::Int(i32::from(kt))],
+            ),
+            Value::Call(
+                data.def_nr("OpCopyRecord"),
+                vec![Value::Var(v), Value::Var(disp), Value::Int(i32::from(kt))],
+            ),
+        ]);
+        let pre = vec![v_set(disp, Value::Null), v_if(live, snapshot, Value::Null)];
+        let mut post = Vec::new();
+        if let Some(hook) = drop_hook(function, disp, data) {
+            post.push(hook);
+        }
+        post.push(call("OpFreeRef", disp, data));
+        // Back to the TRUE sentinel: the sweep visits the temp again at scope end, and a
+        // freed reference that still reads `rec != 0` would run the hook a second time on
+        // whatever the allocator has since put in that slot.  On the sentinel both the
+        // hook's liveness test and the sweep's free are no-ops.
+        post.push(v_set(
+            disp,
+            Value::Call(data.def_nr("OpNullRefSentinel"), Vec::new()),
+        ));
+        Some((pre, post))
     }
 
     /// #316 — classify the (pre-scan) RHS of a `Set` into Reference var `v`.
@@ -6279,13 +6442,30 @@ impl Scopes<'_> {
                     v_set(h, Value::Null)
                 });
             }
+            // `s = S {…}` on a live record local lowers to `OpDatabase(s, tp)` on its
+            // existing store, not to a `Set`: a REBUILD, and the record it overwrites is
+            // released through its hook exactly as a reassigned one is.  The first
+            // construction of a local (outside a loop) displaces nothing.
+            // Re-arm the hand-offs this statement makes, in scan order, so a variable
+            // whose earlier hand-off a reassignment retired is handed off again here.
+            {
+                let transferred = &mut self.drop_transferred;
+                v.walk(&mut |n| drop_handoff_node(n, function, data, transferred));
+            }
+            let rebuilt = self.in_place_rebuild(v, function, data);
             let sv = self.scan(v, function, data);
+            if let Some((pre, _)) = &rebuilt {
+                ls.extend(pre.iter().cloned());
+            }
             if let Value::Insert(to_insert) = sv {
                 for i in to_insert {
                     ls.push(i.clone());
                 }
             } else {
                 ls.push(sv);
+            }
+            if let Some((_, post)) = rebuilt {
+                ls.extend(post);
             }
             // loft#1331 — DETACH an accumulator this statement repointed at a destination the
             // frame does not own, so the scope-exit sweep frees nothing instead of freeing the
@@ -9014,9 +9194,7 @@ impl Scopes<'_> {
         // after it ran), so the drop moves here by the same rule: the arm's variable stops
         // dropping, the temp — and through the join, the binding — owns the resource.
         for &(src, tmp) in &copied {
-            if let Some(moved) =
-                copy_moves_drop_from(function, data, tmp, src, &self.multi_assigned, true)
-            {
+            if let Some(moved) = copy_moves_drop_from(function, data, tmp, src, true) {
                 self.drop_transferred.insert(moved);
             }
         }

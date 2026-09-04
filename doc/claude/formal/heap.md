@@ -219,6 +219,43 @@ every caller (loft#1287, `scopes::scan_args`). Nothing widens: the mark names on
 parameter's ENTRY store, so a REPEATED call still releases the fresh store the previous one
 installed, which the frame does own.
 
+### Drop — the hook a type declares runs once per resource, when the record that owns it dies
+
+```
+  (H-Drop)   a type that declares `OpDrop` releases a RESOURCE the record holds (a handle,
+             a lock, a file), and the hook runs ONCE per resource, at the death of the
+             record that OWNS it:
+               - the owner's scope end (@PLN125 arc B), in reverse declaration order;
+               - a REASSIGNMENT of the owner that displaces the record — a rebuild in
+                 place, a call result, a rebind to null — after the new value has been
+                 computed and before anything after the statement runs (loft#1362);
+               - a CONTAINER's death for what it holds, its own hook first and then its
+                 members, through the synthesized cascade (C111).
+             RESPONSIBILITY moves with a copy (binding.md B-Copy): a plain whole-value copy
+             `t = s`, a copy into a struct field, an enum payload or a vector element, a
+             branch arm's temp, a return buffer — the copy owns, the source stops
+             dropping.  A copy off a PARAMETER moves nothing: the caller owns.
+  (H-Drop-Not) the OLD value of an overwritten FIELD or ELEMENT (`o.s = other`,
+             `v[i] = other`), an element taken OUT (`v.remove(i)`), and a keyed
+             collection's records are NOT released by the language — the author releases
+             them (INTERFACES.md § `OpDrop`, the documented boundary).
+```
+
+**In words.** A drop is not a destructor of loft-side data — the ownership model pays for
+that — it is the release of something outside the program, and such a thing must be
+released exactly once. So the question every site asks is *"which record owns the resource
+now?"*: the owner's death runs the hook, a copy moves the ownership to the copy, and a
+reassignment is a death for the record it displaces. Where two records hold one resource
+by the author's doing — two containers built from one droppable, two copies of one value,
+one hand-off inside a loop body that runs twice — `warning[double-move]` names what it can
+see and the loop shape stays on the author.
+
+**Conformance.** `tests/scripts/139-drop-cascade.loft` (the cascade),
+`a-whole-value-copy-of-a-droppable-releases-once.loft` (the copy moves), and
+`1362-a-rebind-releases-the-droppable-it-displaces.loft` (the reassignment), each measured
+identical on both backends.  Sites: `scopes::displaced_drop`, `scopes::copy_moves_drop_from`,
+`scopes::scope_end_drop`, `scopes::copy_hands_off`.
+
 ### The soundness bridge — a well-typed program never faults a free
 
 ```

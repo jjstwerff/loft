@@ -7888,6 +7888,14 @@ impl Data {
     /// wrappers over a base type and peel. A `Function` does NOT forward: a closure record
     /// is owned by the fn-ref slot's own cascade, not by the type that names it, and
     /// following it would make every fn-ref-holding struct answer for its captures.
+    /// Does a value of this TYPE own a droppable somewhere inside it — a struct through
+    /// its fields, a vector through its elements, at any depth?  The type-level twin of
+    /// [`Self::owns_droppable`], for a container that has no def of its own (a `vector<S>`).
+    #[must_use]
+    pub fn type_owns_droppable_anywhere(&self, t: &Type) -> bool {
+        self.type_owns_droppable(t, &mut HashSet::new())
+    }
+
     fn type_owns_droppable(&self, t: &Type, path: &mut HashSet<u32>) -> bool {
         match t {
             Type::Reference(d, _)

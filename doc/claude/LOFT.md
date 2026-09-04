@@ -2295,7 +2295,8 @@ rather than a bag of functions.  Mark the type and these functions `pub` to use 
   error — distinct-type safety is free).
 - **Scope end** — define `fn OpDrop(self: T)` and it runs when the value's OWNER dies: the
   binding's own scope exit, the early-`return`/`break` paths, reverse-declaration order within a
-  scope (@PLN125 arc B).  Copying a droppable into a struct field, an enum payload or a
+  scope (@PLN125 arc B), and a REASSIGNMENT of the binding, which releases the record it
+  displaces once the new value is computed.  Copying a droppable into a struct field, an enum payload or a
   collection element MOVES it — the source stops dropping, and the container's death releases
   what it holds, its own hook first and then its members (@PLN139).  A plain whole-value copy
   (`t = s`, the variable an `if` arm yields, `t = s; return t`) moves it the same way: the

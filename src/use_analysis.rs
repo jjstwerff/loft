@@ -4153,9 +4153,6 @@ struct DoubleMove<'a> {
     cur: Option<Position>,
     /// `(source var, first hand-off, second hand-off)`, one per var per sequence.
     found: Vec<(u16, Position, Position)>,
-    /// [`crate::scopes::multi_assigned_in`] for this function — the whole-value copy
-    /// predicate reads it.
-    multi: std::collections::HashSet<u16>,
 }
 
 impl DoubleMove<'_> {
@@ -4213,14 +4210,8 @@ impl DoubleMove<'_> {
             Value::Set(v, rhs) => {
                 self.scan(rhs, st);
                 if let Value::Var(src) = rhs.unspan()
-                    && crate::scopes::copy_moves_drop_from(
-                        self.func,
-                        self.data,
-                        *v,
-                        *src,
-                        &self.multi,
-                        false,
-                    ) == Some(*src)
+                    && crate::scopes::copy_moves_drop_from(self.func, self.data, *v, *src, false)
+                        == Some(*src)
                 {
                     self.record_source(*src, st);
                 }
@@ -4260,14 +4251,8 @@ impl DoubleMove<'_> {
         // buffer) moves the drop the way `t = s` does — the same arm the collector reads.
         if let (Value::Var(src), Value::Var(dst)) = (args[0].unspan(), args[1].unspan())
             && self.func.name(*dst).starts_with("__ref")
-            && crate::scopes::copy_moves_drop_from(
-                self.func,
-                self.data,
-                *dst,
-                *src,
-                &self.multi,
-                true,
-            ) == Some(*src)
+            && crate::scopes::copy_moves_drop_from(self.func, self.data, *dst, *src, true)
+                == Some(*src)
         {
             self.record_source(*src, st);
             return;
@@ -4372,7 +4357,6 @@ pub fn warn_double_move(
             copy_d,
             cur: None,
             found: Vec::new(),
-            multi: crate::scopes::multi_assigned_in(&def.code),
         };
         cx.scan(&def.code, &mut Handoffs::new());
         for (src, first, at) in std::mem::take(&mut cx.found) {

@@ -9,6 +9,29 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A reassignment releases the droppable it displaces, and the hand-off fact follows the assignment (2026-09-05)
+
+loft#1362.  `scopes::displaced_drop` — at a `Set` of an owned droppable-typed local already
+in scope, and at a statement-level `OpDatabase(v, tp)` that rebuilds one in place — copies
+the record into a null-safe snapshot temp (`__disp_N`) at the head of the scan's prefix
+(before the transition free and the right-hand side), runs the type's hook on the temp
+after the Set, frees it and resets it to the true sentinel (a freed reference still reads
+`rec != 0`, and the sweep's second visit ran the hook on the recycled slot until it did).
+The owner predicate is the transition free's, and inside a loop the outer latest-assignment
+fact is trusted only when this assignment owns too (`ref_rhs_ownership`), so a view assigned
+in a body is never copied and released as if owned.  `owned_refs` is kept through `base()`
+so a nullable local has an entry.  `drop_transferred` is now flow-sensitive: re-armed by
+every statement's hand-offs in scan order (`drop_handoff_node`, the body the up-front
+collector runs too) and retired by an unconditional reassignment — which is what let
+`copy_moves_drop_from` drop its per-variable single-assignment guards (`t = s; s = …`
+releases through the copy only; `t = s; t = …` releases what it displaces).
+`copy_hands_off` peels nested field and element reads to the root variable
+(`type_owns_droppable_anywhere`): `o.s = S {…}` into the nested `o.s.h` and `v[0] = S {…}`
+into an element were not hand-offs, and the literal's work-ref released the resource a
+second time beside the container's cascade.  Rule: `formal/heap.md (H-Drop)` — new; the
+chapter had no drop clause.  Guard `1362-a-rebind-releases-the-droppable-it-displaces.loft`
+(13 cells), both backends, with both leak checks armed.
+
 ### A tuple with a heap member copies like any other value, and the eager release leg finds its checkout (2026-09-05)
 
 loft#1361: three places kept a tuple's stack WORDS where `binding.md (B-Copy)` and

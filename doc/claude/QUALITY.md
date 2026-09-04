@@ -481,7 +481,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 |---:|---:|---:|
 | 388 | 364 | **24** |
 
-loft#1356 added two peeling sites (the eager factory's tail scan reads a `Return` and a `Set` through their `Span`), loft#1357 one, loft#1361 one (the tuple member copy reads its `Var` or `TupleGet` source through the `Span`) — the statement scan in `scopes::convert` takes a `Span` off an `if` whose condition consumes a `??` temp, so it can put the evaluated condition back under the same position.  `scripts/ir_walker_audit.py unspan` re-measures it, and
+loft#1356 added two peeling sites (the eager factory's tail scan reads a `Return` and a `Set` through their `Span`), loft#1357 one, loft#1361 one (the tuple member copy reads its `Var` or `TupleGet` source through the `Span`), loft#1362 two (`scopes::in_place_rebuild` reads the statement-level `OpDatabase` through its `Span`, and `copy_hands_off` walks a nested destination place through each level's) — the statement scan in `scopes::convert` takes a `Span` off an `if` whose condition consumes a `??` temp, so it can put the evaluated condition back under the same position.  `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
 It moved from 384 · 360 to 385 · 361 with loft#1354's `arm_moves_a_live_tuple_local`, which
 discriminates on `Value::Var` and `Value::Block` to find the local an `if` arm hands over — it
@@ -2457,6 +2457,8 @@ and who does not.
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
 | 703 | 346 | 5 | **352** |
+
+loft#1362 moved one FUNCTION-half site: `scopes::scan_set`'s latest-assignment memo (`owned_refs`) reads the local's type through `base()` now, so a nullable record local has an entry for the reassignment release to read.
 
 The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.  It happened again on the 2026-09-03 join — one side carried `684 | 330 | 5 | 349` and the other `687 | 331 | 5 | 351`, and the tree that holds both measures `689 | 332 | 5 | 352`; the 2026-09-03 evening join (D-bind-11 onto the #1318 tree) measured `692 | 333 | 5 | 354`, loft#1327's opaque-fn-ref clause moved one function off the opaque column, and the D-own-8 closure moved two more onto the peeled one — one arm peeled (`gen_set_first_at_tos`'s null-init) beside two new scope-pass predicates.  The tree that holds BOTH measures `694 | 337 | 5 | 352`, which is neither side's number: two branches each adding predicates cannot have their counts added, because the audit classifies FUNCTIONS and a merged body is one function however many branches touched it.  loft#1333 then moved it to `695 | 338 | 5 | 352` with `scopes::mixed_ownership_locals`, the pre-scan that asks whether a binding is assigned a VIEW on one path and a delivered collection on another; it reads `function.tp(v).base()`, so it peels the wrapper and lands on the seeing-through side, leaving the opaque column where it was.  loft#1335 moved one function the other way, from opaque to seeing-through — `697 | 341 | 5 | 351` — because `fnref_result_type` stopped listing the shapes it bridges and asks `Type::base()` / `borrow_deps` instead, which is the cure that closed it.  loft#1349 added one opaque function, `Parser::boxed_tuple_return` — `698 | 341 | 5 | 352` — which matches `Type::Tuple` bare on purpose: a nullable tuple is not a shape it boxes, so peeling there would be a wrong answer rather than a wider one.  loft#1357 added two on the seeing-through side — `700 | 343 | 5 | 352` — `Parser::lambda_text_buffer_var` and `scopes::any_text_return_buffer`, both asking which hidden attribute is a `RefVar(Text)` buffer, the one home the text-return deliveries read.
 
@@ -4983,6 +4985,58 @@ what failed the single-assignment test.  Print a diagnostic whole, then filter. 
 arm-lift comment said *"a struct-Enum … has no `Var`-copy lowering to hand the temp to"* — a
 carve-out that stated the defect as its reason, exactly the shape
 [[carve-out-comment-can-state-itself-as-the-rule]] warns about.
+
+#### B7o — loft#1362 closed: a reassignment releases what it displaces, and the drop hand-off fact follows the assignment (2026-09-05)
+
+The open issue the B-Copy walk filed, taken next because it sits in the same family with
+its matrix half-built and because the owner's standard does not ship around an open
+issue.  Fourteen rebind cells on both backends, baseline: seven never released the
+displaced record (the droppable itself, a struct rebuilt in place, a struct-enum, a nullable
+local, a rebind to null, a call result, a right-hand side that reads the old value); a loop
+body's local already released per iteration; and a literal handed into a NESTED field or an
+element released twice.
+
+**The mechanism, and why the fix is a snapshot.**  `s = S {…}` on a live local is not a `Set`
+in the IR at all: the parser rebuilds the record in place (`OpDatabase(s, tp)` on the
+existing store), so the old bytes are gone before any hook could read them; every other
+rebind freed the displaced store without its hook.  A hook before the statement is wrong
+where the right-hand side reads the old value (`s = grow(s)`), a hook after is wrong where
+the rebuild is in place — so `scopes::displaced_drop` copies the record into a null-safe
+temp at the head of the scan's prefix and runs the hook on the temp after the statement.
+Three wrong cuts, each a measurement: the temp marked never-free for the sweep silenced its
+own explicit free (a leak of every snapshot store, interpreter only, visible only with the
+leak line in view); the temp left visible was dropped AGAIN by the sweep on a freed
+reference that still reads `rec != 0` (the cure is the true sentinel after the free); and
+the transition free's loop-depth guard hid the rebind of a local declared outside the loop
+(the outer owner fact is trusted when THIS assignment owns too).
+
+**The fact belongs to the assignment.**  With rebinds releasing, the copy-move's
+per-variable single-assignment guard read wrong in both directions: `t = s; s = …` released
+16 twice (the copy AND the displaced source), `t = s; t = …` released nothing.
+`drop_transferred` is now re-armed by every statement's hand-offs in scan order and retired
+by an unconditional reassignment — `@FR-O-Latest` for drops — and the guard is gone.  A
+reassignment inside a deeper scope keeps the hand-off (the leak direction; a conditional
+hand-off is a runtime fact this pass does not have).
+
+**The sibling short list.**  `copy_hands_off` read one field level: `o.s = S {…}` copies
+into the nested `o.s.h` and `v[0] = S {…}` into an element, and neither counted, so the
+literal's work-ref dropped beside the container's cascade.  It peels field and element
+reads to the root now, through a keyed read never.
+
+**Rule.**  `formal/heap.md` had no drop clause at all — every drop question of these two
+days was settled from C111 and INTERFACES.md prose.  `(H-Drop)` states the one release per
+resource at the owner's death (scope end, reassignment, container cascade) and the move
+with a copy; `(H-Drop-Not)` names the boundary (an overwritten field's or element's old
+value, a removed element, a keyed collection's records).  Guard
+`1362-a-rebind-releases-the-droppable-it-displaces.loft`, 13 cells, both backends, both
+leak checks armed.
+
+**Left open, on the record.**  A conditional hand-off (a droppable-holding variable yielded
+by ONE arm of a branch) suppresses the source's release on every path — the untaken arm's
+resource is released by nobody (leak direction, pre-existing since the copy-move).  And an
+overwritten FIELD's old value is the same class as a variable rebind one level in; it is
+kept on the documented boundary because the parser's field write cannot yet tell a
+construction from an overwrite, and a hook on a zeroed fresh field would be a false release.
 
 #### B2 — open, and the owner's call
 

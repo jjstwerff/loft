@@ -467,6 +467,13 @@ and never by the container. That is invisible while both die in the same scope,
 and it is a use-after-free the moment the container outlives the source, which is
 what `open_session` above does.
 
+**A reassignment releases what it displaces.** `s = S { h: acquire() }; s = S { h: acquire() }`
+runs the hook on the first record's handle at the second assignment — after the new value
+has been computed, so `s = grow(s)` still finds the old resource live while `grow` runs —
+and so does a rebind from a call, to `null`, or inside a loop of a local declared outside
+it. The hook used to run at scope end only, and the first handle was never closed
+(loft#1362).
+
 **A plain whole-value copy is the same step.** `h2 = h`, `t = s` for a struct or a
 struct-enum holding a droppable, `t: S? = s`, the variable an `if` arm yields, and
 `t = s; return t` all copy the record, and the copy takes the release with it: the
@@ -518,9 +525,10 @@ What follows from all of this, and is worth knowing before you reach for it:
 **Three things a drop does NOT do.** Each is a deliberate boundary, not an
 omission:
 
-- **Taking a value OUT of its owner does not release it.** `v.remove(i)` and
-  `v[i] = other` do not release the element that goes away: it leaks, and the
-  program is otherwise correct. Releasing there would mean the runtime's free
+- **Taking a value OUT of its owner does not release it.** `v.remove(i)`,
+  `v[i] = other` and an overwritten FIELD `o.s = other` do not release the value that
+  goes away: it leaks, and the program is otherwise correct. (A reassigned LOCAL is
+  different — its record has one owner, the local, and the release runs there.) Releasing there would mean the runtime's free
   cascade calling back into your loft code, inside the one operation the heap
   invariant rests on, for a hook that by contract can neither fail nor answer. If
   you churn a collection of live resources, release the old element yourself

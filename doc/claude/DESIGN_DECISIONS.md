@@ -3185,6 +3185,16 @@ day), `t = s; return t` three times.  `scopes::copy_moves_drop_from` is the one 
 a parameter leaves the caller as the owner.  Guard:
 `tests/scripts/a-whole-value-copy-of-a-droppable-releases-once.loft`.
 
+**And to the reassignment (2026-09-05, loft#1362).**  A rebind is the owner's death for the
+record it displaces, and the hook ran at scope end only — a struct literal assigned to a live
+local is rebuilt IN PLACE, so the old record's bytes were gone before anything could read
+them.  The release is taken on a null-safe snapshot copied before the statement and dropped
+after it (`scopes::displaced_drop`), and the hand-off fact now follows the ASSIGNMENT: a
+source copied and then rebound releases through its copy only, and a copy rebound releases
+what it displaces.  The rule is `heap.md (H-Drop)`; the OLD value of an overwritten field or
+element stays the boundary named above.  Guard:
+`tests/scripts/1362-a-rebind-releases-the-droppable-it-displaces.loft`.
+
 That leaves one question, and it is a question about the GUARANTEE rather than the mechanism:
 which container deaths run the cascade?
 

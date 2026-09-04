@@ -30,6 +30,14 @@ struct's bind is measured at; the same walk found that a tuple holding a vector 
 member is shared, not copied, by a whole-tuple bind or a destructure (loft#1361, open, with
 a verified workaround).
 
+**A reassigned droppable is released.**  `s = S { h: open(a) }; s = S { h: open(b) }` never
+closed `a`: the hook ran at scope end only, and the first record was rebuilt over or freed
+without it.  It now runs at the reassignment, after the new value is computed, on both
+backends — for a rebind from a literal, a call, to `null`, and inside a loop of a local
+declared outside it.  A field or element overwritten in place is unchanged (the documented
+boundary), and a literal handed into a nested field or an element is released once by its
+container instead of twice.
+
 **A copied droppable is released once.**  `t = s` on a record whose type defines `OpDrop`
 — or holds a field that does — ran the hook for both records, so a copied file handle was
 closed twice; a copy returned from a function ran it three times, the first two before the
