@@ -9,6 +9,25 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A lambda's lifetime tuple is boxed like a named function's, a tuple result joins a tuple literal, and a nullable record from a fn-ref copies on the interpreter (2026-09-04)
+
+loft#1349: a lambda declared `-> (vector<integer>, text)` stored its annotation verbatim,
+so its tail was handed up as the bare tuple its arms yield and the vector element aliased the
+argument's field; both lambda forms now take `Parser::boxed_tuple_return`, the rule the named
+declaration already applied (`has_lifetime_concern` → `tuple_def`), at the same point on both
+passes (closures-history D-clo-21).  loft#1350: an `else` arm yielding a stack tuple whose
+element types spell the expected synthetic `__tuple<…>` name is boxed into its own work-ref
+in `block_result` and retyped as the record, so `parse_if` joins two records; a different
+shape keeps the refusal (tuples-history D-tup-7).  loft#1353: `use_analysis::callee_of`
+admits the nullable fn-ref spelling when the return borrows a visible ARGUMENT — the reassign
+copy brackets every ref argument — and still declines a return that borrows the closure
+(`fnref_return_borrows_closure`), the shape the 1114 guard pins (closures-history D-clo-22).
+loft#1351 is the sibling checkout's fix, carried here so the harness measures what a real
+build emits: `tests/native.rs` calls `namespace_colliding_native_fns` after its parse, as
+every `--native` path does; its guard lives on that branch.  Guards `1349`/`1350` (one
+file), `1353`.  Filed apart: loft#1354 (a tuple local yielded by an arm is moved on
+`--native`).
+
 ### A `--lib` directory that lost to a project-local `lib/` says so (2026-09-04)
 
 loft#1352.  `use` resolution is first-wins, and a project-local `lib/`, a declared dependency

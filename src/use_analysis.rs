@@ -3325,6 +3325,16 @@ pub fn callee_of(data: &Data, d_nr: u32, value: &Value) -> Option<u32> {
         // the `Enum(__nullable<S>, true)` the field rewrite produces (loft#1114).  Reading
         // `Optional` alone matched nothing here: by the time a return type reaches this,
         // the rewrite has already run.
+        //
+        // loft#1353 — the nullable spelling IS admitted where the return borrows a VISIBLE
+        // argument: the reassign copy the readers emit brackets every ref argument
+        // (`protectable_ref_args`, both spellings since loft#1245), so the source-free that
+        // follows the copy cannot reach the caller's store, and the copy is what `(B-Copy)`
+        // asks of `j = if c { hr(b) } else { d }` — a nullable record from a fn-ref chosen
+        // by an `if` aliased the argument's field on the interpreter while `--native`
+        // copied.  A return that borrows the CLOSURE (a captured store: the `1114` shape
+        // above) is still declined — no caller variable names that store, so the bracket
+        // cannot protect it and the freed-source bit would reach it.
         Value::CallRef(v, _) => fnref_target_of(
             function_defs(data, d_nr)
                 .rhs
@@ -3332,11 +3342,28 @@ pub fn callee_of(data: &Data, d_nr: u32, value: &Value) -> Option<u32> {
                 .map_or(&[], Vec::as_slice),
         )
         .filter(|d| {
-            data.nullable_struct_payload(data.def(*d).returned())
-                .is_none()
+            let def = data.def(*d);
+            data.nullable_struct_payload(def.returned()).is_none()
+                || !fnref_return_borrows_closure(def)
         }),
         _ => None,
     }
+}
+
+/// Does this lambda's return borrow its CLOSURE — a captured store no caller variable
+/// names?
+///
+/// A return dep that names no visible parameter names the closure record
+/// (`fnref_result_type` reads the same fact at the call: an index past the visible
+/// arguments is the fn-ref slot's own record).  The visible parameters are the leading
+/// non-hidden attributes; a hidden one (a text work buffer, the `__closure` record) is
+/// not a caller-supplied store.
+fn fnref_return_borrows_closure(def: &crate::data::Definition) -> bool {
+    let visible = def.attributes().iter().filter(|a| !a.hidden).count();
+    def.returned()
+        .depend()
+        .iter()
+        .any(|&a| a == u16::MAX || a as usize >= visible)
 }
 
 /// See [`HeapDelivery`].

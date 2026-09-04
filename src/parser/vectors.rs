@@ -1272,6 +1272,9 @@ or build a local and use that."
         } else {
             Type::Void
         };
+        // A lifetime-bearing tuple return is boxed exactly as a named function's is
+        // (loft#1349) — see `Parser::boxed_tuple_return`.
+        let result = self.boxed_tuple_return(result);
         if self.first_pass {
             self.data.set_returned(d_nr, result);
         }
@@ -1569,10 +1572,15 @@ or build a local and use that."
             } else {
                 Type::Void
             };
+            // A lifetime-bearing tuple return is boxed exactly as a named function's is
+            // (loft#1349) — see `Parser::boxed_tuple_return`; the same step on both
+            // passes, so the signature does not move between them.
+            let known = self.boxed_tuple_return(known);
             self.data.set_returned(d_nr, known);
         } else if !result.is_unknown() && !matches!(result, Type::Void) {
             // On second pass, force-update the return type from hint or annotation.
-            self.data.definitions[d_nr as usize].returned = result.clone();
+            let boxed = self.boxed_tuple_return(result.clone());
+            self.data.definitions[d_nr as usize].returned = boxed;
         }
 
         self.vars

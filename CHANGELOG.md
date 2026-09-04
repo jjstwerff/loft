@@ -55,6 +55,13 @@ directory, so an override passed on the command line from inside such a project 
 ignored without a word.  It still is — that order may well be right — but loft now says so,
 naming the file that answered and the one the flag would have used.
 
+**Tuples with text or collections behave the same from a lambda as from a named function.**
+A lambda returning `(vector<T>, text)` used to hand its vector out as a view of the caller's
+field; it now returns a copy, as a named function always did.  And an `if` that chooses
+between such a function's result and a tuple you wrote inline compiles now, whichever arm is
+which.  A nullable record answered by a lambda and chosen by an `if`, or reassigned, is
+copied on the interpreter as it was on the compiled backend.
+
 **The reference is now read end to end — 40 chapters of 40.** The Standard Library section
 was the last and the worst: its generator read three of the seven `default/*.loft` files, so
 the entire JSON and reflection API — `json_parse`, `to_json`, `json_errors`, `reflect_type`,

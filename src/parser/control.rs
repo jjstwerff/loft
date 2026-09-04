@@ -1689,8 +1689,18 @@ impl Parser {
             // bodies whose final expression is `if cond { (a, b) } else
             // { (c, d) }` left two tuple leaves and convert would then
             // fail with Tuple → Reference(__tuple<…>).
+            //
+            // loft#1350 — the same boxing for an `else` ARM.  The else arm is parsed against
+            // the then arm's type, and a then arm that CALLS a function returning a lifetime
+            // tuple yields the synthetic struct; a literal or a tuple local on the other arm
+            // is a stack tuple, and `convert` has no route from one spelling to the other —
+            // "expected __tuple<vector<integer>,text>, got (vector<integer>, text) on else",
+            // for a program that reads as one type to its author.  Box the arm into its own
+            // work-ref, exactly as a function tail is, and let `parse_if` join two records.
+            // Only a tuple whose element types spell the SAME synthetic name is boxed; a
+            // different shape keeps the refusal, which is then about the elements.
             let tuple_rewritten = !self.first_pass
-                && context == "return from block"
+                && (context == "return from block" || context == "else")
                 && matches!(t, Type::Tuple(_))
                 && tail_has_tuple_leaf(l[last].unspan(), &self.vars)
                 && matches!(result, Type::Reference(d, _) if self.data.def(*d).name().starts_with("__tuple<"))
@@ -1700,8 +1710,32 @@ impl Parser {
                     } else {
                         unreachable!()
                     };
-                    self.rewrite_tail_tuple_to_synthetic_struct(synthetic_d_nr, &mut l[last]);
-                    true
+                    if context == "else" {
+                        let same_shape = if let Type::Tuple(elems) = t {
+                            let names: Vec<String> =
+                                elems.iter().map(|e| e.name(&self.data)).collect();
+                            format!("__tuple<{}>", names.join(","))
+                                == self.data.def(synthetic_d_nr).name()
+                        } else {
+                            false
+                        };
+                        if same_shape {
+                            let ref_tp = Type::Reference(synthetic_d_nr, Deps::none());
+                            let w = self.vars.work_refs(&ref_tp, &mut self.lexer);
+                            let kt = self.data.def(synthetic_d_nr).known_type();
+                            self.rewrite_tail_tuple_with_work_ref(
+                                synthetic_d_nr,
+                                kt,
+                                w,
+                                &mut l[last],
+                            );
+                            tp = Type::Reference(synthetic_d_nr, Deps::frame1(w));
+                        }
+                        same_shape
+                    } else {
+                        self.rewrite_tail_tuple_to_synthetic_struct(synthetic_d_nr, &mut l[last]);
+                        true
+                    }
                 };
             // P236: when the body's tail is a `Value::If(...)` (or
             // `match`, which lowers to nested `If`) and the function
