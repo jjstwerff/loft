@@ -1,0 +1,160 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A text function delivers an owned result through its CALLER's hidden `&text` buffer from
+// every `return`, not only from the block tail.
+//
+// @FR-F-Ret says a returned value is handed out owned through the return-buffer, never as a
+// view of a local; @FR-F-Call says the frame frees every local it owns when it drops.  The
+// tail already met both.  An EARLY `return <call>`, `return a ?? b` or `return t[0][0]` did
+// not: it was copied into a frame-local `__ret_N` String that the frame never freed, so the
+// caller read a view of an orphan — the right characters, one leaked buffer per call, and a
+// loop grew without bound (loft#1338).  A tail that VIEWS a local (`t[0][0]`, `ts[0][0]`
+// through a slice, a self-recursive call) had the same orphan for a second reason: the
+// targeted promotion declined to hand such a function a buffer at all.  Both backends
+// always answered the right value; only the interpreter orphaned, and nothing said so.
+//
+// Axes this file MOVES:  where the `return` stands (block tail, an `if` arm, a `match` arm,
+//                        a loop body, an arm two levels down, a recursion base case); what
+//                        it returns (a call, a nullable call under `??`, a chained and a
+//                        right-nested `??`, a view of a local vector element, of a slice
+//                        element, of a local struct field, of a call result's field, a built
+//                        local); the declared return (`text`, `text?`); what the tail is (a
+//                        formatted string, a bare literal, an accumulator, a view, a borrow
+//                        of a parameter); and the function kind (free, method, generic,
+//                        lambda called through a fn-ref).
+// Axes it HOLDS FIXED:   the element type is text; single-threaded; no closure captures.
+//
+// **The controls are the shapes that were already clean** — a single `return lo(n) ?? ""`,
+// an early literal beside a tail call, a tail `match` over call arms, a bound-first `x =
+// t[0][0]; x` — and they are load-bearing: the fix routes every other cell through the
+// buffer those already used, so a delivery that broke would move them first.
+//
+// `d5` is the negative cell: a USER `&text` parameter is the caller's variable, and an
+// early return must not be written into it.  The caller checks its text afterwards.
+//
+// Values are asserted here; the orphan count is asserted by `tests/early_text_return.rs`,
+// which runs this file under `LOFT_TEXT_TIMELINE=1` and requires "NO text leak" — the
+// exit and assertion channels cannot see a leak whose value is right.
+//
+// @falsified-at: 3d8f2b9e — native exit 1 -> 0, native 1 assertion failures -> 0 (d5: the
+// early return was written into the caller's `&text`); interpret INERT on the six channels
+// `make falsify` scores, because every value was always right there — measured by hand
+// under LOFT_TEXT_TIMELINE=1 instead: 106 orphaned text buffers -> 0.
+struct S { name: text, tag: text }
+fn lo(n: integer) -> text? { return "lo{n}"; }
+fn none(n: integer) -> text? { if n > 100 { return "big"; } return null; }
+fn lo_n(n: integer) -> text { return "lo{n}"; }
+fn mk(n: integer) -> S { S { name: "n{n}", tag: "t{n}" } }
+
+// two call arms under `??` (the issue's cell A)
+fn c1(w: boolean, n: integer) -> text { if !w { return lo(n) ?? "" } return lo(n + 1) ?? ""; }
+// two non-null call arms (A')
+fn c2(w: boolean, n: integer) -> text { if !w { return lo_n(n) } return lo_n(n + 1); }
+// control: one call return (A-1)
+fn c3(n: integer) -> text { return lo(n) ?? ""; }
+// control: early literal, tail call (A-2) — and its mirror, early call, formatted tail
+fn c4(w: boolean, n: integer) -> text { if !w { return "x{n}" } return lo(n + 1) ?? ""; }
+fn c4m(w: boolean, n: integer) -> text { if !w { return lo(n) ?? "" } "x{n}" }
+// a tail that views a local vector element (the issue's cell B), and through a slice (B')
+fn c5(n: integer) -> text { t = [["a{n}"], ["b"], ["c"]]; t[0][0] }
+fn c6(n: integer) -> text { t = [["a{n}"], ["b"], ["c"]]; ts = t[0..2]; ts[0][0] }
+// control: the view bound first (B-wa)
+fn c5w(n: integer) -> text { t = [["a{n}"], ["b"], ["c"]]; x = t[0][0]; x }
+// an early view return beside a formatted tail
+fn c7(w: boolean, n: integer) -> text { t = [["a{n}"], ["b"]]; if w { return t[0][0] } "x{n}" }
+// a built-local tail with an early call return
+fn c8(w: boolean, n: integer) -> text { x = "a{n}"; if w { return lo(n) ?? "" } x }
+// a nullable return with two call arms
+fn c9(w: boolean, n: integer) -> text? { if !w { return lo(n) } return lo(n + 1); }
+// control: a tail match over call arms (`_`, not `false`: a boolean match written out in
+// full is not read as exhaustive and warns nullable-into-non-null — filed separately)
+fn c10(w: boolean, n: integer) -> text { return match w { true => lo(n) ?? "", _ => lo(n + 1) ?? "" }; }
+// an early struct-field view return
+fn c11(w: boolean, n: integer) -> text { s = S { name: "n{n}", tag: "t" }; if w { return s.name } "x{n}" }
+// an early return inside a loop, bare-literal tail
+fn c13(n: integer) -> text { for i in 0..3 { if i == n { return lo(i) ?? "" } } "none" }
+// early returns two arms deep
+fn c14(w: boolean, v: boolean, n: integer) -> text { if w { if v { return lo(n) ?? "" } return lo_n(n + 10) } return lo(n + 1) ?? ""; }
+// a recursion whose tail is the self-call and whose base case is an early owned return
+fn c15(n: integer) -> text { if n == 0 { return lo(0) ?? "" } c15(n - 1) }
+// a chained `??` and a right-nested `??` in an early return
+fn d1(w: boolean, n: integer) -> text { if w { return none(n) ?? lo(n) ?? "z" } return lo_n(n + 1); }
+fn d2(w: boolean, n: integer) -> text { if w { return none(n) ?? (none(n + 1) ?? "y{n}") } "x{n}" }
+// a nullable return with an early `return null` and an early null-answering call
+fn d3(k: integer, n: integer) -> text? { if k == 0 { return null } if k == 1 { return none(n) } return lo(n); }
+// an early `return x` of a built local beside a call tail
+fn d4(w: boolean, n: integer) -> text { x = "a{n}"; if w { return x } lo_n(n + 5) }
+// the negative cell: a user `&text` parameter is never a return's destination
+fn d5(s: &text, w: boolean, n: integer) -> text { if w { return lo(n) ?? "" } s = "{s}!"; "{s}" }
+// a method, a generic, a lambda called through a fn-ref
+fn label(self: S, w: boolean) -> text { if w { return lo(7) ?? "" } self.name }
+fn d7<T: Printable>(v: T, w: boolean, n: integer) -> text { if w { return lo(n) ?? "" } "{v}" }
+fn d8(w: boolean, n: integer) -> text { f = fn(m: integer) -> text { if m > 0 { return lo(m) ?? "" } "neg" }; m = if w { n + 1 } else { -1 }; f(m) }
+// an early return of a call result's field
+fn d9(w: boolean, n: integer) -> text { if w { return mk(n).name } "x{n}" }
+// returns from two match arms with a fall-through tail
+fn d10(k: integer, n: integer) -> text { match k { 0 => { return lo(n) ?? "" }, 1 => { return lo_n(n + 1) }, _ => {} } "k{k}" }
+// a tail view of a local struct field beside a freed sibling local
+fn d11(n: integer) -> text { s = mk(n); t = [["p"]]; s.tag }
+// an early owned return beside a tail that borrows a parameter
+fn d12(p: text, w: boolean, n: integer) -> text { if w { return lo(n) ?? "" } p }
+
+fn check_c(w: boolean, i: integer) {
+  e = if w { "lo{i + 1}" } else { "lo{i}" };
+  assert(c1(w, i) == e, "c1({w},{i}) = {c1(w, i)}");
+  assert(c2(w, i) == e, "c2({w},{i}) = {c2(w, i)}");
+  assert(c3(i) == "lo{i}", "c3({i}) = {c3(i)}");
+  assert(c4(w, i) == (if w { "lo{i + 1}" } else { "x{i}" }), "c4({w},{i}) = {c4(w, i)}");
+  assert(c4m(w, i) == (if w { "x{i}" } else { "lo{i}" }), "c4m({w},{i}) = {c4m(w, i)}");
+  assert(c5(i) == "a{i}", "c5({i}) = {c5(i)}");
+  assert(c6(i) == "a{i}", "c6({i}) = {c6(i)}");
+  assert(c5w(i) == "a{i}", "c5w({i}) = {c5w(i)}");
+  assert(c7(w, i) == (if w { "a{i}" } else { "x{i}" }), "c7({w},{i}) = {c7(w, i)}");
+  assert(c8(w, i) == (if w { "lo{i}" } else { "a{i}" }), "c8({w},{i}) = {c8(w, i)}");
+  assert(c9(w, i) == e, "c9({w},{i}) = {c9(w, i)}");
+  assert(c10(w, i) == (if w { "lo{i}" } else { "lo{i + 1}" }), "c10({w},{i}) = {c10(w, i)}");
+  assert(c11(w, i) == (if w { "n{i}" } else { "x{i}" }), "c11({w},{i}) = {c11(w, i)}");
+  assert(c13(i) == "lo{i}", "c13({i}) = {c13(i)}");
+  assert(c13(9) == "none", "c13(9) = {c13(9)}");
+  assert(c14(w, !w, i) == (if w { "lo{i + 10}" } else { "lo{i + 1}" }), "c14 = {c14(w, !w, i)}");
+  assert(c14(true, true, i) == "lo{i}", "c14(t,t) = {c14(true, true, i)}");
+  assert(c15(2) == "lo0", "c15(2) = {c15(2)}");
+}
+
+fn check_d(w: boolean, i: integer) {
+  s = "S";
+  assert(d1(w, i) == (if w { "lo{i}" } else { "lo{i + 1}" }), "d1({w},{i}) = {d1(w, i)}");
+  assert(d2(w, i) == (if w { "y{i}" } else { "x{i}" }), "d2({w},{i}) = {d2(w, i)}");
+  assert(d3(0, i) == null, "d3(0) = {d3(0, i)}");
+  assert(d3(1, i) == null, "d3(1) = {d3(1, i)}");
+  assert(d3(2, i) == "lo{i}", "d3(2) = {d3(2, i)}");
+  assert(d4(w, i) == (if w { "a{i}" } else { "lo{i + 5}" }), "d4({w},{i}) = {d4(w, i)}");
+  before = s;
+  got = d5(s, w, i);
+  if w {
+    assert(got == "lo{i}", "d5({w},{i}) = {got}");
+    assert(s == before, "d5 wrote the caller's text: {s}");
+  } else {
+    assert(got == "{before}!" && s == "{before}!", "d5({w},{i}) = {got}, s = {s}");
+  }
+  assert(mk(i).label(w) == (if w { "lo7" } else { "n{i}" }), "label({w}) = {mk(i).label(w)}");
+  assert(d7(i, w, i) == (if w { "lo{i}" } else { "{i}" }), "d7({w},{i}) = {d7(i, w, i)}");
+  assert(d8(w, i) == (if w { "lo{i + 1}" } else { "neg" }), "d8({w},{i}) = {d8(w, i)}");
+  assert(d9(w, i) == (if w { "n{i}" } else { "x{i}" }), "d9({w},{i}) = {d9(w, i)}");
+  assert(d10(0, i) == "lo{i}", "d10(0) = {d10(0, i)}");
+  assert(d10(1, i) == "lo{i + 1}", "d10(1) = {d10(1, i)}");
+  assert(d10(2, i) == "k2", "d10(2) = {d10(2, i)}");
+  assert(d11(i) == "t{i}", "d11({i}) = {d11(i)}");
+  pi = "p{i}";
+  assert(d12(pi, w, i) == (if w { "lo{i}" } else { pi }), "d12({w},{i}) = {d12(pi, w, i)}");
+}
+
+fn main() {
+  for i in 0..2 {
+    w = i % 2 == 0;
+    check_c(w, i);
+    check_d(w, i);
+  }
+  print("1338 early text returns ok\n");
+}

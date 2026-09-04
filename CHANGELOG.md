@@ -28,6 +28,14 @@ re-bound inside a loop from a closure that may hand its argument back, and a loc
 two places from two sources.  A closure answering a view of a keyed field is no longer freed
 under its caller — a regression this cycle had introduced.
 
+**A function that returns text from an early `return` no longer leaks a buffer per call.**
+`if !w { return lo(n) ?? "" }`, `return t[0][0]`, `return s.name` inside a loop or a nested
+arm — each answered the right text and quietly left one String behind on the interpreter,
+so a loop grew without bound while every value stayed correct.  Every `return` now delivers
+through the same caller-owned buffer the function's tail already used.  The same census
+found that on the compiled backend a function with a `&text` parameter of your own could
+write its returned text INTO that parameter; it no longer can.
+
 **The reference is now read end to end — 40 chapters of 40.** The Standard Library section
 was the last and the worst: its generator read three of the seven `default/*.loft` files, so
 the entire JSON and reflection API — `json_parse`, `to_json`, `json_errors`, `reflect_type`,

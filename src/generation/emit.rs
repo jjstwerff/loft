@@ -750,13 +750,12 @@ impl Output<'_> {
                     // `text_return`), `Str::new(<local_String>)` would
                     // dangle.  Route through `stores.scratch` instead so
                     // the value's backing String lives as long as `stores`.
-                    // Note: text_return doesn't set the `hidden` flag (only
-                    // ref_return does), so we don't filter on `a.hidden`.
+                    // A work buffer is a HIDDEN `RefVar(Text)` attribute — every one
+                    // `text_return` promotes is marked so; a user `&text` parameter is
+                    // not a buffer (`return_buffer_name`, loft#1338).
                     let needs_p205_scratch = wrap_text && {
                         let def = self.data.def(self.def_nr);
-                        let no_work_buffer = !def.attributes().iter().any(|a| {
-                            matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
-                        });
+                        let no_work_buffer = def.text_work_buffers() == 0;
                         // @P321e — also route through scratch when the return
                         // value is a text LOCAL var (an owned `String`, not the
                         // RefVar work-buffer arg).  `Str::new(&var_local)`
@@ -1879,19 +1878,27 @@ impl Output<'_> {
     ///    that expression is captured into `let _ret` first, then yielded at the end.
     /// 3. **String conversion** — a text-typed block may receive a `Str` from a field read;
     ///    `.to_string()` converts it to an owned `String`.
-    // @PLN10 Phase B — the sanitized `var_…` name of this function's first
+    // @PLN10 Phase B — the sanitized `var_…` name of this function's first HIDDEN
     // `RefVar(Text)` work buffer (a `&mut String` arg the caller owns), if any.
     // A buffered (`!nwb`) text fn returning a LOCAL / `??`-block / nwb-inner value
     // writes that owned `String` into this buffer and hands back a `Str` pointing
     // into it — caller-lifetime backing, no `stores.scratch`.  `None` only for an
     // nwb fn (handled by the owned-`String` path), so the scratch fallback below
     // is dead-but-safe.
+    //
+    // HIDDEN, because a user-written `&text` parameter is the caller's variable: read
+    // as the buffer, an early `return mk()` in `fn f(s: &text, …)` was written into `s`
+    // and the caller's text silently changed (loft#1338).  Every buffer `text_return`
+    // promotes is marked hidden, so the hidden ones are exactly the deliverable ones —
+    // `Definition::text_work_buffers` is the one home for that count.
     pub(super) fn return_buffer_name(&self) -> Option<String> {
         self.data
             .def(self.def_nr)
             .attributes
             .iter()
-            .find(|a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))))
+            .find(|a| {
+                a.hidden && matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
+            })
             .map(|a| sanitize(&a.name))
     }
 
@@ -2360,16 +2367,12 @@ impl Output<'_> {
                     // dangling the returned `Str`'s raw pointer.  Route
                     // through `stores.scratch` instead so the value's
                     // backing String lives as long as `stores` does.
-                    // Note: text_return doesn't set the `hidden` flag (only
-                    // ref_return does), so we don't filter on `a.hidden`.
-                    let needs_p205_scratch = wrap_result
-                        && {
-                            let def = self.data.def(self.def_nr);
-                            matches!(def.returned(), Type::Text(_))
-                            && (
-                                !def.attributes().iter().any(|a| {
-                                    matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
-                                })
+                    // A work buffer is a HIDDEN `RefVar(Text)` attribute (see
+                    // `return_buffer_name`, loft#1338).
+                    let needs_p205_scratch = wrap_result && {
+                        let def = self.data.def(self.def_nr);
+                        matches!(def.returned(), Type::Text(_))
+                            && (def.text_work_buffers() == 0
                                 // @PLAN52 cluster VI (2026-05-30): closures (and
                                 // other functions with a `__work_ret: &mut String`
                                 // attribute) declare the buffer but the closure
@@ -2383,9 +2386,8 @@ impl Output<'_> {
                                 // (program-lifetime) and `Str::new` reads from
                                 // there.  Detect by the `__ncc_*` skip_free temp
                                 // signature.
-                                || self.block_contains_ncc_skip_free(bl)
-                            )
-                        };
+                                || self.block_contains_ncc_skip_free(bl))
+                    };
                     // @PLN10 Phase A — a bufferless ("nwb") user text fn returns
                     // an owned `String` (its wrapper is `-> String`), so its
                     // body-tail emits `(tail).to_string()`, not a `Str` wrap.

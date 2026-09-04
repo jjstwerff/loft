@@ -2093,6 +2093,55 @@ impl<'a> Ownership<'a> {
         class
     }
 
+    /// Every EARLY `return <e>` in the body of `d_nr`, classified the way
+    /// [`Self::return_ownership`] classifies the tail.
+    ///
+    /// The tail is one delivery site among several: a function returns from wherever a
+    /// `return` stands, and each site hands the caller a value of its own ownership.  A
+    /// predicate that reads only the tail (`fn f(c) -> text { if c { return mk() } "x" }`)
+    /// answers for the literal and never sees the owned call — which is how such a
+    /// function stayed unbuffered and orphaned one String per early return (loft#1338).
+    /// Not memoised: the tail's class is what callers consult and cache; this is asked
+    /// once, by the orphan predicate, for the function's own delivery.
+    fn early_return_ownerships(&mut self, d_nr: u32) -> Vec<Own> {
+        let def = self.data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) || fn_body_tail(&def.code).is_none() {
+            return Vec::new();
+        }
+        // A null arm returns a SENTINEL, not a buffer: `return null` in a `-> text?`
+        // function lowers to `OpConvTextFromNull()`, a constant Str with nothing behind
+        // it to orphan, and reading it as owned text would hand a buffer to a function
+        // whose real tail forwards a borrow (`text_src(i, tag) { if i == 0 { return
+        // null } return tag }`), which is the promotion the framework's own verdict
+        // declines.
+        let null_text = self.data.def_nr("OpConvTextFromNull");
+        let mut returned: Vec<Value> = Vec::new();
+        def.code.walk(&mut |v| {
+            if let Value::Return(inner) = v
+                && !matches!(inner.unspan(), Value::Null)
+                && !matches!(inner.unspan(), Value::Call(d, args) if *d == null_text && args.is_empty())
+            {
+                returned.push((**inner).clone());
+            }
+        });
+        if returned.is_empty() || !self.visiting.insert(d_nr) {
+            return Vec::new();
+        }
+        let mut defs = Defs::default();
+        collect_defs(&def.code, &FillOps::of(self.data), &mut defs);
+        let outer_vars = std::mem::take(&mut self.visiting_vars);
+        let classes = returned
+            .iter()
+            .map(|e| {
+                self.visiting_vars.clear();
+                self.classify(e, &def.variables, &defs)
+            })
+            .collect();
+        self.visiting_vars = outer_vars;
+        self.visiting.remove(&d_nr);
+        classes
+    }
+
     /// Classify a value expression within `func` (using `defs` to resolve local
     /// vars to their defining RHS). The recursive core of the analysis.
     fn classify(&mut self, node: &Value, func: &Function, defs: &Defs) -> Own {
@@ -3326,20 +3375,28 @@ pub fn text_return_orphan_risk(data: &Data, d_nr: u32) -> Option<&'static str> {
     if !matches!(def.returned().base(), Type::Text(_)) {
         return None;
     }
-    let has_buf = def
-        .attributes()
-        .iter()
-        .any(|a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))));
-    if has_buf {
+    // Only a HIDDEN `&text` buffer delivers a return.  A user-written `&text` parameter
+    // is the caller's variable — counting it here left `fn f(s: &text, c) -> text { if c
+    // { return mk() } … }` unbuffered, and `--native` then wrote the returned text INTO
+    // `s` (loft#1338).  `text_work_buffers` is the one home for the count.
+    if def.text_work_buffers() > 0 {
         return None;
     }
     let borrows_arg = |base: u16| base != u16::MAX && def.variables.is_argument(base);
-    match return_ownership(data, d_nr) {
-        Own::Owned => Some("owned-by-value"),
-        Own::Borrowed { base } if !borrows_arg(base) => Some("view-of-local"),
-        Own::Join { base } if !borrows_arg(base) => Some("join-of-local"),
-        _ => None,
-    }
+    // The tail first, then every early `return`: each is a delivery site, and one that
+    // hands back frame-local text is enough to orphan (loft#1338).  The kind named is the
+    // first risky site's, which is what the promotion needs to know — it re-routes ALL of
+    // them through the one buffer.
+    let mut own = Ownership::new(data);
+    let tail = own.return_ownership(d_nr);
+    std::iter::once(tail)
+        .chain(own.early_return_ownerships(d_nr))
+        .find_map(|o| match o {
+            Own::Owned => Some("owned-by-value"),
+            Own::Borrowed { base } if !borrows_arg(base) => Some("view-of-local"),
+            Own::Join { base } if !borrows_arg(base) => Some("join-of-local"),
+            _ => None,
+        })
 }
 
 /// Public, test-facing entry: the owned-slot reassignment sites of function `d_nr`.

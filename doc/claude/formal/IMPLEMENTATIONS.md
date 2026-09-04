@@ -775,6 +775,28 @@ loft#901 and loft#927 are all fixes to it and two more landed this week (a view 
 `vector<S?>`, and group formation ceasing to depend on declaration order).  An edge the rules
 cannot express is a rule that wants extending: `Col-Group` is the missing one.
 
+## The text return buffer — one home, six restatements, one of them a user's variable (2026-09-04)
+
+The notion: *the hidden `&text` buffer a text function delivers its result through*.  Its one
+home is `Definition::text_work_buffers` — a HIDDEN `RefVar(Text)` attribute, which is also the
+count the fn-ref dispatch ABI pushes, so the interpreter could never have disagreed with it.
+Six sites restated the test as *any* `RefVar(Text)` attribute, three of them under a comment
+saying `text_return` never sets `hidden` (it has, since @P387): `holds_text_work_buf`, the
+loft#568 orphan predicate's `has_buf`, `return_buffer_name`, the two `needs_p205_scratch`
+gates, and `def_returns_owned_string`.  A user-written `&text` parameter is a `RefVar(Text)`
+attribute too, and the restatement read it as the buffer.
+
+What that cost was two defects with one root (loft#1338).  The orphan predicate saw `fn
+f(s: &text, c) -> text { if c { return mk() } … }` as already buffered and declined to hand it
+one, so the interpreter delivered the early return through the orphaning `__ret_N` copy; and
+`--native`, asked the same question by its own spelling, chose `s` as the return buffer and
+wrote the returned text INTO the caller's variable — a silent wrong answer, with the return
+value itself correct.  All six now read the one home, which is the whole fix on the native
+side.  `tests/scripts/1338-…loft` `d5` is the cell; `Data::fnref_text_buffers` still counts a
+`RefVar(Text)` attribute as invisible when matching fn-ref candidates, which is moot while the
+grammar admits no `&text` in a function type, and is recorded here so the next reader does not
+re-derive it.
+
 ## Not mergeable — recorded so the question is not reopened
 
 | the pair | why they must stay apart |

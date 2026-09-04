@@ -9,6 +9,28 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### An early text return is delivered through the caller's buffer, and a user `&text` parameter is never that buffer (2026-09-04)
+
+loft#1338.  A text function's block tail already delivered through the hidden `&text`
+parameter `text_return` promotes; an EARLY `return <call>` / `return a ?? b` / `return
+t[0][0]` reaching the scope pass with frees to run was copied into a frame-local `__ret_N`
+String marked `skip_free` — orphaned, one per call, on the interpreter only (native collapses
+the temp), with every value right.  Both hoist sites (`scopes::free_vars` and the block-tail
+leg of `insert_free`) now write the value per arm into the buffer the function already holds
+(`push_text_arms_into`), free the `__work_N` / `__ncc_N` temps the copy drained, then run the
+frees and return the buffer; the copy stays only for a function with no buffer.  The loft#568
+orphan predicate classifies every `return` site, not the tail alone (`early_return_ownerships`;
+a null arm is a sentinel and excluded), and the targeted promotion (@PLN104) no longer defers
+the view-of-local / join-of-local classes — `553 textslice` is green on both backends.  The
+buffer question has one home, `Definition::text_work_buffers` (a HIDDEN `RefVar(Text)`
+attribute): six sites restated it as any `RefVar(Text)`, which a user `&text` parameter also
+is, so the predicate left such a function unbuffered and `--native` wrote the returned text
+INTO the parameter.  `formal/calls-history.md` D-call-9; the LSan `append_text` suppression's
+premise ("fault path only") is corrected in place.  Guard
+`tests/scripts/1338-an-early-text-return-is-delivered-through-the-caller-buffer.loft` +
+`tests/early_text_return.rs` (the text ledger under `LOFT_TEXT_TIMELINE=1`).  Side finding
+loft#1343.
+
 ### A view of a local returned through a nullable return is copied before it escapes (2026-09-04)
 
 loft#1337.  A `-> S?` return has no delivery buffer, so what is handed up is what the

@@ -9511,12 +9511,7 @@ impl Parser {
             .def(self.context)
             .name()
             .starts_with("n___lambda_")
-            && self
-                .data
-                .def(self.context)
-                .attributes()
-                .iter()
-                .any(|a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))))
+            && self.data.def(self.context).text_work_buffers() > 0
     }
 
     pub(crate) fn text_return(&mut self, ls: &[u16]) {
@@ -9983,8 +9978,7 @@ impl Parser {
             .iter()
             .copied()
             .filter(|&d| {
-                crate::use_analysis::text_return_orphan_risk(&self.data, d)
-                    == Some("owned-by-value")
+                crate::use_analysis::text_return_orphan_risk(&self.data, d).is_some()
                     && !addr_taken.contains(&d)
             })
             .collect();
@@ -11210,7 +11204,7 @@ impl Parser {
 
     /// `create_stack` is `OpCreateStack`'s def_nr, threaded in rather than looked
     /// up per leaf — see the leaf arm for what it decides.
-    pub(super) fn push_text_arms_into(op: &mut Value, av: u16, create_stack: u32) {
+    pub(crate) fn push_text_arms_into(op: &mut Value, av: u16, create_stack: u32) {
         match op {
             Value::Span(b) => Self::push_text_arms_into(&mut b.1, av, create_stack),
             Value::Return(inner) | Value::Drop(inner) => {
