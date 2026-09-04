@@ -36,12 +36,9 @@ fn convert(dir: text, into: text) {
   }
 }
 
-// The demo entry point.  It is `demo` and not `main` because this is a MODULE: a `main`
-// here is reached by nothing (running the file runs its zero-parameter functions anyway),
-// and it collides with the `main` of any program that imports it — `tests/native.rs`
-// picks the entry with a global `def_nr("n_main")`, so a guard doing `use docs;` compiled
-// to a wrapper calling an `n_main` that was never emitted.  A library owes its importers
-// a name they cannot collide with.
+// The demo entry point.  It is `demo` and not `main` because this is a MODULE: running
+// the file runs its zero-parameter functions anyway, so the name buys nothing, and an
+// importer's own `main` is the one that should be reached.
 //
 // It converted nothing even with the filter fixed, because
 // `tests/suite` has never existed in this repo — and it would not have found one at that

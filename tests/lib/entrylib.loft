@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A MODULE that also declares `main`, for loft#1351.
+//
+// Nothing runs this file: it exists to be imported by
+// `tests/scripts/1351-a-module-that-declares-main-does-not-displace-the-entry.loft`,
+// whose own `main` must be the one that runs.  A module declaring `main` is unusual but
+// legal, and it used to make the native harness emit a call to an `n_main` it had not
+// emitted.
+
+pub fn entry_value() -> integer {
+  return 41;
+}
+
+// Fails loudly if it is ever chosen as the program's entry.  A guard whose wrong outcome
+// is "some other function ran" would otherwise report nothing at all — the assertions it
+// meant to run simply would not, which reads exactly like a pass.
+fn main() {
+  assert(false, "the MODULE's main ran in place of the importing program's");
+}

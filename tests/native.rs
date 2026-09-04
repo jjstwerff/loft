@@ -324,6 +324,16 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
         return Err(Error::from(std::io::ErrorKind::InvalidData));
     }
     scopes::check(&mut p.data, &mut p.database);
+    // Two sources may each declare a function of the same name, and emitted Rust is one
+    // flat namespace.  `namespace_colliding_native_fns` is what settles that — the lowest
+    // source keeps the bare name, the rest become `n_s<N>_<name>` — and its own contract is
+    // that it runs after the two-pass parse and BEFORE a native emit.  Every `--native`
+    // path in `main.rs` calls it; this harness did not, so it emitted from a `Data` the
+    // compiler would never hand the generator: a module's own `main` stayed `n_main` beside
+    // the entry's, `duplicate_fn_names` saw a duplicate that no real build has, and the
+    // entry was emitted under a disambiguated ident while the template called the bare
+    // name (loft#1351).
+    p.data.namespace_colliding_native_fns();
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let end_def = p.data.definitions();
