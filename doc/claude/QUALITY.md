@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 377 | 353 | **24** |
+| 379 | 355 | **24** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -509,6 +509,21 @@ table in the same change by gaining an `Int` arm beside its two marker arms — 
 the OPAQUE column, because it matched nodes `collect_yielded` had already unspanned. That is
 the shape this audit is worth having for: a site correct only because of what its one caller
 does. It peels for itself now, so the opaque column is where it was.
+
+loft#1332 moved it to 378 · 354 · 24 with `scopes::first_use_of`, the liveness reading that
+decides whether a loop-body local is READ after its loop or merely mentioned there. It
+discriminates eight variants — `Set`, `Var`, `Block`, `Insert`, `Loop`, `If`, `TupleGet` and
+`TuplePut` — and unspans at every level, so it lands on the peeling side and leaves the opaque
+column alone. Its two orderings are the reason it must peel: a `Set`'s value is read before its
+target, and a `Loop` body may run zero times, so a wrapped node that fell to the catch-all arm
+would answer "no use here" for exactly the shapes the question is about.
+
+loft#1331 moved it to 379 · 355 · 24 with `scopes::repointed_literal_accumulator`, which asks
+whether a statement leaves a literal-backing accumulator naming a store the frame does not own.
+It discriminates `Block`, `Var` and `Set` and unspans at each, so it lands on the peeling side.
+The `Set` arm is the one that must peel: the shape it looks for is an assignment of anything
+other than `null` to the accumulator, and a wrapped node falling to the catch-all would read as
+"not repointed" — the answer that leaves the scope-exit sweep freeing a capture.
 
 loft#1200 moved it to 339 · 322 · 17 with `scopes::nullable_locals_that_displace`, the
 pre-scan that decides whether a nullable heap-record local is worth an ownership witness; it
@@ -2427,9 +2442,9 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 694 | 337 | 5 | **352** |
+| 695 | 338 | 5 | **352** |
 
-The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.  It happened again on the 2026-09-03 join — one side carried `684 | 330 | 5 | 349` and the other `687 | 331 | 5 | 351`, and the tree that holds both measures `689 | 332 | 5 | 352`; the 2026-09-03 evening join (D-bind-11 onto the #1318 tree) measured `692 | 333 | 5 | 354`, loft#1327's opaque-fn-ref clause moved one function off the opaque column, and the D-own-8 closure moved two more onto the peeled one — one arm peeled (`gen_set_first_at_tos`'s null-init) beside two new scope-pass predicates.  The tree that holds BOTH measures `694 | 337 | 5 | 352`, which is neither side's number: two branches each adding predicates cannot have their counts added, because the audit classifies FUNCTIONS and a merged body is one function however many branches touched it.
+The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.  It happened again on the 2026-09-03 join — one side carried `684 | 330 | 5 | 349` and the other `687 | 331 | 5 | 351`, and the tree that holds both measures `689 | 332 | 5 | 352`; the 2026-09-03 evening join (D-bind-11 onto the #1318 tree) measured `692 | 333 | 5 | 354`, loft#1327's opaque-fn-ref clause moved one function off the opaque column, and the D-own-8 closure moved two more onto the peeled one — one arm peeled (`gen_set_first_at_tos`'s null-init) beside two new scope-pass predicates.  The tree that holds BOTH measures `694 | 337 | 5 | 352`, which is neither side's number: two branches each adding predicates cannot have their counts added, because the audit classifies FUNCTIONS and a merged body is one function however many branches touched it.  loft#1333 then moved it to `695 | 338 | 5 | 352` with `scopes::mixed_ownership_locals`, the pre-scan that asks whether a binding is assigned a VIEW on one path and a delivered collection on another; it reads `function.tp(v).base()`, so it peels the wrapper and lands on the seeing-through side, leaving the opaque column where it was.
 
 The most recent movement is loft#1327's, and it goes the right way for the ordinary reason: the
 new clause asks `is_dbref(ret_type.base())` of a fn-ref call's return, so the function it sits in

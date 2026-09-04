@@ -2275,6 +2275,12 @@ impl State {
                 && (stack.function.tp(v).depend().is_empty() || borrows_one_argument)
                 && !stack.function.is_skip_free(v)
                 && !stack.function.is_captured(v)
+                // A DETACH displaces a store without claiming to have owned it, so the
+                // pre-Set free below has nothing licensing it.  The native twin
+                // (`generation::dispatch`'s `owned_ref_reassign`) reads the same predicate —
+                // this side has no rhs-shape gate of its own, so without it the two backends
+                // would disagree about one shape (loft#1331, @FR-O-NoDiverge).
+                && !crate::data::is_null_sentinel_detach(v, value, stack.data, &stack.function)
                 && !is_hidden_buf_arg;
             // An `OpNewRecord` RHS returns an INTERIOR ref into an existing
             // container's backing store (a vector element / nested field), so
