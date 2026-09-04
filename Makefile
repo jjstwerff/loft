@@ -1985,7 +1985,9 @@ ci: ci-guard
 	# is heavy enough that local devs run `make gallery` separately when
 	# touching the wasm bundle.  Other dev-only suites (test-packages,
 	# test-gl-smoke, test-gl-golden) live in `make ci-full`.
-	mkdir -p $(TEST_SCRATCH) && export $(TEST_ENV) && \
+	mkdir -p $(TEST_SCRATCH) && \
+	{ find $(TEST_SCRATCH) -mindepth 1 -maxdepth 1 -mtime +7 -exec rm -rf {} + 2>/dev/null || true; } && \
+	export $(TEST_ENV) && \
 	{ gates=$(CI_LIVE_GATES); jobs=$$(( $$(nproc) / $${gates:-1} )); if [ $$jobs -lt 2 ]; then jobs=2; fi; \
 	  export CARGO_BUILD_JOBS=$$jobs NEXTEST_TEST_THREADS=$$jobs; } && \
 	{ [ "$${gates:-1}" -gt 1 ] && echo "make ci: THROTTLED to $$jobs of $$(nproc) threads — $$gates gates live on this box" || echo "make ci: $$jobs of $$(nproc) threads (sole gate)"; } | tee -a result.txt && \
