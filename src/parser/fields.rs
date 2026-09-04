@@ -561,12 +561,15 @@ impl Parser {
                         &std::collections::HashSet::new(),
                     );
                     list.push(Value::Var(w));
-                    // Mirror the unqualified-form path in parser/objects.rs:
-                    // the LHS of assignment owns the store (empty dep); the
-                    // work-ref is skip_free so it isn't double-freed.  With
-                    // `vec![w]` the LHS got `dep=[__ref_N]` which made it a
-                    // borrower — nothing freed the store.
-                    self.vars.set_skip_free(w);
+                    // `w` is a NORMAL work-ref, freed at scope end — the same discipline
+                    // the unqualified form settled in #394, and the reason this path may
+                    // not mark it `skip_free`.  Only the ALIAS consumers (assignment,
+                    // return) take `w`'s store over, and the ownership-transfer logic
+                    // already claims it for them.  Every DEEP-COPY consumer — a vector
+                    // element, a struct field, a call argument, a nested vector — copies
+                    // the record and orphans `w`, so a `skip_free` here left nothing to
+                    // free it (loft#1344: `xs += [V.Null]` leaked while `xs += [Null]`,
+                    // the very same value spelled without its enum, did not).
                     *code = crate::data::v_block(
                         list,
                         Type::Enum(dnr, true, crate::data::Deps::none()),

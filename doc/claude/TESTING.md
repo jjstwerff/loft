@@ -2862,6 +2862,21 @@ that passed on the very build it was written to catch:
   `tests/scripts` guard passes `--tests` on the pre-fix binary while the same shapes as a
   plain program print `Warning: 1 stores not freed at program exit`.
 
+**A bare `--native` run does not leak-check, so "native is clean" is a control that never
+fired — and reporting it as a BACKEND DIVERGENCE puts a false claim in the tracker.** The
+native leak check is opt-in (`LOFT_NATIVE_LEAK_CHECK`, emitted by
+`generation/mod.rs::NATIVE_LEAK_CHECK_TAIL`); with it unset the generated binary never
+looks, so it prints nothing whether or not a store leaked. DEBUG.md documents how to arm
+it; the trap is one step further on, at the moment the unarmed silence is written down as
+a measurement. Measured 2026-09-04 on loft#1344: a hand matrix over six consumers scored
+`interpret leak / native clean` for four of them, and the issue was filed claiming the two
+backends disagree. `make falsify` — which arms the variable — reported the native leak on
+the same guard, and re-running the matrix with `LOFT_NATIVE_LEAK_CHECK=1` gave leaks at
+exactly the same four consumers on BOTH backends. The divergence never existed. Two things
+follow: arm the variable before any native leak cell, and treat a disagreement between your
+own comparison and `make falsify` as the tool being right until you have shown otherwise —
+it builds and runs the control the way the suite does, which is the whole reason it exists.
+
 **A probe that FAILS TO PARSE reads as a silent pass, and the "did it run?" check can be
 fooled by the error itself.** Measured 2026-09-02 while crossing the six defended-fault-site
 spellings of `D-op-5`: four cells carried a literal `\n` into the loft source, failed to
