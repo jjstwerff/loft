@@ -357,7 +357,8 @@ machine — one manifest line, consumers unchanged; **the four rules for writing
 be placed** (a `pub fn` must not BE a native; answer a value, not a cursor; closures do not
 cross; a returned VIEW cannot be placed) ·
 [LOGGER.md](doc/claude/LOGGER.md) · [WASM.md](doc/claude/WASM.md) · [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) ·
-[BROWSER_INTEROP.md](doc/claude/BROWSER_INTEROP.md) · [WINDOWS.md](doc/claude/WINDOWS.md) / [WINDOWS_SESSION.md](doc/claude/WINDOWS_SESSION.md).
+[BROWSER_INTEROP.md](doc/claude/BROWSER_INTEROP.md) · [GALLERY_CI.md](doc/claude/GALLERY_CI.md) (the two browser
+artefacts that go stale independently, and the gate that catches it) · [WINDOWS.md](doc/claude/WINDOWS.md) / [WINDOWS_SESSION.md](doc/claude/WINDOWS_SESSION.md).
 
 **Networked runs:** `LOFT_NET_PROFILE=1|trace` reports socket operations by **margin**
 (a call that finished close to its deadline is a failure that has not happened yet) with
@@ -390,7 +391,8 @@ questions its sites actually ask, find each question's ONE home, then verify the
 against it — the defects are in the disagreements, and the citation is the receipt, never the
 task.  179 of 257 rules have no code representation, so this is a queue measured in years /
 [_SWEEP](doc/claude/STABILITY_SWEEP.md) / [_HOTSPOTS](doc/claude/STABILITY_HOTSPOTS.md) /
-[_REDFLAGS](doc/claude/STABILITY_REDFLAGS.md) · [DEPS_INVENTORY.md](doc/claude/DEPS_INVENTORY.md) ·
+[_REDFLAGS](doc/claude/STABILITY_REDFLAGS.md) · [BRITTLE.md](doc/claude/BRITTLE.md) (the
+survey of routines most likely to answer silently wrong, each with its hardening path) · [DEPS_INVENTORY.md](doc/claude/DEPS_INVENTORY.md) ·
 formal lens: [FORMALIZATION.md](doc/claude/FORMALIZATION.md) / [TYPING_RELATION.md](doc/claude/TYPING_RELATION.md) ·
 strict: [formal/README.md](doc/claude/formal/README.md) (rules + deviations driven to zero).
 

@@ -58,8 +58,9 @@ const SCRIPTS_NATIVE_SKIP: &[&str] = &[
     // Struct yields from a generator's LOOP body are interpreter-only for
     // now: the native eager-collect factory cannot preserve per-yield
     // snapshots (values silently alias), so --native rejects the shape with
-    // a compile_error naming the alternatives (#481).  The interp half runs
-    // under wrap.
+    // a compile_error naming the alternatives.  Tracked as loft#1356 (#481,
+    // which first named it, closed 2026-07 with the refusal still standing).
+    // The interp half runs under wrap.
     "447-coroutine-yield-borrow.loft",
     // 135-vector-u8-concat.loft was here for @P316 (`vector<u8>` element read
     // with `?? <int>` mis-compiled); @P316 is fixed, so 135 now runs natively
