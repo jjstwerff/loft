@@ -2605,3 +2605,38 @@ fn the_tag_guard_still_sees_a_leak_in_prose() {
         "the topic pages must be covered"
     );
 }
+
+/// Every `#[ignore]` reason says HOW the test runs instead — by hand (`--ignored`), on a
+/// nightly job, or on the platforms that can (`Windows`) — so an ignore is a routing, never
+/// a resting place.  Read off the same baseline `A-ignores` reads; a reason that only says
+/// WHY (`heavy`, `a measurement`) fails here until it also says where the test runs.
+#[test]
+fn every_ignore_reason_says_how_it_runs() {
+    let baseline = fs::read_to_string("tests/ignored_tests.baseline").expect("read the baseline");
+    let markers = [
+        "--ignored",
+        "miri.yml",
+        "ci.yml",
+        "on demand",
+        "manually",
+        "by hand",
+        "Windows",
+    ];
+    let mut silent: Vec<String> = Vec::new();
+    for line in baseline.lines() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let (key, reason) = line.split_once('\t').unwrap_or((line, ""));
+        if !markers.iter().any(|m| reason.contains(m)) {
+            silent.push(format!("{key}\t{reason}"));
+        }
+    }
+    assert!(
+        silent.is_empty(),
+        "{} ignore reason(s) say why but not how the test runs instead (name `--ignored`, the \
+         nightly job, or the platform):\n{}",
+        silent.len(),
+        silent.join("\n")
+    );
+}

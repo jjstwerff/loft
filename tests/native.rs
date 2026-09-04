@@ -3997,44 +3997,18 @@ fn native_tuple_return_script() -> std::io::Result<()> {
 /// `native_utils::add_native_extern_flags` in the test runner, which recovered
 /// graphics/shapes/server/web/moros_render/moros_sim).  Tracked under @P321.
 const LIB_PKGS_NATIVE_SKIP: &[&str] = &[
-    // crypto — FIXED (@P321a): sha256/base64/hmac wired into codegen_runtime.rs.
-    // arguments — FIXED (@P321b): OpSetText with a null value now stores the null
-    // pointer instead of emitting `(()).to_string()`.  Regression:
-    // tests/scripts/repro_p321b.loft.
-    // random — FIXED (@P321f): wired `n_rand_seed` into codegen_runtime (was a
-    // void empty-stub no-op) AND fixed `n_rand_indices` to store 8-byte (i64)
-    // elements matching how `vector<integer>` is read.
-    // moros_editor — FIXED (@P321e): a text-returning match fn `.to_string()`'d
-    // its result into a `__ret_N` local and returned `Str::new(&local)`
-    // (dangling); the return now routes a text-LOCAL value through `stores.scratch`.
-    // moros_ui — FIXED (@P321g): a `&`-ref-param call on an assignment RHS
-    // (`x = route_click(p, st.es_tools, …)`) arrived as `Span(Insert([Set(__ref_N,
-    // …), Call]))`; output_set's S35 hoist matched only a bare `Insert`, so it
-    // fell through to the brace-less Insert arm → `let x = let __ref_N = …; call`
-    // (let in expression position).  output_set now unspans before the S35 check.
-    // imaging — FIXED (@P321c): the native direct-call codegen now forwards a
-    // LoftStore + converts struct `Reference` ARGS to LoftRef
-    // (`output_native_direct_call`), so a store-mutating package `#native` fn
-    // (`load_png(path, image)`) gets the full 4-arg ABI.  The cdylib's
-    // hardcoded field offsets were also wrong; `loft generate` now emits
-    // offsets from the canonical struct schema (`Stores::position`/`size`)
-    // instead of a separate layout calc, and lib/imaging/native matches them.
+    // (empty) An entry here names a package whose tests do not compile or run
+    // under `--native`, the open issue that explains it, and the condition that
+    // removes it.  Every package listed before ran green again by 2026-06.
 ];
 
 /// Specific library test FILES skipped under `--native` (the rest of the
 /// package DOES compile), keyed `"<pkg>/<file>.loft"`.
 const LIB_TESTS_NATIVE_SKIP: &[&str] = &[
-    // Network: live HTTPS to httpbin.org — same reason as the interpreter skip
-    // (wrap.rs::LIB_TESTS_SKIP).  Not a native gap.
-    "web/http.loft",
-    // @P321d FIXED 2026-05-23: nested vector index `m.a[0].b[2]` no longer
-    // emits two live `&mut stores` borrows (E0499) — the OpGetVector /
-    // OpVectorRef `#rust` templates bind `@r` to a local before the call.
-
-    // @P333 FIXED 2026-05-26: `moros_render/geometry.loft` +
-    // `moros_sim/persistence.loft` no longer hardcode `/tmp/` — they use
-    // CWD-relative filenames + `delete()`, so they run on Windows too.  The
-    // Windows skips are removed (macOS + Linux already passed).
+    // (empty) The `web` fixture's network tests live in `tests-network/`, which no
+    // suite walks (TESTING.md § Every skip says why, how it runs instead, and when
+    // it ends) — nothing to list.  An entry here needs the open issue that explains
+    // it and the condition that removes it.
 ];
 
 /// True if `entry` (a `lib/<pkg>/tests/<file>.loft` path) is skipped under the

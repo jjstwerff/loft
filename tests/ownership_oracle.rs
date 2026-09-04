@@ -159,7 +159,7 @@ fn oracle_is_a_pure_observer_si1() {
 /// SI-2 — backend fact-identity: the ownership fact is computed at compile time (`scopes::check`),
 /// so it must read identically under `--interpret` and `--native`. Release-gated (rustc per run).
 #[test]
-#[ignore = "native backend needs rustc per run — the release-gate SI-2 check"]
+#[ignore = "native backend needs rustc per run — runs nightly in miri.yml's `release-gate-sweeps` job; by hand: `cargo test --release --test ownership_oracle oracle_fact_is_backend_identical_si2 -- --ignored`"]
 fn oracle_fact_is_backend_identical_si2() {
     let f = "doc/claude/plans/94-cfg-ownership-dataflow/probes/03-ownership.loft";
     assert_eq!(

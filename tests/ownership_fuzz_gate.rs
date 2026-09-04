@@ -99,7 +99,7 @@ fn fuzz_gate_map54_fast_loop() {
 /// default; run explicitly:
 /// `cargo test --release --test ownership_fuzz_gate -- --ignored`
 #[test]
-#[ignore = "full both-backends replay (rustc per cell) — the release-gate sweep"]
+#[ignore = "full both-backends replay (rustc per cell) — runs nightly in miri.yml's `release-gate-sweeps` job; by hand: `cargo test --release --test ownership_fuzz_gate fuzz_gate_map54_full_replay -- --ignored`"]
 fn fuzz_gate_map54_full_replay() {
     let cells = tempfile_dir();
     generate_cells(&cells);

@@ -354,7 +354,7 @@ fn halt_opt_out(path: &Path) -> Option<String> {
 /// Run the whole corpus on both backends; a divergence on ANY program is a
 /// caught cross-backend bug. Heavy (rustc per program) — `#[ignore]` by default.
 #[test]
-#[ignore = "differential oracle — run with --test differential_oracle -- --ignored"]
+#[ignore = "differential oracle — runs nightly in ci.yml's `test` job (the Differential oracle step); by hand: --test differential_oracle -- --ignored"]
 fn oracle_corpus_agrees_across_backends() {
     let mut report = Vec::new();
     for path in corpus() {

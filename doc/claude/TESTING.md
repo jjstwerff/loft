@@ -1613,21 +1613,41 @@ causing filesystem races.
 The lock is poisoning-tolerant (`unwrap_or_else(|e| e.into_inner())`): a panicking test
 releases the lock and the next test can proceed.
 
-### SUITE_SKIP — skipping known-broken docs files
+### Every skip says why, how it runs instead, and when it ends
 
-The `SUITE_SKIP` const in `tests/wrap.rs` lists `tests/docs/` files that are currently broken and
-should not block the `dir` test. The `dir` test skips any file whose name is in this list
-and prints a note explaining why:
+An ignore or a skip is a ROUTING, never a resting place: the test still runs somewhere, or a
+named condition removes the entry. Each class has one home and a guard.
 
-```rust
-const SUITE_SKIP: &[&str] = &[
-    // (all previously skipped files have been fixed — see CHANGELOG.md)
-];
-```
-
-`last` runs `16-parser.loft` without a trace; `parser_debug` runs it with a full execution
-trace and is marked `#[ignore]` because the trace takes ~100 s. To add a new entry: append
-the filename and a comment with the issue number. Remove it once the underlying issue is fixed.
+- **`#[ignore = "…"]` and `#[cfg_attr(<cfg>, ignore = "…")]`** — every one in `tests/*.rs`
+  and `src/**/*.rs` is listed in `tests/ignored_tests.baseline`
+  (`doc_hygiene::ignored_tests_baseline_is_current` fails on any drift; regenerate with
+  `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`), and every reason
+  names the run it rides — `doc_hygiene::every_ignore_reason_says_how_it_runs` accepts
+  `--ignored` (by hand, with the command), a nightly job (`miri.yml`'s `release-gate-sweeps`,
+  `ci.yml`'s `test` job step "Differential oracle"), `on demand` / `manually`, or a platform
+  (`Windows`: the `cfg_attr` ignores whose guard is the resource cap the platform lacks).
+  `make release-checklist`'s `A-ignores` reads the same file. A reason that only says WHY
+  (`heavy`, `a measurement`) fails the guard until it also says where the test runs.
+- **Suite skip lists** — `wrap.rs::{SUITE_SKIP, WASM_SKIP, LIB_PKGS_SKIP, LIB_TESTS_SKIP}`,
+  `native.rs::{NATIVE_SKIP, SCRIPTS_NATIVE_SKIP, LIB_PKGS_NATIVE_SKIP, LIB_TESTS_NATIVE_SKIP}`,
+  `html_wasm.rs::{LIB_PKGS_WASM_SKIP, LIB_TESTS_WASM_SKIP, LIB_PKGS_NODE_SKIP,
+  LIB_PKGS_WASMTIME_SKIP}`. An entry carries the open issue that explains it and the
+  condition that removes it. Today every list is empty except the `html_wasm` platform
+  limits: `server` (a listener; a browser/WASI guest has no accept — by
+  construction), `hex_world` on node (no filesystem; ends with a JS-host VirtFS bridge),
+  `imaging` on wasmtime (no canvas codec; ends with a pure-wasm PNG decoder), `input` on
+  wasmtime (the graphics crate is absent from the wasip2 sysroot; ends when it is packaged).
+  **Check an entry's blocker STATE before trusting it**: `input` sat in
+  `LIB_PKGS_NATIVE_SKIP` for three months after both its blockers closed, `191-source-dir`
+  named `#268` a quarter after it closed, `19-threading` was "the WASM threading model
+  differs" while it ran green under wasmtime, and both `web/http.loft` entries named a file
+  no suite walks — four inert entries that read as four open gaps.
+- **`tests-network/`** — the `web` fixture keeps its live-network tests
+  (`tests/fixtures/libs/web/tests-network/http.loft` and the `ws_*.loft` echo regressions) in
+  a directory no suite walks, because they need a reachable host. Run them by hand against
+  the echo server in `tools/zt-c-web-staging/README.md` § Verification, from a copy OUTSIDE
+  the lib tree (inside it, `--lib` auto-discovery double-resolves). The class ends when CI
+  gains a network leg.
 
 ### LOFT_DUMP — controlling debug output in docs/scripts tests
 

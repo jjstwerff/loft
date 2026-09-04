@@ -789,12 +789,6 @@ const LIB_PKGS_NODE_SKIP: &[&str] = &[
     // without a JS host bridge (out of scope for now).  Un-skip if a future
     // JS-host VirtFS bridge ships.
     "hex_world",
-    // `input` un-gated on node 2026-06-04: both its blockers — #248 (@P391
-    // cross-package ctor → CONST_STORE) and #266 (nested `&self` writes not
-    // persisting on `--interpret`) — are fixed, and `01-basics` builds + runs
-    // green on the node (`wasm32-unknown-unknown` / browser) path.  It remains
-    // in LIB_PKGS_WASMTIME_SKIP below for an UNRELATED reason (E0463: the
-    // graphics native crate is absent from the wasmtime sysroot).
 ];
 
 /// Packages skipped ONLY on the wasmtime (wasip2) path.  Use this for
@@ -807,7 +801,8 @@ const LIB_PKGS_WASMTIME_SKIP: &[&str] = &[
     // `lib/imaging/wasm/{src/lib.rs, host.js}` and `doc/loft-gl-wasm.js`).
     // Wasmtime has no equivalent; the bridge call would always return
     // false, breaking `assert(img.width == 256)`.  Browsers handle this
-    // fine.
+    // fine.  Ends when the wasm bridge carries a pure-wasm PNG decoder
+    // (then wasmtime decodes without a host canvas).
     "imaging",
     // input — the #248/@P391 + #266 language blockers are FIXED (it now runs
     // green on `--interpret`, `--native`, and the node/browser wasm path).
