@@ -1,0 +1,167 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A literal-backing accumulator repointed at a destination the frame does not own is DETACHED
+// before the scope-exit sweep runs (loft#1331, `formal/ownership.md` @FR-O-Latest / @FR-O-Detach).
+//
+// A keyed or vector literal builds through a function-scoped `__kvb_N` / `__vdb_N` accumulator
+// that normally OWNS the store it builds into, which is why the exit sweep frees it. Where the
+// destination is a CAPTURE, build-into-target REPOINTS the accumulator at that destination —
+// a store belonging to the frame that built the closure — and the sweep then freed the
+// caller's collection. `LOFT_TRACE_DB=1` is where the two frees separate:
+//
+//     [db] OpDatabase var=24 db=#65535   -> #4   the accumulator allocates its own store
+//     [db] free #4                              the DISPLACEMENT free — always was correct
+//     [db] OpDatabase var=24 db=#2@1,8          the repoint onto the capture
+//     [db] free #2                              THE DEFECT: the exit sweep, on the caller's store
+//
+// ⚠ THE CURE IS A DETACH, NOT A VETO, AND THE DIFFERENCE IS THE WHOLE ISSUE. @FR-O-Override's
+// never-free flag closes the fault and then orphans the accumulator's own store once per call,
+// because the veto is total — `ownership.md` says it "VETOES the proxy and the scope-exit sweep
+// alike", so it suppresses the displacement free too, and an explicit `OpFreeRef` written
+// beside it is suppressed with it (measured: `free #4` simply vanishes from the trace). The
+// sentinel write cancels only the exit free, which is the one that was wrong.
+//
+// ⚠ AND THE DETACH IS ITSELF A REBIND, which is the second thing that had to move. Both
+// backends' displacement frees admit any assignment whose value is a call, so each wrapped the
+// detach and freed the destination — relocating the fault one statement earlier instead of
+// closing it. `data::is_null_sentinel_detach` is the one predicate both now read: the native
+// gate already described the shapes it wants as "a fresh-store-producing rhs", and a sentinel
+// produces no store, so this is that sentence made checkable rather than a new rule.
+//
+// @falsified-at: 6c86f296 — interpret exit 0 -> 0, native exit 0 -> 0. INERT under
+//   `make falsify`, and honestly so: falsify does not arm `LOFT_POISON`, and every cell here
+//   answers CORRECTLY on the control — the released bytes are still intact. Census against the
+//   same control build (`--tests`, run with `--path <checkout>/`), on the channel that can see
+//   it:
+//
+//     cell                                        interpret+poison   native
+//     a captured keyed collection is replaced     FAIL (0xDEADBEEF)  pass
+//     an empty literal clears it                  FAIL (0xDEADBEEF)  pass
+//     every keyed kind                            FAIL (0xDEADBEEF)  pass
+//     70 000 replaces hold a flat heap            FAIL (0xDEADBEEF)  pass
+//     a captured vector is replaced       CONTROL pass               pass
+//     a comprehension over its own source CONTROL pass               pass
+//     a value-position literal            CONTROL pass               pass
+//     a non-captured local rebind         CONTROL pass               pass
+//     a nullable keyed local              CONTROL pass               pass
+//
+//   4 of 9 fail on the control and all five controls pass. Without poison the control is
+//   8/8 on BOTH backends, which is the measurement that says the value channel is blind here
+//   and the guard is scored by poison alone.
+//
+//   ⚠ Native is CLEAN on the control at every cell here, and `--native --tests` under
+//   `LOFT_POISON=1` fails all ten cells of the loft#1326 guard on the control too — a
+//   PRE-EXISTING harness interaction, not this defect and not a regression. Score the native
+//   half without poison.
+//
+// ⚠ THE CONTROLS CARRY THE OVER-REACH DIRECTION. A detach applied to an accumulator that DOES
+// own its store orphans it, so `test_a_value_position_literal_still_owns_its_store` and
+// `test_a_non_captured_local_rebind_is_unmoved` are the cells that must keep their frees.
+//
+// `test_seventy_thousand_replaces_hold_a_flat_heap` is not a control — it faults on the
+// pre-fix build like the other three — but it is the cell that scores a SECOND channel: at one
+// orphaned store per call it crosses the 65 535-store table and aborts on both backends with
+// no poison needed. That is what separates a real cure from one that trades the
+// use-after-free for a leak, which is exactly what the two veto-based cures did.
+
+struct Rw1331 { k: integer, v: integer }
+
+fn test_a_captured_keyed_collection_is_replaced() {
+  // The filed shape. The accumulator is repointed at the capture, and the exit sweep then
+  // freed the caller's hash; every later read of it was poison.
+  m: hash<Rw1331[k]> = [Rw1331 { k: 1, v: 1 }, Rw1331 { k: 2, v: 2 }];
+  q = fn() { m = [Rw1331 { k: 9, v: 9 }]; };
+  q();
+  assert(len(m) == 1, "length after the replace: got {len(m)}");
+  assert(m[9].v == 9, "the replacing element: got {m[9].v}");
+}
+
+fn test_an_empty_literal_clears_a_captured_collection() {
+  // The second lowering of one defect: `= []` reaches the sweep wrapped in `OpReplaceKeyed`
+  // rather than as a bare block, which is why the cure belongs where every statement is seen
+  // and not at either lowering's own site.
+  m: hash<Rw1331[k]> = [Rw1331 { k: 1, v: 1 }, Rw1331 { k: 2, v: 2 }];
+  q = fn() { m = []; };
+  q();
+  assert(len(m) == 0, "length after `= []`: got {len(m)}");
+}
+
+fn test_every_keyed_kind_is_replaced_through_a_capture() {
+  // The kind is not the axis — the repoint is. A sorted collection takes the same lowering.
+  s: sorted<Rw1331[k]> = [Rw1331 { k: 1, v: 1 }, Rw1331 { k: 2, v: 2 }];
+  q = fn() { s = [Rw1331 { k: 4, v: 44 }]; };
+  q();
+  assert(len(s) == 1, "sorted length after the replace: got {len(s)}");
+}
+
+fn test_a_captured_vector_is_replaced() {
+  // CONTROL. The vector twin builds through a `__vdb_N` accumulator and was correct
+  // throughout, which is what says the defect is the repoint rather than the capture.
+  v: vector<integer> = [1, 2, 3];
+  q = fn() { v = [7, 8]; };
+  q();
+  assert(len(v) == 2, "vector length after the replace: got {len(v)}");
+  assert(v[0] == 7, "the replacing element: got {v[0]}");
+}
+
+fn test_a_comprehension_over_its_own_source_is_unmoved() {
+  // CONTROL. Naming the destination is not writing into it, so this builds a FRESH collection
+  // and its accumulator is never repointed — the cell that says the discriminator is the
+  // repoint and not merely "a literal assigned to a capture".
+  s = [1, 2];
+  q = fn() { s = [for x in s { x * 10 }]; };
+  q();
+  assert(len(s) == 2, "comprehension length: got {len(s)}");
+  assert(s[0] == 10, "the comprehension's first element: got {s[0]}");
+}
+
+fn test_a_value_position_literal_still_owns_its_store() {
+  // CONTROL, and the over-reach direction: a literal in VALUE position builds into a store the
+  // accumulator owns, so it must keep its exit free. Its block assigns the accumulator only
+  // `null`, never a destination, which is exactly what the detach keys on.
+  a: hash<Rw1331[k]> = mk1331();
+  assert(len(a) == 1, "the returned collection: got {len(a)}");
+  assert(a[1].v == 1, "its element: got {a[1].v}");
+}
+
+fn mk1331() -> hash<Rw1331[k]> { [Rw1331 { k: 1, v: 1 }] }
+
+fn test_a_non_captured_local_rebind_is_unmoved() {
+  // CONTROL. A plain local rebind mints no accumulator at all — it writes straight into the
+  // local — so nothing here should change, and a detach that reached it would be a leak.
+  m: hash<Rw1331[k]> = [Rw1331 { k: 1, v: 1 }];
+  m = [Rw1331 { k: 7, v: 7 }];
+  assert(len(m) == 1, "length after the rebind: got {len(m)}");
+  assert(m[7].v == 7, "the replacing element: got {m[7].v}");
+}
+
+fn test_a_nullable_keyed_local_still_frees_what_it_displaces() {
+  // CONTROL for the DETACH's OWN over-reach, and the one a corpus file found rather than this
+  // matrix. A user-visible `= null` on a NULLABLE collection lowers to the same bare
+  // `OpNullRefSentinel()` call the detach is written as, and THAT one displaces a store the
+  // frame does own. Keyed on the value alone, the exclusion suppressed the free the language
+  // owes and `a-nullable-keyed-collection-can-hold-a-value.loft` leaked four stores. Only a
+  // `__kvb_N` / `__vdb_N` accumulator is ever a detach target, which is what separates the two
+  // spellings of one call.
+  //
+  // ⚠ The leak channel lives in that corpus file, not here: it has a `main`, so the runner's
+  // scope-free gate scores it, and a fn-per-cell file is not leak-checked. This cell holds the
+  // VALUE half of the boundary — that the rebinds still answer correctly.
+  h: hash<Rw1331[k]>? = [Rw1331 { k: 1, v: 1 }];
+  h = null;
+  h = [Rw1331 { k: 2, v: 2 }];
+  assert(len(h ?? []) == 1, "the nullable collection after two rebinds: got {len(h ?? [])}");
+  assert((h ?? [])[2].v == 2, "its element: got {(h ?? [])[2].v}");
+}
+
+fn test_seventy_thousand_replaces_hold_a_flat_heap() {
+  // CONTROL for the DISPLACEMENT free, which the veto cures suppress. At one orphaned store
+  // per call this crosses the 65 535-store table and aborts, on both backends — the channel
+  // that separates a real cure from one that trades a use-after-free for a leak.
+  m: hash<Rw1331[k]> = [Rw1331 { k: 1, v: 1 }];
+  q = fn(n: integer) { m = [Rw1331 { k: n, v: n }]; };
+  for i in 0..70000 { q(i); }
+  assert(len(m) == 1, "length after 70000 replaces: got {len(m)}");
+  assert(m[69999].v == 69999, "the last replacing element: got {m[69999].v}");
+}

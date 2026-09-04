@@ -388,6 +388,8 @@ pub struct Function {
     // AFTER the first user statement so they appear after user-scope vars in var_order
     // and are therefore freed BEFORE them — satisfying the database LIFO invariant.
     inline_ref_vars: BTreeSet<u16>,
+    /// Locals assigned a BORROW on one path and an owned value on another (loft#1333).
+    borrow_arm_vars: BTreeSet<u16>,
     // The names store only the last known instance of this variable in the function.
     names: HashMap<String, u16>,
     // Scope numbers that correspond to loop bodies (Value::Loop), i.e. scopes whose
@@ -499,6 +501,7 @@ impl Function {
             work_refs: BTreeSet::new(),
             arm_consumed: BTreeSet::new(),
             inline_ref_vars: BTreeSet::new(),
+            borrow_arm_vars: BTreeSet::new(),
             names: HashMap::new(),
             loop_scopes: HashSet::new(),
             loop_seq_ranges: HashMap::new(),
@@ -713,6 +716,7 @@ impl Function {
             work_texts: BTreeSet::new(),
             work_refs: BTreeSet::new(),
             inline_ref_vars: other.inline_ref_vars.clone(),
+            borrow_arm_vars: other.borrow_arm_vars.clone(),
             names: other.names.clone(),
             loop_scopes: other.loop_scopes.clone(),
             loop_seq_ranges: other.loop_seq_ranges.clone(),
@@ -3307,6 +3311,26 @@ impl Function {
     /// reference variables, giving the correct LIFO-reversed free order.
     pub fn mark_inline_ref(&mut self, v: u16) {
         self.inline_ref_vars.insert(v);
+    }
+
+    /// Record that `v` is assigned a BORROW on at least one path and an owned value on
+    /// another — the MIXED binding whose single ownership fact cannot be right for both.
+    ///
+    /// `deps` is empty for such a local (the owned arm contributed none and the join dropped
+    /// the borrow's), so @FR-O-Proxy answers "owned" and a displacement free releases the
+    /// store the borrow arm only borrowed.  @FR-O-Complete is the rule — the fact is per
+    /// BINDING and per PATH — and where one static site cannot separate the paths, erring
+    /// toward NOT owned is the direction it names: a leak is recoverable, a premature free is
+    /// not.
+    pub fn mark_borrow_arm(&mut self, v: u16) {
+        self.borrow_arm_vars.insert(v);
+    }
+
+    /// Is `v` a mixed binding, borrowed on some path?  Read by BOTH backends' displacement
+    /// frees, so neither can free on the proxy where the other declines (@FR-O-NoDiverge).
+    #[must_use]
+    pub fn has_borrow_arm(&self, v: u16) -> bool {
+        self.borrow_arm_vars.contains(&v)
     }
 
     pub fn is_inline_ref(&self, v: u16) -> bool {

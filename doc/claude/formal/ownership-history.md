@@ -1413,6 +1413,38 @@ too.  A projection subject stays the view it is.
   sentinel.  Peeled — the same class as the D-layout rows; user code never reaches it because
   a `P? = null` is parsed to `OpNullRefSentinel`.
 
+**A FALLBACK IS NOT A VERDICT — the defect this closure introduced, found and fixed inside
+the branch (2026-09-04).**  `use_analysis`'s `CallRef` arm answers `Own::Owned` for a base it
+cannot NAME, and its own doc already says readers must not take that at face value.  The arm
+lift read it as one.  The shape was unreachable until loft#1329 made a captured fn-ref
+resolvable, and then a FORWARDING lambda —
+
+```loft
+inner = fn(q: vector<integer>?) -> vector<integer> { q ?? [7, 8] };
+fwd   = fn(q: vector<integer>?) -> vector<integer> { inner(q) };
+for _ in 0..4 { r = if true { fwd(c) } else { fwd(none) }; t += r[1]; }   // len(c) == 0
+```
+
+— reached its own return through `__closure`, so the summary lost the base, answered `Owned`,
+and the arm took an UNWITNESSED free of the caller's collection.  Two iterations empty the
+source while the value still reads right, so a values-only cell cannot see it; and the
+CONTROL for it has to be loft#1329's build, because at 26d17f4b the target does not resolve
+and the cell passes for the wrong reason.
+
+⚠ **Declining the lift on that fallback is NOT the cure, and measuring is what said so**: it
+closes the over-free and then leaks worse than the release — 70 000 forwarding mint arms
+exhaust the store table where 2026.8.0 is flat.  Trading a silent wrong answer for a leak the
+shipped compiler did not have is not an improvement.
+
+The cure is the fact the summary lost, which the callee still DECLARES: `fwd`'s type reads
+`vector<integer>["q"]`, naming the visible parameter its return borrows.
+`callref_declared_borrow_base` maps that dep to the caller's argument through the SAME
+`caller_arg_base` a resolved base takes, and `callref_collection_join_base` asks it wherever
+the oracle answered the fallback — so one identity free serves both answers rather than two
+mechanisms serving one question.  Both directions measured: the borrow arm keeps the source,
+the mint arms are flat at 70 000, on both backends, for a vector and a record and for the
+no-branch rebind.
+
 **Found beside it, filed, not fixed here.**  loft#1327: a fn-ref whose target cannot be
 RESOLVED — a fn-typed parameter — reads `Owned` at the oracle's fallback and is typed owned by
 the parser (the fn TYPE's return carries no deps), so `u = g(a)` inside `fn plain(a, g)` frees

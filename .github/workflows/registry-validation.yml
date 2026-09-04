@@ -84,10 +84,17 @@ jobs:
           # stopped looking.  A malformed field must cost us that one package, not
           # the whole sweep; loft-lang/registry's validator now rejects the bad
           # shape at the source (tools/validate.py § gate_schema).
-          packages=$(jq -c '[.packages | to_entries[]
+          # …minus the packages that are not libraries.  That policy lives in
+          # `scripts/revalidate_matrix.py` (`NOT_A_LIBRARY`) and is READ here rather than
+          # restated: `loft` is published but is the TOOLCHAIN, so `loft install loft@X`
+          # answers "`loft` is the toolchain, not a library" and the leg fails every night.
+          # loft#1315 fixed exactly this drift in the revalidate-libs matrix; this workflow
+          # kept its own `jq` copy of the list and so kept the bug.
+          skip=$(python3 scripts/revalidate_matrix.py --not-a-library)
+          packages=$(jq -c --argjson skip "$skip" '[.packages | to_entries[]
                              | select((.value.versions | keys | length)
                                       > ((.value.yanked | if type == "array" then length else 0 end)))
-                             | .key]' index.json)
+                             | .key | select(. as $n | ($skip | index($n)) | not)]' index.json)
           if [ -z "$packages" ] || [ "$packages" = "[]" ]; then
             echo "::error::discover produced NO packages from the registry index — refusing to report a\
            green sweep that validated nothing."

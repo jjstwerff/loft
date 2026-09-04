@@ -9,6 +9,26 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A fn-ref that FORWARDS is witnessed by the dep its callee declares (2026-09-04)
+
+Branch-internal, never on `main`: loft#1329 made a captured fn-ref resolvable, which first
+made this shape reachable.  A forwarding lambda (`fwd = fn(q) { inner(q) }`) reaches its own
+return through `__closure`, so `use_analysis`'s summary cannot name the base and answers
+`Own::Owned` — the arm's FALLBACK, which its own doc says is not a verdict.  D-own-8's arm
+lift read it as one and freed the caller's collection, one per evaluation, with the value
+still right for the first iterations.
+
+Declining the lift there was measured and rejected: it closes the over-free and leaks worse
+than 2026.8.0 (70 000 forwarding mint arms exhaust the store table where the release is
+flat).  The fact the summary lost is the one the callee DECLARES — `-> vector<T>["q"]` names
+the parameter the return borrows — so `callref_declared_borrow_base` maps it to the caller's
+argument through the same `caller_arg_base` a resolved base uses, and
+`callref_collection_join_base` consults it exactly where the oracle answered the fallback.
+One identity free serves both answers.  Guard: the forwarding cells in
+`1323-every-arm-of-a-value-branch-has-its-own-binding`, falsified at `1bee39aa` on both
+backends — a second control, because at the first the target does not resolve and the cell
+would pass for the wrong reason.
+
 ### A `-> text?` lambda called through a fn-ref compiles on `--native` (2026-09-04)
 
 Found while sweeping the nullable-return spellings beside loft#1329, and it is the same

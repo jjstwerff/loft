@@ -1553,6 +1553,9 @@ fn run_scan_phase(
     // that a minting call reassigns, recording whether the store it holds is this frame's sole
     // property.  Minted BEFORE the scan for the reason the buffer's is: the first assignment
     // that has to maintain it already needs a flag to write.
+    for v in mixed_ownership_locals(orig_code, &function, data, d_nr) {
+        function.mark_borrow_arm(v);
+    }
     for v in nullable_locals_that_displace(orig_code, &function, data) {
         let name = format!("__lbo_{}", function.name(v));
         let flag = function.add_temp_var(&name, &Type::Boolean);
@@ -2141,6 +2144,22 @@ fn collect_move_dest(
 ///
 /// The `for` lowering wraps its loop in a block (`{#For block … loop {#For loop …} }`), so the
 /// statement an enclosing block holds is a `Block`, not the `Loop` itself.
+/// Does `node` contain a fn-ref call anywhere?  The cheap structural gate on
+/// [`mixed_ownership_locals`]'s oracle walk — the fact it computes is read only where a
+/// `CallRef` delivers a collection.
+fn contains_callref(node: &Value) -> bool {
+    if matches!(node.unspan(), Value::CallRef(_, _)) {
+        return true;
+    }
+    let mut found = false;
+    node.for_each_child(&mut |c| {
+        if !found && contains_callref(c) {
+            found = true;
+        }
+    });
+    found
+}
+
 fn contains_loop(node: &Value) -> bool {
     if matches!(node.unspan(), Value::Loop(_)) {
         return true;
@@ -2258,6 +2277,106 @@ fn mentions_var(node: &Value, v: u16) -> bool {
     node.for_each_child(&mut |c| {
         if !found && mentions_var(c, v) {
             found = true;
+        }
+    });
+    found
+}
+
+/// Whether the first use of a variable in execution order READS it or WRITES it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FirstUse {
+    Read,
+    Write,
+}
+
+/// The first use of `v` in `node`, in execution order.
+///
+/// This is the liveness question [`Scopes::loop_locals_read_after`] asks: a later region that
+/// ASSIGNS `v` before reading it is a fresh binding that happens to share a name, not a reader
+/// of the value the loop produced.  [`mentions_var`] cannot tell those apart — it answers
+/// "does `v` appear here", so an independent binding reads as a use of the loop's value.
+///
+/// Two orderings carry the meaning.  A `Set`'s VALUE is evaluated before its target is
+/// written, so `r = f(r)` reads first.  A `Loop` body may run ZERO times, so a write inside it
+/// never kills the binding — only a read there establishes liveness.
+fn first_use_of(node: &Value, v: u16) -> Option<FirstUse> {
+    match node.unspan() {
+        Value::Set(t, val) => first_use_of(val, v).or_else(|| (*t == v).then_some(FirstUse::Write)),
+        Value::Var(x) if *x == v => Some(FirstUse::Read),
+        Value::Block(bl) => first_use_in_seq(&bl.operators, v),
+        Value::Insert(ops) => first_use_in_seq(ops, v),
+        Value::Loop(b) => match first_use_in_seq(&b.operators, v) {
+            Some(FirstUse::Read) => Some(FirstUse::Read),
+            _ => None,
+        },
+        Value::If(test, t, f) => first_use_of(test, v).or_else(|| {
+            match (first_use_of(t, v), first_use_of(f, v)) {
+                // A read on EITHER path makes the binding live; only a write on BOTH kills it.
+                (Some(FirstUse::Read), _) | (_, Some(FirstUse::Read)) => Some(FirstUse::Read),
+                (Some(FirstUse::Write), Some(FirstUse::Write)) => Some(FirstUse::Write),
+                _ => None,
+            }
+        }),
+        // The IR nodes that name a variable as a bare `u16` rather than through `Value::Var`.
+        // Each one READS the variable it names (a `TuplePut` writes an ELEMENT, so the tuple
+        // itself must already hold a value), and reading them as such is also the safe
+        // direction: it can only keep a hoist that loft#1156 wants, never drop one.
+        Value::TupleGet(x, _) if *x == v => Some(FirstUse::Read),
+        Value::TuplePut(x, _, inner) => {
+            first_use_of(inner, v).or_else(|| (*x == v).then_some(FirstUse::Read))
+        }
+        Value::FnRefDnr(x) if *x == v => Some(FirstUse::Read),
+        Value::FnRef(_, clos_var, _) if *clos_var == v => Some(FirstUse::Read),
+        _ => {
+            let mut found = None;
+            node.for_each_child(&mut |c| {
+                if found.is_none() {
+                    found = first_use_of(c, v);
+                }
+            });
+            found
+        }
+    }
+}
+
+/// The first use of `v` across `ops`, evaluated in order.
+fn first_use_in_seq(ops: &[Value], v: u16) -> Option<FirstUse> {
+    ops.iter().find_map(|op| first_use_of(op, v))
+}
+
+/// The literal-backing accumulator a statement REPOINTS at a destination, if it has one.
+///
+/// A keyed or vector literal builds through a function-scoped accumulator (`__kvb_N` /
+/// `__vdb_N`, [`crate::variables::owns_literal_backing_store`]) that normally OWNS the store it
+/// builds into — which is why the scope-exit sweep frees it.  Where the destination is a
+/// CAPTURE, @PLN93's build-into-target lowering instead REPOINTS the accumulator at that
+/// destination, and the sweep then frees a store belonging to the frame that built the closure
+/// (loft#1331).
+///
+/// The repoint is what this recognises, and it is the exact discriminator: a value-position
+/// literal's block only ever assigns the accumulator `null` — it allocates and builds into a
+/// store of its own — while a repointing block assigns it the destination first.  A plain
+/// non-captured local rebind mints no accumulator at all.  Returning the accumulator here is
+/// therefore the same question as *"does this statement leave it naming a store this frame does
+/// not own?"*.
+///
+/// One home for every lowering: the keyed replace reaches the sweep as a bare `Block`, the
+/// empty-literal clear as one wrapped in `OpReplaceKeyed`, and both are the same defect.
+fn repointed_literal_accumulator(node: &Value, function: &Function) -> Option<u16> {
+    if let Value::Block(bl) = node.unspan()
+        && let Some(Value::Var(acc)) = bl.operators.last().map(Value::unspan)
+        && crate::variables::owns_literal_backing_store(function.name(*acc))
+        && bl.operators.iter().any(|op| {
+            matches!(op.unspan(), Value::Set(t, val)
+                if t == acc && !matches!(val.unspan(), Value::Null))
+        })
+    {
+        return Some(*acc);
+    }
+    let mut found = None;
+    node.for_each_child(&mut |c| {
+        if found.is_none() {
+            found = repointed_literal_accumulator(c, function);
         }
     });
     found
@@ -5675,6 +5794,14 @@ impl Scopes<'_> {
             // a free site and consults @FR-O-Override like every other.
             && !function.tp(v).depend().is_empty()
             && !function.is_skip_free(v)
+            // loft#1333 — and NOT for a MIXED binding, one another path assigns a borrow.
+            // The deps this would strip are that other path's, not this delivery's: the two
+            // arms share one binding, so declaring it the owner of this buffer also declares
+            // it the owner of the store the borrow arm merely views, and the displacement
+            // free then released it.  @FR-O-Complete says the fact is per BINDING and per
+            // PATH; where one static site cannot be both, the rule names the direction —
+            // a retained buffer is recoverable, a premature free is not.
+            && !function.has_borrow_arm(v)
         {
             // A collection a closure hands back is DELIVERED — copied by the callee into the
             // buffer minted for that call — unless it is a raw view (`returns_borrowed_view`)
@@ -5958,6 +6085,26 @@ impl Scopes<'_> {
                 }
             } else {
                 ls.push(sv);
+            }
+            // loft#1331 — DETACH an accumulator this statement repointed at a destination the
+            // frame does not own, so the scope-exit sweep frees nothing instead of freeing the
+            // caller's collection.  @FR-O-Latest is the fact: ownership belongs to the LATEST
+            // assignment, and the repoint made the accumulator name a capture.  The sentinel
+            // makes that true at RUN time — the sweep still emits its free and finds nothing —
+            // while the DISPLACEMENT free that releases the accumulator's own store at the
+            // repoint is untouched, which is what @FR-O-Override's blanket veto could not do.
+            //
+            // @FR-O-Detach places it: after the statement, so it follows every read of the
+            // accumulator by the value being built through it.  Skipped where the statement is
+            // the block's RESULT, which `expr` below pops — a detach there would become the
+            // value the block yields.
+            if (bl.result == Type::Void || i + 1 < bl.operators.len())
+                && let Some(acc) = repointed_literal_accumulator(v, function)
+            {
+                ls.push(v_set(
+                    acc,
+                    Value::Call(data.def_nr("OpNullRefSentinel"), Vec::new()),
+                ));
             }
         }
         let expr = if ls.is_empty() || bl.result == Type::Void {
@@ -7556,7 +7703,11 @@ impl Scopes<'_> {
             {
                 continue;
             }
-            if rest.iter().any(|r| mentions_var(r, v)) {
+            // LIVE after the loop, not merely mentioned: a later region that assigns `v`
+            // before reading it is an independent binding sharing the name, and hoisting
+            // those together gives one function-scope variable whose ownership fact is the
+            // JOIN of both — which frees a borrow as if it were owned (loft#1332).
+            if first_use_in_seq(rest, v) == Some(FirstUse::Read) {
                 out.push(v);
             }
         }
@@ -8712,7 +8863,37 @@ impl Scopes<'_> {
                     Deps::frame1(base)
                 }
             }
-            crate::use_analysis::Own::Owned => Deps::none(),
+            crate::use_analysis::Own::Owned => {
+                // ⚠ `Own::Owned` is ALSO the `CallRef` arm's fallback for a base it cannot
+                // name — its own doc says so — so at a site that frees it is not a verdict.
+                // A second hop reaches it: `fwd = fn(q) { inner(q) }` resolves (loft#1329
+                // made a fn-ref capture resolvable) and answers `Owned` because the base
+                // arrives through the capture, while the callee's own type says the return
+                // borrows `q`.  Taking that at face value gave the temp an unwitnessed free
+                // of the CALLER's collection, one per evaluation.
+                //
+                // So ask the CALLEE, which is where the fact is: a return that borrows a
+                // visible parameter is not owned, whatever the caller-side walk resolved.
+                // Its DECLARED dep still names WHICH parameter, so the arm keeps a binding
+                // and the store is decided per execution by identity against the argument —
+                // the borrow arm hands back that store and declines, the mint arm is
+                // distinct and frees.  With no nameable argument there is no witness, and
+                // the arm keeps the leak it had rather than freeing blind.
+                if def.returns_borrowed_view() {
+                    let base =
+                        crate::use_analysis::callref_declared_borrow_base(data, self.d_nr, val)?;
+                    if self.multi_assigned.contains(&base) {
+                        return None;
+                    }
+                    if record {
+                        Deps::none()
+                    } else {
+                        Deps::frame1(base)
+                    }
+                } else {
+                    Deps::none()
+                }
+            }
             crate::use_analysis::Own::Borrowed { .. } => {
                 if !record && def.returns_borrowed_view() {
                     return None;
@@ -9730,6 +9911,88 @@ fn hidden_return_buffer_var(d_nr: u32, function: &Function, data: &Data) -> Opti
     let name = def.attributes().get(idx)?.name.clone();
     let v = function.var(&name);
     (v != u16::MAX).then_some(v)
+}
+
+/// Which heap LOCALS are assigned a BORROW on one path and an owned value on another?
+///
+/// The single ownership fact such a binding carries cannot be right for both.  Its `deps` come
+/// out EMPTY — the owned arm contributes none and the join drops the borrow's — so @FR-O-Proxy
+/// answers "owned" and the displacement free releases a store the borrow arm only borrowed.
+/// Measured: `if c { r = field_of(q) } else { r = fnref(7) }` in a loop freed `q`'s store on
+/// the iteration that took the other arm, on both backends (loft#1333).
+///
+/// **A FOREIGN base is the borrow that counts, not any non-owned verdict.** `x: vector<τ> = []`
+/// followed by `x = fnref(i)` also reads as non-owned on its first assignment, and there the
+/// base is the `__vdb_N` that very literal minted — storage `x` is the sole user of, released
+/// by that temp's own scope-exit free.  Marking such a binding withdraws the strip loft#1329
+/// needs, and every cell of its guard then exhausted the store table.  What separates them is
+/// whether the base is the binding's own literal backing
+/// ([`crate::variables::owns_literal_backing_store`]) or storage reached through somebody
+/// else — a call's return buffer carrying a view of the callee's argument, which is the c3i
+/// shape this closes.
+///
+/// **Why MIXED and not merely viewed.** A local every path views already carries a dep and
+/// declines the free on its own; it is the disagreement that produces the empty list.  Keeping
+/// the condition to mixed bindings is what stops this from suppressing frees that are correct.
+fn mixed_ownership_locals(code: &Value, function: &Function, data: &Data, d_nr: u32) -> Vec<u16> {
+    let mut viewed: HashSet<u16> = HashSet::new();
+    let mut owned: HashSet<u16> = HashSet::new();
+    fn walk(
+        node: &Value,
+        data: &Data,
+        d_nr: u32,
+        function: &Function,
+        viewed: &mut HashSet<u16>,
+        owned: &mut HashSet<u16>,
+    ) {
+        if let Value::Set(t, val) = node.unspan() {
+            match crate::use_analysis::ownership_of(data, d_nr, val) {
+                crate::use_analysis::Own::Owned => {
+                    owned.insert(*t);
+                }
+                crate::use_analysis::Own::Borrowed { base }
+                | crate::use_analysis::Own::Join { base } => {
+                    // A base that is the binding's OWN literal backing is not a foreign
+                    // borrow: `x: vector<τ> = []` lowers to a read of the `__vdb_N` this very
+                    // literal minted, and that temp's own scope-exit free releases it.  Any
+                    // other base is storage reached through somebody else — a call's return
+                    // buffer carrying a view of the callee's argument, or a named local.
+                    if base != u16::MAX
+                        && (base as usize) < function.count() as usize
+                        && !crate::variables::owns_literal_backing_store(function.name(base))
+                    {
+                        viewed.insert(*t);
+                    }
+                }
+            }
+        }
+        node.unspan()
+            .for_each_child(&mut |c| walk(c, data, d_nr, function, viewed, owned));
+    }
+    // The fact is read at ONE site — `callref_delivers_collection`'s strip — so a body with no
+    // fn-ref call cannot need it, and the oracle walk below is not free: it asks
+    // `ownership_of` per assignment, and a big vector literal is thousands of them
+    // (`issue854_a_vector_literal_compiles_in_linear_time` went from seconds to over a minute
+    // before this gate).  The structural pre-check is what keeps the cost on the bodies that
+    // can actually be wrong.
+    if !contains_callref(code) {
+        return Vec::new();
+    }
+    walk(code, data, d_nr, function, &mut viewed, &mut owned);
+    let mut out: Vec<u16> = viewed.intersection(&owned).copied().collect();
+    out.sort_unstable();
+    // ⚠ Deliberately NOT filtered on an empty dep list.  This runs BEFORE the scan, where the
+    // view arm's dep is still on the binding — the empty list is what the scan PRODUCES and
+    // what this exists to prevent, so testing for it here would drop every var that matters.
+    out.retain(|&v| {
+        v < function.count()
+            && matches!(
+                function.tp(v).base(),
+                Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
+            )
+            && !function.is_argument(v)
+    });
+    out
 }
 
 /// Which nullable heap-record LOCALS are reassigned from a call that mints?
