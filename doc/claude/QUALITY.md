@@ -479,10 +479,13 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 384 | 360 | **24** |
+| 385 | 361 | **24** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
+It moved from 384 · 360 to 385 · 361 with loft#1354's `arm_moves_a_live_tuple_local`, which
+discriminates on `Value::Var` and `Value::Block` to find the local an `if` arm hands over — it
+peels first, so it lands on the seeing-through side and leaves the opaque column where it was.
 
 ⚠ **The row moved from 344 · 327 · 17 to 356 · 332 · 24 with nothing about the code changing,
 and the reason is worth keeping: the census USED TO DEPEND ON FORMATTING.** `DISCRIM` ends in
@@ -2442,7 +2445,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 697 | 340 | 5 | **352** |
+| 698 | 341 | 5 | **352** |
 
 The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.  It happened again on the 2026-09-03 join — one side carried `684 | 330 | 5 | 349` and the other `687 | 331 | 5 | 351`, and the tree that holds both measures `689 | 332 | 5 | 352`; the 2026-09-03 evening join (D-bind-11 onto the #1318 tree) measured `692 | 333 | 5 | 354`, loft#1327's opaque-fn-ref clause moved one function off the opaque column, and the D-own-8 closure moved two more onto the peeled one — one arm peeled (`gen_set_first_at_tos`'s null-init) beside two new scope-pass predicates.  The tree that holds BOTH measures `694 | 337 | 5 | 352`, which is neither side's number: two branches each adding predicates cannot have their counts added, because the audit classifies FUNCTIONS and a merged body is one function however many branches touched it.  loft#1333 then moved it to `695 | 338 | 5 | 352` with `scopes::mixed_ownership_locals`, the pre-scan that asks whether a binding is assigned a VIEW on one path and a delivered collection on another; it reads `function.tp(v).base()`, so it peels the wrapper and lands on the seeing-through side, leaving the opaque column where it was.
 
@@ -2699,7 +2702,7 @@ third time by REPAIR rather than by addition: `assign_var_nr` decides whether a 
 the variable it writes through, its own router already asked through `.base()`, and the
 disagreement between the two was an internal compiler error on `n.t += "cd"` for a `text?`
 field.  loft#1207 moved it twice more, to 659 · 305 · 349, for the fourth and fifth time by
-REPAIR: `is_collection` and `keyed_field_kt`.
+REPAIR: `is_collection` and `keyed_field_kt`.  loft#1354 then moved it to 698 · 341 with `arm_moves_a_live_tuple_local`, which asks whether an `if` arm hands over a tuple carrying text: it reads the element types through `.base()`, so it sees through the wrapper and the opaque column is unchanged.
 
 Those five repairs are worth reading as ONE finding rather than five, and the reading is
 what the CALLER half exists to give.  `is_keyed`, `assign_var_nr`, `collection_element`,
