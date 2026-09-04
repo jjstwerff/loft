@@ -2225,6 +2225,29 @@ impl<'a> Ownership<'a> {
                 .last()
                 .map_or(Own::Owned, |t| self.classify(t, func, defs)),
             Value::Return(v) => self.classify(v, func, defs),
+            // `@FR-B-View` — a heap member read out of a tuple (`a = t.0`) is a VIEW of the
+            // tuple's member, exactly as a struct field read is; a scalar member is a value.
+            // A read off a work temp holding a bare copy of another tuple local (the
+            // destructure's `T1.4` temp) views THAT local's member: the temp copies the
+            // tuple's words, and a heap member's word is the handle.  Without this arm the
+            // read fell to the fallback and was called `Owned`, so the dead-store lint
+            // warned that a write through the view was lost — while both backends landed it.
+            Value::TupleGet(base, i) => {
+                let heap = matches!(func.tp(*base), crate::data::Type::Tuple(elems)
+                    if elems.get(*i as usize).is_some_and(crate::data::is_dbref));
+                if !heap {
+                    return Own::Owned;
+                }
+                let mut b = *base;
+                if let Some(rhss) = defs.rhs.get(&b)
+                    && let [only] = rhss.as_slice()
+                    && let Value::Var(x) = only.unspan()
+                    && matches!(func.tp(*x), crate::data::Type::Tuple(_))
+                {
+                    b = *x;
+                }
+                Own::Borrowed { base: b }
+            }
             // @FR-O-Oracle — a call resolves through the callee's return summary, and a
             // call has TWO spellings.  `Value::Call` names its definition; a `CallRef`
             // names a runtime value, so the target is recovered from the assignment that

@@ -1641,13 +1641,22 @@ use a separate collection or add after the loop"
         } else {
             false
         };
+        // A vector member read off an OWNED tuple local (`a = t.0`) is the same one-level
+        // projection — `@FR-L-Tuple` makes the tuple a struct — and copies for the same
+        // reason (loft#1361); off a parameter or a linked local it stays the view
+        // `@FR-B-View-Base` says.
+        // The base's own member deps name its frame-local backings (a copied member depends
+        // on the store it was copied into), never a borrow of another variable — a `&` link
+        // is a `RefVar`, not a `Tuple` — so ownership here is "a local that is not a parameter".
+        let owned_tuple_member = matches!(code.unspan(), Value::TupleGet(bv, _)
+            if matches!(self.vars.tp(*bv), Type::Tuple(_)) && !self.vars.is_argument(*bv));
         if is_bare_var {
             if matches!(code.unspan(), Value::Var(rhs) if *rhs == var_nr) {
                 return VecBind::SelfAssign;
             }
             return VecBind::CopyVar;
         }
-        if owned_field_read {
+        if owned_field_read || owned_tuple_member {
             return VecBind::CopyOwnedField;
         }
         VecBind::NotABind
@@ -2643,6 +2652,34 @@ use a separate collection or add after the loop"
         let prev_target = std::mem::replace(&mut self.assign_target, var_nr);
         let prev_replaces = std::mem::replace(&mut self.assign_replaces, op == "=");
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
+        // `@FR-B-Copy` (with `@FR-T-Cons`) — a whole-tuple bind `u = t` COPIES every heap
+        // member.  It is lowered onto the literal's own per-member copy: the source
+        // becomes the tuple of its member reads and `tuple_member_owned_copy` gives each heap
+        // member a frame-local backing, so both backends bind an INDEPENDENT value.  A bind
+        // used to copy the tuple's stack words, and a heap member's word is a handle, so
+        // `u = t; t.0 += [9]` grew `u.0` too (loft#1361).  A local TARGET only (a field or
+        // element write has its own lowering), never a `&` link, and a parameter source copies
+        // like every plain bind off a parameter does.
+        if op == "="
+            && !self.amp_pending
+            && matches!(to, Value::Var(_))
+            && let Value::Var(src) = code.unspan()
+            && let Type::Tuple(elems) = self.vars.tp(*src).clone()
+            && elems.iter().any(|e| !crate::data::is_scalar(e.base()))
+        {
+            let src = *src;
+            let mut types = elems.clone();
+            let mut members: Vec<Value> = Vec::with_capacity(elems.len());
+            for (i, t) in elems.iter().enumerate() {
+                let mut m = Value::TupleGet(src, i as u16);
+                if let Some(owned) = self.tuple_member_owned_copy(&mut m, t) {
+                    types[i] = owned;
+                }
+                members.push(m);
+            }
+            *code = Value::Tuple(members);
+            s_type = Type::Tuple(types);
+        }
         // tuples.md T-Ref — a tuple LITERAL bound to a local that is the SOURCE OF A `&` LINK
         // (recorded in pass 1 at the link or the call) and carries a heap element is built as
         // the `__tuple<…>` RECORD a heap-tuple return and a loop variable already are, so the
@@ -5550,6 +5587,13 @@ use a separate collection or add after the loop"
                         rhs_elems.len()
                     );
                 }
+                // `@FR-B-Copy` / `@FR-B-View-Base` — a COLLECTION member read off an OWNED
+                // tuple local COPIES (`a = t.0` is `af = bx.v`, one level off an owned base), a
+                // struct member VIEWS (`@FR-B-View`), and off a BORROWED base — a parameter, a
+                // linked local — every member views.  Decided on the source before the temp
+                // takes its place: the temp is never an argument. (loft#1361)
+                let owned_base = matches!(rhs.unspan(), Value::Var(s)
+                    if !self.vars.is_argument(*s) && matches!(self.vars.tp(*s), Type::Tuple(_)));
                 // T1.4: create a temp variable for the RHS tuple, then read elements.
                 let tmp_tp = rhs_type.clone();
                 let tmp = self.vars.work_refs(&tmp_tp, &mut self.lexer);
@@ -5580,7 +5624,16 @@ use a separate collection or add after the loop"
                         self.change_var_type(v_nr, &rhs_elems[i]);
                     }
                     let step = if ref_def_nr == u32::MAX {
-                        Value::Set(v_nr, Box::new(Value::TupleGet(tmp, i as u16)))
+                        let mut read = Value::TupleGet(tmp, i as u16);
+                        if owned_base
+                            && Self::is_collection_type(rhs_elems[i].base())
+                            && let Some(owned) =
+                                self.tuple_member_owned_copy(&mut read, &rhs_elems[i])
+                            && self.vars.exists(v_nr)
+                        {
+                            self.change_var_type(v_nr, &owned);
+                        }
+                        Value::Set(v_nr, Box::new(read))
                     } else {
                         let elem_offset = if let Some(offs) =
                             crate::data::stored_tuple_offsets_for_def(

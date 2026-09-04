@@ -409,7 +409,18 @@ impl Output<'_> {
                     if elem_is_bool {
                         write!(w, "((")?;
                     }
+                    // A member the scope pass rewrote as `Insert([statements…, value])` — a
+                    // heap local's declaration hoisted to the enclosing statement ahead of the
+                    // block that binds it — is a statement list with a value tail, which
+                    // inside a tuple is legal Rust only as a block expression.
+                    let as_block = e.unspan().kind() == ValueType::Insert;
+                    if as_block {
+                        write!(w, "{{ ")?;
+                    }
                     self.output_code_node(w, e)?;
+                    if as_block {
+                        write!(w, " }}")?;
+                    }
                     if elem_is_bool {
                         write!(w, ") as u8)")?;
                     }

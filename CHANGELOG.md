@@ -217,6 +217,10 @@ shell idiom there is.
 
 ### Smaller things you may notice
 
+- A tuple with a heap member is a value: `u = t` copies the member, `(s, 5)` copies a struct
+  member in, and `a = t.0` / `(a, b) = t` copy a collection member out of a tuple you own —
+  on both backends.  A struct member read out is still a view, as a struct field is; and the
+  `lost-write` warning no longer fires on a write through that view.
 - A struct or vector yielded from a generator's LOOP body compiles on `--native`, and the
   consumer reads the value as it was at the yield; the statements after the loop run too
   (they were silently dropped).

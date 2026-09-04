@@ -6,13 +6,37 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** (D-tup-7 opened and closed 2026-09-04, loft#1350 — below; D-tup-4's KEYED half CLOSED 2026-08-31, loft#1230); D-tup-5 and D-tup-6 opened and closed
+OPEN: **0** (D-tup-8 opened and closed 2026-09-04, loft#1361 — below; D-tup-7 opened and closed 2026-09-04, loft#1350 — below; D-tup-4's KEYED half CLOSED 2026-08-31, loft#1230); D-tup-5 and D-tup-6 opened and closed
 2026-08-28; D-tup-3 opened and closed 2026-08-26; D-tup-2 closed the day the
 rule it needed was written down.  Bounded by the oracle note below — **and D-tup-3 is what that
 note was warning about**: it was found by giving an element a HEAP type, which this doc's
 all-`(integer, integer)` oracle cannot express, so the zero above never covered it.  D-tup-5 and
 D-tup-6 are two more from the same blind spot, one axis further: a NULLABLE element, which the
 all-`(integer, integer)` oracle cannot express either.
+
+### D-tup-8 — OPENED AND CLOSED (2026-09-04, loft#1361): a tuple with a heap member was shared where the rules say copy
+
+`(T-Cons)` copies a heap element INTO a tuple literal and `binding.md (B-Copy)` copies a plain
+bind, whole-value and heap alike; `layout.md (L-Tuple)` makes a tuple a synthetic struct, so a
+struct's own boundary applies to it.  Three places kept the tuple's stack WORDS instead — and a
+heap member's word is its handle.  A whole-tuple bind `u = t` copied the words (the interpreter's
+`set_var_tuple`; native's `whole_tuple_clone` emitted `.clone()`, a pointer copy for a `DbRef`
+leaf), so `t.0 += [9]` grew `u.0`; the literal's member copy (`tuple_member_owned_copy`) knew a
+VECTOR and a KEYED local but not a STRUCT, so `(s, 5); s.v = 9` read 9 through `p.0.v`; and the
+destructure's `T1.4` temp read its elements back the same way.  Both backends, the same wrong
+values, nothing said so — the walk of `@FR-B-Copy` (QUALITY.md § B7n) found it by moving the
+struct's bind through every position a bind can take.
+
+Closed with ONE home rather than four: the whole-tuple bind and the destructure lower onto the
+literal's per-member copy, which gained the struct (and struct-enum, and nullable, and nested
+tuple) branches; a member read OUT follows `(B-View)` / `(B-View-Base)` — a collection member off
+an owned tuple copies (`af = bx.v`), a struct member views, and off a parameter every member views
+— through the same `classify_vec_bind` a struct field read takes.  The ownership oracle learned
+that a heap member read out of a tuple is a view, which silenced a `lost-write` warning that had
+been firing on a write both backends landed.  The return path's unwrap (`tuple_member_copy_source`,
+loft#1109) matches the struct branch's shape too.  Guard
+`tests/scripts/1361-a-tuple-with-a-heap-member-copies-like-any-other-value.loft` (15 cells,
+falsified on both channels); the oracle note below stands — this was found one axis past it.
 
 ### D-tup-7 — OPENED AND CLOSED (2026-09-04, loft#1350): a lifetime-tuple result refused to join a tuple literal in an `if`
 

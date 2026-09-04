@@ -9,6 +9,31 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A tuple with a heap member copies like any other value, and the eager release leg finds its checkout (2026-09-05)
+
+loft#1361: three places kept a tuple's stack WORDS where `binding.md (B-Copy)` and
+`tuples.md (T-Cons)` say copy — a heap member's word is its handle.  The whole-tuple bind
+(`u = t`) is lowered at the assignment onto the literal's per-member copy
+(`Parser::tuple_member_owned_copy`, which now takes a `TupleGet` source and gained the struct,
+struct-enum, nullable and nested-tuple branches); the destructure's `T1.4` temp reads a
+collection member through the same copy when the base is an owned tuple local; a projection
+`a = t.0` of a vector member joins `classify_vec_bind`'s `CopyOwnedField` (`L-Tuple` makes the
+tuple a struct).  A struct member read out stays the view `B-View` makes it, and
+`ownership_of` now says so for a `TupleGet` (it fell to `Owned`, and `warn_dead_stores`
+warned that a landed write was lost).  The backing for a keyed or struct member is a
+function-scope `__ref_N` work ref — the temp an inline record literal mints — because a
+block-scoped local was the block's own value and nothing freed it once the tuple sat in an
+argument (`show((s, 5))` leaked one store per member; the keyed branch had since
+loft#1230).  The native tuple emitter renders an `Insert` member as a block expression.
+Guard `tests/scripts/1361-…` (15 cells, falsified on both channels); D-tup-8 opened and
+closed in `tuples-history.md`; QUALITY rows 388/364/24 and 703/346/5/352.
+
+Release mechanics found by the first `make release-gate`: `registry-validation.yml`'s
+`discover` job read `scripts/revalidate_matrix.py` with no checkout (loft#1334 moved the
+not-a-library set there) — it checks the repo out now; `release-gate.sh`'s run lookup passed
+`--arg` to `gh --jq`, which takes a bare expression; and the `x86_64-apple-darwin` leg leaves
+`macos-14` (deprecated, brownouts through October, gone November 2nd) for `macos-15`.
+
 ### The warm cache carries its import tables, an eager generator owns its snapshots and runs its tail, and every ignore says how it runs instead (2026-09-04)
 
 loft#1359: the IR root (`tools/ir_schema/ir.loft` `Data`, cache format **4**) now carries

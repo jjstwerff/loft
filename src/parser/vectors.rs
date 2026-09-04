@@ -4937,17 +4937,32 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
     /// Only a NAMED non-argument local is copied.  A vector ARGUMENT aliases the caller by design
     /// (`@FR-B-Ref-Alias` — a parameter reaches the source), so copying it here would change what
     /// the caller sees; and a member that is already a fresh value has no source to diverge from.
-    fn tuple_member_owned_copy(&mut self, val: &mut Value, tp: &Type) -> Option<Type> {
+    pub(crate) fn tuple_member_owned_copy(&mut self, val: &mut Value, tp: &Type) -> Option<Type> {
         if self.first_pass {
             return None;
         }
-        let v = match val.unspan() {
-            Value::Var(v) => *v,
+        // `@FR-T-Cons`: a heap element is COPIED into the tuple.  The source is a heap LOCAL,
+        // or a member read off a tuple local — the whole-tuple bind and the destructure lower
+        // onto this same copy (loft#1361), so the member of a tuple PARAMETER copies too:
+        // `u = p` is a plain bind, and `@FR-B-Copy` has no parameter carve-out (`w = v` off a
+        // vector parameter copies today).  A bare heap
+        // ARGUMENT as a literal member keeps its documented alias.  Anything else is a fresh
+        // value with no source to diverge from.
+        let src = match val.unspan() {
+            Value::Var(v) => {
+                if *v >= self.vars.count() || self.vars.is_argument(*v) {
+                    return None;
+                }
+                Value::Var(*v)
+            }
+            Value::TupleGet(base, i) => {
+                if *base >= self.vars.count() {
+                    return None;
+                }
+                Value::TupleGet(*base, *i)
+            }
             _ => return None,
         };
-        if v >= self.vars.count() || self.vars.is_argument(v) {
-            return None;
-        }
         // The KEYED half of `D-tup-4`, closed with the copy the keyed family already has.
         // `OpReplaceKeyed` is what a STRUCT literal emits for a keyed member (`S { h: a }`),
         // and a tuple RETURN copies through the synthetic `__tuple<…>` record — so both
@@ -4959,18 +4974,26 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
         // so the store type is the same either way, but a tuple's element slot is `τ?` when
         // the source is, and a dense-typed copy loses its ownership dep entering that slot —
         // which leaks the copy's store.
-        if self.keyed_local(v) {
-            let keyed_tp = self.vars.tp(v).clone();
+        // The backing is created OWNED.  The member's type may carry the deps of the tuple it
+        // was read from — a copied tuple's member depends on the literal's own backing — and a
+        // backing that inherited them would be read as a borrow and never freed.
+        let owned_create = tp.with_deps(&Deps::none());
+        // The backing for a KEYED or STRUCT member is a function-scope work ref (`__ref_N`),
+        // the same temp an inline record literal mints: declared at the body's top and freed
+        // at function exit, so a copy built inside an ARGUMENT tuple (`show((s, 5))`) is
+        // released too.  A block-scoped local was the block's own value and nothing freed it
+        // there.  The vector branch's store is its `__vdb`, which already has that discipline.
+        if is_keyed(tp) {
+            let keyed_tp = owned_create.clone();
             let kt = self.keyed_known_type(&keyed_tp)?;
-            let o = self.create_unique("tupcopy", &keyed_tp);
+            let o = self.vars.work_refs(&keyed_tp, &mut self.lexer);
             if o == u16::MAX {
                 return None;
             }
-            self.vars.defined(o);
             let db = self.cl("OpDatabase", &[Value::Var(o), Value::Int(i32::from(kt))]);
             let copy = self.cl(
                 "OpReplaceKeyed",
-                &[Value::Var(v), Value::Var(o), Value::Int(i32::from(kt))],
+                &[src, Value::Var(o), Value::Int(i32::from(kt))],
             );
             let ops = vec![v_set(o, Value::Null), db, copy, Value::Var(o)];
             // DEPENDING on `o`, exactly as the vector branch's result does: that dep is what
@@ -4979,11 +5002,72 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
             *val.unspan_mut() = crate::data::v_block(ops, owned_tp.clone(), "tuple_member_copy");
             return Some(owned_tp);
         }
+        // A STRUCT (or struct-enum) member: the record is copied into a frame-local backing
+        // the same way (`OpDatabase` + `OpCopyRecord`, the shape a whole-value struct bind
+        // emits).  A nullable source copies only when it holds a record — a null stays null,
+        // which `OpCopyRecord` alone would turn into a default record.
+        if let Some(d_nr) = match tp.base() {
+            Type::Reference(d, _) | Type::Enum(d, true, _) => Some(*d),
+            _ => None,
+        } {
+            let kt = self.data.def(d_nr).known_type();
+            if kt == u16::MAX {
+                return None;
+            }
+            let o = self.vars.work_refs(&owned_create, &mut self.lexer);
+            if o == u16::MAX {
+                return None;
+            }
+            let db = self.cl("OpDatabase", &[Value::Var(o), Value::Int(i32::from(kt))]);
+            let copy = self.cl(
+                "OpCopyRecord",
+                &[src.clone(), Value::Var(o), Value::Int(i32::from(kt))],
+            );
+            let fill = if matches!(tp, Type::Optional(_))
+                && let Some(is_null) = self.null_test(src, tp, false)
+            {
+                crate::data::v_if(
+                    is_null,
+                    Value::Null,
+                    crate::data::v_block(vec![db, copy], Type::Void, "tuple_member_copy_fill"),
+                )
+            } else {
+                crate::data::v_block(vec![db, copy], Type::Void, "tuple_member_copy_fill")
+            };
+            let ops = vec![v_set(o, Value::Null), fill, Value::Var(o)];
+            let owned_tp = owned_create.depending(o);
+            *val.unspan_mut() = crate::data::v_block(ops, owned_tp.clone(), "tuple_member_copy");
+            return Some(owned_tp);
+        }
+        // A nested TUPLE member with a heap leaf: hold the inner tuple once, then copy each
+        // of ITS heap members through this same function — the copy is one level deep per
+        // call and recursion reaches every leaf.
+        if let Type::Tuple(elems) = tp
+            && elems.iter().any(|e| !crate::data::is_scalar(e.base()))
+        {
+            let h = self.create_unique("tuphold", &owned_create);
+            if h == u16::MAX {
+                return None;
+            }
+            self.vars.defined(h);
+            let mut members: Vec<Value> = Vec::with_capacity(elems.len());
+            let mut types = elems.clone();
+            for (i, t) in elems.iter().enumerate() {
+                let mut m = Value::TupleGet(h, i as u16);
+                if let Some(owned) = self.tuple_member_owned_copy(&mut m, t) {
+                    types[i] = owned;
+                }
+                members.push(m);
+            }
+            let owned_tp = Type::Tuple(types);
+            let ops = vec![v_set(h, src), Value::Tuple(members)];
+            *val.unspan_mut() = crate::data::v_block(ops, owned_tp.clone(), "tuple_member_copy");
+            return Some(owned_tp);
+        }
         let Type::Vector(b, _) = tp else {
             return None;
         };
         let elm = (**b).clone();
-        let owned_create = Type::Vector(Box::new(elm.clone()), Deps::none());
         let o = self.create_unique("tupcopy", &owned_create);
         if o == u16::MAX {
             return None;
@@ -4994,10 +5078,7 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
         // reused one — the same reason the match-arm copy beside this one clears.
         ops.push(self.cl("OpClearVector", &[Value::Var(o)]));
         let elem_tp = self.append_elem_tp(&elm);
-        ops.push(self.cl(
-            "OpAppendVector",
-            &[Value::Var(o), Value::Var(v), Value::Int(elem_tp)],
-        ));
+        ops.push(self.cl("OpAppendVector", &[Value::Var(o), src, Value::Int(elem_tp)]));
         ops.push(Value::Var(o));
         let owned_tp = Type::Vector(Box::new(elm), Deps::frame1(o));
         *val.unspan_mut() = crate::data::v_block(ops, owned_tp.clone(), "tuple_member_copy");
@@ -5029,18 +5110,29 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
             return None;
         }
         // The block ends `OpAppendVector(backing, source, elem_tp); backing` for a VECTOR
-        // member and `OpReplaceKeyed(source, backing, tp); backing` for a KEYED one, and the
-        // SOURCE is the only part of either that the record's own copy still needs.  The source
-        // sits at a DIFFERENT argument position in the two, which is why this cannot be a
+        // member, `OpReplaceKeyed(source, backing, tp); backing` for a KEYED one and
+        // `OpCopyRecord(source, backing, tp)` (inside the fill block) for a STRUCT one, and the
+        // SOURCE is the only part of any of them that the record's own copy still needs.  The
+        // source sits at a DIFFERENT argument position, which is why this cannot be a
         // name-agnostic `args.get(1)`.
-        b.operators.iter().rev().find_map(|op| match op.unspan() {
-            Value::Call(d, args) => match self.data.def(*d).name() {
-                "OpAppendVector" => args.get(1).cloned(),
-                "OpReplaceKeyed" => args.first().cloned(),
+        // The STRUCT branch nests its `OpCopyRecord` one block down (the fill, guarded by a
+        // null test when the source is nullable); its source is the first argument too.
+        fn source_in(data: &crate::data::Data, ops: &[Value]) -> Option<Value> {
+            ops.iter().rev().find_map(|op| match op.unspan() {
+                Value::Call(d, args) => match data.def(*d).name() {
+                    "OpAppendVector" => args.get(1).cloned(),
+                    "OpReplaceKeyed" | "OpCopyRecord" => args.first().cloned(),
+                    _ => None,
+                },
+                Value::Block(inner) if inner.name == "tuple_member_copy_fill" => {
+                    source_in(data, &inner.operators)
+                }
+                Value::If(_, t, f) => source_in(data, std::slice::from_ref(t.as_ref()))
+                    .or_else(|| source_in(data, std::slice::from_ref(f.as_ref()))),
                 _ => None,
-            },
-            _ => None,
-        })
+            })
+        }
+        source_in(&self.data, &b.operators)
     }
 
     pub(crate) fn vector_db(&mut self, assign_tp: &Type, vec: u16) -> Vec<Value> {
