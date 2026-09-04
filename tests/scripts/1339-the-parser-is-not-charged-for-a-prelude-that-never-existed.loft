@@ -1,0 +1,86 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @ARGS: --lib lib
+//
+// Two `.lav` reads that always found nothing (loft#1339).
+//
+// `.lav` is an extension from before the lavition→loft rename, and this repo has never
+// carried one. Both sites read it, found nothing, and carried on as if they had
+// succeeded — the failure mode the extension guarantees rather than merely allows.
+//
+// `parser::parse` loaded `default/01_code.lav` as a prelude. The fix is to REMOVE the
+// load, not to correct the path, and the difference is the whole point of the first two
+// cells: `parse` answers the number of errors in the source it was handed, a prelude's
+// errors land in the same log, and this parser does not yet accept every construct the
+// stdlib uses. Measured on the three variants — the caller is charged 0 for the phantom
+// prelude, 2 for the real `01_code.loft`, and 6 for a deliberately broken file. So
+// "fixing the path" would have made `parse` blame the caller for text they never wrote,
+// which is a worse defect than the dead read it replaces.
+//
+// `docs::convert` filtered for `.lav`, so every source was skipped. Correcting it to
+// `.loft` needs two things the filter alone does not give, and both are cells below:
+// the slice that drops the extension drops it by LENGTH, so a fixed filter with the old
+// `- 4` writes `parser..html`; and `files()` returns DIRECTORIES too, so the `.loft/`
+// build cache that loft writes beside whatever it runs matches the suffix and produced a
+// page named `.html`.
+//
+// @falsified-at: e3368e68 — interpret 0 assertion failures -> 1 on the `.lav` tree.
+// The converter cells are the ones that move: on the pre-fix library `convert` writes NO
+// page for a `.loft` source (the filter matched nothing), so the first converter cell
+// fails with `wanted a page for one.loft`. The `parse` cells do NOT move, and cannot:
+// removing a read that found nothing is behaviour-preserving BY CONSTRUCTION, which is
+// the claim they exist to pin. They are the control — if a later change makes `parse`
+// load a prelude again, the stdlib's own parse errors start landing in these counts.
+
+use parser;
+use docs;
+
+fn main() {
+  // --- `parse` answers for the source it was given, and nothing else ---
+
+  // A clean snippet has no errors.  This is the cell a prelude would spoil: with
+  // `default/01_code.loft` loaded it answered 2.
+  clean = parser::parse("t", "pub fn f() -> integer {{ 1 }}");
+  assert(clean == 0, "a clean snippet answers {clean}, want 0");
+
+  // The control: the count is not simply always 0.
+  broken = parser::parse("t", "pub fn broken( {{{{");
+  assert(broken > 0, "a broken snippet answers {broken}, want more than 0");
+
+  // --- `convert` matches loft sources, and only those ---
+
+  // `now()` is milliseconds, and the two backends run this file as separate test
+  // binaries that may overlap — a fixed name would let one run delete what the other is
+  // still asserting on.
+  base = temp_dir() ?? ".";
+  run = now();
+  src = "{base}/loft-1339-{run}-src";
+  out = "{base}/loft-1339-{run}-out";
+  mkdir_all(src);
+  mkdir_all(out);
+
+  // A loft source, a file carrying the dead extension, and a DIRECTORY whose name ends
+  // in `.loft` — which is what the build cache is called.
+  file("{src}/one.loft").write("pub fn a() -> integer {{ 1 }}\n");
+  file("{src}/old.lav").write("pub fn b() -> integer {{ 2 }}\n");
+  mkdir_all("{src}/.loft");
+
+  docs::convert(src, out);
+
+  // The loft source gets a page, named without its extension.
+  assert(exists("{out}/one.html"), "wanted a page for one.loft");
+  // `- 5` and not `- 4`: the old slice would have left the dot on.
+  assert(!exists("{out}/one..html"), "the extension was dropped by the wrong length");
+  // The dead extension is not a loft source and gets nothing.
+  assert(!exists("{out}/old.html"), "a .lav file must not be converted");
+  // The cache directory matches the suffix but is not a file.
+  assert(!exists("{out}/.html"), "a directory named .loft was converted as a source");
+
+  delete("{out}/one.html");
+  delete("{src}/one.loft");
+  delete("{src}/old.lav");
+  rmdir("{src}/.loft");
+  rmdir(src);
+  rmdir(out);
+}
