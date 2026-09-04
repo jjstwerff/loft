@@ -187,16 +187,8 @@ index, …) names *why* the value is null, which is exactly what a `"{x}"` in a 
 
 **OPEN: 0.**
 
-⚠ This section read **OPEN: 2** for two days after both entries were closed. `D-fmt-2` and
-`D-fmt-3` were fixed by the commit that wrote the "a spec tunes ⟦v⟧ … for EVERY type"
-paragraph into the rules above, and loft#1165 / loft#1166 were closed with it — but the
-commit that split this register out of the rules doc replayed the deviation list from before
-that fix, and a clean prose merge keeps both halves. **An `OPEN: n` is a claim to
-re-measure, and the cheapest way is to run the entry's own repro**: `{c:>5}` and `{v:>12}`
-both padded, which is what a deviation says they do not.
-
-The full register — these entries in full, plus every closed one with its dates and
-issue numbers — is the companion [formatting-history.md](formatting-history.md).
+The full register — every entry, open and closed, with its dates and issue numbers — is
+the companion [formatting-history.md](formatting-history.md).
 
 ## Conformance
 

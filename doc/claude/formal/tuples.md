@@ -140,17 +140,8 @@ or take the tuple by value and return a new one. The refusal message says both.
 
 **OPEN: 0.**
 
-`D-tup-4`'s KEYED half closed 2026-08-31 (loft#1230): a keyed collection given to a tuple is now
-COPIED like its vector twin, so `(T-Cons)`'s independence holds for every element type.
-
-⚠ **The zero above is only as strong as the Conformance list below it, and that list checked
-`(T-Cons)`'s copy with a VECTOR** — the one element type that already obeyed it. The keyed half
-stood for five days after the vector half closed because the rule's own example exercised the
-passing shape. A conformance entry that names one member of a family is a claim about that
-member, not the family.
-
-The full register — these entries in full, plus every closed one with its dates and
-issue numbers — is the companion [tuples-history.md](tuples-history.md).
+The full register — every entry, open and closed, with its dates and issue numbers — is
+the companion [tuples-history.md](tuples-history.md).
 
 ## Conformance
 

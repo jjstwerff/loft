@@ -44,3 +44,14 @@ nullable collection fields (`909`, `917`, `920`, `922`, `936`) and every one of 
 length differs from both the empty and the present arm is what separates them; that is what
 `tests/scripts/1120-one-null-question-for-a-collection.loft` writes, over six collection kinds ×
 {null, empty, filled} × {field, element field, parameter, handle, lookup} × {`??`, `== null`, `if`}.
+
+## Carried by collections.md until 2026-09-04
+
+The rules doc used to carry these beside its `OPEN` line — closure summaries, and notes on
+the times the count read 0 over a live entry.  They are timeline, so they moved here
+unchanged; [collections.md](collections.md) now states only what is open.
+
+### the status line formal/README.md's area table carried until 2026-09-04
+
+**SCOPE (2026-07-10)** — not yet rules: it inventories the shipped behaviour, names each rule with its anchor, and lists what must be both-backends-verified before it graduates to the normal form at 0 deviations. **`Slice-Open`/`Slice-Cap` now HOLD (2026-08-19, loft#1002)** — the open spatial slices answered the Z-order tail against a rule that already said *outward walk*, and open question 4 (`:n` exact-count) is answered: exactly n from any origin
+

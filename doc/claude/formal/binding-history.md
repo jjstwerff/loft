@@ -584,3 +584,39 @@ gap, D-const-1, now closed).
 > write-back reaches the caller (`a.x == 9`) — verified on interp **and** native. The parse
 > rejection is gone; `tests/issues.rs::pln87_amp_writeback_from_call_writes_back` is an active,
 > passing test (no longer `#[ignore]`d).
+
+## Carried by binding.md until 2026-09-04
+
+The rules doc used to carry these beside its `OPEN` line — closure summaries, and notes on
+the times the count read 0 over a live entry.  They are timeline, so they moved here
+unchanged; [binding.md](binding.md) now states only what is open.
+
+### D-bind-16 / D-bind-11 closure summaries
+
+**D-bind-16 CLOSED 2026-09-03** (loft#1321): `(B-Copy)` is read ARM BY ARM at a branch join.
+Every arm tail a plain bind would copy — a variable, a parameter, a loop element, a call whose
+record return the caller must copy — is rewritten into the bound spelling on a temp
+(`scopes.rs::lift_join_arm_tails`), bound by that plain bind's own lowering, and the join
+borrows the temps; an arm a plain bind would view stays a view (`(B-View-Depth)`'s `vv[0] ??
+[0]` is the control).  It is the copy face of ownership.md's D-own-8, closed by the same
+change; the reverted attempt's three facts (a `??` hoists its subject; the join is not to be
+read whole; a call arm may return a borrow) are all honoured by binding each arm through the
+lowering that already knows them.  Guard:
+`tests/scripts/1321-a-joined-binding-copies-what-a-plain-bind-copies.loft`, falsified at
+26d17f4b on both backends.  ⚠ A branch consumed as a call ARGUMENT is NOT copied: an argument
+aliases (calls.md F-ParamHeap).  ⚠ And a binding the join is not the one assignment of keeps
+the runtime join bind it had (`r = x; for … { r = v[i] ?? x }` copies through
+`OpBindOrCopy`): one variable carries one type-level fact for all its Sets.
+
+**D-bind-11 CLOSED 2026-09-03** (loft#1006): a `&(τ, …)` holds any element a struct field can.
+The two representations the register named were never a choice — the stack form cannot own a
+`text` element, and the record form already did this exact swap through the loop variable —
+so a `&(…)` whose elements are not all scalars is a reference to the `__tuple<…>` record, a
+linked tuple LOCAL is built as that record, and the rule is written down as `(T-Ref-Rep)` in
+[tuples.md](tuples.md).  A nullable, fn-ref or nested-tuple element stays refused and the
+refusal names it.
+
+### the status line formal/README.md's area table carried until 2026-09-04
+
+**0 open** — D-bind-11 CLOSED 2026-09-03 (a `&(τ, …)` with a heap element is a reference to the `__tuple<…>` record; it had read: `&(τ, …)` admits only SCALAR elements, against B-Ref-Alias/B-Ref-Uniform) and D-bind-16 CLOSED the same day (a join binds every arm a plain bind would copy through its own temp, loft#1321); (the D-bind-11 entry read: — the two backends represent a reference tuple differently and `text` is the first element where that shows; loft#1006) — **B-Ref-AnnotationOnly is now total** (D-bind-10, 2026-08-09): a `&` that was the LAST operand of an expression (`b = 1 + &a`, `b += &a`, a block-final `1 + &a`, `S { x: &a }`) used to compile, because the guard peeked only the token AFTER the operand; `B-Ref-StoredRef` records the one legal non-binding position, a `reference<τ>` field. **B-Ref-Reshape** landed (@PLN130 F9, loft#779): disturbing a container while a `&` reference into it is LIVE is a compile error, for all three of `B-Disturb`'s events (removal, re-key, container reassignment). It is the first application of C79's 2026-08-05 *decline-what-we-cannot-implement-safely* revisit, whose reason is forward compatibility: an error can be dropped later, a silently different semantics cannot. Also closed: `&` is a TYPE ANNOTATION (`&τ` = `Type::RefVar`), @PLN87 ladder L1–L6 + D-bind-7 closed; the @PLN40 two-level `const` model (Const-Bind/Value/…) shipped, and D-const-1 (enum-variant const) closed via @PLN102 K1 — enforced identically to struct fields, both backends
+

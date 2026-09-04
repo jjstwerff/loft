@@ -157,3 +157,24 @@ for the same reason and wants `OpFormatDatabase`'s signature widened on both bac
   (`i64::MIN`, `NaN`, `STRING_NULL`, `0xFF`) are an operational decision (operational.md E-Null);
   their uniform `"null"` text (character-0 excepted) is intended, so it is a rule here, not a
   deviation.
+
+## Carried by formatting.md until 2026-09-04
+
+The rules doc used to carry these beside its `OPEN` line — closure summaries, and notes on
+the times the count read 0 over a live entry.  They are timeline, so they moved here
+unchanged; [formatting.md](formatting.md) now states only what is open.
+
+### the two days this register read OPEN: 2 after D-fmt-2/3 closed
+
+⚠ This section read **OPEN: 2** for two days after both entries were closed. `D-fmt-2` and
+`D-fmt-3` were fixed by the commit that wrote the "a spec tunes ⟦v⟧ … for EVERY type"
+paragraph into the rules above, and loft#1165 / loft#1166 were closed with it — but the
+commit that split this register out of the rules doc replayed the deviation list from before
+that fix, and a clean prose merge keeps both halves. **An `OPEN: n` is a claim to
+re-measure, and the cheapest way is to run the entry's own repro**: `{c:>5}` and `{v:>12}`
+both padded, which is what a deviation says they do not.
+
+### the status line formal/README.md's area table carried until 2026-09-04
+
+**rules written (2026-07-05), 0 own** — arbitrary-expression interpolation, `{{`/`}}` escape, per-type render (null → `"null"`, char-0 → nothing), the width/align/pad/precision/radix specs, and fault-safe interpolation (`{a/b}` → `null(/0)`, never a halt); one rendering sink → backend parity; plus `F-Target` (@PLN124, 2026-08-09) — the same template builds a VALUE when checked against a type defining `lit`/`hole_*`; conformance via the oracle
+

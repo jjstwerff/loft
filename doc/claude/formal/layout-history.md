@@ -114,3 +114,14 @@
   synthetic `__nullable<S>`'s own payload attribute, where no `Optional` can arrive — but it is
   the population any next instance of this class will be drawn from, and it is the reason the
   rule-led walk over `@FR-L-Null` is not finished by this entry.
+
+## Carried by layout.md until 2026-09-04
+
+The rules doc used to carry these beside its `OPEN` line — closure summaries, and notes on
+the times the count read 0 over a live entry.  They are timeline, so they moved here
+unchanged; [layout.md](layout.md) now states only what is open.
+
+### the status line formal/README.md's area table carried until 2026-09-04
+
+**rules written (2026-07-07), 1 open** — the FORMAT counterpart to heap.md's steps (it defines the `field_offset` heap.md reads at); one format (RAM = disk); nullability is a sentinel, not a layout (`L-Null`); **D-layout-1** (no version guard on persisted bytes, #477) is **mechanism-shipped** — the golden test + the `.dschema` sidecar — pending a durable-store consumer to auto-invoke it (@PLN97)
+

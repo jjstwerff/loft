@@ -269,40 +269,8 @@ implication that reading `deps` is *sufficient*.
 > and the `--native` release of a displaced store on a fn-ref re-bind of a USER local, which
 > is loft#1328 and which the `??` hoist sidesteps by releasing in the IR.
 
-**D-own-8 CLOSED 2026-09-03** (loft#1320, loft#1321, loft#1323): a Join's ownership fact was
-true on one path only because ONE binding carried two paths.  The close is structural, not
-N-ary: every arm tail of a bound value branch that a single bind would leave OWNING — a fn-ref
-call of any ownership, a named call answering a record the caller must copy, a plain variable
-(`(B-Copy)`) — is given a binding of its own, bound by that single bind's own lowering, and
-the joined binding borrows the temps.  The two shapes loft#1320 declined take the witness the
-base itself could not be: a SNAPSHOT of the store the base named at the bind (`(O-Latest)`,
-the way a rebindable parameter's entry stash already witnesses).  And the `??` hoist that
-binds a CALL subject now owns what a plain bind of that call would.  Measured on both backends
-at the ceiling and in the over-free direction; the full record, including the two regressions
-the first cut introduced and what each taught, is in
-[ownership-history.md](ownership-history.md).
-
-**D-own-26 CLOSED 2026-09-03**, against the bar its own entry set: *"the honest cure is a way
-to fail a build in which a free-deciding site reads the proxy without the veto."* That gate
-now exists, is falsified on five separate paths, and passes — 9 sites declare `free` and all
-9 consult `O-Override`; the other 15 declare which of the other three facts they read. The
-"eleven of seventeen" it opened with was a hand count that could not separate *asking* the
-proxy from *freeing* on it. What the close does NOT cover: a site that declares a non-free
-question and frees somewhere the gate cannot see. The full record is in
-[ownership-history.md](ownership-history.md).
-
-**D-own-16 CLOSED 2026-09-03.** Every cell that should reach zero does, on both backends, with
-every value unchanged: a minting call that reads the local, the self-referential join
-`c = mk(i) ?? c`, a conditional borrow, and a local bound from a PARAMETER and then minted.
-The one shape that still retains a store is a lambda-CAPTURED local, and that is
-`(L-CapHeap)` holding rather than a leak — a captured heap value is SHARED, so declining the
-free is the right answer and its right answer keeps a store.  Guard:
-`tests/scripts/1085b-a-nullable-local-frees-what-it-displaces.loft`; the full record, including
-the two mechanisms that were tried and reverted, is in
-[ownership-history.md](ownership-history.md).
-
-The full register — these entries in full, plus every closed one with its dates and
-issue numbers — is the companion [ownership-history.md](ownership-history.md).
+The full register — every entry, open and closed, with its dates and issue numbers — is
+the companion [ownership-history.md](ownership-history.md).
 
 ## Machine-checkable soundness — the @PLN94 flow-sensitive oracle (proof skeleton)
 

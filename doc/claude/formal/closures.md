@@ -139,38 +139,13 @@ with the closure's environment in scope.
 > either capture may come back, and a capture variable reassigned after the build — and each
 > keeps the leak it had.
 
-**D-clo-7 CLOSED 2026-09-03.**  The last open half — a `??` whose borrow arm hands back a
-capture the caller could not NAME — resolved by reading the SLOT off the callee's body: the
-subject's `OpGetDbRef(__closure, off)` and the build's `OpSetDbRef(___clos_N, off, var)` share
-an offset, so one offset over a variable assigned once is a witness as good as an argument's
-(`use_analysis::capture_return_offsets`, `closure_capture_base`).  A collection `??` over a
-capture turned out never to hand the capture back at all — its chosen arm is COPIED into the
-caller's `__retbuf` — and is separated from a capture returned DIRECTLY by whether the return's
-dep names `__closure` (`callref_capture_blocks`).
+`D-clo-18` and `D-clo-20` are decided refusals ([DESIGN_DECISIONS C115](../DESIGN_DECISIONS.md)),
+not deviations: `(L-CapScalar)` gives a closure a COPY of a `&` scalar parameter, so a write to
+it from inside the closure has no shared record to land in, and the heap twin takes the same
+refusal one rule over.
 
-**D-clo-14 CLOSED 2026-09-03** (loft#1257, and its bound-spelling mint arm with loft#1320): a
-closure's collection `??` return is freed by store IDENTITY against the `Join` base the temp's
-own dep names — inline, bound, as an argument, in a branch arm, at every collection kind. The
-record is in [closures-history.md](closures-history.md).
-
-**The cluster's premise is now measured false, and D-clo-14 is what measured it.** Both rows were
-recorded as *"the same missing mechanism — a per-execution ownership witness"* together with
-[ownership.md](ownership.md)'s `D-own-16` ([QUALITY.md](../QUALITY.md)'s cluster register). All
-three closed or narrowed WITHOUT one: a `Join`'s owner is decidable at run time by store
-IDENTITY against the variable the dep already NAMES, which costs no witness slot, no IR temp and
-no deps strip. The sharper question the cluster should have asked is whether a row has a NAMEABLE
-base — and D-clo-7's remaining half is exactly the case where it does not.
-
-**D-clo-18 is no longer here.** A `&` SCALAR parameter written from inside a closure is REFUSED,
-and refusing is deliberate: `(L-CapScalar)` gives the closure a COPY of the caller's value, so
-there is no shared record for the write to land in and no code change closes it. Per
-[ROADMAP.md](ROADMAP.md), a row that turns out **spec-may-adjust** leaves `formal/` and becomes a
-decided edge — it is [DESIGN_DECISIONS C115](../DESIGN_DECISIONS.md), together with `D-clo-20`,
-its heap twin, which took the same refusal for the same reason one rule over. Counting a
-permanent refusal as distance from the spec overstates the register by one.
-
-The full register — these entries in full, plus every closed one with its dates and
-issue numbers — is the companion [closures-history.md](closures-history.md).
+The full register — every entry, open and closed, with its dates and issue numbers — is
+the companion [closures-history.md](closures-history.md).
 
 ## Conformance
 

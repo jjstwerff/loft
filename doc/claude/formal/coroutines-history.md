@@ -158,3 +158,14 @@ a deviation — recorded here so it is not mistaken for a bug:
   extends `G-Yield` (a delegated yield forwards the sub-generator's values) and gets its own
   rule + oracle case. Until then a `yield from` is a parse-level unsupported form, not an
   unspecified runtime behaviour.
+
+## Carried by coroutines.md until 2026-09-04
+
+The rules doc used to carry these beside its `OPEN` line — closure summaries, and notes on
+the times the count read 0 over a live entry.  They are timeline, so they moved here
+unchanged; [coroutines.md](coroutines.md) now states only what is open.
+
+### the status line formal/README.md's area table carried until 2026-09-04
+
+**rules written (2026-07-04), 0 own** — lazy one-value-per-advance; straight-line yields lazy on both backends, and so is a loop body that ONLY yields; a loop body with a SECOND statement is eager on native (a DECIDED EDGE — rustc restriction, loft#836); conformance via the oracle
+

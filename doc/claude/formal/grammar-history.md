@@ -37,3 +37,14 @@ predicted — they leave formal/ rather than being driven to zero).
 > `b += &a`, a block-final `1 + &a`, `S { x: &a }`) compiled, because the guard peeked only the
 > token AFTER the operand — which proves nothing precedes the `&`. The claim outran the
 > enforcement by one half of the question.
+
+## Carried by grammar.md until 2026-09-04
+
+The rules doc used to carry these beside its `OPEN` line — closure summaries, and notes on
+the times the count read 0 over a live entry.  They are timeline, so they moved here
+unchanged; [grammar.md](grammar.md) now states only what is open.
+
+### the status line formal/README.md's area table carried until 2026-09-04
+
+**0 open** — the 12-level precedence ladder written; the prefix-`&`/infix-`&` overload + non-CFG surface resolved as decided edges (C81/C82)
+

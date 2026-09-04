@@ -82,3 +82,25 @@ granted.
   LOCAL → admitted) in `admission_escape_suite_rejects_every_breakout`; lib suite green (722). RESIDUAL (conservative, safe): a `v[i] = …` on a locally-owned KEYED
   collection (hash/sorted/…) still falls to the host default — rarer, and an over-reject not an
   escape; widen the arm the same way if a consumer needs it.
+
+## Carried by capabilities.md until 2026-09-04
+
+The rules doc used to carry these beside its `OPEN` line — closure summaries, and notes on
+the times the count read 0 over a live entry.  They are timeline, so they moved here
+unchanged; [capabilities.md](capabilities.md) now states only what is open.
+
+### the D-cap-3 gap (@PLN102 F6) — the week this read OPEN 0 over a live escape
+
+> **History — the D-cap-3 gap (@PLN102 F6).** From 2026-07-04 to 2026-07-11 this "OPEN 0" claim
+> was **over-stated**: the script-owned-vector rule rested on a false memory-model premise ("even
+> `r = &v` copies"), leaving a real escape — a `r = &param; r[i] = e` laundered a host-vector
+> write past the gate. It was found the right way, by *extending the falsifying suite* with the
+> `&`-alias case, and closed by making the gate follow the dep chain (above). The lesson the
+> freeze records: "OPEN 0 / by construction" is only as strong as the escape suite is complete —
+> here a spec contradiction (heap.md said `r = &v` copies; reality aliases) was the tell that the
+> suite had a blind spot.
+
+### the status line formal/README.md's area table carried until 2026-09-04
+
+**0 open** (2026-07-04) — the 6-rule judgment `P;ctx ⊢ e ✓` fully enforced; D-cap-1/2/3 CLOSED, each with a RED/GREEN adversarial pair. Cites ownership.md/heap.md for the owned-vs-host fact
+

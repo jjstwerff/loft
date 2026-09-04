@@ -305,3 +305,43 @@ only as strong as the rules above it, not only as strong as its oracle.
 > split would make every defended site report. Measured: of three sites in one program, only
 > the undefended one logs, on both backends. Kept as a one-line tombstone because it reshaped two rules
 > (E-Report's logging policy + the C80 refinement); see `git log` for the full entry.
+
+## Carried by operational.md until 2026-09-04
+
+The rules doc used to carry these beside its `OPEN` line — closure summaries, and notes on
+the times the count read 0 over a live entry.  They are timeline, so they moved here
+unchanged; [operational.md](operational.md) now states only what is open.
+
+### D-op-9 (its entry, and the count/prose disagreement), D-op-7/8 pointer
+
+D-op-9 was listed here as a fourth while the paragraph below already recorded it CLOSED
+(2026-09-01) — the count and the prose disagreed, and the count is the half a reader trusts.
+Kept below for its reasoning, which is still the live question for any future check on a hot
+op: whether the checking form is emitted always or only under a flag is a measurement.
+
+- **D-op-9 (CLOSED)** — (E-Report)'s soft-halt clause reaches div0 and OOB but not OVERFLOW
+  (loft#1265, both backends).  Overflow is the one recoverable fault the rule ALSO
+  denies a log record, so the triage flag is its only channel and it is silent there
+  too.  It never reaches `raise`: `ops::op_add_long` folds it into
+  `checked_add(..).unwrap_or(i64::MIN)`, a pure function with no `State`.  Closing it
+  puts a null-result test on the hottest op in the language, so whether the checking
+  form is emitted always or only under the flag (the `LOFT_HOIST_VERIFY` shape) is a
+  measurement, not a judgement.
+
+D-op-7 and D-op-8, both loft#1246 and both CLOSED 2026-08-31, are in the history: the
+(E-Uncomp-NN) default was the range's lower bound rather than the type's, and (E-Uncomp)
+did not reach a nullable narrow ALIAS at all.
+
+**D-op-9** (loft#1265) is CLOSED 2026-09-01: `--dev-soft-halt` surfaced div0 and OOB but
+not overflow, though (E-Report) names all three in one breath. Overflow was the one with
+no other channel — the other two write a log record and it deliberately does not — so the
+flag was the whole of its observability. It is reported from `checked_long!`'s `None` arm,
+the single place an overflow becomes the sentinel and a branch that already existed, so
+nothing that does not overflow gained a test; and its guarded peer `checked_long_nullable!`
+stays silent, which is the same answer (E-Report) already gives that site's div0 half.
+Guard `tests/dev_soft_halt_surfaces_overflow.rs`.
+
+### the status line formal/README.md's area table carried until 2026-09-04
+
+**rules complete for the core, 2 open** — values/null sentinels, left-to-right order, uncomputable→null (C80) + `??`, state steps; the 2 open are the META deviation D-op-1/2 (differential-not-definitional conformance), inherited by every operational file below
+

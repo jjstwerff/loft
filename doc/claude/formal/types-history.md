@@ -664,3 +664,31 @@ The reconciliation:
 that narrow path is fixed — still without blanket widening (C83 § Revisit). The site audit in
 [plans/88-integer-i64.md](../plans/88-integer-i64.md) remains the reference for any such targeted
 fix. @PLN88's storage-rework rungs are **not** pursued (off the path per C83).
+
+## Carried by types.md until 2026-09-04
+
+The rules doc used to carry these beside its `OPEN` line — closure summaries, and notes on
+the times the count read 0 over a live entry.  They are timeline, so they moved here
+unchanged; [types.md](types.md) now states only what is open.
+
+### the two times this register read OPEN: 0 over live entries
+
+⚠ **This line read `OPEN: 0` while D-Narrow-Asgn and D-Narrow-Res were both live, and the
+oracle under it could not have moved either** — `(I-Narrow)` had only two clauses, so a
+nullable target was not a case the rule could be checked against at all; and the sentinel's
+exclusion from `τ?`'s range was prose in a table rather than a rule, so nothing could be
+checked against it either.  Both gained the clause they were missing — `(I-Narrow-Opt)`, which
+closed D-Narrow-Asgn, and `(N-Reserve)`, which turns an open design question into a stated
+deviation.  A register is only as strong as the completeness of the rules above it.
+
+⚠ **And it read `OPEN: 0` again while D-Null-Heap was live, where the rules were NOT the weak
+part.**  `(N-Opt)` and `(N-Store)` are written for every `τ` and always were; what disagreed was
+the enforcement, gated on a scalar-only predicate whose own doc comment stated the carve-out as
+if it were the model.  So a register can also be wrong when its rules are complete and nothing
+re-measures the code against them — the second failure mode, and the one a reading of this doc
+alone cannot catch.
+
+### the status line formal/README.md's area table carried until 2026-09-04
+
+**0 open** — D-Null-Join (loft#1103) opened and closed 2026-08-26: at a branch JOIN a nullable in a LATER arm stored into a non-null slot in silence, whichever arm and however spelled.  @PLN25 value/null model landed (DN1–DN6 + D2 closed); the @PLN102 null-flow generalisation (N-Prop/N-Domain/N-Cast/N-Store incl. call-arg + DN3-Float) SHIPPED default-on and verified both backends — for the DIRECT store, which is the bound on that verification
+

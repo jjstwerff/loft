@@ -384,3 +384,25 @@ than a third spelling both would have to learn.  Guard:
   the rule is an open design question (**loft#1102**); either way `(T-Cons)` owes a clause, and
   the `OPEN: 0` above does not cover this because the oracle carries no collection element
   either.
+
+## Carried by tuples.md until 2026-09-04
+
+The rules doc used to carry these beside its `OPEN` line — closure summaries, and notes on
+the times the count read 0 over a live entry.  They are timeline, so they moved here
+unchanged; [tuples.md](tuples.md) now states only what is open.
+
+### D-tup-4's keyed half, and why the zero stood over it
+
+`D-tup-4`'s KEYED half closed 2026-08-31 (loft#1230): a keyed collection given to a tuple is now
+COPIED like its vector twin, so `(T-Cons)`'s independence holds for every element type.
+
+⚠ **The zero above is only as strong as the Conformance list below it, and that list checked
+`(T-Cons)`'s copy with a VECTOR** — the one element type that already obeyed it. The keyed half
+stood for five days after the vector half closed because the rule's own example exercised the
+passing shape. A conformance entry that names one member of a family is a claim about that
+member, not the family.
+
+### the status line formal/README.md's area table carried until 2026-09-04
+
+**0 open** (2026-08-31) — D-tup-1 closed 2026-08-20 (the reference tuple has a rule; `&(τ,…)`'s SCALAR-only restriction is now binding.md's D-bind-11, not an unspecified composition), and D-tup-4's keyed half closed 2026-08-31 (loft#1230: a keyed collection given to a tuple is COPIED like its vector twin, so `(T-Cons)`'s independence holds for every element type) — positional products (n≥2); `.i` a compile-time index; `(a,b) = …` destructuring; tuple returns. ⚠ its differential oracle is all-`(integer, integer)`: the doc read `0 open` through loft#1004 and loft#1005, both `text`-element deviations it could not see
+

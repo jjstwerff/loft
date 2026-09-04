@@ -2137,3 +2137,48 @@ fact — they unify when ownership is carried as one typed `deps` fact end-to-en
   fact — vacuous for FREE placement (the binder owns no store) but unavailable to any
   future lifetime check until `Deps` is carried type-wide (the D-own-1/D-own-2
   completion).
+
+## Carried by ownership.md until 2026-09-04
+
+The rules doc used to carry these beside its `OPEN` line — closure summaries, and notes on
+the times the count read 0 over a live entry.  They are timeline, so they moved here
+unchanged; [ownership.md](ownership.md) now states only what is open.
+
+### D-own-8 / D-own-26 / D-own-16 closure summaries
+
+**D-own-8 CLOSED 2026-09-03** (loft#1320, loft#1321, loft#1323): a Join's ownership fact was
+true on one path only because ONE binding carried two paths.  The close is structural, not
+N-ary: every arm tail of a bound value branch that a single bind would leave OWNING — a fn-ref
+call of any ownership, a named call answering a record the caller must copy, a plain variable
+(`(B-Copy)`) — is given a binding of its own, bound by that single bind's own lowering, and
+the joined binding borrows the temps.  The two shapes loft#1320 declined take the witness the
+base itself could not be: a SNAPSHOT of the store the base named at the bind (`(O-Latest)`,
+the way a rebindable parameter's entry stash already witnesses).  And the `??` hoist that
+binds a CALL subject now owns what a plain bind of that call would.  Measured on both backends
+at the ceiling and in the over-free direction; the full record, including the two regressions
+the first cut introduced and what each taught, is in
+[ownership-history.md](ownership-history.md).
+
+**D-own-26 CLOSED 2026-09-03**, against the bar its own entry set: *"the honest cure is a way
+to fail a build in which a free-deciding site reads the proxy without the veto."* That gate
+now exists, is falsified on five separate paths, and passes — 9 sites declare `free` and all
+9 consult `O-Override`; the other 15 declare which of the other three facts they read. The
+"eleven of seventeen" it opened with was a hand count that could not separate *asking* the
+proxy from *freeing* on it. What the close does NOT cover: a site that declares a non-free
+question and frees somewhere the gate cannot see. The full record is in
+[ownership-history.md](ownership-history.md).
+
+**D-own-16 CLOSED 2026-09-03.** Every cell that should reach zero does, on both backends, with
+every value unchanged: a minting call that reads the local, the self-referential join
+`c = mk(i) ?? c`, a conditional borrow, and a local bound from a PARAMETER and then minted.
+The one shape that still retains a store is a lambda-CAPTURED local, and that is
+`(L-CapHeap)` holding rather than a leak — a captured heap value is SHARED, so declining the
+free is the right answer and its right answer keeps a store.  Guard:
+`tests/scripts/1085b-a-nullable-local-frees-what-it-displaces.loft`; the full record, including
+the two mechanisms that were tried and reverted, is in
+[ownership-history.md](ownership-history.md).
+
+### the status line formal/README.md's area table carried until 2026-09-04
+
+**0 open** — back at 0 on 2026-09-03 with D-own-8 CLOSED (every path of a bound value branch its own binding, loft#1320/#1321/#1323); it had been RE-OPENED after the 2026-07-04 zero, down to D-own-8 (a Join's ownership fact is true on one path only). D-own-16 and D-own-26 both closed 2026-09-03; D-own-26's gate had been reporting `0 violations` over its own violations for a week, because it searched for a free in a region the free cannot occur in. The ORIGINAL five stay resolved: D-own-1/2/3/4/5 ALL CLOSED; every store-lifetime decision reads the one total `deps` fact. The soundness proof heap.md's free rules rest on
+
