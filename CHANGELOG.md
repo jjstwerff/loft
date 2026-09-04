@@ -223,6 +223,22 @@ shell idiom there is.
 - On Windows, a `log.conf` `[levels]` key ending in `/` raises a file's level as documented,
   and `loft check`'s machine-readable line names the source in the spelling the live host
   compares against.
+- Every public type in the distribution now has a description on its API page — a third of
+  the structs had none, `Stage`, `Canvas` and `Server` among them, each named in dozens of
+  signatures with nothing saying what it was. And the reference pages no longer end a
+  function's description with a bookkeeping tag (`Example: @RND-001`, `@PLN110`, `loft#…`):
+  those were notes to the maintainers, and a reader could open none of them.
+- The reference had been warning you off four things that work. The parser library reads
+  index expressions, `??` and format literals; production mode logs and continues on the
+  compiled backend too, not only interpreted; a text element of a value tuple parameter can
+  be written on `--native`; and a generic's result may be used inline without leaking a
+  record. Each was a limitation that had since been fixed, with the warning left behind.
+- Appending a payload-less variant of a struct-enum to a vector — `xs += [V.Null]` where
+  `V` also has variants with fields — no longer leaks a record per site. Spelled `[Null]`
+  it never did; the two spellings were built by two copies of one routine.
+- A tuple carrying text can be handed to an `if` binding and the original still read
+  afterwards on `--native` — `t = if c { pair } else { (0, "z") }; pair.1` used to refuse
+  to compile, because the arm had moved the value.
 
 ---
 

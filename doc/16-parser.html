@@ -43,7 +43,7 @@
 <li>Expressions: binary operators with precedence, function calls, field access, if/else, for loops, and blocks</li>
 <li>Type expressions: plain names, generic types like <code>vector&lt;T&gt;</code>, keyed collections (sorted/hash/index), and integer ranges with <code>integer limit(min, max)</code> — in parameter, field, and return position</li>
 </ul>
-<p>Three constructs it does NOT accept yet, all of them ordinary Loft that the language itself compiles: an index expression (<code>v[0]</code>), the null-coalescing operator (<code>a ?? 0</code>), and a formatted string literal (<code>"v={n}"</code>). A snippet containing one answers a non-zero count even though it is valid, so a validator built on this today will reject input it should accept.</p>
+<p>It reads an index expression (<code>v[0]</code>), the null-coalescing operator (<code>a ?? 0</code>) and a formatted string literal (<code>"v={n}"</code>) as the compiler does, so a validator built on this accepts what the compiler accepts.</p>
 <pre><code><span class="kw">use</span> parser;
 <span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="parsing-a-minimal-function">Parsing a minimal function</h2>
@@ -131,11 +131,9 @@ if parser::parse("user_code", snippet) &gt; 0 {
 //   collections (sorted/hash/index), and integer ranges with
 //   'integer limit(min, max)' — in parameter, field, and return position
 //
-// Three constructs it does NOT accept yet, all of them ordinary Loft that the
-// language itself compiles: an index expression ('v[0]'), the null-coalescing
-// operator ('a ?? 0'), and a formatted string literal ('"v={n}"'). A snippet
-// containing one answers a non-zero count even though it is valid, so a validator
-// built on this today will reject input it should accept.
+// It reads an index expression ('v[0]'), the null-coalescing operator ('a ?? 0')
+// and a formatted string literal ('"v={n}"') as the compiler does, so a validator
+// built on this accepts what the compiler accepts.
 use parser;
 // @PAR-001 — validate a source string before acting on it: `== 0` is good, `&gt; 0` is not
 fn main() {

@@ -140,9 +140,8 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 <span class="kw">fn</span> <span class="fn-call"><a href="stdlib-field-iteration-support-types.html">to_text</a></span>(self: <span class="en">Money</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> { <span class="st">"{self.cents}c"</span> }
 <span class="kw">fn</span> <span class="fn-call">test_user_type_bounds</span>() {
   cheap = <span class="en">Money</span> { cents: <span class="nm">300</span> };
-  dear = <span class="en">Money</span> { cents: <span class="nm">700</span> };</code></pre>
-<p>Bind a generic's result before reading through it: consuming the value inline retains one record per call.</p>
-<pre><code>  best = <span class="fn-call">gen_max</span>(cheap, dear);
+  dear = <span class="en">Money</span> { cents: <span class="nm">700</span> };
+  best = <span class="fn-call">gen_max</span>(cheap, dear);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(best.cents == <span class="nm">700</span>, <span class="st">"Ordered on a user type: {best.cents}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cheap &lt; dear, <span class="st">"…and the bare operator, from the same definition"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">same</span>(cheap, <span class="en">Money</span> { cents: <span class="nm">300</span> }), <span class="st">"Equatable on a user type"</span>);
@@ -342,8 +341,6 @@ fn to_text(self: Money) -&gt; text { "{self.cents}c" }
 fn test_user_type_bounds() {
   cheap = Money { cents: 300 };
   dear = Money { cents: 700 };
-  // Bind a generic's result before reading through it: consuming the value inline
-  // retains one record per call.
   best = gen_max(cheap, dear);
   assert(best.cents == 700, "Ordered on a user type: {best.cents}");
   assert(cheap &lt; dear, "…and the bare operator, from the same definition");

@@ -3572,7 +3572,7 @@ collections (sorted/hash/index), and integer ranges with
 'integer limit(min, max)' — in parameter, field, and return position
 ```
 
-Three constructs it does NOT accept yet, all of them ordinary Loft that the language itself compiles: an index expression ('v\[0\]'), the null-coalescing operator ('a ?? 0'), and a formatted string literal ('"v={n}"'). A snippet containing one answers a non-zero count even though it is valid, so a validator built on this today will reject input it should accept.
+It reads an index expression ('v\[0\]'), the null-coalescing operator ('a ?? 0') and a formatted string literal ('"v={n}"') as the compiler does, so a validator built on this accepts what the compiler accepts.
 
 ```rust
 use parser;
@@ -4314,7 +4314,7 @@ per_site = 5       # suppress messages from the same source line after 5/minute
 [levels]
 # Override the global level for one file, by its name alone:
 "debug_tool.loft" = info
-"src/"            = error   # a path prefix, matched against the path as invoked
+"src/"            = error   # a path prefix, matched from the project root
 ```
 
 === Production mode
@@ -4325,8 +4325,6 @@ With 'production = true' in the '\[log\]' section of log.conf, or '--production'
 - A failing 'assert()' becomes an error log entry instead of aborting.
 
 The program keeps running and the problem is captured in the log — useful for long-running services where a single error should not bring everything down. It still exits non-zero at the end, so a supervisor watching the exit status learns that something went wrong.
-
-⚠ This works on the interpreter only. On the '--native' backend — which is what you get by default — 'panic()' still aborts and writes nothing to the log. Run a service that relies on production mode with '--interpret'.
 
 === Using format strings in log messages
 
@@ -4358,7 +4356,7 @@ When a 'log.conf' is present with 'level = info', the four calls above produce e
 2026-09-01T08:35:38.971Z FATAL  /home/you/app/app.loft:6  critical failure
 ```
 
-Each line contains: a UTC timestamp to the millisecond, the severity level, the source file and line number, then the message. This makes it easy to search the file for errors or trace back to the exact line that produced a message. The file path is the one the program was invoked by, so it is usually absolute — a `\[levels\]` path prefix has to match that form to apply. A true assert never logs anything — it is only the false case that logs.
+Each line contains: a UTC timestamp to the millisecond, the severity level, the source file and line number, then the message. This makes it easy to search the file for errors or trace back to the exact line that produced a message. The file path is written the way a `\[levels\]` key addresses it: relative to the project root inside a project, the bare file name for a script. A true assert never logs anything — it is only the false case that logs.
 
 ```rust
   assert(true, "this should never fail");
@@ -5315,11 +5313,6 @@ fn to_text(self: Money) -> text { "{self.cents}c" }
 fn test_user_type_bounds() {
   cheap = Money { cents: 300 };
   dear = Money { cents: 700 };
-```
-
-Bind a generic's result before reading through it: consuming the value inline retains one record per call.
-
-```rust
   best = gen_max(cheap, dear);
   assert(best.cents == 700, "Ordered on a user type: {best.cents}");
   assert(cheap < dear, "…and the bare operator, from the same definition");
@@ -5674,7 +5667,7 @@ fn outer_combined() -> iterator<integer> {
 }
 ```
 
-Delegating to a generator that takes an ARGUMENT is written as a plain forwarding loop rather than 'yield from' — see the note in that section.
+Delegating to a generator that takes an ARGUMENT: a plain forwarding loop means the same thing as 'yield from scaled\_by(4)', and either spelling works.
 
 ```rust
 fn scaled_by(factor: integer) -> iterator<integer> {
@@ -5793,7 +5786,7 @@ So 'while !exhausted(g)' runs one iteration too many.  Drive the generator with 
   assert(yf_total == 33, "yield from: 1+10+20+2={yf_total}");
 ```
 
-⚠ 'yield from' works today only for a sub-generator that takes NO arguments; with an argument it will not compile on --native, though the interpreter runs it.  Forward such a generator with a plain loop — 'for v in sub(arg) { yield v; }', which means the same thing and works on both backends.
+A forwarding loop — 'for v in sub(arg) { yield v; }' — means the same thing as 'yield from sub(arg)'; both work on both backends.
 
 ```rust
   fwd_total = 0;
@@ -5976,8 +5969,6 @@ A tuple element may itself be a tuple.
   assert(inner == 40, "the function saw its own doubled copy: {inner}");
   assert(p.0 == 10, "and the caller's tuple is untouched: {p.0}");
 ```
-
-⚠ Writing to a TEXT element of a value parameter — 'p.1 = "…"' where the parameter is '(integer, text)' — will not compile on --native today, though the interpreter runs it.  Copy the parameter into a local first and write there: 'q = p; q.1 = "…";'.
 
 === Tuples as reference parameters (swap in place)
 

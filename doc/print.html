@@ -1442,7 +1442,7 @@
 <li>Expressions: binary operators with precedence, function calls, field access, if/else, for loops, and blocks</li>
 <li>Type expressions: plain names, generic types like <code>vector&lt;T&gt;</code>, keyed collections (sorted/hash/index), and integer ranges with <code>integer limit(min, max)</code> — in parameter, field, and return position</li>
 </ul>
-<p>Three constructs it does NOT accept yet, all of them ordinary Loft that the language itself compiles: an index expression (<code>v[0]</code>), the null-coalescing operator (<code>a ?? 0</code>), and a formatted string literal (<code>"v={n}"</code>). A snippet containing one answers a non-zero count even though it is valid, so a validator built on this today will reject input it should accept.</p>
+<p>It reads an index expression (<code>v[0]</code>), the null-coalescing operator (<code>a ?? 0</code>) and a formatted string literal (<code>"v={n}"</code>) as the compiler does, so a validator built on this accepts what the compiler accepts.</p>
 <pre><code><span class="kw">use</span> parser;
 <span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="parsing-a-minimal-function">Parsing a minimal function</h2>
@@ -1812,7 +1812,7 @@ per_site = 5       # suppress messages from the same source line after 5/minute
 <pre><code>[levels]
 # Override the global level for one file, by its name alone:
 "debug_tool.loft" = info
-"src/"            = error   # a path prefix, matched against the path as invoked
+"src/"            = error   # a path prefix, matched from the project root
 </code></pre>
 <h2 id="production-mode">Production mode</h2>
 <p>With <code>production = true</code> in the <code>[log]</code> section of log.conf, or <code>--production</code> on the command line:</p>
@@ -1821,7 +1821,6 @@ per_site = 5       # suppress messages from the same source line after 5/minute
 <li>A failing <code>assert()</code> becomes an error log entry instead of aborting.</li>
 </ul>
 <p>The program keeps running and the problem is captured in the log — useful for long-running services where a single error should not bring everything down. It still exits non-zero at the end, so a supervisor watching the exit status learns that something went wrong.</p>
-<p>⚠ This works on the interpreter only. On the <code>--native</code> backend — which is what you get by default — <code>panic()</code> still aborts and writes nothing to the log. Run a service that relies on production mode with <code>--interpret</code>.</p>
 <h2 id="using-format-strings-in-log-messages">Using format strings in log messages</h2>
 <p>Log messages are plain text, but you can embed any expression using the same <code>{...}</code> format syntax as everywhere else in Loft.</p>
 <p>The message is built BEFORE the call decides whether to write it — the argument is an ordinary expression, evaluated like any other. So a message that is discarded still costs what it costs, and that is true whether it was filtered out by the level, suppressed by the rate limit, or dropped because there is no log.conf at all. Keep an expensive call out of a message on a hot path, or guard the whole log line with an <code>if</code>.</p>
@@ -1838,7 +1837,7 @@ per_site = 5       # suppress messages from the same source line after 5/minute
 2026-09-01T08:35:38.971Z ERROR  /home/you/app/app.loft:5  something went wrong
 2026-09-01T08:35:38.971Z FATAL  /home/you/app/app.loft:6  critical failure
 </code></pre>
-<p>Each line contains: a UTC timestamp to the millisecond, the severity level, the source file and line number, then the message. This makes it easy to search the file for errors or trace back to the exact line that produced a message. The file path is the one the program was invoked by, so it is usually absolute — a <code>[levels]</code> path prefix has to match that form to apply. A true assert never logs anything — it is only the false case that logs.</p>
+<p>Each line contains: a UTC timestamp to the millisecond, the severity level, the source file and line number, then the message. This makes it easy to search the file for errors or trace back to the exact line that produced a message. The file path is written the way a <code>[levels]</code> key addresses it: relative to the project root inside a project, the bare file name for a script. A true assert never logs anything — it is only the false case that logs.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="kw">true</span>, <span class="st">"this should never fail"</span>);</code></pre>
 <h2 id="typical-usage-pattern">Typical usage pattern</h2>
 <p>In a real program you would write something like:</p>
@@ -2385,9 +2384,8 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 <span class="kw">fn</span> <span class="fn-call"><a href="stdlib-field-iteration-support-types.html">to_text</a></span>(self: <span class="en">Money</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> { <span class="st">"{self.cents}c"</span> }
 <span class="kw">fn</span> <span class="fn-call">test_user_type_bounds</span>() {
   cheap = <span class="en">Money</span> { cents: <span class="nm">300</span> };
-  dear = <span class="en">Money</span> { cents: <span class="nm">700</span> };</code></pre>
-<p>Bind a generic's result before reading through it: consuming the value inline retains one record per call.</p>
-<pre><code>  best = <span class="fn-call">gen_max</span>(cheap, dear);
+  dear = <span class="en">Money</span> { cents: <span class="nm">700</span> };
+  best = <span class="fn-call">gen_max</span>(cheap, dear);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(best.cents == <span class="nm">700</span>, <span class="st">"Ordered on a user type: {best.cents}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cheap &lt; dear, <span class="st">"…and the bare operator, from the same definition"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">same</span>(cheap, <span class="en">Money</span> { cents: <span class="nm">300</span> }), <span class="st">"Equatable on a user type"</span>);
@@ -2589,7 +2587,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
   yield from <span class="fn-call">inner_vals</span>();
   yield <span class="nm">2</span>;
 }</code></pre>
-<p>Delegating to a generator that takes an ARGUMENT is written as a plain forwarding loop rather than <code>yield from</code> — see the note in that section.</p>
+<p>Delegating to a generator that takes an ARGUMENT: a plain forwarding loop means the same thing as <code>yield from scaled_by(4)</code>, and either spelling works.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">scaled_by</span>(factor: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
   yield factor;
   yield factor * <span class="nm">10</span>;
@@ -2662,7 +2660,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
     yf_total += n;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(yf_total == <span class="nm">33</span>, <span class="st">"yield from: 1+10+20+2={yf_total}"</span>);</code></pre>
-<p>⚠ <code>yield from</code> works today only for a sub-generator that takes NO arguments; with an argument it will not compile on --native, though the interpreter runs it.  Forward such a generator with a plain loop — <code>for v in sub(arg) { yield v; }</code>, which means the same thing and works on both backends.</p>
+<p>A forwarding loop — <code>for v in sub(arg) { yield v; }</code> — means the same thing as <code>yield from sub(arg)</code>; both work on both backends.</p>
 <pre><code>  fwd_total = <span class="nm">0</span>;
   <span class="kw">for</span> n <span class="kw">in</span> <span class="fn-call">forwards_with_argument</span>() {
     fwd_total += n;
@@ -2763,7 +2761,6 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
   inner = <span class="fn-call">doubled_first</span>(p);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(inner == <span class="nm">40</span>, <span class="st">"the function saw its own doubled copy: {inner}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(p.<span class="nm">0</span> == <span class="nm">10</span>, <span class="st">"and the caller's tuple is untouched: {p.0}"</span>);</code></pre>
-<p>⚠ Writing to a TEXT element of a value parameter — <code>p.1 = "…"</code> where the parameter is <code>(integer, text)</code> — will not compile on --native today, though the interpreter runs it.  Copy the parameter into a local first and write there: <code>q = p; q.1 = "…";</code>.</p>
 <h2 id="tuples-as-reference-parameters-swap-in-place">Tuples as reference parameters (swap in place)</h2>
 <p>A <code>&amp;</code> tuple holds scalar elements only.  <code>&amp;(text, …)</code> is refused when you compile, naming the element type — text lives on the heap, and a reference tuple has nowhere to put it.</p>
 <pre><code>  pair = (<span class="nm">3</span>, <span class="nm">7</span>);
