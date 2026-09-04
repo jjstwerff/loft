@@ -743,6 +743,22 @@ reviewer's own sentence is a claim with no more standing than the one being repl
 Record the read below. One row per chapter source, and the commit is the one you read
 **through** — normally `HEAD` at the time.
 
+⚠ **A caveat that cites an issue is a claim with an expiry date, and the tag was the only
+thing marking it.** The 2026-09 chapter pass found five caveats promising limitations the
+language no longer has — the parser "does NOT accept" `v[0]`/`??`/format literals
+(loft#1259, all three parse), production mode "interpreter only" (loft#1263, native logs
+FATAL and continues), `yield from sub(arg)` "will not compile natively" (loft#1277), a text
+element write on a value tuple parameter (loft#1278), and an inline generic result that
+"retains one record per call" (loft#1273, no leak either backend). Every one had survived
+loft#1348's tracker-tag pass with its tag stripped and its sentence kept, which is the worst
+of both: the reader still sees the limitation and nothing now says it was ever provisional.
+One (the `[levels]` prefix rule) was reworded AROUND the stale claim, making it wrong in a
+new way. Each was settled by running it on both backends, never by reading the issue's
+close — *a closed issue is a claim that something changed, not what it changed to*. The rule
+that falls out: when a chapter's caveat loses its citation, the caveat is re-run or removed,
+not kept. `tests/docs/26-closures.loft`'s `&`-capture caveat is the control — its refusal
+stands and now names the chapter's cure.
+
 ## Watermarks
 
 The one home for "reviewed through". `scripts/reference-review.py` parses this table;
@@ -816,7 +832,7 @@ differently and only a cell could ever have caught the claim.
 
 | chapter source | reviewed through | commit |
 |---|---|---|
-| `default` | 2026-09-04 | `db66076b` |
+| `default` | 2026-09-04 | `32700867` |
 | `doc/00-vs-python.html` | 2026-09-03 | `b1ccf0e9` |
 | `doc/00-vs-rust.html` | 2026-09-03 | `b1ccf0e9` |
 | `doc/install.html` | 2026-09-03 | `b1ccf0e9` |
@@ -835,18 +851,18 @@ differently and only a cell could ever have caught the claim.
 | `tests/docs/12-hash.loft` | 2026-09-01 | `e9643ff6` |
 | `tests/docs/13-file.loft` | 2026-09-01 | `e9643ff6` |
 | `tests/docs/15-lexer.loft` | 2026-09-01 | `e9643ff6` |
-| `tests/docs/16-parser.loft` | 2026-09-01 | `e9643ff6` |
+| `tests/docs/16-parser.loft` | 2026-09-04 | `2abce623` |
 | `tests/docs/17-libraries.loft` | 2026-09-01 | `e9643ff6` |
 | `tests/docs/18-locks.loft` | 2026-09-01 | `e9643ff6` |
 | `tests/docs/19-threading.loft` | 2026-09-01 | `e9643ff6` |
-| `tests/docs/20-logging.loft` | 2026-09-01 | `e9643ff6` |
+| `tests/docs/20-logging.loft` | 2026-09-04 | `2abce623` |
 | `tests/docs/22-time.loft` | 2026-09-01 | `e9643ff6` |
-| `tests/docs/23-safety.loft` | 2026-09-03 | `b1ccf0e9` |
+| `tests/docs/23-safety.loft` | 2026-09-04 | `7c6a945c` |
 | `tests/docs/24-json.loft` | 2026-09-03 | `b1ccf0e9` |
-| `tests/docs/25-generics.loft` | 2026-09-03 | `b1ccf0e9` |
-| `tests/docs/26-closures.loft` | 2026-09-03 | `b1ccf0e9` |
-| `tests/docs/27-coroutines.loft` | 2026-09-03 | `b1ccf0e9` |
-| `tests/docs/28-tuples.loft` | 2026-09-03 | `b1ccf0e9` |
+| `tests/docs/25-generics.loft` | 2026-09-04 | `2abce623` |
+| `tests/docs/26-closures.loft` | 2026-09-04 | `7c6a945c` |
+| `tests/docs/27-coroutines.loft` | 2026-09-04 | `2abce623` |
+| `tests/docs/28-tuples.loft` | 2026-09-04 | `2abce623` |
 | `tests/docs/29-match.loft` | 2026-09-03 | `b1ccf0e9` |
 | `tests/docs/30-formatting.loft` | 2026-09-03 | `b1ccf0e9` |
 | `tests/docs/31-ref-forward.loft` | 2026-09-03 | `b1ccf0e9` |
