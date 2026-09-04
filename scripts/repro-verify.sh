@@ -68,11 +68,17 @@ if command -v sha256sum >/dev/null; then SHA="sha256sum"; else SHA="shasum -a 25
 
 # The target this runner natively builds — matched to release.yml's matrix, because a
 # cross-compiled binary is not expected to equal a natively built one.
+#
+# One triple is the exception BY CONSTRUCTION of the release: GitHub retired its Intel
+# macOS image, so release.yml builds `x86_64-apple-darwin` by cross-compiling on an Apple
+# Silicon runner.  The published bundle IS a cross-build, and the faithful reproduction is
+# the same cross-build on the same runner class — so an aarch64 macOS host may verify it.
 host=$(rustc -vV | sed -n 's/^host: //p')
+CROSS_OK=""
 case "$host" in
   x86_64-unknown-linux-gnu)  NATIVE="x86_64-unknown-linux-musl" ;;
   x86_64-apple-darwin)       NATIVE="x86_64-apple-darwin" ;;
-  aarch64-apple-darwin)      NATIVE="aarch64-apple-darwin" ;;
+  aarch64-apple-darwin)      NATIVE="aarch64-apple-darwin"; CROSS_OK="x86_64-apple-darwin" ;;
   x86_64-pc-windows-msvc)    NATIVE="x86_64-pc-windows-msvc" ;;
   *) die "no published target for host $host" ;;
 esac
@@ -88,7 +94,7 @@ esac
 # a silent pass" rule exists to prevent — so a mismatch is `cannot verify` (3), not a
 # difference (1).
 TARGET="${TARGET_REQ:-$NATIVE}"
-if [ "$TARGET" != "$NATIVE" ]; then
+if [ "$TARGET" != "$NATIVE" ] && [ "$TARGET" != "$CROSS_OK" ]; then
   die "asked to verify $TARGET, but this host ($host) natively builds $NATIVE. A cross-compiled binary is not expected to equal a natively built one, so this runner cannot verify that target — give the job a $TARGET runner"
 fi
 
