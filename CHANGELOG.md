@@ -28,6 +28,40 @@ re-bound inside a loop from a closure that may hand its argument back, and a loc
 two places from two sources.  A closure answering a view of a keyed field is no longer freed
 under its caller — a regression this cycle had introduced.
 
+**A function that returns text from an early `return` no longer leaks a buffer per call.**
+`if !w { return lo(n) ?? "" }`, `return t[0][0]`, `return s.name` inside a loop or a nested
+arm — each answered the right text and quietly left one String behind on the interpreter,
+so a loop grew without bound while every value stayed correct.  Every `return` now delivers
+through the same caller-owned buffer the function's tail already used.  The same census
+found that on the compiled backend a function with a `&text` parameter of your own could
+write its returned text INTO that parameter; it no longer can.
+
+**A closure that answers a keyed collection, a `?` value or a tuple now carries the right
+borrow fact to its caller.**  The bridge that turns a callee's parameter numbers into the
+caller's variables handled four shapes and passed the rest through untranslated, so an `if`
+choosing between such a call and a local could read a stale number as one of your
+variables.  The bridge now covers every shape; the nightly invariant gate that had been
+red on it is green.
+
+**Four returns now do what the rules say.**  A `match` on a boolean that spells out `true`
+and `false` no longer warns that its result might be null.  A function returning `vector<T>?`
+that answers a field of its argument hands back a copy, so a later write to that field no
+longer shows through the result.  A nullable record chosen by an `if`, or reassigned from a
+call, is copied on the interpreter as it always was on the compiled backend.  And a lambda
+declared `-> vector<T>?` or `-> S?` accepts a non-null tail, as a named function always did.
+
+**`--lib` tells you when it lost.**  A project's own `lib/` is searched before a `--lib`
+directory, so an override passed on the command line from inside such a project was
+ignored without a word.  It still is — that order may well be right — but loft now says so,
+naming the file that answered and the one the flag would have used.
+
+**Tuples with text or collections behave the same from a lambda as from a named function.**
+A lambda returning `(vector<T>, text)` used to hand its vector out as a view of the caller's
+field; it now returns a copy, as a named function always did.  And an `if` that chooses
+between such a function's result and a tuple you wrote inline compiles now, whichever arm is
+which.  A nullable record answered by a lambda and chosen by an `if`, or reassigned, is
+copied on the interpreter as it was on the compiled backend.
+
 **The reference is now read end to end — 40 chapters of 40.** The Standard Library section
 was the last and the worst: its generator read three of the seven `default/*.loft` files, so
 the entire JSON and reflection API — `json_parse`, `to_json`, `json_errors`, `reflect_type`,

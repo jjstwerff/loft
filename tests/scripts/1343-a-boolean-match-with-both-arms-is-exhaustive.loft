@@ -1,0 +1,54 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A `match` on a boolean whose arms spell out `true` and `false` is exhaustive: no
+// fall-through exists, so nothing about it is nullable.
+//
+// @FR-M-Exhaust states exhaustiveness for an enum, and a boolean is the one scalar whose whole
+// domain a match can spell.  Without a `_`, every scalar match carried a typed-null
+// fall-through for the value no arm matched, and the join read that leaf as a nullable arm —
+// `-> text { match w { true => lo(n) ?? "", false => … } }` warned nullable-into-non-null on
+// both backends, whatever the arms held, while the same choice spelled as an `if` was quiet
+// (loft#1343).  The last arm is now the fallback, exactly as a trailing `_` would be.
+//
+// Axes this file MOVES:  the arm contents (a discharged call, a non-null call, a literal, a
+//                        block); the match position (an explicit `return match`, the
+//                        implicit tail, a bound value); the result type (text, integer).
+// Axes it HOLDS FIXED:   the scrutinee is a plain boolean local; no guards — a guarded arm
+//                        can fail, so it is not part of the domain and keeps the fall-through.
+//
+// The controls are the spellings that were always quiet: the `_` arm, the `if` twin, an
+// integer match with `_`.  Values are asserted here; the diagnostic channel is
+// `tests/boolean_match_exhaustive.rs`, which requires an empty warning stream on both
+// backends — no corpus channel scores a warning that must NOT fire.
+//
+// @falsified-at: dd46146c — warning stream 5 lines -> 0 on both backends, measured by
+// `tests/boolean_match_exhaustive.rs`; exit and assertions 0 -> 0 (the values were always
+// right), so `make falsify` reports this guard inert on the channels it scores.
+fn lo(n: integer) -> text? { return "lo{n}"; }
+fn lo_n(n: integer) -> text { return "lo{n}"; }
+fn w1(w: boolean, n: integer) -> text { return match w { true => lo(n) ?? "", false => lo(n + 1) ?? "" }; }
+fn w2(w: boolean, n: integer) -> text { match w { true => lo(n) ?? "", false => lo(n + 1) ?? "" } }
+fn w4(w: boolean, n: integer) -> text { return match w { true => lo_n(n), false => lo_n(n + 1) }; }
+fn w8(w: boolean) -> text { return match w { true => "a", false => "b" }; }
+fn w9(w: boolean, n: integer) -> integer { match w { false => { n * 2 }, true => { n + 1 } } }
+fn w10(w: boolean, n: integer) -> text { r = match w { true => lo_n(n), false => "z" }; "{r}!" }
+// controls: the spellings that were always quiet
+fn c1(w: boolean, n: integer) -> text { return match w { true => lo_n(n), _ => lo_n(n + 1) }; }
+fn c2(w: boolean, n: integer) -> text { return if w { lo_n(n) } else { lo_n(n + 1) }; }
+fn c3(k: integer, n: integer) -> text { return match k { 0 => lo_n(n), _ => lo_n(n + 1) }; }
+fn main() {
+  for i in 0..2 {
+    w = i % 2 == 0;
+    assert(w1(w, i) == (if w { "lo{i}" } else { "lo{i + 1}" }), "w1({w},{i}) = {w1(w, i)}");
+    assert(w2(w, i) == (if w { "lo{i}" } else { "lo{i + 1}" }), "w2({w},{i}) = {w2(w, i)}");
+    assert(w4(w, i) == (if w { "lo{i}" } else { "lo{i + 1}" }), "w4({w},{i}) = {w4(w, i)}");
+    assert(w8(w) == (if w { "a" } else { "b" }), "w8({w}) = {w8(w)}");
+    assert(w9(w, i) == (if w { i + 1 } else { i * 2 }), "w9({w},{i}) = {w9(w, i)}");
+    assert(w10(w, i) == (if w { "lo{i}!" } else { "z!" }), "w10({w},{i}) = {w10(w, i)}");
+    assert(c1(w, i) == (if w { "lo{i}" } else { "lo{i + 1}" }), "c1({w},{i}) = {c1(w, i)}");
+    assert(c2(w, i) == (if w { "lo{i}" } else { "lo{i + 1}" }), "c2({w},{i}) = {c2(w, i)}");
+    assert(c3(i, i) == (if i == 0 { "lo0" } else { "lo{i + 1}" }), "c3({i}) = {c3(i, i)}");
+  }
+  print("1343 boolean match exhaustive ok\n");
+}

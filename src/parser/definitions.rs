@@ -1645,13 +1645,8 @@ impl Parser {
         // Only a shape that DEPENDS on `T` (`-> (T, T)`) defers to instantiation.
         let generic_return_promotable =
             !is_generic_template || !self.return_shape_depends_on_type_var(&result);
-        if generic_return_promotable
-            && needs_tuple_rewrite
-            && let crate::data::Type::Tuple(elems) = &result
-        {
-            let elems_clone = elems.clone();
-            let synthetic_d_nr = self.data.tuple_def(&mut self.lexer, &elems_clone);
-            result = crate::data::Type::Reference(synthetic_d_nr, crate::data::Deps::none());
+        if generic_return_promotable && needs_tuple_rewrite {
+            result = self.boxed_tuple_return(result);
         }
         self.vars
             .append(&mut self.data.definitions[self.context as usize].variables);
@@ -5616,5 +5611,32 @@ pub(crate) fn default_replayable_in_place(value: &crate::data::Value, site: Defa
 
         // `unspan` above already peeled the outer wrapper; peel any nested one too.
         Value::Span(b) => default_replayable_in_place(&b.1, site),
+    }
+}
+
+impl Parser {
+    /// A lifetime-bearing tuple return, boxed as the synthetic `__tuple<…>` record.
+    ///
+    /// The one rule for a declared `-> (a, b)` whose elements carry a lifetime concern — a
+    /// text, a record, a collection: the function returns the synthetic struct loft already
+    /// registers for stored tuples, so the whole `ref_return` / `text_return` delivery
+    /// machinery applies and every element is COPIED out.  A pure-value tuple keeps Rust's
+    /// tuple ABI (`has_lifetime_concern` says no for it) and is returned unchanged.
+    ///
+    /// Named functions took this at their declaration; a LAMBDA declared the same way did
+    /// not, so its tail `(q.items, q.nm)` was handed up as the bare tuple its arms yield —
+    /// the vector element a view of the argument's field, and the caller's bind aliased it
+    /// while the named twin copied (loft#1349, @FR-F-Ret).  Both lambda forms now box
+    /// through this, at the same point on both passes.
+    pub(crate) fn boxed_tuple_return(&mut self, result: Type) -> Type {
+        let Type::Tuple(elems) = &result else {
+            return result;
+        };
+        if !elems.iter().any(crate::data::has_lifetime_concern) {
+            return result;
+        }
+        let elems = elems.clone();
+        let synthetic_d_nr = self.data.tuple_def(&mut self.lexer, &elems);
+        Type::Reference(synthetic_d_nr, crate::data::Deps::none())
     }
 }

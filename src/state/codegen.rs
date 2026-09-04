@@ -2460,7 +2460,18 @@ impl State {
                     // returned dep names a VISIBLE param), not the inline visible-dep
                     // scan; identical verdict, one fewer per-site re-derivation
                     // (siblings at 1845/2582 already read it).
-                    && !(stash_old_for_post_free && stack.data.def(fn_nr).returns_borrowed_view())
+                    //
+                    // The question is whether the CALL reads `v` — `rhs_reads_v` — and not
+                    // whether the post-free is routed through the guarded form.  That
+                    // routing (`stash_old_for_post_free`) is also taken for a NULLABLE
+                    // local and for an `OpNewRecord` right-hand side, neither of which
+                    // means the result may be `v`'s own store; asked through it, every
+                    // nullable record local reassigned from a borrowed-view call kept the
+                    // raw pointer, and a `-> S?` result chosen by an `if` (its lifted arm
+                    // temp is declared nullable and assigned in the arm) aliased the
+                    // callee's argument field on this backend alone — `--native` copies
+                    // through its own arm (loft#1346, @FR-O-NoDiverge).
+                    && !(rhs_reads_v && stack.data.def(fn_nr).returns_borrowed_view())
                 {
                     let tp_nr = stack.data.def(d_nr).known_type();
                     // Plan-04 Phase B.3.f: allocate fresh store directly

@@ -123,6 +123,16 @@ share-marker is deliberately NOT writable through this path.  ✅ uniform.
    re-reading the writer catalog with that shape in mind — a `Type` moved
    between spaces for its SHAPE is a crossing site even when no dep code
    is involved.
+6. **`parser/mod.rs::fnref_result_type` (the fn-ref call's return)** — CLOSED
+   2026-09-04 (loft#1335).  The bridge for a fn-ref call's return type,
+   written as a list of the shapes it bridges — text, vector, record, record
+   enum — with `other => other` beneath it.  A KEYED collection, a return
+   under `?` and a tuple went through untouched, attribute indices intact,
+   and the `if` join unioned attribute 0 into a frame-space list: the nightly
+   debug-assertions gate's "dep-space violation", nightly since the loft#1245
+   guard landed.  Now routed through `Type::borrow_deps` /
+   `Type::rewrap_deps`, the one home for "which shapes carry a list", and
+   lists nothing — the same cure as the DbRef set (IMPLEMENTATIONS.md).
 
 ### Corpus probe (2026-06-11)
 

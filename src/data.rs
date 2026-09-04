@@ -1535,10 +1535,13 @@ impl Deps {
     /// attr-space list would corrupt it (debug-asserted).  Used by the text-return
     /// retbuf renumber (`Type::renumber_frame_deps`).
     pub fn renumber_frame(&mut self, from: u16, to: u16) {
+        // An EMPTY list has nothing to corrupt, whatever space it is tagged — a `&text`
+        // parameter's declared type carries the attribute tag into the variable table, and
+        // the retbuf renumber walks every variable's type (loft#1335).  `union` exempts the
+        // empty list for the same reason.
         #[cfg(debug_assertions)]
-        debug_assert_ne!(
-            self.space,
-            DepSpace::Attr,
+        debug_assert!(
+            self.items.is_empty() || self.space != DepSpace::Attr,
             "renumber_frame on attr-space deps ({:?})",
             self.items
         );

@@ -121,6 +121,38 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
 
+> **D-clo-22 — OPENED AND CLOSED (2026-09-04, loft#1353): a nullable record answered by a
+> FN-REF and reassigned, or chosen by an `if`, kept the raw pointer on the interpreter.**  The
+> reassign copy the interpreter emits for a borrowed-view call result asks
+> `use_analysis::callee_of` which function a fn-ref call reaches, and that resolver declined
+> every fn-ref whose return is `τ?`, because admitting the nullable spelling had been measured
+> as a use-after-free — on `1114-a-nullable-heap-capture-…`'s `fn(p2_n) -> P2s? { p2_st }`, a
+> lambda returning a CAPTURED store, which no caller variable names and the argument bracket
+> (`protectable_ref_args`) cannot protect.  So `j = if c { hr(b2) } else { d }` with `hr =
+> fn(q: Bag) -> P? { … q.rec … }` aliased `b2.rec` on the interpreter while `--native`, whose
+> arm has no such exception, copied — against `(B-Copy)` and `(O-NoDiverge)`.  Closed by
+> telling the two returns apart: a return that borrows a visible ARGUMENT is admitted (the
+> bracket protects it, and the copy is what the rules ask); one whose return dep names no
+> visible parameter — the closure record — is still declined (`fnref_return_borrows_closure`).
+> Guard `tests/scripts/1353-…loft` (the join, a reassigned nullable local, the plain and the
+> captured-store controls, which the 1114 guard pins as well), falsified at `1bb5e1b8` on
+> `--interpret`, native inert by construction.  The named twin is loft#1346
+> (ownership-history D-own-29).
+>
+> **D-clo-21 — OPENED AND CLOSED (2026-09-04, loft#1349): a lambda returning a lifetime tuple
+> handed its vector element up as a view of the argument's field.**  `(F-Ret)` says a returned
+> whole heap value is owned, never a view.  A NAMED function declared `-> (vector<integer>,
+> text)` takes the lifetime-tuple boxing at its declaration — the return becomes the synthetic
+> `__tuple<…>` record and every element is copied out through the return buffer.  A LAMBDA
+> declared the same way stored its annotation verbatim, so its tail `(q.items, q.nm)` was
+> handed up as the bare tuple the arms yield: the vector element a view of `q.items`, and
+> `t = hp(b); b.items[0] = 99` read 99 through `t` on both backends while the named twin
+> read the original.  Closed by one helper both lambda forms take at the same point on both
+> passes (`Parser::boxed_tuple_return`, the rule the named declaration already applied:
+> `has_lifetime_concern` → `tuple_def`).  The boxed lambda then joins with a tuple literal
+> exactly as a named function does, which is loft#1350's territory and closed beside it.
+> Measured on both backends; the cells are in loft#1350's guard.
+>
 > **D-clo-18 — RECLASSIFIED as a decided edge (2026-09-03, loft#1276): a `&` SCALAR parameter
 > written from inside a closure is REFUSED, and no code change closes it.**
 >

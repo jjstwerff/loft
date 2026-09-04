@@ -534,6 +534,12 @@ form looks exactly like an empty one. Adjacency is the signal rather than the gr
 because the idiom is written TOGETHER while a group nobody intended is two fields added at
 different times for different reasons. Quiet on adjacent members, on a pair with no keyed
 member, and on a LIBRARY's struct, which a consumer cannot rearrange) ·
+`LOFT_NO_LIB_OUTRANKED` (loft#1352 `lib-flag-outranked` ADVICE: `use <id>` resolved
+somewhere other than a `--lib` directory that also provides it — resolution is first-wins
+and a project-local `lib/`, a declared dependency and the script's own directory are
+searched BEFORE the flag, so a `--lib` override run from a tree with a `lib/` measures the
+original in silence; reports the precedence rather than moving it, once per id, quiet when
+the winner lies inside the flag's directory) ·
 `LOFT_NO_UNDECLARED_DEP` (loft#968 `undeclared-dependency` ADVICE: `use <pkg>` resolved a
 REGISTRY package the project's `loft.toml` never declares — so nothing distinguishes "we
 depend on this" from "this happens to be installed on the box that built it", the negative

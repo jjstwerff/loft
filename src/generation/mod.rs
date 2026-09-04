@@ -975,10 +975,10 @@ pub(crate) fn def_returns_owned_text(def: &crate::data::Definition) -> bool {
     matches!(def.returned().base(), Type::Text(_))
         && matches!(def.code(), Value::Block(_))
         && !def.name().starts_with("Op")
-        && !def
-            .attributes()
-            .iter()
-            .any(|a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))))
+        // A user `&text` parameter is not a work buffer: the buffered-vs-bufferless
+        // shape reads the HIDDEN buffers only (`text_work_buffers`), else a function
+        // with such a parameter is emitted buffered and returns THROUGH it (loft#1338).
+        && def.text_work_buffers() == 0
 }
 
 /// @PLN10 — does this function's generated `--native` wrapper return an owned

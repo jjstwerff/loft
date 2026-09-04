@@ -6822,7 +6822,7 @@ impl Scopes<'_> {
             self.var_order.push(tmp);
             let mut result = Vec::with_capacity(ls.len() + 2);
             result.push(v_set(tmp, expr.clone()));
-            free_copied_work_texts(&mut result, expr, function, data);
+            free_copied_text_sources(&mut result, expr, &ls, function, data);
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
@@ -6926,23 +6926,55 @@ impl Scopes<'_> {
             result.append(&mut ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
+        } else if is_return
+            && matches!(tp.base(), Type::Text(_))
+            && !expr_is_terminal
+            && !matches!(expr.unspan(), Value::Null)
+            && let Some(buf) = text_return_buffer_for(expr, function, data, self.d_nr)
+        {
+            // @FR-F-Ret / @FR-F-Call — an owned text return is delivered through the
+            // CALLER's hidden `&text` buffer, never as a view of a local of this frame,
+            // and the frame frees every local it owns when it drops.  The block tail
+            // already writes that buffer (`text_return` promotes it); an EARLY
+            // `return <call>` / `return <view>` / `return a ?? b` used to reach the
+            // `__ret_N` hoist below instead, which copied the value into a frame-local
+            // `String` that nothing freed — one orphan per call, unbounded in a loop
+            // (loft#1338).  Write each arm of the value into the buffer this function
+            // already holds from its caller (per arm, so native's arm types stay
+            // uniform), free the frame-local temps the copy drained, run the scope-exit
+            // frees, and return the buffer.  The buffer is one the value does not
+            // READ: `"{x}-{n}"` written into `x` would clear `x` before rendering it.
+            let mut delivered = expr.clone();
+            crate::parser::Parser::push_text_arms_into(
+                &mut delivered,
+                buf,
+                data.def_nr("OpCreateStack"),
+            );
+            let mut result = Vec::with_capacity(ls.len() + 3);
+            result.push(delivered);
+            free_copied_text_sources(&mut result, expr, &ls, function, data);
+            result.extend(ls);
+            result.push(Value::Return(Box::new(Value::Var(buf))));
+            return result;
         } else if is_return && matches!(tp.base(), Type::Text(_)) && !expr_is_terminal {
-            // B5-L3 extension for text returns: save the expression's text
-            // to a `__ret_N` temp, run free ops, then return the temp.  The
-            // temp's String holds an OWN copy (OpAppendText copies bytes),
-            // so subsequent OpFreeText on the original work-text doesn't
-            // dangle the returned Str.  Mark the temp `skip_free` so its
-            // OpFreeText isn't emitted at scope exit — the String leaks
-            // for the duration of the caller's read, which is fine because
-            // the caller copies bytes via AppendText immediately on return.
+            // The residual of the arm above: a text-returning function that holds NO
+            // hidden `&text` buffer (a literal tail, or a tail whose promotion the
+            // targeted pass declined) and whose value the value reads every buffer of.
+            // Save the value's text to a `__ret_N` temp, run the free ops, then return
+            // the temp.  The temp's String holds an OWN copy (`OpAppendText` copies
+            // bytes), so the frees do not dangle the returned Str.  Its own scope-exit
+            // `OpFreeText` is suppressed (`skip_free`): the caller copies the bytes on
+            // return, and the String is ORPHANED — this is the one delivery that
+            // violates @FR-F-Call's "owned locals freed", kept only where no buffer
+            // exists to deliver through (`use_analysis::text_return_orphan_risk` is
+            // the predicate that hands such a function a buffer, so a leak here means
+            // that predicate did not see this return).
             //
-            // Native codegen also needs the wrap (otherwise the call result
-            // is dropped + `return null` returns the typed null sentinel).
-            // The native emit converts `Set(__ret, call)` into
-            // `let __ret: String = call(...).to_string()` — fine for the
-            // interpreter but for native, `Str::new(&__ret)` after Return
-            // would dangle.  Detect this in `output_block` and emit
-            // `return Str::new(call(...))` directly, dropping the temp.
+            // Native codegen also needs the wrap (otherwise the call result is
+            // dropped + `return null` returns the typed null sentinel), and then
+            // collapses `Set(__ret, call); …; Return(__ret)` back to `return
+            // Str::new(call(...))` in `output_block`, dropping the temp — which is
+            // why native never orphans here.
             self.ret_temp_counter += 1;
             let name = format!("__ret_{}", self.ret_temp_counter);
             let tmp = function.add_temp_var(&name, tp);
@@ -6951,7 +6983,7 @@ impl Scopes<'_> {
             self.var_order.push(tmp);
             let mut result = Vec::with_capacity(ls.len() + 2);
             result.push(v_set(tmp, expr.clone()));
-            free_copied_work_texts(&mut result, expr, function, data);
+            free_copied_text_sources(&mut result, expr, &ls, function, data);
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
@@ -9992,27 +10024,82 @@ fn needs_pre_init(tp: &Type) -> bool {
     ) || crate::parser::vectors::is_keyed(tp)
 }
 
-/// @PLN85 text-tail-return-leak — after a B5-L3 `__ret_N` COPY hoist
-/// (`Set(__ret_N, expr)` lowers to `OpAppendText`, a deep copy), any `__work_N`
-/// text temp that `expr` reads is now dead: the caller consumes the `__ret_N`
-/// copy, not `__work_N`.  `wrap_value_text_dest` synthesises that work-text
-/// precisely so it CAN be freed, but as the return terminal its scope-exit free
-/// is suppressed (it looked like the returned value — `ret_var`).  Emit the free
-/// HERE, at the copy, so it fires ONLY when a copy actually happened; the
-/// direct-transfer path (fast-path `Return(Var(__work_N))`, no `__ret_N`) reaches
-/// neither this nor a free and correctly leaves `__work_N` for the caller.  Fixes
-/// the tail native-text-CALL leak (and the `-> text?` freed-then-read UAF) without
-/// touching the direct-transfer shapes attempt 1 broke.  See
-/// plans/85-store-lifetime-retirement/text-tail-return-leak.md.
-fn free_copied_work_texts(result: &mut Vec<Value>, expr: &Value, function: &Function, data: &Data) {
+/// After a return value has been COPIED — into the caller's hidden `&text` buffer, or into
+/// a `__ret_N` temp — the frame-local text temps it read are dead: the caller consumes
+/// the copy, not them.  Two kinds are otherwise never freed on this path, because each
+/// was suppressed on the premise that the return would TRANSFER it rather than copy it:
+///
+/// - a `__work_N` text that `wrap_value_text_dest` minted for a callee to fill — as the
+///   return's terminal it is skipped by `get_free_vars` (`ret_var`);
+/// - a `__ncc_N` null-coalesce temp, `skip_free` so the present-path Str outlives its
+///   block; a NON-tail consumer frees it in place (`collect_consumed_ncc_text`), and a
+///   return that copies is exactly such a consumer.
+///
+/// Emit the frees HERE, at the copy, so they fire only when a copy actually happened; the
+/// direct-transfer path (fast-path `Return(Var(__work_N))`, no copy) reaches neither this
+/// nor a free and correctly leaves the buffer for the caller.  Any other source is a
+/// user local (freed by the scope sweep already) or an argument (the caller's).
+fn free_copied_text_sources(
+    result: &mut Vec<Value>,
+    expr: &Value,
+    pending: &[Value],
+    function: &Function,
+    data: &Data,
+) {
     let mut srcs = Vec::new();
     collect_return_sources(expr, data, &mut srcs);
     for w in srcs {
-        if function.name(w).starts_with("__work_") && matches!(function.tp(w).base(), Type::Text(_))
+        if !matches!(function.tp(w).base(), Type::Text(_)) || function.is_argument(w) {
+            continue;
+        }
+        // A source the scope-exit sweep already releases is not drained twice: a
+        // multi-arm value has no single returned var for `get_free_vars` to suppress,
+        // so a `__work_N` behind a formatted-string ARM sits in `pending` as well.
+        if pending
+            .iter()
+            .any(|op| scope_free_op_var(op, data) == Some(w))
         {
+            continue;
+        }
+        let n = function.name(w);
+        if n.starts_with("__work_") || (n.starts_with("__ncc_") && function.is_skip_free(w)) {
             result.push(call("OpFreeText", w, data));
         }
     }
+}
+
+/// The hidden `&text` return buffer of `d_nr` that `expr` does not read — the caller-owned
+/// destination an owned text return is delivered through (@FR-F-Ret), as a variable of
+/// the function's own frame.
+///
+/// A function holds one such buffer per promotion its body asked for (`text_return`: the
+/// block tail's accumulator, a formatted early return's work text, a built local the tail
+/// names), and any of them is a valid destination for a return — the call is leaving, so
+/// nothing this frame does with the buffer afterwards matters — EXCEPT one the value
+/// itself reads: writing `"{x}-{n}"` into `x` clears `x` before it is rendered.  Only a
+/// HIDDEN buffer qualifies; a user-written `&text` parameter is the caller's variable, and
+/// a return must not overwrite it.  `None` = the function has no buffer to deliver
+/// through, which is the `__ret_N` residual.
+fn text_return_buffer_for(
+    expr: &Value,
+    function: &Function,
+    data: &Data,
+    d_nr: u32,
+) -> Option<u16> {
+    let mut read = HashSet::new();
+    expr.walk(&mut |v| {
+        if let Value::Var(x) = v {
+            read.insert(*x);
+        }
+    });
+    data.def(d_nr)
+        .attributes()
+        .iter()
+        .filter(|a| {
+            a.hidden && matches!(&a.typedef, Type::RefVar(t) if matches!(**t, Type::Text(_)))
+        })
+        .map(|a| function.var(&a.name))
+        .find(|&v| v != u16::MAX && !read.contains(&v))
 }
 
 /// Does this reassignment displace a store the function OWNS through a callee that
@@ -10880,19 +10967,55 @@ impl Scopes<'_> {
                         && tail_needs_eval
                         && !expr_ends_in_return(o)
                     {
-                        self.ret_temp_counter += 1;
-                        let name = format!("__ret_{}", self.ret_temp_counter);
-                        let tmp = function.add_temp_var(&name, &block.result);
-                        // The hoisted value is the RETURN value (transferred to the caller):
-                        // its scope-exit free must NOT fire, else the caller reads a freed
-                        // record. Text already does this; a heap ref/vector needs it too.
-                        if is_text_result || is_heap_ref_result {
-                            function.set_skip_free(tmp);
+                        if is_text_result
+                            && !matches!(o.unspan(), Value::Null)
+                            && let Some(buf) = text_return_buffer_for(o, function, data, self.d_nr)
+                        {
+                            // @FR-F-Ret / @FR-F-Call — the block-tail twin of `free_vars`'s
+                            // text delivery: an owned text return goes into the CALLER's
+                            // hidden `&text` buffer, never into a frame-local temp nothing
+                            // frees.  This is the leg an early `return a ?? b` reaches (its
+                            // `??` lowers to a block whose tail is the `if`), and it orphaned
+                            // one String per call on the interpreter (loft#1338).  Per arm,
+                            // so native's arm types stay uniform; then the temps the copy
+                            // drained are freed, the scope frees follow, and the buffer is
+                            // what the `Return` below names.
+                            let mut delivered = o.clone();
+                            crate::parser::Parser::push_text_arms_into(
+                                &mut delivered,
+                                buf,
+                                data.def_nr("OpCreateStack"),
+                            );
+                            ls.push(delivered);
+                            let pending: Vec<Value> =
+                                trailing_frees.iter().chain(free.iter()).cloned().collect();
+                            free_copied_text_sources(&mut ls, o, &pending, function, data);
+                            hoist_tmp = Some(buf);
+                        } else {
+                            self.ret_temp_counter += 1;
+                            let name = format!("__ret_{}", self.ret_temp_counter);
+                            let tmp = function.add_temp_var(&name, &block.result);
+                            // The hoisted value is the RETURN value (transferred to the
+                            // caller): its scope-exit free must NOT fire, else the caller
+                            // reads a freed record.  Text already does this — and for text it
+                            // is the ORPHAN `free_vars`'s residual arm documents: kept only
+                            // where the function has no buffer to deliver through.  A heap
+                            // ref/vector needs it too.
+                            if is_text_result || is_heap_ref_result {
+                                function.set_skip_free(tmp);
+                            }
+                            self.var_scope.insert(tmp, self.scope);
+                            self.var_order.push(tmp);
+                            ls.push(v_set(tmp, o.clone()));
+                            if is_text_result {
+                                // The copy drained the `??` temp inside the tail; free it
+                                // even where the temp itself is the residual orphan.
+                                let pending: Vec<Value> =
+                                    trailing_frees.iter().chain(free.iter()).cloned().collect();
+                                free_copied_text_sources(&mut ls, o, &pending, function, data);
+                            }
+                            hoist_tmp = Some(tmp);
                         }
-                        self.var_scope.insert(tmp, self.scope);
-                        self.var_order.push(tmp);
-                        ls.push(v_set(tmp, o.clone()));
-                        hoist_tmp = Some(tmp);
                     }
                     // The block's OWN trailing scope-frees (after the result op) run first,
                     // then the enclosing scope's `free`; both after the result is hoisted.

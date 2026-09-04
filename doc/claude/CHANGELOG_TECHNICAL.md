@@ -9,6 +9,98 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A lambda's lifetime tuple is boxed like a named function's, a tuple result joins a tuple literal, and a nullable record from a fn-ref copies on the interpreter (2026-09-04)
+
+loft#1349: a lambda declared `-> (vector<integer>, text)` stored its annotation verbatim,
+so its tail was handed up as the bare tuple its arms yield and the vector element aliased the
+argument's field; both lambda forms now take `Parser::boxed_tuple_return`, the rule the named
+declaration already applied (`has_lifetime_concern` → `tuple_def`), at the same point on both
+passes (closures-history D-clo-21).  loft#1350: an `else` arm yielding a stack tuple whose
+element types spell the expected synthetic `__tuple<…>` name is boxed into its own work-ref
+in `block_result` and retyped as the record, so `parse_if` joins two records; a different
+shape keeps the refusal (tuples-history D-tup-7).  loft#1353: `use_analysis::callee_of`
+admits the nullable fn-ref spelling when the return borrows a visible ARGUMENT — the reassign
+copy brackets every ref argument — and still declines a return that borrows the closure
+(`fnref_return_borrows_closure`), the shape the 1114 guard pins (closures-history D-clo-22).
+loft#1351 is the sibling checkout's fix, carried here so the harness measures what a real
+build emits: `tests/native.rs` calls `namespace_colliding_native_fns` after its parse, as
+every `--native` path does; its guard lives on that branch.  Guards `1349`/`1350` (one
+file), `1353`.  Filed apart: loft#1354 (a tuple local yielded by an arm is moved on
+`--native`).
+
+### A `--lib` directory that lost to a project-local `lib/` says so (2026-09-04)
+
+loft#1352.  `use` resolution is first-wins, and a project-local `lib/`, a declared dependency
+and the script's own directory are probed before `--lib`, so the flag never reaches a name
+one of those provides — three measurements of a patched library copy passed through `--lib
+<copy>` from the repository root scored the unmodified tree, in silence.  The precedence is
+REPORTED, not moved: `lib-flag-outranked` (advice) names the file that answered and the file
+the flag provides, once per id, quiet without a flag, when the winner lies inside the flag's
+directory, and under `LOFT_NO_LIB_OUTRANKED`.  Whether the precedence itself should change is
+an owner call and is left where it is.  `tests/lib_flag_outranked.rs` pins the reported /
+honoured pair with a copy that cannot parse behind the flag, so a clean run is positive
+evidence.
+
+### Four returns settle against the rules: a boolean match is exhaustive, a nullable vector return copies its projection, a nullable record reassigned from a call copies on the interpreter, and a nullable lambda keeps its `?` (2026-09-04)
+
+loft#1343: a `match` on a boolean spelling `true` and `false` is exhaustive — the scalar match
+parser makes the last arm the fallback instead of carrying a typed-null fall-through whose
+leaf the join read as nullable (`formal/matching.md` `(M-Bool)`, D-match-1).  loft#1345: a
+`-> vector<T>?` function's branching tail reaches the vector materialiser, which now has a
+PROJECTION leaf (`is_projection_op` → clear + append into the buffer), so `q.items` under a
+null arm is copied instead of handed up as the view (calls-history D-call-10).  loft#1346: the
+interpreter's set lowering skipped its borrowed-view copy when "the call reads the
+destination", asked through the flag that routes the post-free — also raised for a nullable
+local — so every nullable record reassigned from a borrowed-view call, the `if` join's lifted
+arm temp included, kept the raw pointer while native copied; it asks `rhs_reads_v` now, and
+`OpCopyRefOrNull` writes `DbRef::NULL` for a null result instead of `Stores::null()`, which
+allocates (ownership-history D-own-29).  loft#1347: the borrow-copy and forwarder vector
+delivery legs re-set the returned type without the declared `?`, so a lambda `-> vector<T>?`
+published two types across the passes and was refused; one `set_delivered_vector_return`
+keeps the `?` (D-call-11).  Guards `1343-…`, `1345-…`, `1346-…`, `1347-…` +
+`tests/boolean_match_exhaustive.rs`.  Filed apart: loft#1349 (a lambda's lifetime tuple),
+loft#1350 (a tuple result refuses to join a tuple literal), loft#1353 (the fn-ref nullable
+record join).
+
+### The nightly gate: a fn-ref return of any shape maps its deps into the caller, and the branches doc no longer links a file that is never committed (2026-09-04)
+
+loft#1335, both legs.  **Debug-assertions gate:** `fnref_result_type` bridged a fn-ref
+call's return deps from the callee's attribute space to the caller's frame for four listed
+shapes and handed every other shape back untouched, so a keyed collection, a `?` return or a
+tuple reached the caller with attribute indices in place — the `if` join then unioned
+attribute 0 into a frame list ("dep-space violation", `Deps::union`, on every nightly since
+the loft#1245 guard).  The mapper now asks `Type::borrow_deps` / `rewrap_deps` and lists
+nothing; `Deps::renumber_frame` exempts an EMPTY attribute-tagged list (a `&text`
+parameter's declared type carries the tag into the variable table).  The whole gate is green
+on this tree.  `formal/ownership-history.md` D-own-28; DEPS_INVENTORY.md crossing site 6.
+Guard `tests/scripts/1335-…loft`.  **Doc index hygiene:** the generated
+`LIBRARY_BRANCHES.md` linked `LIBRARIES.md`, which is built on demand and never committed,
+so the link was broken on every CI checkout; `scripts/lib-branch-audit.sh` now names the
+file and the command instead.  Held fixed and filed apart: a nullable VECTOR return, a
+vector in a returned tuple, and a nullable record chosen by an `if` alias the field.
+
+### An early text return is delivered through the caller's buffer, and a user `&text` parameter is never that buffer (2026-09-04)
+
+loft#1338.  A text function's block tail already delivered through the hidden `&text`
+parameter `text_return` promotes; an EARLY `return <call>` / `return a ?? b` / `return
+t[0][0]` reaching the scope pass with frees to run was copied into a frame-local `__ret_N`
+String marked `skip_free` — orphaned, one per call, on the interpreter only (native collapses
+the temp), with every value right.  Both hoist sites (`scopes::free_vars` and the block-tail
+leg of `insert_free`) now write the value per arm into the buffer the function already holds
+(`push_text_arms_into`), free the `__work_N` / `__ncc_N` temps the copy drained, then run the
+frees and return the buffer; the copy stays only for a function with no buffer.  The loft#568
+orphan predicate classifies every `return` site, not the tail alone (`early_return_ownerships`;
+a null arm is a sentinel and excluded), and the targeted promotion (@PLN104) no longer defers
+the view-of-local / join-of-local classes — `553 textslice` is green on both backends.  The
+buffer question has one home, `Definition::text_work_buffers` (a HIDDEN `RefVar(Text)`
+attribute): six sites restated it as any `RefVar(Text)`, which a user `&text` parameter also
+is, so the predicate left such a function unbuffered and `--native` wrote the returned text
+INTO the parameter.  `formal/calls-history.md` D-call-9; the LSan `append_text` suppression's
+premise ("fault path only") is corrected in place.  Guard
+`tests/scripts/1338-an-early-text-return-is-delivered-through-the-caller-buffer.loft` +
+`tests/early_text_return.rs` (the text ledger under `LOFT_TEXT_TIMELINE=1`).  Side finding
+loft#1343.
+
 ### A view of a local returned through a nullable return is copied before it escapes (2026-09-04)
 
 loft#1337.  A `-> S?` return has no delivery buffer, so what is handed up is what the

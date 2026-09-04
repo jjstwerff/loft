@@ -6,9 +6,110 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — `D-call-8` opened and closed 2026-09-04 (loft#1337); before it `D-call-7`
-closed 2026-09-02 and `D-call-6` was opened and closed the same day by the reference review of
-chapter 31.
+OPEN: **0** — `D-call-10` and `D-call-11` opened and closed 2026-09-04 (loft#1345, loft#1347),
+the same day as `D-call-9` (loft#1338) and `D-call-8` (loft#1337); before them `D-call-7`
+closed 2026-09-02 and `D-call-6` was opened and closed the same day by the reference review
+of chapter 31.
+
+### D-call-11 — OPENED AND CLOSED (2026-09-04, loft#1347): a lambda declared `-> vector<T>?` lost the `?` when its tail was delivered
+
+`(F-Return)` returns the tail, and storing a non-null value where `τ?` is declared is the
+widening every named function performs.  Two vector-delivery legs — the borrow-copy of a
+projected tail (`copy_borrow_tail_into_retbuf`) and the forwarder copy (`emit_forward_copy_409`)
+— re-set the function's returned type as a BARE vector, dropping the declared `?`, where
+`ref_return` keeps it.  A named function survived that (nothing reads its signature against a
+variable), but a lambda's Function type is built from the def's returned type, so a lambda
+`fn(q: Bag) -> vector<integer>? { q.items }` published `-> vector<integer>` on the pass that
+delivered and `-> vector<integer>?` on the pass that did not, and the variable holding it was
+refused as a type change — while the named twin compiled.  A `-> S?` lambda with a non-null
+record tail was refused the same way.
+
+**Closed at the two legs, by the one rewrap `ref_return` already applies**
+(`set_delivered_vector_return`: the deps belong to the storage and the `?` to the value).
+Guard `tests/scripts/1347-a-lambda-declared-nullable-heap-accepts-a-non-null-tail.loft` —
+the vector, record and whole-argument lambdas, the null-arm twin, the scalar and text
+controls, the named twins; the control build refuses the file at parse time (exit 1 → 0 on
+both backends).
+
+### D-call-10 — OPENED AND CLOSED (2026-09-04, loft#1345): a `-> vector<T>?` function handed up a projection of its argument as the view
+
+`(F-Ret)` says a returned whole heap value is owned, never a view.  The buffered non-null
+vector return copies a projected tail (`Delivery::CopyBorrow`, row 104), but a nullable
+return always branches on its null arm and reached the vector materialiser instead, whose
+leaf cases were a local vector and a call carrying its own buffer — a projecting arm
+(`if q.rec.y > 0 { q.items } else { null }`) matched neither and escaped as the view.  The
+caller's bind then aliased the callee's argument field on both backends, whether the callee
+was named or a fn-ref and whether the result was bound or chosen by an `if`; the non-null
+twin copied throughout, which located the gap at the nullable delivery.
+
+**Closed in the materialiser, with a projection leaf**: a field, element or keyed projection
+(`use_analysis::is_projection_op`) is appended into the buffer — `OpClearVector(w);
+OpAppendVector(w, <projection>); w` — and nothing is freed, because the source is the
+argument's store.  Guard `tests/scripts/1345-a-nullable-vector-return-of-a-projection-is-copied.loft`
+(named and fn-ref callees; plain bind, `if` join, a loop with a filler allocation; a field and
+an element-of-field projection; the null arm; the non-null controls and the bind-then-rebind
+workaround), falsified at `dd46146c` on both backends.  Held fixed and filed apart: a lambda's
+lifetime TUPLE takes no synthetic-tuple rewrite at all (loft#1349), and a named function's
+tuple result refuses to join a tuple literal (loft#1350).
+
+
+### D-call-9 — OPENED AND CLOSED (2026-09-04, loft#1338): an early text return was delivered as a view of an orphaned local
+
+`(F-Call)` says the frame frees every local it owns when it drops, and `(F-Ret)` says a
+returned value is handed out through the return-buffer, never as a view of a local.  A text
+function's block tail met both: `text_return` promotes the tail's accumulator, work text or
+built local to a hidden `&text` parameter the CALLER owns, and the tail writes it.  An EARLY
+`return` did not.  `return lo(n) ?? ""`, `return lo_n(n)`, `return t[0][0]`, `return s.name`
+inside an `if` arm, a loop body, a `match` arm, a nested arm or a recursion base case reached
+the scope pass with frees to run before the value could leave, and `free_vars` (and its
+block-tail twin in `insert_free`) copied the value into a frame-local `__ret_N` String marked
+`skip_free`, under a comment that called the orphan fine "because the caller copies
+immediately".  The right characters came back, the String never did — one per call on the
+interpreter, 600 blocks definitely lost in valgrind for the issue's 300-iteration loop, and a
+second buffer per call where the value was a `??` (its `__ncc_N` temp is `skip_free` for the
+same premise).  `--native` collapses the temp into a direct `return`, so only one backend
+leaked, and nothing said so: the LSan gate's `append_text` suppression rests on the premise
+that those frames leak only on a fault path, and 14 corpus scripts leaked with no fault in
+them.
+
+A tail that VIEWS a local — `t[0][0]`, `ts[0][0]` through a slice, a self-recursive call —
+had the same orphan for a second reason: the loft#568 orphan predicate classified only the
+block tail, so a function whose only owned return was an early one was never flagged, and
+the targeted promotion (@PLN104 Phase A) deferred the `view-of-local` class outright with a
+note that a bare rebind had crashed `553 textslice`.  And a third defect sat under both: the
+predicate, and `--native`'s own return-buffer choice, read ANY `RefVar(Text)` attribute as the
+hidden buffer — a user-written `&text` parameter is one too — so `fn f(s: &text, c) -> text {
+if c { return mk() } … }` was left unbuffered on the interpreter and, on `--native`, had its
+returned text written INTO `s`: the caller's variable changed, silently, with the return value
+right.
+
+**Closed at the chokepoint that minted the orphan, and at the one home of the buffer
+question.**  Where a text return must be hoisted past frees and the function holds a hidden
+`&text` buffer the value does not read, both hoist sites now write each arm of the value into
+that buffer (`push_text_arms_into`, per arm so native's arm types stay uniform), free the
+`__work_N` / `__ncc_N` temps the copy drained, run the frees, and return the buffer.  The
+`__ret_N` copy remains only for a function with no buffer at all, and is documented as the
+residual it is.  The orphan predicate classifies every `return` site (`early_return_ownerships`),
+a null arm excluded because `OpConvTextFromNull()` is a sentinel with nothing behind it — the
+first cut counted it, promoted `text_src(i, tag) { if i == 0 { return null } return tag }`, and
+that made its direct-call caller leak the way its local-bind sibling already did; and the
+targeted promotion promotes the view-of-local and join-of-local classes, which `Set(__tret,
+view)` materialises through the interpreter's own `OpAppendText` copy — `553 textslice` is
+green on both backends.  The buffer question reads `Definition::text_work_buffers` (hidden
+only) at all six sites that had restated it ([IMPLEMENTATIONS.md](IMPLEMENTATIONS.md) § The
+text return buffer).
+
+Measured: the issue's program 600 → 0 blocks under valgrind, two probe matrices of 27 cells
+27 + 23 → 0 orphans, nine of the issue's fourteen corpus scripts → 0, the other five (a
+tuple-of-text return, a generic monomorph inside a `par` worker, an iterator `?` discharge)
+unchanged at their baseline counts — other shapes, held fixed here and named in the LSan
+suppression they still hide behind.  Every value byte-identical on both backends before and
+after.  Guard `tests/scripts/1338-an-early-text-return-is-delivered-through-the-caller-buffer.loft`
+(29 cells, six controls, the `&text` negative cell) with `tests/early_text_return.rs` scoring
+the text ledger; falsified at `3d8f2b9e` — native exit 1 → 0 on the `&text` cell, interpret
+106 orphaned buffers → 0 by hand under `LOFT_TEXT_TIMELINE=1`, inert on the six channels
+`make falsify` scores.  Side finding filed: loft#1343 (a boolean `match` with both arms warns
+nullable-into-non-null).
 
 ### D-call-8 — OPENED AND CLOSED (2026-09-04, loft#1337): a view of a local escaped through a nullable return
 

@@ -476,6 +476,9 @@ pub struct Parser {
     /// there can read.
     #[cfg(feature = "registry")]
     undeclared_reported: std::collections::HashSet<String>,
+    /// The `use` ids already reported by [`Parser::lib_flag_outranked`] — one advice per
+    /// id, for the same reason and with the same non-travel rule as `undeclared_reported`.
+    lib_outranked_reported: std::collections::HashSet<String>,
     /// What an auto-install already answered this run: `id -> Some(version)`, or `None`
     /// for a name the registry does not carry.  @PLN143 — a bare `use` is decided by
     /// `probe_auto_install` on EVERY parse pass now that no lockfile pins it, and asking
@@ -1301,6 +1304,7 @@ impl Parser {
             use_paths: std::collections::HashMap::new(),
             #[cfg(feature = "registry")]
             undeclared_reported: std::collections::HashSet::new(),
+            lib_outranked_reported: std::collections::HashSet::new(),
             #[cfg(feature = "registry")]
             auto_installed: std::collections::HashMap::new(),
             #[cfg(feature = "registry")]
@@ -12103,12 +12107,23 @@ impl Parser {
             }
             Deps::frame(out)
         };
+        // Which shapes carry a borrow list is `Type::deps_ref` / `Type::with_deps`'s
+        // question (@FR-O-Deps: one fact, read everywhere), so it is asked there rather than
+        // restated as a list of variants here.  The list this replaces named four — text,
+        // vector, record, record enum — and a KEYED collection or a nullable return fell
+        // through it with the callee's ATTRIBUTE indices still in place, which the caller
+        // then read as its own frame variables: `r = if c { h(bag) } else { d }` with
+        // `h = fn(q: Bag) -> hash<K[k]> { q.m }` unioned attribute 0 (`q`) into a frame-space
+        // list — the debug-assertions gate's "dep-space violation" (loft#1335), and in a
+        // release build a borrow of whatever caller variable happens to be number 0.
         match ret {
             // Text is COPIED out through a work buffer rather than handed back, so the
-            // caller's value is its own however the callee reached it.
-            Type::Text(d) => Type::Text(visible(&d)),
-            // A tuple carries no list of its own — map element-wise, where the deps live,
-            // exactly as `joined_deps` joins one.
+            // caller's value is its own however the callee reached it — under `?` too.
+            other if matches!(other.base(), Type::Text(_)) => match other.borrow_deps() {
+                Some(d) => other.rewrap_deps(&visible(&d)),
+                None => other,
+            },
+            // A tuple has no list of its own: each element is a return in its own right.
             Type::Tuple(elems) => Type::Tuple(
                 elems
                     .into_iter()
@@ -12117,7 +12132,8 @@ impl Parser {
             ),
             // Every other kind that borrows — vector, struct, enum, the five keyed
             // collections, a fn-ref, and an `Optional`/`RefVar` over any of them — is asked
-            // through `deps_ref`, which is where "what does this type borrow?" is answered.
+            // through `borrow_deps`, which is where "what does this type borrow?" is
+            // answered and which peels a `Rewritten` wrapper on the way.
             // Enforces @FR-O-Move: *if the return borrows a parameter, the return type
             // records it* — recorded in the callee's space, and mapped into the caller's here.
             // The hand-written list this replaces named four shapes, so a keyed return
@@ -12127,7 +12143,7 @@ impl Parser {
             // with frame-space deps (the debug-assertions gate's `dep-space violation`,
             // loft#1335).  `call_dependencies` is the named-call twin, and loft#938 was the
             // same omission there for `Optional`.
-            other => match other.deps_ref().cloned() {
+            other => match other.borrow_deps() {
                 Some(d) => other.rewrap_deps(&through(&d)),
                 None => other,
             },
@@ -13183,7 +13199,74 @@ impl Parser {
         if blocked(&f) {
             f = format!("{id}.loft");
         }
+        self.lib_flag_outranked(id, &f);
         f
+    }
+
+    /// loft#1352 — a `--lib` directory provides `<id>`, and the `use` resolved elsewhere:
+    /// say so.
+    ///
+    /// Resolution is first-wins, and a project-local `lib/`, a declared dependency and the
+    /// script's own directory are all probed before the flag, so the flag never reaches a
+    /// name one of those also provides.  That precedence may well be right — an
+    /// intra-package `use` must not be hijackable by a stray flag — and this reports it
+    /// rather than moving it.  The cost of the silence was a MEASUREMENT: three runs of a
+    /// patched library copy passed through `--lib <copy>` from the repository root, and
+    /// every one scored the unmodified tree, because `lib/` beside the working directory
+    /// answered first and nothing said the flag had lost.
+    ///
+    /// `advice`, not `warning`: the program computes what the language promises for the
+    /// file it resolved.  What is wrong is the operator's belief about WHICH file, and the
+    /// cure is at the command line — run from a directory without a `lib/`, or put the
+    /// override where the resolution looks first.  Both layouts a `--lib` directory can
+    /// carry are checked, the flat `<dir>/<id>.loft` and the packaged
+    /// `<dir>/<id>/src/<id>.loft`, and a flag directory the winner lies INSIDE is not a
+    /// loss.  One report per id; `LOFT_NO_LIB_OUTRANKED` silences it.
+    fn lib_flag_outranked(&mut self, id: &str, resolved: &str) {
+        if self.lib_dirs.is_empty() || std::env::var_os("LOFT_NO_LIB_OUTRANKED").is_some() {
+            return;
+        }
+        if !std::path::Path::new(resolved).exists() {
+            return;
+        }
+        let canon =
+            |p: &str| std::fs::canonicalize(p).unwrap_or_else(|_| std::path::PathBuf::from(p));
+        let winner = canon(resolved);
+        let lib_dirs = self.lib_dirs.clone();
+        let Some((dir, provided)) = lib_dirs.iter().find_map(|l| {
+            let flat = format!("{l}{}{id}.loft", sep_str());
+            let packaged = format!("{l}{0}{id}{0}src{0}{id}.loft", sep_str());
+            let provided = [flat, packaged]
+                .into_iter()
+                .find(|c| std::path::Path::new(c).exists())?;
+            if winner.starts_with(canon(l)) {
+                return None;
+            }
+            Some((l.clone(), provided))
+        }) else {
+            return;
+        };
+        if !self.lib_outranked_reported.insert(id.to_string()) {
+            return;
+        }
+        diagnostic!(
+            self.lexer,
+            Level::Advice,
+            code = "lib-flag-outranked",
+            "`use {id}` resolved to `{resolved}`; `--lib {dir}` also provides it (`{provided}`) \
+             and was not consulted — a project-local `lib/`, a declared dependency and the \
+             script's own directory are searched before the flag"
+        );
+        self.lexer.fix_last(crate::diagnostics::Fix {
+            kind: crate::diagnostics::FixKind::Mechanical,
+            title: "run from a directory without a `lib/` that provides this name, or put the \
+                    override where the resolution looks first"
+                .to_string(),
+            condition: None,
+            edit: None,
+            concept: "packages",
+            concept_ref: "@F55",
+        });
     }
 
     /// The optional import spec after a `use` target: `::*`, a single `::name [as bind]`,

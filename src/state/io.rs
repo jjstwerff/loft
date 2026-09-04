@@ -1838,11 +1838,17 @@ impl State {
         if src.rec == 0 {
             // Null return: reclaim the pre-allocated destination record and bind
             // the null sentinel so `v == null` holds.
+            //
+            // The sentinel is `DbRef::NULL` — the value `OpNullRefSentinel` pushes and
+            // `OpRefIsNull` tests for (`store_nr == u16::MAX`).  `Stores::null()` is not
+            // it: that ALLOCATES a store and hands back a ref into it, so the slot read as
+            // present to `== null` while rendering as null, and one store leaked per null
+            // result (loft#1346, the interpreter's nullable-record reassign copy).
             let dst = *self.get_var::<DbRef>(pos);
             if dst.store_nr != u16::MAX {
                 self.database.free(&dst);
             }
-            *self.mut_var::<DbRef>(pos) = self.database.null();
+            *self.mut_var::<DbRef>(pos) = DbRef::NULL;
             return;
         }
         let dst = *self.get_var::<DbRef>(pos);

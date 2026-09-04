@@ -6,7 +6,7 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
+OPEN: **0** — D-own-29 OPENED AND CLOSED 2026-09-04 (loft#1346, below), after D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
 single cell, its Face B CLOSED the same day, that cell's one known SYMPTOM closed 2026-08-26
 with the FACT still wrong, loft#1098, and the fact itself closed by giving every path of a
 value branch its own binding — below).  D-own-26 CLOSED 2026-09-03: its gate existed all
@@ -38,6 +38,80 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-29 — OPENED AND CLOSED (2026-09-04, loft#1346): the interpreter kept a nullable record's borrowed-view result raw where native copied it
+
+`(O-NoDiverge)` says both backends read one fact and cannot disagree; `(B-Copy)` says a plain
+bind is independent of its source.  A nullable record answered by a call that views its
+argument (`fn nr(q: Bag) -> P? { if … { q.rec } else { null } }`) took the bind-or-copy on its
+FIRST bind, and on a REASSIGNMENT — a nullable local assigned again, or the `__lift_N` temp an
+`if` join binds its arm into, which is declared nullable and assigned inside the arm — reached
+the interpreter's set lowering, whose borrowed-view copy is skipped when *the call reads the
+destination* (the self-passing shape `g = idp(b, g)`, whose result may BE `g`'s own store).
+That question was asked through `stash_old_for_post_free`, the flag that routes the post-free
+through the guarded form — and that flag is also raised for a NULLABLE local and for a fresh
+record, neither of which means the call reads the destination.  So every nullable record
+local reassigned from a borrowed-view call kept the raw pointer: `j = if c { nr(b) } else
+{ d }; b.rec.x = 99` read 99 through `j` on the interpreter, and `--native`, whose arm has no
+such exception, copied — the same IR, two answers.
+
+**Closed by asking the question itself** — `rhs_reads_v` — and leaving the post-free routing
+to its own flag.  The guard then found a second defect beneath the copy: `OpCopyRefOrNull`,
+which binds a callee's null result, wrote `Stores::null()` into the slot — a constructor that
+ALLOCATES an owned empty store, which is what a variable's default-init wants and what an
+absence is not — so the null arm read as PRESENT to `== null` (`OpRefIsNull` tests the
+sentinel's store number) while rendering as null, and one store leaked per null result.  It
+writes `DbRef::NULL` now, the sentinel every other absence site uses; the census of the
+constructor's other readers found only default-inits.
+
+Guard `tests/scripts/1346-a-nullable-record-from-a-call-copies-when-reassigned-or-joined.loft`
+(the `if` join, a reassigned nullable local, the null arm; the first-bind, self-passing and
+fn-ref-plain controls), falsified at `dd46146c` on `--interpret`, native inert by construction.
+Held fixed and filed apart: the FN-REF callee's join (loft#1353) — `use_analysis::callee_of`
+declines the nullable fn-ref spelling by design until its `CallRef` twin lands, a measured
+use-after-free otherwise.
+
+### D-own-28 — OPENED AND CLOSED (2026-09-04, loft#1335): a fn-ref return of a keyed, nullable or tuple shape kept the callee's attribute indices
+
+`(O-Deps)` says every store-lifetime decision reads the one carried `deps` fact, and
+[DEPS_INVENTORY.md](../DEPS_INVENTORY.md) says a callee's ATTRIBUTE indices are bridged to
+caller FRAME variables at the call site — that bridge is what makes the fact readable by the
+frame that holds it.  The named-call path bridges every dep-carrying shape.  The fn-ref path
+(`fnref_result_type`) listed four — text, vector, record, record enum — and returned every
+other shape UNTOUCHED:
+
+```loft
+h = fn(q: Bag1245) -> hash<K1245[k]> { q.m };
+r = if s > 0 { h(bag) } else { d };     // `h(bag)` arrives typed  hash<K[k]>["q"]  — attr 0
+```
+
+A keyed collection, any return under `?`, a tuple of them — each reached the caller with
+the callee's attribute index in place, and the `if` join then unioned attribute 0 into a
+frame-space list.  The nightly debug-assertions gate stopped there ("dep-space violation:
+union of Attr deps with Frame deps", `Deps::union`), every night since the guard for
+loft#1245 landed; a release build reads the index as whatever caller variable happens to be
+number 0, a borrow of a variable the value never touched.  It is the class IMPLEMENTATIONS.md
+records under *the DbRef set drifts short*: a hand-written list of the shapes that carry a
+list, restated beside the keystone that already knows.
+
+**Closed at the mapper, by asking the keystone.**  `fnref_result_type` now routes every
+shape through `Type::borrow_deps` / `Type::rewrap_deps` — a text return (under `?` too)
+through the visible-argument map, a tuple element by element, every other dep-carrying shape
+through the closure-aware map — and lists nothing.  A second assertion then surfaced on the
+same gate: `Deps::renumber_frame` refused an EMPTY attribute-tagged list, which a `&text`
+parameter's declared type carries into the variable table and which the retbuf renumber
+walks; an empty list has nothing to corrupt, so the assertion exempts it as `union` already
+did.  Both are visible only under `RUSTFLAGS='-C debug-assertions=on'`; the whole gate
+(`--lib`, `issues`, `wrap`, `strings`, `frame_vars`) is green on this tree.
+
+Guard `tests/scripts/1335-a-fn-ref-return-of-any-shape-maps-its-deps-into-the-caller.loft`
+(hash, sorted, index, nullable record, nullable text; join, plain bind, loop with filler; the
+vector and record controls), falsified by hand under the debug-assertions build at
+`3d8f2b9e` (abort → ok) — inert on the six channels `make falsify` scores, because the wrong
+index landed on a variable the values never read.  Held fixed and filed apart: a nullable
+VECTOR return, a vector inside a returned tuple, and a nullable record chosen by an `if`
+ALIAS the field on the baseline as well — `(B-Copy)` deviations the mapper fix is not what
+closes.
 
 ### D-own-27 — OPENED AND CLOSED (2026-09-04, loft#1336): a local that OWNS after one assignment and VIEWS after another has no static owner
 
