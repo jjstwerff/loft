@@ -286,7 +286,10 @@ the rules: [formal/README.md](doc/claude/formal/README.md) § When to reach for 
 ## Bug-filing policy — MANDATORY
 
 **Default is FIX, not file** — bugs surfaced while fixing another are the cheapest to fix (paths
-loaded, repro warm). In **stability work** the file-instead-of-fix escape hatches do NOT apply: fix
+loaded, repro warm). **An open issue is a debt, not a resolution: the owner wants NO open
+issues, and a clean slate outranks a release** — so filing is only ever the hand-off to a
+peer who is fixing it now, never a resting place, and "ship with #N open" is never the
+recommendation. In **stability work** the file-instead-of-fix escape hatches do NOT apply: fix
 in the same session with a regression test. Record scope + root cause, never origin commit.
 
 **File only when NOT fixing now:** it blocks the current task (bookmark + workaround), or it's
