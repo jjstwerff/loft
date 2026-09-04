@@ -802,9 +802,11 @@ def build_items(version: str, network: bool) -> list[tuple[str, list[Item]]]:
         Item(
             "M-docs-review",
             "Pre-release documentation review (RELEASE.md steps 1-4 + 8)",
-            "load the doc-quality skill first, then walk the steps",
+            "load the doc-quality skill first, then walk the steps; step 8 is "
+            "`make clippy-review`",
             "stale problem docs removed, code links resolve, every doc reachable, "
-            "clippy suppressions re-justified.  Steps 5-7 are deferred (2026-05-15)",
+            "clippy suppressions measured (dead ones named, live ones explained).  "
+            "Steps 5-7 are deferred (2026-05-15)",
         ),
         Item(
             "M-monthly-docs",

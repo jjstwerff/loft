@@ -924,6 +924,18 @@ release-checklist:  ## Per-release checklist: what CI proved, and what is left f
 reference-review:  ## Which reference chapters owe a human read (and which have MOVED)
 	@python3 scripts/reference-review.py $(ARGS)
 
+# RELEASE.md § 8, measured instead of grepped.  Every `#[allow(clippy::…)]` under
+# src/ becomes an `#[expect]` in a throwaway worktree and clippy runs the way CI
+# runs it, so the compiler itself names each suppression nothing fulfils — the
+# function that shrank under the line limit, the parameter that was removed —
+# beside whether anything on or above the line says why it is there.  A REPORT,
+# never a gate, and never a cleanup: the checkout is not edited.  Builds under
+# target/clippy-review, so it neither touches nor waits on a running gate.
+#   make clippy-review                        # CI's three clippy legs, ~1 min warm
+#   make clippy-review ARGS="--legs all"      # + debug-assertions ON + wasm32: what CI never lints
+clippy-review:  ## Which clippy suppressions are dead, and which are live but unexplained
+	@python3 scripts/clippy-review.py $(ARGS)
+
 # `doc/claude/plans/**/probes/` holds ~860 executable `.loft` files that no suite
 # reaches — the residue of finished investigations, still compiling and running
 # long after their plan closed.  loft#1113 (a months-old SIGSEGV) surfaced only
