@@ -14,7 +14,8 @@
 //
 // Axes this file MOVES:  the callee (named, fn-ref); the consumer (a plain bind, an `if`
 //                        join with a local, a bind inside a loop with a filler allocation);
-//                        the projection (a field, an element of a field).
+//                        the projection (a field, an element of a field, a tuple element —
+//                        the second SPELLING of a projection, `TupleGet`, which is not a call).
 // Axes it HOLDS FIXED:   the element type is integer; the tail's null arm is second.  A
 //                        lambda's lifetime TUPLE (loft#1349) and a nullable RECORD chosen by
 //                        an `if` on the interpreter (loft#1346) are their own findings.
@@ -66,6 +67,13 @@ fn test_fnref() {
   for i in 0..200 { t = hv(b); s += len(t ?? []); filler: vector<integer> = [i]; }
   assert(s == 400 && len(b.items) == 2 && b.items[0] == 14, "in a loop with a filler: {s} {b.items}");
 }
+fn nt(q: (vector<integer>, integer)) -> vector<integer>? { if q.1 > 0 { q.0 } else { null } }
+fn test_tuple_element_spelling() {
+  t = ([31, 32], 1);
+  a = nt(t); t.0[0] = 99;
+  assert((a ?? [0])[0] == 31, "a tuple-element projection: {a}");
+  assert(t.0[0] == 99, "the caller's tuple is intact: {t.0}");
+}
 fn test_workaround_still_copies() {
   b = mk(21); t = nv(b); a = t; b.items[0] = 99;
   assert((a ?? [0])[0] == 21, "bind then rebind: {a}");
@@ -73,6 +81,7 @@ fn test_workaround_still_copies() {
 fn main() {
   test_named();
   test_fnref();
+  test_tuple_element_spelling();
   test_workaround_still_copies();
   print("1345 nullable vector return copies ok\n");
 }

@@ -11995,6 +11995,18 @@ impl Parser {
             // and the caller's bind aliased the callee's argument field (loft#1345).  Copy
             // the projection's elements into `w`; the source is the argument's store, so
             // nothing is freed here.
+            //
+            // Both spellings of a projection: the call (`OpGetField` / `OpGetVector` /
+            // `OpVectorRef` / `OpGetRecord`) and a tuple element (`TupleGet`), which carries
+            // its base as a variable number and is a view of that tuple's store the same way.
+            Value::TupleGet(_, _) => {
+                let rec_tp = self.append_elem_tp(elm);
+                let proj = std::mem::replace(op, Value::Null);
+                let clear = self.cl("OpClearVector", &[Value::Var(w)]);
+                let append = self.cl("OpAppendVector", &[Value::Var(w), proj, Value::Int(rec_tp)]);
+                *op = Value::Insert(vec![clear, append, Value::Var(w)]);
+                true
+            }
             Value::Call(d, _) if crate::use_analysis::is_projection_op(&self.data, *d) => {
                 let rec_tp = self.append_elem_tp(elm);
                 let proj = std::mem::replace(op, Value::Null);

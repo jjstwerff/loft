@@ -1489,7 +1489,7 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 43 | **9** | 34 |
+| 44 | **10** | 34 |
 
 (`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
 so the row cannot go stale — the same arrangement the `unspan` table has.)
@@ -1497,6 +1497,12 @@ so the row cannot go stale — the same arrangement the `unspan` table has.)
 loft#1186 moved it to 41 · 8 with `parser::node_place_root`, the arm-level half of the join
 reading: it resolves a projection by op name AND carries the `TupleGet` spelling, so it lands
 on the handling side and leaves the third column where it was.
+loft#1345 moved it to 44 · 10 the same way: the vector materialiser's new projection leaf
+(`materialize_vector_arms_collect`) copies a projected arm into the return buffer, and it was
+written for BOTH spellings from the start — the screen asked, before the row was updated,
+whether a tuple element viewed through `q.0` could reach a `-> vector<T>?` return, and it can
+(`tests/scripts/1345-…loft`'s tuple-element cell), so the leaf handles `TupleGet` and the
+third column stays where it was.
 
 loft#1195 moved it to 42 · 8 · **34** with `parser::field_place`, which reads a comprehension
 destination as a PLACE (root variable + `OpGetField` offsets) and does not carry the
