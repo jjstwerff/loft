@@ -36,7 +36,14 @@ fn convert(dir: text, into: text) {
   }
 }
 
-// The demo entry point.  It converted nothing even with the filter fixed, because
+// The demo entry point.  It is `demo` and not `main` because this is a MODULE: a `main`
+// here is reached by nothing (running the file runs its zero-parameter functions anyway),
+// and it collides with the `main` of any program that imports it — `tests/native.rs`
+// picks the entry with a global `def_nr("n_main")`, so a guard doing `use docs;` compiled
+// to a wrapper calling an `n_main` that was never emitted.  A library owes its importers
+// a name they cannot collide with.
+//
+// It converted nothing even with the filter fixed, because
 // `tests/suite` has never existed in this repo — and it would not have found one at that
 // path anyway: a RELATIVE path resolves against the SCRIPT's directory, not the process
 // working directory, so `"tests/suite"` here means `lib/tests/suite`.  `"."` is therefore
@@ -45,7 +52,7 @@ fn convert(dir: text, into: text) {
 // The output goes to an ABSOLUTE path under the system temp directory, for the same
 // reason read the other way: a relative `into` would deposit the pages inside `lib/`, and
 // a demo should not leave anything behind in the tree it read.
-fn main() {
+fn demo() {
   base = temp_dir() ?? ".";
   out = "{base}/loft-docs";
   convert(".", out);
