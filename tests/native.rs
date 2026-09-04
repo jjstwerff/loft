@@ -327,13 +327,29 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     let end_def = p.data.definitions();
-    let main_nr = p.data.def_nr("n_main");
+    // The ENTRY FILE's `main`, not any `main` in the table.  `def_nr` is a global lookup
+    // and `use` parses a module's definitions into the same table, so a library that
+    // happens to declare `fn main()` could win it — and the generated Rust then called an
+    // `n_main` that was never emitted (`cannot find function n_main in this scope`,
+    // loft#1351).  `MAIN_SOURCE` is the entry; `2..` are the modules it imported.
+    let main_nr = (start_def..end_def)
+        .find(|d| {
+            let def = p.data.def(*d);
+            def.name == "n_main" && def.source() == loft::data::MAIN_SOURCE
+        })
+        .unwrap_or(end_def);
     let has_main = main_nr < end_def;
 
     // Collect zero-parameter user functions as test entry points.
     let mut test_fns: Vec<(u32, String)> = Vec::new();
     for d_nr in start_def..end_def {
         let def = p.data.def(d_nr);
+        // Same narrowing, same reason: an imported module's zero-parameter void function
+        // is not this file's test.  `is_corpus_entry_point` excludes the STDLIB by path
+        // but says nothing about a `use`d library.
+        if def.source() != loft::data::MAIN_SOURCE {
+            continue;
+        }
         // `Definition::is_corpus_entry_point` is the ONE answer, shared with
         // `tests/wrap.rs`.  This side used to ask a WIDER question — no return filter — so
         // every zero-parameter value-returning function in a main-less corpus file ran here
