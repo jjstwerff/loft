@@ -36,6 +36,13 @@ through the same caller-owned buffer the function's tail already used.  The same
 found that on the compiled backend a function with a `&text` parameter of your own could
 write its returned text INTO that parameter; it no longer can.
 
+**A closure that answers a keyed collection, a `?` value or a tuple now carries the right
+borrow fact to its caller.**  The bridge that turns a callee's parameter numbers into the
+caller's variables handled four shapes and passed the rest through untranslated, so an `if`
+choosing between such a call and a local could read a stale number as one of your
+variables.  The bridge now covers every shape; the nightly invariant gate that had been
+red on it is green.
+
 **The reference is now read end to end — 40 chapters of 40.** The Standard Library section
 was the last and the worst: its generator read three of the seven `default/*.loft` files, so
 the entire JSON and reflection API — `json_parse`, `to_json`, `json_errors`, `reflect_type`,

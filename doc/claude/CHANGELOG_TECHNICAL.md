@@ -9,6 +9,23 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The nightly gate: a fn-ref return of any shape maps its deps into the caller, and the branches doc no longer links a file that is never committed (2026-09-04)
+
+loft#1335, both legs.  **Debug-assertions gate:** `fnref_result_type` bridged a fn-ref
+call's return deps from the callee's attribute space to the caller's frame for four listed
+shapes and handed every other shape back untouched, so a keyed collection, a `?` return or a
+tuple reached the caller with attribute indices in place — the `if` join then unioned
+attribute 0 into a frame list ("dep-space violation", `Deps::union`, on every nightly since
+the loft#1245 guard).  The mapper now asks `Type::borrow_deps` / `rewrap_deps` and lists
+nothing; `Deps::renumber_frame` exempts an EMPTY attribute-tagged list (a `&text`
+parameter's declared type carries the tag into the variable table).  The whole gate is green
+on this tree.  `formal/ownership-history.md` D-own-28; DEPS_INVENTORY.md crossing site 6.
+Guard `tests/scripts/1335-…loft`.  **Doc index hygiene:** the generated
+`LIBRARY_BRANCHES.md` linked `LIBRARIES.md`, which is built on demand and never committed,
+so the link was broken on every CI checkout; `scripts/lib-branch-audit.sh` now names the
+file and the command instead.  Held fixed and filed apart: a nullable VECTOR return, a
+vector in a returned tuple, and a nullable record chosen by an `if` alias the field.
+
 ### An early text return is delivered through the caller's buffer, and a user `&text` parameter is never that buffer (2026-09-04)
 
 loft#1338.  A text function's block tail already delivered through the hidden `&text`

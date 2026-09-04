@@ -12103,14 +12103,33 @@ impl Parser {
             }
             Deps::frame(out)
         };
+        // Which shapes carry a borrow list is `Type::deps_ref` / `Type::with_deps`'s
+        // question (@FR-O-Deps: one fact, read everywhere), so it is asked there rather than
+        // restated as a list of variants here.  The list this replaces named four — text,
+        // vector, record, record enum — and a KEYED collection or a nullable return fell
+        // through it with the callee's ATTRIBUTE indices still in place, which the caller
+        // then read as its own frame variables: `r = if c { h(bag) } else { d }` with
+        // `h = fn(q: Bag) -> hash<K[k]> { q.m }` unioned attribute 0 (`q`) into a frame-space
+        // list — the debug-assertions gate's "dep-space violation" (loft#1335), and in a
+        // release build a borrow of whatever caller variable happens to be number 0.
         match ret {
             // Text is COPIED out through a work buffer rather than handed back, so the
-            // caller's value is its own however the callee reached it.
-            Type::Text(d) => Type::Text(visible(&d)),
-            Type::Vector(to, d) => Type::Vector(to, through(&d)),
-            Type::Reference(to, d) => Type::Reference(to, through(&d)),
-            Type::Enum(to, true, d) => Type::Enum(to, true, through(&d)),
-            other => other,
+            // caller's value is its own however the callee reached it — under `?` too.
+            other if matches!(other.base(), Type::Text(_)) => match other.borrow_deps() {
+                Some(d) => other.rewrap_deps(&visible(&d)),
+                None => other,
+            },
+            // A tuple has no list of its own: each element is a return in its own right.
+            Type::Tuple(elems) => Type::Tuple(
+                elems
+                    .into_iter()
+                    .map(|e| Self::fnref_result_type(e, types, fn_var))
+                    .collect(),
+            ),
+            other => match other.borrow_deps() {
+                Some(d) => other.rewrap_deps(&through(&d)),
+                None => other,
+            },
         }
     }
 
