@@ -6,9 +6,52 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — `D-call-9` opened and closed 2026-09-04 (loft#1338), the same day as
-`D-call-8` (loft#1337); before them `D-call-7` closed 2026-09-02 and `D-call-6` was opened and
-closed the same day by the reference review of chapter 31.
+OPEN: **0** — `D-call-10` and `D-call-11` opened and closed 2026-09-04 (loft#1345, loft#1347),
+the same day as `D-call-9` (loft#1338) and `D-call-8` (loft#1337); before them `D-call-7`
+closed 2026-09-02 and `D-call-6` was opened and closed the same day by the reference review
+of chapter 31.
+
+### D-call-11 — OPENED AND CLOSED (2026-09-04, loft#1347): a lambda declared `-> vector<T>?` lost the `?` when its tail was delivered
+
+`(F-Return)` returns the tail, and storing a non-null value where `τ?` is declared is the
+widening every named function performs.  Two vector-delivery legs — the borrow-copy of a
+projected tail (`copy_borrow_tail_into_retbuf`) and the forwarder copy (`emit_forward_copy_409`)
+— re-set the function's returned type as a BARE vector, dropping the declared `?`, where
+`ref_return` keeps it.  A named function survived that (nothing reads its signature against a
+variable), but a lambda's Function type is built from the def's returned type, so a lambda
+`fn(q: Bag) -> vector<integer>? { q.items }` published `-> vector<integer>` on the pass that
+delivered and `-> vector<integer>?` on the pass that did not, and the variable holding it was
+refused as a type change — while the named twin compiled.  A `-> S?` lambda with a non-null
+record tail was refused the same way.
+
+**Closed at the two legs, by the one rewrap `ref_return` already applies**
+(`set_delivered_vector_return`: the deps belong to the storage and the `?` to the value).
+Guard `tests/scripts/1347-a-lambda-declared-nullable-heap-accepts-a-non-null-tail.loft` —
+the vector, record and whole-argument lambdas, the null-arm twin, the scalar and text
+controls, the named twins; the control build refuses the file at parse time (exit 1 → 0 on
+both backends).
+
+### D-call-10 — OPENED AND CLOSED (2026-09-04, loft#1345): a `-> vector<T>?` function handed up a projection of its argument as the view
+
+`(F-Ret)` says a returned whole heap value is owned, never a view.  The buffered non-null
+vector return copies a projected tail (`Delivery::CopyBorrow`, row 104), but a nullable
+return always branches on its null arm and reached the vector materialiser instead, whose
+leaf cases were a local vector and a call carrying its own buffer — a projecting arm
+(`if q.rec.y > 0 { q.items } else { null }`) matched neither and escaped as the view.  The
+caller's bind then aliased the callee's argument field on both backends, whether the callee
+was named or a fn-ref and whether the result was bound or chosen by an `if`; the non-null
+twin copied throughout, which located the gap at the nullable delivery.
+
+**Closed in the materialiser, with a projection leaf**: a field, element or keyed projection
+(`use_analysis::is_projection_op`) is appended into the buffer — `OpClearVector(w);
+OpAppendVector(w, <projection>); w` — and nothing is freed, because the source is the
+argument's store.  Guard `tests/scripts/1345-a-nullable-vector-return-of-a-projection-is-copied.loft`
+(named and fn-ref callees; plain bind, `if` join, a loop with a filler allocation; a field and
+an element-of-field projection; the null arm; the non-null controls and the bind-then-rebind
+workaround), falsified at `dd46146c` on both backends.  Held fixed and filed apart: a lambda's
+lifetime TUPLE takes no synthetic-tuple rewrite at all (loft#1349), and a named function's
+tuple result refuses to join a tuple literal (loft#1350).
+
 
 ### D-call-9 — OPENED AND CLOSED (2026-09-04, loft#1338): an early text return was delivered as a view of an orphaned local
 

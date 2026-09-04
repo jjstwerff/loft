@@ -43,6 +43,13 @@ choosing between such a call and a local could read a stale number as one of you
 variables.  The bridge now covers every shape; the nightly invariant gate that had been
 red on it is green.
 
+**Four returns now do what the rules say.**  A `match` on a boolean that spells out `true`
+and `false` no longer warns that its result might be null.  A function returning `vector<T>?`
+that answers a field of its argument hands back a copy, so a later write to that field no
+longer shows through the result.  A nullable record chosen by an `if`, or reassigned from a
+call, is copied on the interpreter as it always was on the compiled backend.  And a lambda
+declared `-> vector<T>?` or `-> S?` accepts a non-null tail, as a named function always did.
+
 **The reference is now read end to end — 40 chapters of 40.** The Standard Library section
 was the last and the worst: its generator read three of the seven `default/*.loft` files, so
 the entire JSON and reflection API — `json_parse`, `to_json`, `json_errors`, `reflect_type`,

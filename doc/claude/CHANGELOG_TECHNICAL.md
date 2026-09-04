@@ -9,6 +9,27 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Four returns settle against the rules: a boolean match is exhaustive, a nullable vector return copies its projection, a nullable record reassigned from a call copies on the interpreter, and a nullable lambda keeps its `?` (2026-09-04)
+
+loft#1343: a `match` on a boolean spelling `true` and `false` is exhaustive — the scalar match
+parser makes the last arm the fallback instead of carrying a typed-null fall-through whose
+leaf the join read as nullable (`formal/matching.md` `(M-Bool)`, D-match-1).  loft#1345: a
+`-> vector<T>?` function's branching tail reaches the vector materialiser, which now has a
+PROJECTION leaf (`is_projection_op` → clear + append into the buffer), so `q.items` under a
+null arm is copied instead of handed up as the view (calls-history D-call-10).  loft#1346: the
+interpreter's set lowering skipped its borrowed-view copy when "the call reads the
+destination", asked through the flag that routes the post-free — also raised for a nullable
+local — so every nullable record reassigned from a borrowed-view call, the `if` join's lifted
+arm temp included, kept the raw pointer while native copied; it asks `rhs_reads_v` now, and
+`OpCopyRefOrNull` writes `DbRef::NULL` for a null result instead of `Stores::null()`, which
+allocates (ownership-history D-own-29).  loft#1347: the borrow-copy and forwarder vector
+delivery legs re-set the returned type without the declared `?`, so a lambda `-> vector<T>?`
+published two types across the passes and was refused; one `set_delivered_vector_return`
+keeps the `?` (D-call-11).  Guards `1343-…`, `1345-…`, `1346-…`, `1347-…` +
+`tests/boolean_match_exhaustive.rs`.  Filed apart: loft#1349 (a lambda's lifetime tuple),
+loft#1350 (a tuple result refuses to join a tuple literal), loft#1353 (the fn-ref nullable
+record join).
+
 ### The nightly gate: a fn-ref return of any shape maps its deps into the caller, and the branches doc no longer links a file that is never committed (2026-09-04)
 
 loft#1335, both legs.  **Debug-assertions gate:** `fnref_result_type` bridged a fn-ref

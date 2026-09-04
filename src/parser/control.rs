@@ -2615,8 +2615,7 @@ impl Parser {
             Type::Vector(Box::new(elm_ty.clone()), Deps::frame1(buf_var)),
             "fwd_copy_409",
         );
-        let dep = Deps::attrs(vec![buf_attr]);
-        self.data.definitions[self.context as usize].returned = Type::Vector(Box::new(elm_ty), dep);
+        self.set_delivered_vector_return(elm_ty, buf_attr);
     }
 
     /// Plan-14 phase 07 (P234 runtime): rewrite a body-tail
@@ -7590,7 +7589,28 @@ impl Parser {
         }
         self.lexer.token("}");
 
-        let chain = self.build_scalar_chain(v, subject_type, has_wildcard, &result_type, arms);
+        // `(M-Exhaust)` is stated for an enum, and a boolean is the one scalar whose domain
+        // a match can spell out in full: `true` and `false`, each an unguarded arm, leave
+        // nothing for a fall-through to answer.  Without this the chain ended in the typed
+        // null every wildcard-less scalar match carries for the value no arm matched, and
+        // the join read that leaf as a nullable arm — `-> text { match w { true => …,
+        // false => … } }` warned nullable-into-non-null on both backends while the same
+        // choice spelled as an `if` was quiet (loft#1343).  The last arm becomes the
+        // fallback, exactly as a trailing `_` would.
+        let bool_exhaustive = *subject_type == Type::Boolean
+            && !has_wildcard
+            && arms.iter().all(|(_, _, _, guard)| guard.is_none())
+            && [true, false].iter().all(|b| {
+                arms.iter()
+                    .any(|(pat, _, _, _)| matches!(pat, Some(Value::Boolean(x)) if x == b))
+            });
+        let chain = self.build_scalar_chain(
+            v,
+            subject_type,
+            has_wildcard || bool_exhaustive,
+            &result_type,
+            arms,
+        );
         *code = v_block(
             vec![v_set(v, subject), chain],
             result_type.clone(),
@@ -11966,6 +11986,23 @@ impl Parser {
                 *op = Value::Insert(seq);
                 true
             }
+            // A PROJECTION arm — `q.items`, `v[i]`, a keyed lookup — yields a view of a
+            // store this frame does not own, and @FR-F-Ret says a returned whole heap value
+            // is owned, never a view.  The buffered non-null return copies such a tail
+            // (`Delivery::CopyBorrow`), but a nullable return always branches on its null
+            // arm, and the projecting arm reached this walk as a call carrying no hidden
+            // buffer, which the arm below has nothing to substitute — so the view escaped
+            // and the caller's bind aliased the callee's argument field (loft#1345).  Copy
+            // the projection's elements into `w`; the source is the argument's store, so
+            // nothing is freed here.
+            Value::Call(d, _) if crate::use_analysis::is_projection_op(&self.data, *d) => {
+                let rec_tp = self.append_elem_tp(elm);
+                let proj = std::mem::replace(op, Value::Null);
+                let clear = self.cl("OpClearVector", &[Value::Var(w)]);
+                let append = self.cl("OpAppendVector", &[Value::Var(w), proj, Value::Int(rec_tp)]);
+                *op = Value::Insert(vec![clear, append, Value::Var(w)]);
+                true
+            }
             Value::Call(_, _) => {
                 // #437/@PLN85 cluster V cluster I-b (O-Move): a Call-terminal arm
                 // (`head(0,value)`) writes its OWN hidden `__ref_N` buffer, which
@@ -12141,9 +12178,27 @@ impl Parser {
             Type::Vector(Box::new(elm_ty.clone()), Deps::frame1(buf_var)),
             "borrow_tail_copy_104",
         );
-        self.data.definitions[self.context as usize].returned =
-            Type::Vector(Box::new(elm_ty), Deps::attrs(vec![buf_attr]));
+        self.set_delivered_vector_return(elm_ty, buf_attr);
         true
+    }
+
+    /// Record that this function's vector result is delivered through `buf_attr`, keeping
+    /// the DECLARED `?`.
+    ///
+    /// The deps belong to the storage and the `?` to the value, so re-typing one must not
+    /// drop the other (`ref_return` says the same).  Two delivery legs re-set the returned
+    /// type as a bare vector, and a lambda declared `-> vector<T>?` whose tail was such a
+    /// delivery then published `fn(Bag) -> vector<integer>` on the pass that delivered and
+    /// `-> vector<integer>?` on the pass that did not — refused as a type change of the
+    /// variable holding it, while the named twin compiled (loft#1347).
+    fn set_delivered_vector_return(&mut self, elm_ty: Type, buf_attr: u16) {
+        let delivered = Type::Vector(Box::new(elm_ty), Deps::attrs(vec![buf_attr]));
+        let declared = self.data.def(self.context).returned();
+        self.data.definitions[self.context as usize].returned = if declared.ret_promo_peels() {
+            Type::optional(delivered)
+        } else {
+            delivered
+        };
     }
 
     fn chain_site_set_shape(ret: &Type, tail: &mut Value, w: u16) {
