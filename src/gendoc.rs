@@ -8,7 +8,7 @@
 use loft::documentation::typst_escape;
 use loft::documentation::{
     StdlibSection, TopicSource, build_nav, gather_topic_info, generate_docs, get_topic_sources,
-    page_html, render_topic_body, render_topic_typst,
+    is_example_tag, page_html, render_topic_body, render_topic_typst,
 };
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -1301,17 +1301,13 @@ fn comment_blocks(text: &str) -> Vec<(usize, String)> {
 /// The first `@AAA-###` in a comment block, if any. Three uppercase letters, a hyphen and
 /// three digits — the shape that cannot collide with loft's `@P` / `@PLN` / `@F` families.
 fn first_tag(block: &str) -> Option<String> {
-    let bytes: Vec<char> = block.chars().collect();
-    for i in 0..bytes.len() {
-        if bytes[i] != '@' || i + 7 >= bytes.len() {
+    let chars: Vec<char> = block.chars().collect();
+    for i in 0..chars.len() {
+        if chars[i] != '@' {
             continue;
         }
-        let w: String = bytes[i + 1..i + 8].iter().collect();
-        let ok = w.len() == 7
-            && w[0..3].chars().all(|c| c.is_ascii_uppercase())
-            && w.as_bytes()[3] == b'-'
-            && w[4..7].chars().all(|c| c.is_ascii_digit());
-        if ok {
+        let w: String = chars[i + 1..].iter().take(7).collect();
+        if is_example_tag(&w) {
             return Some(w);
         }
     }

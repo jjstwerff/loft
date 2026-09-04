@@ -2680,8 +2680,6 @@ struct Db {
 }
 ```
 
-\@FTR-037 — a `sorted` collection keeps its order as records arrive, descending on a `-key`, and answers a lookup by that key
-
 ```rust
 fn main() {
 ```
@@ -2960,8 +2958,6 @@ struct Db {
   map: index < Elm[nr, -key] >
 }
 ```
-
-\@FTR-038 — an `index` on a multi-part key: lookup by key, ordered iteration, and a second key breaking ties in the other direction
 
 ```rust
 fn main() {
@@ -4129,8 +4125,6 @@ fn make_scores() -> ScoreList {
   thr_q
 }
 ```
-
-\@FTR-070 — a `par` loop across threads: the worker runs on every element and the results come back in order, whatever the thread count
 
 ```rust
 fn main() {

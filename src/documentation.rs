@@ -180,6 +180,38 @@ fn is_topic_directive(trimmed: &str) -> bool {
     trimmed.starts_with("// @NAME: ") || trimmed.starts_with("// @TITLE: ")
 }
 
+/// Does `s` open with a worked-example tag — three uppercase letters, a hyphen, three
+/// digits (`STD-001`, `LEX-002`)? `s` is the text FOLLOWING an `@`.
+///
+/// The shape is chosen so it cannot collide with loft's tracker families: `@P259`,
+/// `@PLN3` and `@F7` all put a digit or a differently-sized letter run where this wants
+/// exactly three letters then a hyphen.
+///
+/// One home for the shape, because two readers must agree on it: the example index
+/// FINDS a tag, and the topic renderer must NOT print one. A renderer that disagreed
+/// about what a tag looks like would publish the ones it failed to recognise.
+#[must_use]
+pub fn is_example_tag(s: &str) -> bool {
+    let w: Vec<char> = s.chars().take(7).collect();
+    w.len() == 7
+        && w[0..3].iter().all(char::is_ascii_uppercase)
+        && w[3] == '-'
+        && w[4..7].iter().all(char::is_ascii_digit)
+}
+
+/// Does this line OPEN a worked-example tag definition (`// @AAA-### — what it shows`)?
+///
+/// A tag definition marks the call site that teaches a function (@PLN141). It is
+/// bookkeeping for `check_doc_drift.sh examples`, not prose a reader of the page asked
+/// for, so the topic renderers drop it along with the rest of its comment block.
+fn opens_example_tag(trimmed: &str) -> bool {
+    trimmed
+        .strip_prefix("//")
+        .map(str::trim_start)
+        .and_then(|t| t.strip_prefix('@'))
+        .is_some_and(is_example_tag)
+}
+
 /// Is this line part of the header block a topic opens with, rather than its prose?
 ///
 /// The block is attribution, provenance and directives. Provenance matters because a
@@ -707,6 +739,8 @@ fn parse_sections(source: &str) -> Vec<DocSection> {
     let mut prose: Vec<String> = Vec::new();
     let mut code: Vec<String> = Vec::new();
     let mut in_header = true;
+    // Inside a worked-example tag definition's comment block, which is dropped whole.
+    let mut in_example_tag = false;
 
     for line in source.lines() {
         let trimmed = line.trim();
@@ -714,6 +748,22 @@ fn parse_sections(source: &str) -> Vec<DocSection> {
             continue;
         }
         in_header = false;
+
+        // Drop a worked-example tag definition and the rest of its comment block.  The
+        // WHOLE block goes, not just the tagged line: the description wraps, so dropping
+        // one line leaves its continuation as an orphan sentence that reads worse than
+        // the tag did.  The block ends at the first non-comment line, which then falls
+        // through to be handled normally.
+        if in_example_tag {
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            in_example_tag = false;
+        }
+        if opens_example_tag(trimmed) {
+            in_example_tag = true;
+            continue;
+        }
 
         if trimmed.starts_with("//") {
             if !code.is_empty() {
@@ -1961,5 +2011,60 @@ pub enum Shape { Circle, Square }
             !sigs.iter().any(|s| s.contains("const")),
             "const excluded, got {sigs:?}"
         );
+    }
+
+    /// A worked-example tag DEFINITION is bookkeeping, and a topic page must not print it.
+    ///
+    /// `@FTR-037` reached the published Sorted Collections page as a bare paragraph
+    /// beginning "@FTR-037 —". The whole comment block has to go: the description wraps,
+    /// so dropping only the tagged line leaves its continuation as an orphan sentence.
+    #[test]
+    fn a_worked_example_tag_block_is_not_rendered_as_prose() {
+        let src = "\
+// Prose the reader asked for.
+
+// @FTR-037 — a `sorted` collection keeps its order as records arrive, descending on a
+// `-key`, and answers a lookup by that key
+fn main() {
+  // ## A heading
+  // Prose after the tag.
+}
+";
+        let body = render_topic_body(src, &HashMap::<String, String>::new());
+        assert!(
+            !body.contains("FTR-037"),
+            "the tag must not reach the page: {body}"
+        );
+        assert!(
+            !body.contains("answers a lookup by that key"),
+            "the tag's continuation line must go with it: {body}"
+        );
+        // The control: prose on BOTH sides of the block still renders, so the test is
+        // measuring suppression of the block and not suppression of everything.
+        assert!(
+            body.contains("Prose the reader asked for."),
+            "prose before the tag survives: {body}"
+        );
+        assert!(
+            body.contains("Prose after the tag."),
+            "prose after the tag survives: {body}"
+        );
+        assert!(
+            body.contains("A heading"),
+            "a heading after the tag survives: {body}"
+        );
+    }
+
+    /// The tag shape is deliberately narrow so it cannot swallow loft's tracker families.
+    #[test]
+    fn the_example_tag_shape_excludes_the_tracker_families() {
+        assert!(is_example_tag("STD-001"), "three letters, hyphen, three digits");
+        assert!(is_example_tag("FTR-037 — trailing prose is fine"));
+        assert!(!is_example_tag("PLN3"), "@PLN3 is a plan, not an example");
+        assert!(!is_example_tag("P259"), "@P259 is a P-issue");
+        assert!(!is_example_tag("F7"), "@F7 is a feature");
+        assert!(!is_example_tag("FR-B-Copy"), "@FR- is a formal rule");
+        assert!(!is_example_tag("STD-01"), "two digits is not the shape");
+        assert!(!is_example_tag("ST-001"), "two letters is not the shape");
     }
 }

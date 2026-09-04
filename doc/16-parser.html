@@ -137,6 +137,7 @@ if parser::parse("user_code", snippet) &gt; 0 {
 // containing one answers a non-zero count even though it is valid, so a validator
 // built on this today will reject input it should accept. Tracked as loft#1259.
 use parser;
+// @PAR-001 — validate a source string before acting on it: `== 0` is good, `&gt; 0` is not
 fn main() {
   // ## Parsing a minimal function
   // The double braces '{{' and '}}' produce literal '{' and '}' inside a

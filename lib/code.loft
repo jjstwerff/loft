@@ -1,3 +1,25 @@
+// Copyright (c) 2025-2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The intermediate form loft's self-hosting parser builds: a flat `Code` record holding
+// every definition, type and instruction the source declared.  `lib/parser.loft` is its
+// only caller — it reads loft source and calls the builders here to record what it found.
+//
+// A builder writes into one of two places, and `cur_arg` is the switch.  Between
+// `argument(...)` and the end of the parameter list `cur_arg` names the parameter being
+// read, so a value lands in that parameter's DEFAULT; otherwise (`cur_arg == 255`) it is
+// appended to the instruction stream.  255 is a real sentinel, not a null encoding —
+// which is why `cur_arg` is a plain `u8` and not a nullable one.
+//
+// ⚠ ONLY THE DECLARATION HALF IS REACHED TODAY.  `parser.loft` calls `define`,
+// `get_type`, `field`, `argument`, `finish_define` and `type_name`; it records the shapes
+// a file declares and does not yet emit code for the bodies.  The instruction half — the
+// `*_value` family, `call_fn`, `id`, and the `add_block`/`end_block`,
+// `add_loop`/`end_loop`, `else_if`/`end_if` triples — has no caller anywhere, so it is
+// unexercised rather than merely untested, and its gaps are recorded in loft#1340 rather
+// than hidden here.  Read it as a sketch of where the emitter is going, not as a
+// contract you can build on.
+
 struct Field {
   name: text,
   typedef: u16,

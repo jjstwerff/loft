@@ -922,7 +922,6 @@
 <pre><code><span class="kw">struct</span> <span class="en">Db</span> {
   map: <span class="ty"><a href="stdlib-collections.html">sorted</a></span> &lt; <span class="en">Elm</span>[-key] &gt;
 }</code></pre>
-<p>@FTR-037 — a <code>sorted</code> collection keeps its order as records arrive, descending on a <code>-key</code>, and answers a lookup by that key</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="adding-elements">Adding Elements</h2>
 <p>You initialise a sorted collection the same way as a vector. The elements are automatically placed in the right position as you add them.</p>
@@ -1083,7 +1082,6 @@
 <pre><code><span class="kw">struct</span> <span class="en">Db</span> {
   map: <span class="ty">index</span> &lt; <span class="en">Elm</span>[nr, -key] &gt;
 }</code></pre>
-<p>@FTR-038 — an <code>index</code> on a multi-part key: lookup by key, ordered iteration, and a second key breaking ties in the other direction</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="adding-and-looking-up-records">Adding and Looking Up Records</h2>
 <p>Fill the index just like a vector. Elements are automatically kept in key order. This index is sorted first by <code>nr</code> (ascending), then by <code>key</code> (descending) for ties.</p>
@@ -1712,7 +1710,6 @@ entry = "src/mylib.loft"   override the default entry path
   thr_q.items +=[<span class="en">Score</span> {value: <span class="nm">10</span> }, <span class="en">Score</span> {value: <span class="nm">20</span> }, <span class="en">Score</span> {value: <span class="nm">30</span> }];
   thr_q
 }</code></pre>
-<p>@FTR-070 — a <code>par</code> loop across threads: the worker runs on every element and the results come back in order, whatever the thread count</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="free-function-form-1">Free function (Form 1)</h2>
 <p>Each Score's value is doubled by <code>double_score</code> across 4 threads. The loop body sees <code>b</code> with the doubled value, in original order.</p>

@@ -1,0 +1,14 @@
+# Worked-example verdicts for libraries in THIS repo (@PLN141).
+#
+# `package <TAB> exempt|deferred <TAB> reason`, keyed exactly as
+# `make libraries-review` names the library.  A library with no `// Example:`
+# citation and no row here is TODO — the point of the file is that "nothing here
+# teaches more from a call site" and "nobody has looked yet" stop looking alike.
+#
+#   exempt   — no function here teaches more from a call site than from its signature.
+#   deferred — one does, but not this pass; the reason names what unblocks it, and the
+#              monthly review (doc/claude/LIBRARY_DOC_REVIEW.md) is where it comes back.
+#
+# package	verdict	reason
+lib/testlib.loft	exempt	A fixture, not a shipped library: it exists to be imported by tests/docs/17-libraries.loft and tests/diagnostic_reach.rs, so its `add`/`distance`/`bump` are deliberately trivial and a call site teaches nothing its signature does not.
+lib/code.loft	deferred	The IR builder behind lib/parser.loft. Its emitter half (the *_value family, add_block/end_block, add_loop/end_loop, else_if/end_if) has no call site anywhere to cite: parser.loft resolves types and declarations but does not yet emit code. Unblocked when the self-hosting parser emits into Code.

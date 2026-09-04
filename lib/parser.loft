@@ -40,6 +40,7 @@ struct FormatSpec {
 // the log as it goes, and the parser itself is internal.  Returning it is what lets a
 // caller (or a doc page) assert that a snippet is valid rather than merely watch the
 // call not crash.
+// Example: @PAR-001
 pub fn parse(name: text, s: text) -> integer {
   p = Parser { };
   p.operators =[
