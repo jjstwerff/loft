@@ -1174,22 +1174,33 @@ impl Parser {
             // both passes.)
             && (self.first_pass
                 || self.def_has_tret_attr()
-                || self.force_tret.contains(&self.context));
+                || self.force_tret.contains(&self.context)
+                || self.lambda_text_buffer_var().is_some());
         if do_tret_bind {
             let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
             if tv != u16::MAX {
                 let last = l.len() - 1;
+                // The same move as the accumulator below: a lambda that already holds its
+                // buffer keeps `__tret` a local and delivers through the buffer.
+                let ret = match self.lambda_text_buffer_var() {
+                    Some(buf) if buf != tv => buf,
+                    _ => tv,
+                };
                 if matches!(l[last].unspan(), Value::Return(_)) {
                     // explicit `return <call>` → `Set(__tret, call); return __tret`
-                    let ret =
-                        std::mem::replace(&mut l[last], Value::Return(Box::new(Value::Var(tv))));
-                    l.insert(last, crate::data::v_set(tv, Self::peel_to_inner_call(ret)));
+                    let call =
+                        std::mem::replace(&mut l[last], Value::Return(Box::new(Value::Var(ret))));
+                    l.insert(last, crate::data::v_set(tv, Self::peel_to_inner_call(call)));
                 } else {
                     // bare `<call>` tail → `Set(__tret, call); __tret`
-                    let call = std::mem::replace(&mut l[last], Value::Var(tv));
+                    let call = std::mem::replace(&mut l[last], Value::Var(ret));
                     l.insert(last, crate::data::v_set(tv, call));
                 }
-                t = Type::Text(Deps::frame1(tv));
+                if ret != tv {
+                    let last = l.len() - 1;
+                    l.insert(last, crate::data::v_set(ret, Value::Var(tv)));
+                }
+                t = Type::Text(Deps::frame1(ret));
             }
         }
         // @PLN85 unified fix — a value-yielding `if`/`match` text tail (match
@@ -1258,7 +1269,9 @@ impl Parser {
             // infer stably, make pass 2 FOLLOW pass 1: promote on pass 2 only where pass 1
             // already minted the `__acc` attribute.  Pass 1 evaluates the verdict directly
             // and the attribute it mints persists, so a stable tail still promotes twice.
-            && (self.first_pass || self.def_has_acc_attr());
+            && (self.first_pass
+                || self.def_has_acc_attr()
+                || self.lambda_text_buffer_var().is_some());
         // `LOFT_DBG_ACC=1` — one line per pass per text-returning function, printing every
         // term of the gate above.  It is what located loft#1099: the two lines for one
         // function differ in `optOk` alone, which is how a non-pass-stable term shows
@@ -1312,6 +1325,16 @@ impl Parser {
             } else {
                 Type::Text(Deps::none())
             };
+            // A lambda carries at most ONE hidden text buffer (`holds_text_work_buf`), and
+            // `parse_return` may already have taken it before this tail asks, so `text_return`
+            // declines to promote this accumulator (`SkipSecondTextBuf`) and it stays a
+            // local.  That is the right outcome: the scope pass delivers a returned text
+            // local through the buffer the lambda holds (`free_vars`, @FR-F-Ret), staged
+            // where the value reads that buffer.  What must not happen is the gate above
+            // declining to accumulate at all on pass 2 — that left `return cap ?? "x"` as a
+            // view of its `??` temp, one orphaned `String` per call (loft#1357).  Writing
+            // the arms straight into the buffer is not an option either: `return lloc ??
+            // "x"` reads the very buffer `lloc` was promoted to.
             let av = self.create_unique("__acc", &acc_type);
             if av != u16::MAX {
                 let last = l.len() - 1;
@@ -1340,12 +1363,24 @@ impl Parser {
                 // documents this leading `Set` as load-bearing for exactly the same
                 // reason; the tail promotion was missing it.
                 l.insert(last, crate::data::v_set(av, Value::Text(String::new())));
+                // A lambda already holding its one buffer cannot promote `av` to a second
+                // (`SkipSecondTextBuf`), so `av` stays a local: move its bytes into that
+                // buffer and return the buffer.  The local then takes its ordinary
+                // scope-exit free.  Returning `av` itself handed up a view of a local the
+                // frame never freed — one orphaned `String` per call (loft#1357).
+                let ret = match self.lambda_text_buffer_var() {
+                    Some(buf) if buf != av => {
+                        l.push(crate::data::v_set(buf, Value::Var(av)));
+                        buf
+                    }
+                    _ => av,
+                };
                 l.push(if is_ret {
-                    Value::Return(Box::new(Value::Var(av)))
+                    Value::Return(Box::new(Value::Var(ret)))
                 } else {
-                    Value::Var(av)
+                    Value::Var(ret)
                 });
-                t = Type::Text(Deps::frame1(av));
+                t = Type::Text(Deps::frame1(ret));
             }
         }
         t = self.block_result(context, result, &t, &mut l, &last_expr_peek.position);
@@ -9567,6 +9602,26 @@ impl Parser {
         }
     }
 
+    /// The variable of the one hidden text buffer a LAMBDA already holds — the `__work_ret`
+    /// the fn-ref ABI hands it, or a buffer an earlier promotion in the same body took —
+    /// or `None` for a named function or a lambda that has none yet.  The tail promotions
+    /// read it as their pass-2 gate: a lambda whose `return` took the buffer on pass 1
+    /// never minted an `__acc` / `__tret` attribute, so the attribute-based gate declined
+    /// on pass 2 and the tail was never rewritten at all.
+    fn lambda_text_buffer_var(&self) -> Option<u16> {
+        if !self.holds_text_work_buf() {
+            return None;
+        }
+        let def = self.data.def(self.context);
+        def.attributes()
+            .iter()
+            .find(|a| {
+                a.hidden && matches!(&a.typedef, Type::RefVar(t) if matches!(**t, Type::Text(_)))
+            })
+            .map(|a| self.vars.var(&a.name))
+            .filter(|&v| v != u16::MAX)
+    }
+
     fn holds_text_work_buf(&self) -> bool {
         self.data
             .def(self.context)
@@ -9860,6 +9915,17 @@ impl Parser {
             let early_promotable = l[..tail_ix]
                 .iter()
                 .any(|op| self.early_text_return_orphans(op, l));
+            // `LOFT_DBG_ACC=1` — the monomorph twin of `parse_block`'s gate line: every term
+            // of the decision, one line per monomorph.
+            if std::env::var_os("LOFT_DBG_ACC").is_some() {
+                eprintln!(
+                    "[acc-mono] fn={} pass1={} tail_promotable={tail_promotable}                      early_promotable={early_promotable} if_acc={} tail={:?}",
+                    self.data.def(d_nr).name(),
+                    self.first_pass,
+                    self.monomorph_if_acc_ok(d_nr, l, &bl.result),
+                    l.last().map(|t| self.classify_text_return(t, l)),
+                );
+            }
             if tail_promotable || early_promotable {
                 let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
                 if tv != u16::MAX {
@@ -10261,6 +10327,21 @@ impl Parser {
                     Self::rewrite_text_returns_into(o, tv);
                 }
             }
+            // A `return` inside a loop body is a delivery site like any other: `for v in it {
+            // return v; } d` handed the loop variable up as a view of a local the loop's own
+            // free never reached on that path (loft#1357), because this walk stopped at the
+            // loop.  `Drop` wraps a statement whose value is discarded and can hold one too.
+            Value::Loop(bl) => {
+                for o in &mut bl.operators {
+                    Self::rewrite_text_returns_into(o, tv);
+                }
+            }
+            Value::Iter(_, a, b, c) => {
+                Self::rewrite_text_returns_into(a, tv);
+                Self::rewrite_text_returns_into(b, tv);
+                Self::rewrite_text_returns_into(c, tv);
+            }
+            Value::Drop(inner) => Self::rewrite_text_returns_into(inner, tv),
             _ => {}
         }
     }

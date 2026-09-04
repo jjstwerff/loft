@@ -562,7 +562,7 @@ crash gates closed:
 
 | ID | H/M | Summary | Reference |
 |---|---|---|---|
-| **Valgrind-clean gate** | H | `valgrind target/release/loft <script>` must produce `ERROR SUMMARY: 0 errors from 0 contexts` AND `definitely lost: 0 bytes in 0 blocks` on every script in `tests/scripts/` and every doc in `tests/docs/`.  Run on the tag candidate before release. | ROADMAP.md |
+| **Valgrind-clean gate** | H | `scripts/valgrind-sweep.sh`: every script in `tests/scripts/` and every doc in `tests/docs/` under memcheck, on the interpreter and as the compiled native program, must show no invalid access and `definitely lost: 0 bytes in 0 blocks`.  Runs nightly (`miri.yml` `valgrind` job); run it on the tag candidate before release. | ROADMAP.md |
 
 ### Memory leaks — no release may leak on valid programs
 

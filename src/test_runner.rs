@@ -1870,6 +1870,16 @@ pub(crate) fn run_tests(
                         } else {
                             state.execute_argv(&fn_name_owned, &data_copy, &user_args);
                         }
+                        // A frame-driven program (`yield_frame`, `gl_swap_buffers`) hands
+                        // control back after each frame and is RESUMED until it finishes —
+                        // the CLI's loop.  Without it the runner scored the first frame as
+                        // the whole test and abandoned `main` mid-loop: its scope-exit frees
+                        // never ran, and the release valgrind sweep (which runs every script
+                        // under `--tests`) reported the frame's formatted texts as definitely
+                        // lost (loft#1357, `85-yield-resume`).
+                        while state.database.frame_yield {
+                            state.resume();
+                        }
                         // loft#860 — resolve this test's samples against ITS `Data` and
                         // merge them.  Before the fault check below, because a test
                         // that FAULTED still burnt the time it burnt; only a Rust panic
@@ -2196,6 +2206,10 @@ pub(crate) fn run_tests(
         );
         return 1;
     }
+    // The text-buffer ledger (`LOFT_TEXT_TIMELINE`) reports here as it does at a program's
+    // exit: a suite run used to end without the summary, so a leak in a `main`-less guard
+    // was invisible to the one instrument built to see it (loft#1357).  No-op unarmed.
+    crate::state::text_timeline_summary();
     if total_fail == 0 {
         println!(
             "test result: ok. {total_pass} passed; {total_files} file{}  {scope}",

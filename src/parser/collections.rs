@@ -4916,9 +4916,17 @@ use #count instead"
         //
         // Marking the bound var skip-free says exactly what is true — the loop does not
         // own what it is looking at — and leaves every other free in the body alone.
+        //
+        // A TEXT binding is the exception: a text `Set` copies bytes into the binding's own
+        // `String` (`OpAppendText`), so `_ = e` over a `vector<text>` owns what it holds and
+        // marking it never-free orphaned one buffer per row (loft#1357).  The sequential
+        // form frees the same binding; so does this one now.
         let borrowed_views = elem_borrow_bindings(&block, elem_var);
         replace_var_in_ir(&mut block, elem_var, &a_accessor);
         for v in borrowed_views {
+            if matches!(self.vars.tp(v).base(), Type::Text(_)) {
+                continue;
+            }
             self.vars.set_skip_free(v);
         }
         let idx_inc = v_set(

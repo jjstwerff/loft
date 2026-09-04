@@ -3410,6 +3410,31 @@ pub fn text_return_orphan_risk(data: &Data, d_nr: u32) -> Option<&'static str> {
         return None;
     }
     let borrows_arg = |base: u16| base != u16::MAX && def.variables.is_argument(base);
+    // A returned TEXT LOCAL is a view of this frame whatever bound it: a text `Set` copies
+    // bytes into the local's own `String` (`OpAppendText`), so `t = text_src(i, s); return t`
+    // hands up `t`'s buffer, not the argument `text_src` borrowed.  The ownership oracle
+    // follows the binding to `s` — the right answer for the STORE question it exists for,
+    // and one that left this local orphaned on every call (loft#1357).  A `&text` place
+    // (`RefVar`) and an argument are the caller's.
+    let mut returns_text_local = false;
+    let vars = &def.variables;
+    let is_text_local = |e: &Value| {
+        matches!(e.unspan(), Value::Var(v)
+            if !vars.is_argument(*v)
+                && !matches!(vars.tp(*v), Type::RefVar(_))
+                && matches!(vars.tp(*v).base(), Type::Text(_)))
+    };
+    if let Some(tail) = fn_body_tail(&def.code) {
+        returns_text_local |= is_text_local(tail);
+    }
+    def.code.walk(&mut |v| {
+        if let Value::Return(inner) = v {
+            returns_text_local |= is_text_local(inner);
+        }
+    });
+    if returns_text_local {
+        return Some("view-of-local");
+    }
     // The tail first, then every early `return`: each is a delivery site, and one that
     // hands back frame-local text is enough to orphan (loft#1338).  The kind named is the
     // first risky site's, which is what the promotion needs to know — it re-routes ALL of

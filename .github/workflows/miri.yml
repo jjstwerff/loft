@@ -42,6 +42,16 @@
 #     ([profile.dev.package.loft]) and previously checked only by cargo-fuzz.
 #     `-C debug-assertions=on` runs them over the whole interpreter corpus at
 #     near-native speed — the fast, broad complement to Miri's slow curated set.
+#   - valgrind — memcheck over the RELEASE binary, every script and document, on the
+#     interpreter and as the compiled native program (`scripts/valgrind-sweep.sh`, the
+#     checklist's `M-valgrind`).  What only it sees: an uninitialised read, and the
+#     shipped binary as shipped — no sanitizer build, no nightly toolchain.  A
+#     definitely-lost text buffer is red here where the ASan leak gate suppresses the
+#     frame (loft#1338, loft#1357); a leaked STORE is not its question, the arena being
+#     one valid allocation.  Nightly-only: ~1200 memchecks is over the PR ceiling alone.
+#   - release-gate-sweeps — the two `#[ignore]`d tests whose reason names the release
+#     gate (the ownership fuzz map's full both-backends replay, the ownership oracle's
+#     backend fact-identity check), each needing rustc per cell.  Nightly-only.
 #   - toolchain-matrix — the suite under beta + nightly rustc, the early-warning
 #     for toolchain-sensitivity (the @P383 trigger).  Non-blocking: nightly/beta
 #     std/lint churn must never page us.
@@ -661,6 +671,112 @@ jobs:
             ./target/release/loft --native "tests/scripts/$s.loft"
             echo "::endgroup::"
           done
+
+  valgrind:
+    name: Valgrind memcheck sweep (release binary, both backends)
+    # Nightly-only: ~1200 memcheck runs exceed the 20-min PR ceiling on their own — @CI_BUDGET.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold + valgrind
+        run: sudo apt-get update && sudo apt-get install -y mold valgrind
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-valgrind-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-valgrind-cargo-
+
+      # The binary the release ships, plus the runtime rlib its native half links: the
+      # sweep compiles each tests/docs document with `--native` against libloft.rlib and
+      # hands the compiled program to memcheck.  Built together so the rlib is from the
+      # same rustc as the binary (the native-asan job above records why).
+      - name: Build loft release binary + runtime rlib
+        run: cargo build --release --bin loft --lib
+
+      # A script that `use`s a library with a native cdylib needs that cdylib built
+      # against THIS rlib, or it panics before it runs anything (loft#920) — and a run
+      # that never allocates cannot be seen to leak.
+      - name: Rebuild the native cdylibs against this libloft.rlib
+        run: make rebuild-native-cdylibs
+
+      # `scripts/valgrind-sweep.sh` is the release's `M-valgrind` gate as one command
+      # (RELEASE.md § Memory safety): every script and document under memcheck, on the
+      # interpreter and as the compiled native program.  Red on an INVALID ACCESS or a
+      # DEFINITELY lost block; quiet on "possibly lost" (Rust's interior-pointer tables
+      # at exit); blind to a leaked STORE, which is one valid allocation to memcheck —
+      # that half is `M-leaks`.  What it sees that no other job does: an uninitialised
+      # read, and a definitely-lost text `String`, the class the ASan leak gate
+      # suppresses by frame (loft#1338, loft#1357).  One line per run lands in
+      # target/vg/results.tsv and one memcheck log per file beside it.
+      - name: Valgrind sweep (interpreter corpus + native docs)
+        run: scripts/valgrind-sweep.sh
+
+      # The verdict names the red files; the logs say which allocation.  Only the red
+      # files' logs are kept — a green sweep's ~1200 logs are noise.
+      - name: Collect the red logs
+        if: failure()
+        run: |
+          mkdir -p target/vg-red
+          cp target/vg/results.tsv target/vg-red/ 2>/dev/null || true
+          awk -F'\t' '($4 != "-" && $4 > 0) || ($5 != "-" && $5 > 0) {
+                 n = split($2, p, "/"); s = p[n]; sub(/\.loft$/, "", s); print $1 "-" s ".log" }' \
+              target/vg/results.tsv \
+            | while read -r l; do cp "target/vg/$l" target/vg-red/ 2>/dev/null || true; done
+
+      - name: Upload the sweep's verdict and the red logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: valgrind-sweep
+          path: target/vg-red/
+          if-no-files-found: warn
+
+  release-gate-sweeps:
+    name: Release-gate sweeps (the ignored tests whose reason names this job)
+    # Nightly-only: rustc per cell / per run puts both over the PR ceiling — @CI_BUDGET.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-release-gate-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-release-gate-cargo-
+
+      # Two `#[ignore]`d tests carry "the release-gate sweep" / "the release-gate SI-2
+      # check" as their reason: the full both-backends replay of the ownership fuzz map
+      # (rustc per cell) and the backend fact-identity check of the ownership oracle
+      # (rustc per run).  A reason that names a job is only a reason while the job
+      # exists; this is it.
+      - name: Ownership fuzz gate — full both-backends replay
+        run: cargo test --release --test ownership_fuzz_gate fuzz_gate_map54_full_replay -- --ignored
+
+      - name: Ownership oracle — backend fact identity (SI-2)
+        run: cargo test --release --test ownership_oracle oracle_fact_is_backend_identical_si2 -- --ignored
 
   debug-asserts:
     name: Debug-assertions gate (loft's internal invariants)
