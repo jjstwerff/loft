@@ -13429,7 +13429,9 @@ impl Parser {
     /// package and the `<pkg>::grid` key from inside it), and parsing it twice puts two
     /// copies of every definition in `Data` (loft#1080).
     /// Is `cur_script` a file inside the registry cache — a package someone else
-    /// published, whose manifest is not this project's to fix?  Three diagnostics ask it.
+    /// published, whose manifest is not this project's to fix?  Three diagnostics ask it,
+    /// each behind the `registry` feature, as is the cache directory it reads.
+    #[cfg(feature = "registry")]
     fn script_in_registry_cache(cur_script: &str) -> bool {
         crate::portable_path::is_under_canonical(
             std::path::Path::new(cur_script),
