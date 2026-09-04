@@ -1825,6 +1825,9 @@ pub fn sum_of(v: vector<integer>) -> integer {
 #superseded "sum"
 #pure
 
+// A type that can be walked as a tree.  Declaring `fn children(self: T) -> vector<T>`
+// is the whole contract — that bare function is what makes `T` walkable, with nothing to
+// register and no base type to inherit from.  `tree_walk` is what consumes it.
 pub interface Walkable {
   fn children(self: Self) -> vector<Self>
 }

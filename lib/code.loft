@@ -35,6 +35,9 @@ struct Type {
   size: u16
 }
 
+// What KIND of thing a definition is.  Each variant says where the rest of the shape
+// lives, because a definition and its type are stored apart: the `typedef` beside it
+// holds the parameters, the alternatives or the fields, depending on this.
 pub enum Structure {
   Function,
   // The corresponding typedef holds the parameters.
@@ -101,6 +104,10 @@ struct Definition {
   code_pos: integer
 }
 
+// Everything a parsed program declared, in one record: its definitions, the types they
+// use, and the instruction stream.  This is the value `lib/parser.loft` builds as it
+// reads source, and the builders below are the only way it is written — see the file
+// header for which half of them is wired up today.
 pub struct Code {
   definitions: vector < Definition >,
   def_names: hash < Definition[name] >,

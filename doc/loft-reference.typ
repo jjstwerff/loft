@@ -8377,6 +8377,8 @@ Sum of all integer elements. Returns 0 for an empty vector. Superseded by the ge
 pub interface Walkable
 ```
 
+A type that can be walked as a tree.  Declaring `fn children(self: T) -\> vector\<T\>` is the whole contract — that bare function is what makes `T` walkable, with nothing to register and no base type to inherit from.  `tree\_walk` is what consumes it.
+
 ```rust
 pub fn tree_walk < T: Walkable > (wk_root: T, cap: integer) -> vector<T>
 ```

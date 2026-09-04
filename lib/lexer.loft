@@ -31,6 +31,10 @@ enum Scanned {
   Finished,
 }
 
+// The tokeniser's state: the text being scanned, where the cursor is in it, and the
+// token and keyword tables that decide how the next word is read.  Set those with
+// `set_tokens` / `set_keywords` before the first `parse_string` or `parse_file` — they
+// are what makes this reusable for a language other than loft.
 pub struct Lexer {
   file: text,
   // we can switch files

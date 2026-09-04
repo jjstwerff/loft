@@ -4428,6 +4428,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </div>
 <div class="item">
 <pre><code>pub interface Walkable</code></pre>
+<p>A type that can be walked as a tree.  Declaring `fn children(self: T) -&gt; vector&lt;T&gt;` is the whole contract — that bare function is what makes `T` walkable, with nothing to register and no base type to inherit from.  `tree_walk` is what consumes it.</p>
 </div>
 <div class="item">
 <pre><code>pub fn tree_walk &lt; T: Walkable &gt; (wk_root: T, cap: integer) -&gt; vector&lt;T&gt;</code></pre>
