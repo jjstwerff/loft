@@ -2315,17 +2315,17 @@ fn gh253_bang_on_nullable_is_quiet() {
     code!("fn test() { n: integer = 3; if !n { n = 4; } assert(n == 3, \"ok\"); }");
 }
 
-/// GitHub #247 — storing a CAPTURING closure into a collection is cleanly
-/// rejected (compile error) instead of crashing.  Covers all three detectable
-/// shapes: a direct capturing lambda, a local holding one, and a call to a
-/// function that RETURNS a capturing closure (`[make(1)]`).
+/// A collection element is a plain fn-ref (DESIGN_DECISIONS.md C116, loft#247): a
+/// CAPTURING closure headed into one is refused at compile time, with the struct-field
+/// route named.  Covers the detectable shapes — a direct capturing lambda, and a call to
+/// a function that RETURNS one (`[make(1)]`, a closure factory).
 #[test]
 fn gh247_capturing_closure_in_vector_rejected_direct() {
     code!("fn test() { k = 3; fs: vector<fn() -> integer> = [fn() -> integer { k * 2 }]; }").error(
-        "a capturing closure cannot be stored in a collection yet — the co-located \
-             closure-record layout is deferred (@P213/@P214); hold the captured state \
-             separately (e.g. a struct field) and store a non-capturing fn that reads it \
-             at gh247_capturing_closure_in_vector_rejected_direct:1:77",
+        "a capturing closure cannot be stored in a collection: a collection has one element \
+         layout and each capture set is its own record shape — hold it in a struct field, or \
+         store a non-capturing fn that reads the state from a struct field \
+         at gh247_capturing_closure_in_vector_rejected_direct:1:77",
     );
 }
 
@@ -2336,9 +2336,9 @@ fn gh247_capturing_closure_in_vector_rejected_call() {
 fn test() { fs: vector<fn() -> integer> = [make(1)]; }"
     )
     .error(
-        "a capturing closure cannot be stored in a collection yet — the co-located \
-         closure-record layout is deferred (@P213/@P214); hold the captured state \
-         separately (e.g. a struct field) and store a non-capturing fn that reads it \
+        "a capturing closure cannot be stored in a collection: a collection has one element \
+         layout and each capture set is its own record shape — hold it in a struct field, or \
+         store a non-capturing fn that reads the state from a struct field \
          at gh247_capturing_closure_in_vector_rejected_call:2:52",
     );
 }

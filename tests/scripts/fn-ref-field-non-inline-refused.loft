@@ -85,17 +85,18 @@ fn fnr_assign_null_element() -> integer {
   v[0](5)
 }
 
-// #247: a capturing closure in a collection is the deferred layout, whether the capturing
-// source is written INLINE or held in a local.  The inline form arrives wrapped in its
-// closure-allocation block, which the shape test alone could not see through.
-// @EXPECT_ERROR: a capturing closure cannot be stored in a collection yet
+// A collection element holds a plain fn-ref (DESIGN_DECISIONS.md C116, loft#247): a
+// capturing closure is refused whether the capturing source is written INLINE or held in
+// a local.  The inline form arrives wrapped in its closure-allocation block, which the
+// shape test alone could not see through.
+// @EXPECT_ERROR: a capturing closure cannot be stored in a collection: a collection has one element layout
 fn fnr_assign_capturing_element_inline(k: integer) -> integer {
   v: vector<fn(integer) -> integer> = [fnr_plain];
   v[0] = fn(x: integer) -> integer { x + k };
   v[0](5)
 }
 
-// @EXPECT_ERROR: a capturing closure cannot be stored in a collection yet
+// @EXPECT_ERROR: a capturing closure cannot be stored in a collection: a collection has one element layout
 fn fnr_assign_capturing_element_local(k: integer) -> integer {
   g = fn(x: integer) -> integer { x + k };
   v: vector<fn(integer) -> integer> = [fnr_plain];
