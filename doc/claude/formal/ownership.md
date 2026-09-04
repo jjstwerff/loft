@@ -389,6 +389,16 @@ analysis directly (the certifier sidesteps it).
 
 ## Conformance
 
+- **A fn-ref call's return records the argument it borrows, for EVERY kind (`O-Move`,
+  loft#1335)** — `fn pick(x: integer, bag: Bag) -> hash<K[k]> { h = fn(q: Bag) -> hash<K[k]>
+  { q.m }; h(bag) }` records `bag` (attribute 1) as what its return borrows, for a keyed, an
+  optional keyed and an optional struct return exactly as for the vector control.  On the
+  four-shape list it replaced, the keyed return recorded attribute 0 — the scalar `x` — which
+  in a join with a local unioned attribute-space with frame-space deps (the debug-assertions
+  gate's `dep-space violation`), and would have read as an owned store had the lift not
+  re-derived the answer.  Guard `frame_vars::a_fn_ref_return_borrows_the_argument_in_the_callers_space_for_every_kind`,
+  a FACT test, falsified on the list.
+
 - **A `??` default-arm mint is released once (`O-Borrow`, loft#1322)** — `_vec_N` and
   `__vdb_N` name one store, and exactly one of them frees it: at the vector and keyed kinds,
   empty and non-empty defaults, nested, bound outside a closure, and at the store ceiling.

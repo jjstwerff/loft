@@ -12107,10 +12107,30 @@ impl Parser {
             // Text is COPIED out through a work buffer rather than handed back, so the
             // caller's value is its own however the callee reached it.
             Type::Text(d) => Type::Text(visible(&d)),
-            Type::Vector(to, d) => Type::Vector(to, through(&d)),
-            Type::Reference(to, d) => Type::Reference(to, through(&d)),
-            Type::Enum(to, true, d) => Type::Enum(to, true, through(&d)),
-            other => other,
+            // A tuple carries no list of its own — map element-wise, where the deps live,
+            // exactly as `joined_deps` joins one.
+            Type::Tuple(elems) => Type::Tuple(
+                elems
+                    .into_iter()
+                    .map(|e| Self::fnref_result_type(e, types, fn_var))
+                    .collect(),
+            ),
+            // Every other kind that borrows — vector, struct, enum, the five keyed
+            // collections, a fn-ref, and an `Optional`/`RefVar` over any of them — is asked
+            // through `deps_ref`, which is where "what does this type borrow?" is answered.
+            // Enforces @FR-O-Move: *if the return borrows a parameter, the return type
+            // records it* — recorded in the callee's space, and mapped into the caller's here.
+            // The hand-written list this replaces named four shapes, so a keyed return
+            // (`fn(q: Bag) -> hash<K[k]> { q.m }`) reached the caller with the callee's
+            // ATTRIBUTE indices still in it: read in the caller's frame they name whichever
+            // local holds that number, and a branch join over such an arm unioned attr-space
+            // with frame-space deps (the debug-assertions gate's `dep-space violation`,
+            // loft#1335).  `call_dependencies` is the named-call twin, and loft#938 was the
+            // same omission there for `Optional`.
+            other => match other.deps_ref().cloned() {
+                Some(d) => other.rewrap_deps(&through(&d)),
+                None => other,
+            },
         }
     }
 

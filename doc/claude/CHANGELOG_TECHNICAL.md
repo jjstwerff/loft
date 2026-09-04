@@ -9,6 +9,50 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A fn-ref call's return records what it borrows, for every kind of return (2026-09-04)
+
+`Parser::fnref_result_type` maps a lambda's declared return deps — attribute indices in the
+callee's space — through the actual arguments into the caller's frame.  It did so for text,
+vector, struct and enum returns and handed every other kind back verbatim, so a fn-ref
+returning a keyed field view (`fn(q: Bag) -> hash<K[k]> { q.m }`) reached the caller still
+naming attribute 0.  In the caller's frame that is whichever variable holds number 0: with a
+scalar parameter first, the enclosing function's own return then recorded the scalar and read
+as an OWNED store, and a branch join over such an arm unioned attribute-space with frame-space
+deps — the debug-assertions gate's `dep-space violation` on `1245b` (loft#1335).  The shape
+list is gone: any type that borrows is asked through `Type::deps_ref` and rewrapped, a tuple
+element-wise, which is what `(O-Move)` states and what `call_dependencies` already learned for
+`Optional` (loft#938).  Guard: `frame_vars::a_fn_ref_return_borrows_the_argument_in_the_callers_space_for_every_kind`
+asserts the FACT — the enclosing function's return names the parameter — in a build that always
+runs; falsified: the keyed cell answers `[0]` on the four-shape list.  Values were right in
+every cell before and after, because the lift and the ownership oracle re-derive what the dep
+mis-stated; the script corpus is clean under `-C debug-assertions=on` again.  Noted on the way:
+a named function cannot hand a fn-ref call's TUPLE back as its tail (`expected __tuple<…>, got
+(…) on return from block`), a standing refusal that kept a tuple cell out of the guard.
+
+The gate's other red, `issue_328_reference_self_recursive_walk`'s `Database 5 not correctly
+freed`, is loft#1336: a nullable struct local bound by copy leaks its store when rebound to a
+`reference` field view, and a later copy-bind writes into the viewed record on `--native`.
+Filed with its eleven-cell matrix; the cure needs a per-variable ownership witness.
+
+### Path spelling has one home, and the Windows nightly's two real failures close (2026-09-04)
+
+`portable_path` now answers every path-spelling question the tree used to answer per site:
+`plain_canonical` / `try_plain_canonical` / `plain_canonical_str` (canonicalise in the plain
+spelling every other path uses — on Windows `fs::canonicalize` answers a verbatim `\\?\C:\…`
+that never equals or prefix-matches its plain twin), `strip_verbatim` (disk and UNC),
+`is_stdlib_source` (however the stdlib was loaded — the eight readers that checked only
+`default/` treated an installed stdlib as user code), `is_under` (by component, so `pkg` does
+not claim `pkg2/`) and `is_under_canonical` / `same_file`.  Fifty `canonicalize` sites, thirteen
+stdlib checks and the two string-prefix package tests route through them.  That is what closed
+the Windows leg's two real reds: the logger's project root came back verbatim and matched no
+record's plain path, so a `[levels]` key ending in `/` could not raise a file's level
+(`log_source_path`); and the check-line contract test built its expected path from the 8.3
+`temp_dir()` and a bare `canonicalize`, neither the driver's spelling
+(`check_line_audiences`).  Validated on Windows through `windows-probe.yml` dispatched on the
+branch with the named tests.  The macOS reds in the same nightly were already closed by #1330
+and a retry-green cold-cache flake in `native_scripts`; the `doc index hygiene` red was the
+generated branch report linking the uncommitted library catalogue.
+
 ### The release gate: every nightly against one commit, one verdict (2026-09-04)
 
 `release-gate.yml` calls the six nightlies — `ci.yml` (full matrix incl. Windows, the
