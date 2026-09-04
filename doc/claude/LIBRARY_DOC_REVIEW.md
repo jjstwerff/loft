@@ -208,6 +208,19 @@ as a STALE ROW rather than ignored.
 PR #971, 2026-08-18) — the 2026-08 pass *was* that tagging, so it is the pass's real
 end ref rather than the `(bootstrap)` placeholder these rows carried first.
 
+### Type descriptions — 2026-09 (loft#1342)
+
+The 2026-09 pass found the published distribution documents its functions and not
+its types: 34 `pub struct`/`pub enum` declarations carried no description, 33 of them
+named in other public signatures of their own library (`Stage` in 111 of `stage`'s).
+Every one now has a one-line description directly above its declaration, on the
+`doc-types-2026-09` branch of each library repo that had one — `loft-libs-graphics`,
+`-world`, `-net`, `-core`, `-assets` and `-docs` (`game` and `plugins` had none);
+parse-checked as 19 packages, 0 errors. The count is taken over the REGISTRY's
+published surface, so the `34 type` figure `make libraries-review` prints moves only
+once those branches merge and the libraries republish: the branches are the fix, the
+release is the owner's step.
+
 ## What this is NOT
 
 - **Not a gate.** It never blocks a release — the `examples` gate blocks on
