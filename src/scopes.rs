@@ -6822,7 +6822,7 @@ impl Scopes<'_> {
             self.var_order.push(tmp);
             let mut result = Vec::with_capacity(ls.len() + 2);
             result.push(v_set(tmp, expr.clone()));
-            free_copied_text_sources(&mut result, expr, function, data);
+            free_copied_text_sources(&mut result, expr, &ls, function, data);
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
@@ -6952,7 +6952,7 @@ impl Scopes<'_> {
             );
             let mut result = Vec::with_capacity(ls.len() + 3);
             result.push(delivered);
-            free_copied_text_sources(&mut result, expr, function, data);
+            free_copied_text_sources(&mut result, expr, &ls, function, data);
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(buf))));
             return result;
@@ -6983,7 +6983,7 @@ impl Scopes<'_> {
             self.var_order.push(tmp);
             let mut result = Vec::with_capacity(ls.len() + 2);
             result.push(v_set(tmp, expr.clone()));
-            free_copied_text_sources(&mut result, expr, function, data);
+            free_copied_text_sources(&mut result, expr, &ls, function, data);
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
@@ -10042,6 +10042,7 @@ fn needs_pre_init(tp: &Type) -> bool {
 fn free_copied_text_sources(
     result: &mut Vec<Value>,
     expr: &Value,
+    pending: &[Value],
     function: &Function,
     data: &Data,
 ) {
@@ -10049,6 +10050,15 @@ fn free_copied_text_sources(
     collect_return_sources(expr, data, &mut srcs);
     for w in srcs {
         if !matches!(function.tp(w).base(), Type::Text(_)) || function.is_argument(w) {
+            continue;
+        }
+        // A source the scope-exit sweep already releases is not drained twice: a
+        // multi-arm value has no single returned var for `get_free_vars` to suppress,
+        // so a `__work_N` behind a formatted-string ARM sits in `pending` as well.
+        if pending
+            .iter()
+            .any(|op| scope_free_op_var(op, data) == Some(w))
+        {
             continue;
         }
         let n = function.name(w);
@@ -10977,7 +10987,9 @@ impl Scopes<'_> {
                                 data.def_nr("OpCreateStack"),
                             );
                             ls.push(delivered);
-                            free_copied_text_sources(&mut ls, o, function, data);
+                            let pending: Vec<Value> =
+                                trailing_frees.iter().chain(free.iter()).cloned().collect();
+                            free_copied_text_sources(&mut ls, o, &pending, function, data);
                             hoist_tmp = Some(buf);
                         } else {
                             self.ret_temp_counter += 1;
@@ -10998,7 +11010,9 @@ impl Scopes<'_> {
                             if is_text_result {
                                 // The copy drained the `??` temp inside the tail; free it
                                 // even where the temp itself is the residual orphan.
-                                free_copied_text_sources(&mut ls, o, function, data);
+                                let pending: Vec<Value> =
+                                    trailing_frees.iter().chain(free.iter()).cloned().collect();
+                                free_copied_text_sources(&mut ls, o, &pending, function, data);
                             }
                             hoist_tmp = Some(tmp);
                         }
