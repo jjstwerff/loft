@@ -2325,6 +2325,44 @@ fn first_use_in_seq(ops: &[Value], v: u16) -> Option<FirstUse> {
     ops.iter().find_map(|op| first_use_of(op, v))
 }
 
+/// The literal-backing accumulator a statement REPOINTS at a destination, if it has one.
+///
+/// A keyed or vector literal builds through a function-scoped accumulator (`__kvb_N` /
+/// `__vdb_N`, [`crate::variables::owns_literal_backing_store`]) that normally OWNS the store it
+/// builds into — which is why the scope-exit sweep frees it.  Where the destination is a
+/// CAPTURE, @PLN93's build-into-target lowering instead REPOINTS the accumulator at that
+/// destination, and the sweep then frees a store belonging to the frame that built the closure
+/// (loft#1331).
+///
+/// The repoint is what this recognises, and it is the exact discriminator: a value-position
+/// literal's block only ever assigns the accumulator `null` — it allocates and builds into a
+/// store of its own — while a repointing block assigns it the destination first.  A plain
+/// non-captured local rebind mints no accumulator at all.  Returning the accumulator here is
+/// therefore the same question as *"does this statement leave it naming a store this frame does
+/// not own?"*.
+///
+/// One home for every lowering: the keyed replace reaches the sweep as a bare `Block`, the
+/// empty-literal clear as one wrapped in `OpReplaceKeyed`, and both are the same defect.
+fn repointed_literal_accumulator(node: &Value, function: &Function) -> Option<u16> {
+    if let Value::Block(bl) = node.unspan()
+        && let Some(Value::Var(acc)) = bl.operators.last().map(Value::unspan)
+        && crate::variables::owns_literal_backing_store(function.name(*acc))
+        && bl.operators.iter().any(|op| {
+            matches!(op.unspan(), Value::Set(t, val)
+                if t == acc && !matches!(val.unspan(), Value::Null))
+        })
+    {
+        return Some(*acc);
+    }
+    let mut found = None;
+    node.for_each_child(&mut |c| {
+        if found.is_none() {
+            found = repointed_literal_accumulator(c, function);
+        }
+    });
+    found
+}
+
 /// Sources whose retarget would move the destination's WRITE across a statement that touches
 /// that destination.
 ///
@@ -6020,6 +6058,26 @@ impl Scopes<'_> {
                 }
             } else {
                 ls.push(sv);
+            }
+            // loft#1331 — DETACH an accumulator this statement repointed at a destination the
+            // frame does not own, so the scope-exit sweep frees nothing instead of freeing the
+            // caller's collection.  @FR-O-Latest is the fact: ownership belongs to the LATEST
+            // assignment, and the repoint made the accumulator name a capture.  The sentinel
+            // makes that true at RUN time — the sweep still emits its free and finds nothing —
+            // while the DISPLACEMENT free that releases the accumulator's own store at the
+            // repoint is untouched, which is what @FR-O-Override's blanket veto could not do.
+            //
+            // @FR-O-Detach places it: after the statement, so it follows every read of the
+            // accumulator by the value being built through it.  Skipped where the statement is
+            // the block's RESULT, which `expr` below pops — a detach there would become the
+            // value the block yields.
+            if (bl.result == Type::Void || i + 1 < bl.operators.len())
+                && let Some(acc) = repointed_literal_accumulator(v, function)
+            {
+                ls.push(v_set(
+                    acc,
+                    Value::Call(data.def_nr("OpNullRefSentinel"), Vec::new()),
+                ));
             }
         }
         let expr = if ls.is_empty() || bl.result == Type::Void {

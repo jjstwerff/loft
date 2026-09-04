@@ -255,6 +255,12 @@ impl Output<'_> {
                     to.unspan(),
                     Value::Call(_, _) | Value::CallRef(_, _) | Value::Insert(_) | Value::Block(_)
                 )
+                // …and a DETACH is not one of them, though it is spelled as a call.  The
+                // shapes above are listed as "a fresh-store-producing rhs"; the null
+                // sentinel produces no store, so the free this gate emits — of the store the
+                // binding moves OFF — has nothing licensing it (loft#1331,
+                // `crate::data::is_null_sentinel_detach`).
+                && !crate::data::is_null_sentinel_detach(var, to, self.data, variables)
                 && (!is_retbuf_attr || self.retbuf_witness.contains(&var));
             if owned_ref_reassign {
                 let name = sanitize(variables.name(var));

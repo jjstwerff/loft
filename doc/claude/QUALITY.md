@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 378 | 354 | **24** |
+| 379 | 355 | **24** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -517,6 +517,13 @@ discriminates eight variants — `Set`, `Var`, `Block`, `Insert`, `Loop`, `If`, 
 column alone. Its two orderings are the reason it must peel: a `Set`'s value is read before its
 target, and a `Loop` body may run zero times, so a wrapped node that fell to the catch-all arm
 would answer "no use here" for exactly the shapes the question is about.
+
+loft#1331 moved it to 379 · 355 · 24 with `scopes::repointed_literal_accumulator`, which asks
+whether a statement leaves a literal-backing accumulator naming a store the frame does not own.
+It discriminates `Block`, `Var` and `Set` and unspans at each, so it lands on the peeling side.
+The `Set` arm is the one that must peel: the shape it looks for is an assignment of anything
+other than `null` to the accumulator, and a wrapped node falling to the catch-all would read as
+"not repointed" — the answer that leaves the scope-exit sweep freeing a capture.
 
 loft#1200 moved it to 339 · 322 · 17 with `scopes::nullable_locals_that_displace`, the
 pre-scan that decides whether a nullable heap-record local is worth an ownership witness; it

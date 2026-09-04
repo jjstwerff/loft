@@ -3440,6 +3440,37 @@ mod tuple_stack_layout_tests {
 /// `(offset, index)` pairs for elements that need cleanup on scope exit
 /// (text, reference, vector, collection, struct-enum).
 #[must_use]
+/// Is this assignment the null-sentinel DETACH that `Scopes::convert` emits (loft#1331)?
+///
+/// A detach stops a literal-backing accumulator naming a store the frame does not own.  It
+/// produces no store and asserts nothing about who owned the one being left, so every site
+/// that frees *"the store this binding is displacing"* must decline it: that free is licensed
+/// by the binding having OWNED what it moves off, which a detach does not claim.
+///
+/// ⚠ BOTH halves are load-bearing, and the target is the half that is easy to drop.  A
+/// user-visible `= null` on a NULLABLE collection lowers to the same bare
+/// `OpNullRefSentinel()` call, and that one displaces a store the frame really does own — so
+/// keying on the value alone suppresses a free the language owes, and four nullable keyed
+/// locals leaked in one corpus file.  Only a `__kvb_N` / `__vdb_N` accumulator is ever the
+/// target of a detach, so [`crate::variables::owns_literal_backing_store`] is what separates
+/// the two spellings of one call.
+///
+/// One home, read by BOTH displacement frees — `generation::dispatch`'s `owned_ref_reassign`
+/// and `state::codegen`'s `owned_ref` — because a shape one backend excludes and the other
+/// does not is the divergence @FR-O-NoDiverge forbids.  The native gate already names the
+/// shape it wants in prose (*"a fresh-store-producing rhs"*); a sentinel call is not one, and
+/// this is that sentence made checkable.
+pub fn is_null_sentinel_detach(
+    var: u16,
+    value: &Value,
+    data: &Data,
+    function: &crate::variables::Function,
+) -> bool {
+    crate::variables::owns_literal_backing_store(function.name(var))
+        && matches!(value.unspan(), Value::Call(nr, args)
+            if args.is_empty() && data.def(*nr).name() == "OpNullRefSentinel")
+}
+
 pub fn owned_elements(types: &[Type]) -> Vec<(usize, usize)> {
     let offsets = element_stack_offsets(types);
     let mut result = Vec::new();
