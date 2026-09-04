@@ -34,6 +34,10 @@ repos — is done on their `doc-types-2026-09` branches and lands with their nex
 | `M-libs` | `revalidate_libs_local.sh`: 42 pass, 0 runtime/env, 0 compile-break (`target/m-libs-candidate.log`) |
 | `M-valgrind` | **GREEN** — 1195 runs (1159 interpreter, 36 native), 0 invalid accesses, 0 definitely lost, 0 timed out (`target/vg-2026-09-candidate/`) |
 
+The commits after the measured tree (`e77ef442` → `68948bbf`) touch this record, the checklist,
+one test's failure message, the four wasm skip comments and the `Makefile`'s scratch prune — no
+`src/` — and `make ci` is green on `68948bbf` (4698/4698).
+
 **The valgrind red of the morning was #1357, and it is fixed rather than waved through.**
 Eleven files lost one Rust `String` per call on the interpreter — nine the class #568 had
 closed in July without reaching these shapes, two the text ledger could not see. The sibling
