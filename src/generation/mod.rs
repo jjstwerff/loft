@@ -677,6 +677,11 @@ pub struct Output<'a> {
     /// element.  Cleared after the assignment so argument-context
     /// tuples (which need `&str`) keep the default emit.
     pub tuple_text_to_string: bool,
+    /// The tuple local an `if` arm is about to hand over, when handing it over would MOVE
+    /// it (loft#1354).  Read by the `ValueType::Var` arm, which clones exactly this
+    /// variable and nothing else — a blanket clone on every tuple read would copy a
+    /// `String` at each use, and most of them are the last one.
+    pub(crate) clone_handed_tuple_local: Option<u16>,
     /// loft#1069 — the DECLARED element types of the tuple currently being emitted, when
     /// the destination named them.  Set beside [`Self::tuple_text_to_string`] by the same
     /// destination-aware paths, and for the same reason: a tuple ELEMENT cannot say what
@@ -1442,6 +1447,7 @@ impl<'a> Output<'a> {
             fn_ref_context: false,
             i32_literal_context: false,
             tuple_text_to_string: false,
+            clone_handed_tuple_local: None,
             tuple_slot_types: Vec::new(),
             call_stack_prefix: None,
             wasm_browser: false,
