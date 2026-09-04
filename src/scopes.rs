@@ -2263,6 +2263,68 @@ fn mentions_var(node: &Value, v: u16) -> bool {
     found
 }
 
+/// Whether the first use of a variable in execution order READS it or WRITES it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FirstUse {
+    Read,
+    Write,
+}
+
+/// The first use of `v` in `node`, in execution order.
+///
+/// This is the liveness question [`Scopes::loop_locals_read_after`] asks: a later region that
+/// ASSIGNS `v` before reading it is a fresh binding that happens to share a name, not a reader
+/// of the value the loop produced.  [`mentions_var`] cannot tell those apart — it answers
+/// "does `v` appear here", so an independent binding reads as a use of the loop's value.
+///
+/// Two orderings carry the meaning.  A `Set`'s VALUE is evaluated before its target is
+/// written, so `r = f(r)` reads first.  A `Loop` body may run ZERO times, so a write inside it
+/// never kills the binding — only a read there establishes liveness.
+fn first_use_of(node: &Value, v: u16) -> Option<FirstUse> {
+    match node.unspan() {
+        Value::Set(t, val) => first_use_of(val, v).or_else(|| (*t == v).then_some(FirstUse::Write)),
+        Value::Var(x) if *x == v => Some(FirstUse::Read),
+        Value::Block(bl) => first_use_in_seq(&bl.operators, v),
+        Value::Insert(ops) => first_use_in_seq(ops, v),
+        Value::Loop(b) => match first_use_in_seq(&b.operators, v) {
+            Some(FirstUse::Read) => Some(FirstUse::Read),
+            _ => None,
+        },
+        Value::If(test, t, f) => first_use_of(test, v).or_else(|| {
+            match (first_use_of(t, v), first_use_of(f, v)) {
+                // A read on EITHER path makes the binding live; only a write on BOTH kills it.
+                (Some(FirstUse::Read), _) | (_, Some(FirstUse::Read)) => Some(FirstUse::Read),
+                (Some(FirstUse::Write), Some(FirstUse::Write)) => Some(FirstUse::Write),
+                _ => None,
+            }
+        }),
+        // The IR nodes that name a variable as a bare `u16` rather than through `Value::Var`.
+        // Each one READS the variable it names (a `TuplePut` writes an ELEMENT, so the tuple
+        // itself must already hold a value), and reading them as such is also the safe
+        // direction: it can only keep a hoist that loft#1156 wants, never drop one.
+        Value::TupleGet(x, _) if *x == v => Some(FirstUse::Read),
+        Value::TuplePut(x, _, inner) => {
+            first_use_of(inner, v).or_else(|| (*x == v).then_some(FirstUse::Read))
+        }
+        Value::FnRefDnr(x) if *x == v => Some(FirstUse::Read),
+        Value::FnRef(_, clos_var, _) if *clos_var == v => Some(FirstUse::Read),
+        _ => {
+            let mut found = None;
+            node.for_each_child(&mut |c| {
+                if found.is_none() {
+                    found = first_use_of(c, v);
+                }
+            });
+            found
+        }
+    }
+}
+
+/// The first use of `v` across `ops`, evaluated in order.
+fn first_use_in_seq(ops: &[Value], v: u16) -> Option<FirstUse> {
+    ops.iter().find_map(|op| first_use_of(op, v))
+}
+
 /// Sources whose retarget would move the destination's WRITE across a statement that touches
 /// that destination.
 ///
@@ -7556,7 +7618,11 @@ impl Scopes<'_> {
             {
                 continue;
             }
-            if rest.iter().any(|r| mentions_var(r, v)) {
+            // LIVE after the loop, not merely mentioned: a later region that assigns `v`
+            // before reading it is an independent binding sharing the name, and hoisting
+            // those together gives one function-scope variable whose ownership fact is the
+            // JOIN of both — which frees a borrow as if it were owned (loft#1332).
+            if first_use_in_seq(rest, v) == Some(FirstUse::Read) {
                 out.push(v);
             }
         }

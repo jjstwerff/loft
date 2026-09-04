@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 377 | 353 | **24** |
+| 378 | 354 | **24** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -509,6 +509,14 @@ table in the same change by gaining an `Int` arm beside its two marker arms — 
 the OPAQUE column, because it matched nodes `collect_yielded` had already unspanned. That is
 the shape this audit is worth having for: a site correct only because of what its one caller
 does. It peels for itself now, so the opaque column is where it was.
+
+loft#1332 moved it to 378 · 354 · 24 with `scopes::first_use_of`, the liveness reading that
+decides whether a loop-body local is READ after its loop or merely mentioned there. It
+discriminates eight variants — `Set`, `Var`, `Block`, `Insert`, `Loop`, `If`, `TupleGet` and
+`TuplePut` — and unspans at every level, so it lands on the peeling side and leaves the opaque
+column alone. Its two orderings are the reason it must peel: a `Set`'s value is read before its
+target, and a `Loop` body may run zero times, so a wrapped node that fell to the catch-all arm
+would answer "no use here" for exactly the shapes the question is about.
 
 loft#1200 moved it to 339 · 322 · 17 with `scopes::nullable_locals_that_displace`, the
 pre-scan that decides whether a nullable heap-record local is worth an ownership witness; it
