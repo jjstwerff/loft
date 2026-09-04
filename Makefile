@@ -859,7 +859,7 @@ examples-preflight:  ## Would a PR report anything on worked-example tags? (REPO
 # REPO defaults to this repo; point it at a library checkout to drive that repo's
 # rollout: make examples-progress REPO=../loft-libs-graphics
 REPO ?= .
-.PHONY: test-fast examples-index examples-preflight examples-progress features-review libraries-review bug-review release-checklist release-gate reference-review
+.PHONY: test-fast examples-index examples-preflight examples-progress features-review libraries-review bug-review release-checklist release-gate reference-review clippy-review
 examples-progress:  ## Worked-example rollout REPORT: which packages still owe a verdict (never a gate)
 	@EXAMPLES_REPO_ROOT=$(REPO) bash scripts/check_doc_drift.sh examples-progress
 
