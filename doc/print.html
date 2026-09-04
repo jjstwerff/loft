@@ -1442,7 +1442,7 @@
 <li>Expressions: binary operators with precedence, function calls, field access, if/else, for loops, and blocks</li>
 <li>Type expressions: plain names, generic types like <code>vector&lt;T&gt;</code>, keyed collections (sorted/hash/index), and integer ranges with <code>integer limit(min, max)</code> — in parameter, field, and return position</li>
 </ul>
-<p>Three constructs it does NOT accept yet, all of them ordinary Loft that the language itself compiles: an index expression (<code>v[0]</code>), the null-coalescing operator (<code>a ?? 0</code>), and a formatted string literal (<code>"v={n}"</code>). A snippet containing one answers a non-zero count even though it is valid, so a validator built on this today will reject input it should accept. Tracked as loft#1259.</p>
+<p>Three constructs it does NOT accept yet, all of them ordinary Loft that the language itself compiles: an index expression (<code>v[0]</code>), the null-coalescing operator (<code>a ?? 0</code>), and a formatted string literal (<code>"v={n}"</code>). A snippet containing one answers a non-zero count even though it is valid, so a validator built on this today will reject input it should accept.</p>
 <pre><code><span class="kw">use</span> parser;
 <span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="parsing-a-minimal-function">Parsing a minimal function</h2>
@@ -1812,7 +1812,7 @@ per_site = 5       # suppress messages from the same source line after 5/minute
 <pre><code>[levels]
 # Override the global level for one file, by its name alone:
 "debug_tool.loft" = info
-"src/"            = error   # a path prefix — see loft#1264 before relying on it
+"src/"            = error   # a path prefix, matched against the path as invoked
 </code></pre>
 <h2 id="production-mode">Production mode</h2>
 <p>With <code>production = true</code> in the <code>[log]</code> section of log.conf, or <code>--production</code> on the command line:</p>
@@ -1821,7 +1821,7 @@ per_site = 5       # suppress messages from the same source line after 5/minute
 <li>A failing <code>assert()</code> becomes an error log entry instead of aborting.</li>
 </ul>
 <p>The program keeps running and the problem is captured in the log — useful for long-running services where a single error should not bring everything down. It still exits non-zero at the end, so a supervisor watching the exit status learns that something went wrong.</p>
-<p>⚠ This works on the interpreter only. On the <code>--native</code> backend — which is what you get by default — <code>panic()</code> still aborts and writes nothing to the log (loft#1263). Until that is closed, run a service that relies on production mode with <code>--interpret</code>.</p>
+<p>⚠ This works on the interpreter only. On the <code>--native</code> backend — which is what you get by default — <code>panic()</code> still aborts and writes nothing to the log. Run a service that relies on production mode with <code>--interpret</code>.</p>
 <h2 id="using-format-strings-in-log-messages">Using format strings in log messages</h2>
 <p>Log messages are plain text, but you can embed any expression using the same <code>{...}</code> format syntax as everywhere else in Loft.</p>
 <p>The message is built BEFORE the call decides whether to write it — the argument is an ordinary expression, evaluated like any other. So a message that is discarded still costs what it costs, and that is true whether it was filtered out by the level, suppressed by the rate limit, or dropped because there is no log.conf at all. Keep an expensive call out of a message on a hot path, or guard the whole log line with an <code>if</code>.</p>
@@ -1838,7 +1838,7 @@ per_site = 5       # suppress messages from the same source line after 5/minute
 2026-09-01T08:35:38.971Z ERROR  /home/you/app/app.loft:5  something went wrong
 2026-09-01T08:35:38.971Z FATAL  /home/you/app/app.loft:6  critical failure
 </code></pre>
-<p>Each line contains: a UTC timestamp to the millisecond, the severity level, the source file and line number, then the message. This makes it easy to search the file for errors or trace back to the exact line that produced a message. The file path is the one the program was invoked by, so it is usually absolute (loft#1264). A true assert never logs anything — it is only the false case that logs.</p>
+<p>Each line contains: a UTC timestamp to the millisecond, the severity level, the source file and line number, then the message. This makes it easy to search the file for errors or trace back to the exact line that produced a message. The file path is the one the program was invoked by, so it is usually absolute — a <code>[levels]</code> path prefix has to match that form to apply. A true assert never logs anything — it is only the false case that logs.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="kw">true</span>, <span class="st">"this should never fail"</span>);</code></pre>
 <h2 id="typical-usage-pattern">Typical usage pattern</h2>
 <p>In a real program you would write something like:</p>
@@ -1994,7 +1994,7 @@ elapsed_ms  = elapsed_us / 1000
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">5</span>&lt;&lt;<span class="nm">0</span> == <span class="nm">5</span>, <span class="st">"shift left by 0: identity"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">5</span>&gt;&gt;<span class="nm">0</span> == <span class="nm">5</span>, <span class="st">"shift right by 0: identity"</span>);</code></pre>
 <h2 id="float-null-compares-uniformly-with-every-other-scalar">Float null compares uniformly with every other scalar</h2>
-<p>Floats store null as <code>NaN</code> internally, but null COMPARISON is uniform with every other scalar type (@PLN102 null model): <code>null == null</code> is TRUE, null is not equal to any real value, and null orders as the low extreme. Detect a null float with <code>f == null</code> (or <code>!f</code> / <code>f ?? default</code>) — NOT the old <code>f != f</code> trick, which no longer works now that <code>null == null</code> is true. Both the defended and the undefended division yield null and continue (C80 / E-Uncomp — see tests/scripts/184-i333-div-zero-null-continues.loft); the undefended site additionally reports a warning.</p>
+<p>Floats store null as <code>NaN</code> internally, but null COMPARISON is uniform with every other scalar type: <code>null == null</code> is TRUE, null is not equal to any real value, and null orders as the low extreme. Detect a null float with <code>f == null</code> (or <code>!f</code> / <code>f ?? default</code>) — NOT the old <code>f != f</code> trick, which no longer works now that <code>null == null</code> is true. Both the defended and the undefended division yield null and continue (C80 / E-Uncomp — see tests/scripts/184-i333-div-zero-null-continues.loft); the undefended site additionally reports a warning.</p>
 <pre><code>  bad = <span class="nm">0.0</span> / <span class="nm">0.0</span> ?? <span class="kw">null</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!bad, <span class="st">"a null float is falsy"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad == <span class="kw">null</span>, <span class="st">"detect a null float with `== null`"</span>);
@@ -2296,7 +2296,7 @@ User.parse(json_parse(text))   -&gt;  Addr.zip: expected JNumber, got JString
 <pre><code><span class="kw">fn</span> first_element&lt;<span class="en">T</span>&gt;(gen_v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">T</span>&gt;) -&gt; <span class="en">T</span> {
   gen_v[<span class="nm">0</span>]
 }</code></pre>
-<p>@PLN25 index flip — a computed index <code>gen_v.len() - 1</code> is not provably in-bounds, so the read is nullable; a generic has no <code>?? default</code>, so the honest result type is <code>T?</code>.</p>
+<p>A computed index <code>gen_v.len() - 1</code> is not provably in-bounds, so the read is nullable; a generic has no <code>?? default</code>, so the honest result type is <code>T?</code>.</p>
 <pre><code><span class="kw">fn</span> last_element&lt;<span class="en">T</span>&gt;(gen_v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">T</span>&gt;) -&gt; <span class="en">T</span>? {
   gen_v[gen_v.<span class="bi"><a href="stdlib-text.html">len</a></span>() - <span class="nm">1</span>]
 }
@@ -2386,7 +2386,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 <span class="kw">fn</span> <span class="fn-call">test_user_type_bounds</span>() {
   cheap = <span class="en">Money</span> { cents: <span class="nm">300</span> };
   dear = <span class="en">Money</span> { cents: <span class="nm">700</span> };</code></pre>
-<p>Bind a generic's result before reading through it — loft#1273 retains one record per call when the value is consumed inline.</p>
+<p>Bind a generic's result before reading through it: consuming the value inline retains one record per call.</p>
 <pre><code>  best = <span class="fn-call">gen_max</span>(cheap, dear);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(best.cents == <span class="nm">700</span>, <span class="st">"Ordered on a user type: {best.cents}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cheap &lt; dear, <span class="st">"…and the bare operator, from the same definition"</span>);
@@ -2531,7 +2531,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(evens[<span class="nm">0</span>] == <span class="nm">2</span>, <span class="st">"evens[0]: {evens[0]}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(evens[<span class="nm">1</span>] == <span class="nm">4</span>, <span class="st">"evens[1]: {evens[1]}"</span>);</code></pre>
 <h2 id="what-a-closure-cannot-capture">What a closure cannot capture</h2>
-<p>A <code>&amp;</code> parameter cannot be captured at all, in any shape — copy it into a local, capture the local, and write the local back before returning (loft#1276).</p>
+<p>A <code>&amp;</code> parameter cannot be captured at all, in any shape — copy it into a local, capture the local, and write the local back before returning.</p>
 <p>A capturing closure cannot be stored in a COLLECTION either: <code>vector&lt;fn(…)&gt;</code> and the keyed collections take non-capturing lambdas only.  A struct FIELD holds one without trouble, which is the shape to reach for.</p>
 <pre><code>  step = <span class="nm">7</span>;
   stepper = <span class="en">Stepper</span> { advance: <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { x + step } };
@@ -2662,7 +2662,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
     yf_total += n;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(yf_total == <span class="nm">33</span>, <span class="st">"yield from: 1+10+20+2={yf_total}"</span>);</code></pre>
-<p>⚠ <code>yield from</code> works today only for a sub-generator that takes NO arguments; with an argument it will not compile on --native, though the interpreter runs it (loft#1277).  Until that closes, forward such a generator with a plain loop — <code>for v in sub(arg) { yield v; }</code>, which means the same thing and works on both backends.</p>
+<p>⚠ <code>yield from</code> works today only for a sub-generator that takes NO arguments; with an argument it will not compile on --native, though the interpreter runs it.  Forward such a generator with a plain loop — <code>for v in sub(arg) { yield v; }</code>, which means the same thing and works on both backends.</p>
 <pre><code>  fwd_total = <span class="nm">0</span>;
   <span class="kw">for</span> n <span class="kw">in</span> <span class="fn-call">forwards_with_argument</span>() {
     fwd_total += n;
@@ -2763,7 +2763,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
   inner = <span class="fn-call">doubled_first</span>(p);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(inner == <span class="nm">40</span>, <span class="st">"the function saw its own doubled copy: {inner}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(p.<span class="nm">0</span> == <span class="nm">10</span>, <span class="st">"and the caller's tuple is untouched: {p.0}"</span>);</code></pre>
-<p>⚠ Writing to a TEXT element of a value parameter — <code>p.1 = "…"</code> where the parameter is <code>(integer, text)</code> — will not compile on --native today, though the interpreter runs it (loft#1278).  Until that closes, copy the parameter into a local first and write there: <code>q = p; q.1 = "…";</code>.</p>
+<p>⚠ Writing to a TEXT element of a value parameter — <code>p.1 = "…"</code> where the parameter is <code>(integer, text)</code> — will not compile on --native today, though the interpreter runs it.  Copy the parameter into a local first and write there: <code>q = p; q.1 = "…";</code>.</p>
 <h2 id="tuples-as-reference-parameters-swap-in-place">Tuples as reference parameters (swap in place)</h2>
 <p>A <code>&amp;</code> tuple holds scalar elements only.  <code>&amp;(text, …)</code> is refused when you compile, naming the element type — text lives on the heap, and a reference tuple has nowhere to put it.</p>
 <pre><code>  pair = (<span class="nm">3</span>, <span class="nm">7</span>);
@@ -3967,23 +3967,23 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 <div class="item">
 <pre><code>pub interface Numeric</code></pre>
 <p>Types that support `*` and `-` (unary negation). Separate from `Addable` so a generic can ask for the fewest operators it needs. Satisfied by integer, single, float, and user types defining OpMul and OpMin.</p>
-<p>Binary subtraction is `Subtractable` below and deliberately NOT here.  Both arities of `-` CAN now be declared by one interface — that is what loft#1275 fixed, and `Subtractable` beside `Numeric` is only a choice about the shipped surface — but adding a requirement to `Numeric` would take satisfaction away from every user type that provides `OpMul` and unary `OpMin` today, which is exactly what COMPATIBILITY.md forbids.</p>
+<p>Binary subtraction is `Subtractable` below and deliberately NOT here.  One interface CAN declare both arities of `-`, so keeping them apart is a choice about the shipped surface rather than a limitation: adding a requirement to `Numeric` would take satisfaction away from every user type that provides `OpMul` and unary `OpMin` today, which is what COMPATIBILITY.md forbids.</p>
 </div>
 <div class="item">
 <pre><code>pub interface Subtractable</code></pre>
 <p>Types that support binary `-` (subtraction), returning the same type. Satisfied by integer, single, float, and user types defining a two-operand OpMin.</p>
-<p>A bound of its own rather than a third requirement on `Numeric`: a bound set may declare one name at two arities since loft#1275 (`-` desugars to `OpMin` either way, and the stub key carries the arity), so `&lt;T: Numeric + Subtractable&gt;` gets negation and subtraction together from two interfaces that each name `OpMin`.  Before that it could get only one of them.</p>
+<p>A bound of its own rather than a third requirement on `Numeric`: a bound set may declare one name at two arities (`-` desugars to `OpMin` either way, and the stub key carries the arity), so `&lt;T: Numeric + Subtractable&gt;` gets negation and subtraction together from two interfaces that each name `OpMin`.</p>
 </div>
 <div class="item">
 <pre><code>pub interface Scalable</code></pre>
-<p>Types that support integer scaling via a `scale` method. Uses a method (not `op *`) because a `&lt;T: Numeric + Scalable&gt;` would then need two signatures of one name from ONE bound set, which is still refused (loft#1275). Two SEPARATE generics may each bound their own `T` by an interface declaring the same method differently — a header binds its own type variable. User types satisfy Scalable by defining `fn scale(self: T, factor: integer) -&gt; integer`.</p>
+<p>Types that support integer scaling via a `scale` method. Uses a method (not `op *`) because a `&lt;T: Numeric + Scalable&gt;` would then need two signatures of one name from ONE bound set, which is refused. Two SEPARATE generics may each bound their own `T` by an interface declaring the same method differently — a header binds its own type variable. User types satisfy Scalable by defining `fn scale(self: T, factor: integer) -&gt; integer`.</p>
 </div>
 <div class="item">
 <pre><code>pub interface Printable</code></pre>
 <p>Types that can be converted to text via a `to_text` method. User types satisfy Printable by defining `fn to_text(self: T) -&gt; text`.</p>
 </div>
 <h2 id="stdlib-math">Math</h2>
-<p class="section-desc">Functions for numeric computation. All trigonometric functions work in radians. Both single and float variants exist for every function — choose single for speed, float for precision. Integer operations loft#984 — the declared-RANGE guard, applied to the VALUE at a store into a slot that declares one (`integer limit(lo, hi)`, a narrow width).  A value outside `lo..=hi` takes the slot's DEFAULT — `dflt` is the lowest value in range, or the null sentinel where the slot admits null — and reports it, rather than being wrapped, aliased, or dropped.</p>
+<p class="section-desc">Functions for numeric computation. All trigonometric functions work in radians. Both single and float variants exist for every function — choose single for speed, float for precision. Integer operations The declared-RANGE guard, applied to the VALUE at a store into a slot that declares one (`integer limit(lo, hi)`, a narrow width).  A value outside `lo..=hi` takes the slot's DEFAULT — `dflt` is the lowest value in range, or the null sentinel where the slot admits null — and reports it, rather than being wrapped, aliased, or dropped.</p>
 <p class="section-desc">It guards the VALUE rather than the store, which is what lets one op reach both a FIELD and a VARIABLE: a variable has no store op to carry the range, and that is why a declared range on a local went unenforced entirely.</p>
 <p class="section-desc">A null passes straight through: whether a null may land in this slot is `(N-Store)`'s question, answered at compile time, and substituting `lo` for it here would quietly invent a value the program never computed.</p>
 <p class="section-desc">Emitted only where the value is NOT provably in range, so ordinary in-range code pays nothing (`parser::expressions::range_guard`). @FR-E-Uncomp-NN — the collapse: a value that does not fit the target's declared range takes the type's DEFAULT, and the sentinel is a value that does not fit either.</p>
@@ -4153,7 +4153,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 <h2 id="stdlib-min-max-clamp">min / max / clamp</h2>
 <div class="item">
 <pre><code>pub fn min(both: integer, b: integer) -&gt; integer</code></pre>
-<p>@PLN25 F1b(b): each has a NON-NULL overload (`-&gt; τ`) and a `τ?` overload (`-&gt; τ?`). The call dispatch picks the `τ?` overload whenever ANY argument is STATICALLY nullable, so an explicit `integer?`/`single?`/`float?` argument — INCLUDING a division result (`1 / z`, now typed `τ?` under DN3) — gets a correctly-typed nullable RESULT and routes to the `τ?` body. The non-null bodies are therefore CLEAN (no `return null` guard): they only ever receive truly-non-null args, so they no longer rely on the STD_SOURCE (N-Store) exemption, which is now retired. The `τ?` overloads carry the propagation: null if either argument is null. Smallest of two integer values.</p>
+<p>Each of these has two overloads: one over non-null values (`-&gt; τ`) and one over nullable ones (`-&gt; τ?`).  You get the nullable overload whenever ANY argument is statically nullable — an `integer?`/`single?`/`float?`, or a division result such as `1 / z` — and it propagates: the answer is null if either argument is null.  Otherwise you get the non-null overload and a non-null answer, so a plain `min(a, b)` needs no discharge. Smallest of two integer values.</p>
 </div>
 <div class="item">
 <pre><code>pub fn max(both: integer, b: integer) -&gt; integer</code></pre>
@@ -4189,7 +4189,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </div>
 <div class="item">
 <pre><code>pub fn approx(both: float, b: float, eps: float) -&gt; boolean</code></pre>
-<p>Approximate equality: true when a and b differ by at most eps (inclusive). `==` on float/single is EXACT IEEE equality (@PLN102) — use `approx` when you want a tolerance, e.g. comparing computed transcendentals: `approx(sqrt(2.0) * sqrt(2.0), 2.0, 1e-9)`. A null (NaN) operand is not approximately equal to anything, so the result is false.</p>
+<p>Approximate equality: true when a and b differ by at most eps (inclusive). `==` on float/single is EXACT IEEE equality — use `approx` when you want a tolerance, e.g. comparing computed transcendentals: `approx(sqrt(2.0) * sqrt(2.0), 2.0, 1e-9)`. A null (NaN) operand is not approximately equal to anything, so the result is false.</p>
 </div>
 <div class="item">
 <pre><code>pub fn approx(both: single, b: single, eps: single) -&gt; boolean</code></pre>
@@ -4199,11 +4199,11 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 <p class="section-desc">Functions for working with text (UTF-8 strings) and character values.</p>
 <div class="item">
 <pre><code>pub fn len(both: text) -&gt; integer</code></pre>
-<p>Number of characters (Unicode code points) in the text (@PLN110) — the human count, as in every mainstream language. For a byte length (bounds checks, the limit of byte-positioned indexing / slicing) use `size`.</p>
+<p>Number of characters (Unicode code points) in the text — the human count, as in every mainstream language. For a byte length (bounds checks, the limit of byte-positioned indexing / slicing) use `size`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn size(both: text) -&gt; integer</code></pre>
-<p>Number of bytes in the text (@PLN110). This is the bound for byte-positioned operations: `s[i]`, slices `s[a..b]`, and `find`/`rfind` all use byte offsets. For the human character count use `len`.</p>
+<p>Number of bytes in the text. This is the bound for byte-positioned operations: `s[i]`, slices `s[a..b]`, and `find`/`rfind` all use byte offsets. For the human character count use `len`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn len(both: character) -&gt; integer</code></pre>
@@ -4244,11 +4244,11 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </div>
 <div class="item">
 <pre><code>pub fn find(self: text, value: text) -&gt; integer?</code></pre>
-<p>Returns the byte index of the first occurrence of value, or null if not found. Use to locate substrings before slicing.  Nullable: null when value is absent (@PLN102 keystone step 4 — the type is honest about the not-found case).</p>
+<p>Returns the byte index of the first occurrence of value, or null if not found. Use to locate substrings before slicing.  Nullable: null when value is absent (the type is honest about the not-found case).</p>
 </div>
 <div class="item">
 <pre><code>pub fn rfind(self: text, value: text) -&gt; integer?</code></pre>
-<p>Returns the byte index of the last occurrence of value, or null if not found. Use to find file extensions or the last path separator.  Nullable: null when value is absent (@PLN102 keystone step 4 — the type is honest about not-found).</p>
+<p>Returns the byte index of the last occurrence of value, or null if not found. Use to find file extensions or the last path separator.  Nullable: null when value is absent (the type is honest about not-found).</p>
 </div>
 <div class="item">
 <pre><code>pub fn contains(self: text, value: text) -&gt; boolean</code></pre>
@@ -4328,7 +4328,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </div>
 <div class="item">
 <pre><code>pub fn byte_at(self: text, i: integer) -&gt; integer</code></pre>
-<p>These two are TEXT functions that happen to sit after the Environment marker. Re-opening the section files them under Text in the generated reference, which is where a reader looks for them — `text_from_bytes` existed for two releases and was reported as missing (loft#748) because `doc/stdlib-text.html` did not list it.  Declaring the section rather than MOVING the definitions is deliberate: definition order is the order types are minted, and the native `init()` replays that order, so relocating `vector&lt;u8&gt;`'s first mention shifts every type id after it (loft#739 / #742).  A comment cannot. Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text[i]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  ~5-10× faster than `text[i]` for pure-ASCII checks.</p>
+<p>Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text[i]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  ~5-10× faster than `text[i]` for pure-ASCII checks.</p>
 </div>
 <div class="item">
 <pre><code>pub fn text_from_bytes(bytes: vector&lt;u8&gt;) -&gt; text</code></pre>
@@ -4358,7 +4358,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </div>
 <div class="item">
 <pre><code>pub fn size(both: hash) -&gt; integer</code></pre>
-<p>The byte footprint of a hash (@PLN110): its full bucket table, holes included.  The table is the hash's own allocation — `elms` slots, each a 4-byte record-id (an empty slot is a hole and still counts, because open addressing's spare capacity IS the format).  Allocation-local: the entry records live in separate allocations and are not counted.  Grows in steps as the table rehashes (load factor 0.75).  0 for an empty (unallocated) hash.</p>
+<p>The byte footprint of a hash: its full bucket table, holes included.  The table is the hash's own allocation — `elms` slots, each a 4-byte record-id (an empty slot is a hole and still counts, because open addressing's spare capacity IS the format).  Allocation-local: the entry records live in separate allocations and are not counted.  Grows in steps as the table rehashes (load factor 0.75).  0 for an empty (unallocated) hash.</p>
 </div>
 <h2 id="stdlib-output-and-diagnostics">Output and Diagnostics</h2>
 <div class="item">
@@ -4412,20 +4412,19 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 <h2 id="stdlib-vector-aggregates">Vector aggregates</h2>
 <div class="item">
 <pre><code>pub fn min_of &lt; T: Ordered &gt; (v: vector&lt;T&gt;) -&gt; T?</code></pre>
-<p>Smallest element in a vector, or null when the vector is empty (@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op &lt;).</p>
+<p>Smallest element in a vector, or null when the vector is empty (the type is honest about the empty case).  Works on any Ordered type (op &lt;).</p>
 </div>
 <div class="item">
 <pre><code>pub fn max_of &lt; T: Ordered &gt; (v: vector&lt;T&gt;) -&gt; T?</code></pre>
-<p>Largest element in a vector, or null when the vector is empty (@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op &lt;).</p>
+<p>Largest element in a vector, or null when the vector is empty (the type is honest about the empty case).  Works on any Ordered type (op &lt;).</p>
 </div>
 <div class="item">
 <pre><code>pub fn sum &lt; T: Addable &gt; (v: vector&lt;T&gt;, init: T? = null) -&gt; T</code></pre>
 <p>Sum of vector elements.  Works on any Addable type.  `init` is the identity to start from; leave it out and the element type's own zero is used (0, 0.0, &quot;&quot;). Example: sum([10, 20, 12], 0) == 42 Example: sum([10, 20, 12]) == 42</p>
-<p>@PLN102 arc C — `init` gained its default so `sum_of(v)` can be REWRITTEN to `sum(v)`: `superseded-call` offers that rename and `loft fix` verifies every edit by compiling the result, so while `init` was required the only `#superseded` symbol loft ships had its fix rejected on every program (loft#1003).  A literal default is not spellable here (`init: T = 0` is &quot;expected T, got integer&quot;), so it is the nullable-with-discharge form, which needs loft#1016's per-monomorph `construct_default(T)`.  Additive: every existing `sum(v, init)` call is unchanged.</p>
 </div>
 <div class="item">
 <pre><code>pub fn sum_of(v: vector&lt;integer&gt;) -&gt; integer</code></pre>
-<p>Sum of all integer elements. Returns 0 for an empty vector. @PLN102 arc C — superseded by the general `sum(v, init)`; kept as a shim over it (the old form keeps working). `sum_of(v)` == `sum(v, 0)`. Defined AFTER `sum` so the shim's call resolves — a forward reference to a generic is not yet supported.</p>
+<p>Sum of all integer elements. Returns 0 for an empty vector. Superseded by the general `sum(v, init)`; kept as a shim over it (the old form keeps working). `sum_of(v)` == `sum(v, 0)`. Defined AFTER `sum` so the shim's call resolves — a forward reference to a generic is not yet supported.</p>
 </div>
 <div class="item">
 <pre><code>pub interface Walkable</code></pre>
@@ -4442,7 +4441,6 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 <p>Assert that two values are equal, naming BOTH of them when they are not.</p>
 <p>`assert(got == want, &quot;…&quot;)` puts the expected value in the CONDITION, so a failure says what was got and leaves the reader to recover what was wanted by reading the expression. This says both.  Works on any type that is `Equatable` (op ==) and `Printable` (to_text) — every built-in scalar, and a user type defining both.</p>
 <p>Failure behaves exactly as `assert` does, because it IS `assert`: the run aborts (and in `--production` logs an error instead), and the reported position is the CALLER's, not this function's.  The file and line are injected by the compiler; do not pass them manually.</p>
-<p>The type variable is spelled `AssertValue` and NOT `T` on purpose.  A type variable's bound stubs are keyed by its NAME (`t_1T_to_text`), so every generic in the program spelling its variable `T` shares one namespace with a user `struct T` — and a bound declaring a method as common as `to_text` or `op ==` then blocks that struct from defining its own.  Measured: with these bounds on `T`, every user struct named `T` formatted as EMPTY and could not declare `to_text` at all.  loft#1153 tracks the collision itself; until it closes, a stdlib generic bound to a common method needs a name no one would write.</p>
 </div>
 <div class="item">
 <pre><code>pub fn assert_ne &lt; AssertValue: Equatable + Printable &gt; (got: AssertValue, want: AssertValue, what: text, file: text, line: integer)</code></pre>
@@ -4468,7 +4466,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
   // Was the field DECLARED nullable (`text?` rather than `text`)?
   //
   // The payload variants above are typed non-null, and `τ?` shares `τ`'s
-  // runtime layout (@PLN25) — a nullable field spells absence with a SENTINEL
+  // runtime layout — a nullable field spells absence with a SENTINEL
   // rather than a wrapper. So a null field's value arrives inside `FvText` /
   // `FvInt` / … as that sentinel, and this flag is what says so; without it a
   // reader would have to discover the possibility by being surprised.
@@ -4504,7 +4502,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 <p>Returns the text unchanged — the identity case, so `text` satisfies `Printable` too.</p>
 </div>
 <h2 id="stdlib-file-system">File System</h2>
-<p class="section-desc">Types and functions for reading and writing files. A File value is obtained via file() and carries the path, format, and an internal reference. An environment variable as a name/value pair. Capability groups (@PLN86) — the fs/env split a sandbox profile grants via `fs#read` / `fs#update` / `env#read`; the functions below link in their signature.</p>
+<p class="section-desc">Types and functions for reading and writing files. A File value is obtained via file() and carries the path, format, and an internal reference. An environment variable as a name/value pair. Capability groups — the fs/env split a sandbox profile grants via `fs#read` / `fs#update` / `env#read`; the functions below link in their signature.</p>
 <div class="item">
 <pre><code>pub struct EnvVariable {
   name: text,
@@ -4543,10 +4541,9 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 
   size: integer,
 
-  // @PLN116 — a bare enum field needs an explicit default (an enum's 0 is null, and a
-  // non-null field may not hold null).  A fresh File is `NotExists` until `OpGetFile`
-  // determines the real format for a valid path (see `file()`), so `NotExists` is the
-  // honest placeholder — it is overwritten before any read.
+  // A fresh File reads as `NotExists` until `file()` has determined the real format for
+  // the path, so this default is a placeholder rather than a claim about the path — it is
+  // overwritten before any read.
   format: Format = NotExists,
 
   ref: i32?,
@@ -4571,7 +4568,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </div>
 <div class="item">
 <pre><code>pub fn file(path: text) -&gt; File fs#read</code></pre>
-<p>Plan-06 phase 5a: #impure(host_io) — reads a host-detected constant.  Could be #pure once detected (it's invariant for the lifetime of a process), but the runtime caches it inside Stores so the access is observable. Use as the entry point for all file I/O. A relative path resolves against the program's own directory (#255 / @PLN9), so `../data.txt` names the file above the script — the same file an absolute path would name, and it answers the same either way (loft#712).</p>
+<p>Plan-06 phase 5a: #impure(host_io) — reads a host-detected constant.  Could be #pure once detected (it's invariant for the lifetime of a process), but the runtime caches it inside Stores so the access is observable. Use as the entry point for all file I/O. A relative path resolves against the program's own directory, so `../data.txt` names the file above the script — the same file an absolute path would name, and it answers the same either way.</p>
 </div>
 <div class="item">
 <pre><code>pub fn exists(path: text) -&gt; boolean fs#read</code></pre>
@@ -4579,7 +4576,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </div>
 <div class="item">
 <pre><code>pub fn exists(both: File) -&gt; boolean fs#read</code></pre>
-<p>Filesystem stat (via file()); par-safe. Method form: f = file(&quot;path&quot;); if f.exists() { ... } Also callable as exists(file_obj) via the 'both' parameter name.</p>
+<p>Filesystem stat (via file()); par-safe. Method form: f = file(&quot;path&quot;); if f.exists() { .. } Also callable as exists(file_obj) via the 'both' parameter name.</p>
 </div>
 <div class="item">
 <pre><code>pub fn delete(path: text) -&gt; FileResult fs#update</code></pre>
@@ -4591,11 +4588,11 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </div>
 <div class="item">
 <pre><code>pub fn mkdir(path: text) -&gt; FileResult fs#update</code></pre>
-<p>Create a single directory level; the parent must already exist. FileResult.Other when the directory is already there.  There is no counterpart that REMOVES a directory (loft#1256).</p>
+<p>Create a single directory level; the parent must already exist. FileResult.Other when the directory is already there.  There is no counterpart that REMOVES a directory.</p>
 </div>
 <div class="item">
 <pre><code>pub fn mkdir_all(path: text) -&gt; FileResult fs#update</code></pre>
-<p>Create a directory and all missing parents (like Unix mkdir -p). Idempotent: a directory that already exists is FileResult.Ok, which is what makes it safe on the way into a run.  There is no counterpart that REMOVES a directory (loft#1256).</p>
+<p>Create a directory and all missing parents (like Unix mkdir -p). Idempotent: a directory that already exists is FileResult.Ok, which is what makes it safe on the way into a run.  There is no counterpart that REMOVES a directory.</p>
 </div>
 <div class="item">
 <pre><code>pub fn rmdir(path: text) -&gt; FileResult fs#update</code></pre>
@@ -4611,11 +4608,11 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </div>
 <div class="item">
 <pre><code>pub fn list_dir(path: text) -&gt; vector&lt;text&gt; ?fs#read</code></pre>
-<p>Lists the entry NAMES of directory `path` (base names, not full paths), sorted.  @PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct from an EMPTY directory, `[]`); discharge with `?? []` to keep the old shape. Use to enumerate a directory; join with `path` to build full child paths.</p>
+<p>Lists the entry NAMES of directory `path` (base names, not full paths), sorted.  A MISSING / non-directory path lists as NULL (distinct from an EMPTY directory, `[]`); discharge with `?? []` to keep the old shape. Use to enumerate a directory; join with `path` to build full child paths.</p>
 </div>
 <div class="item">
 <pre><code>pub fn read_bytes(path: text) -&gt; vector&lt;u8&gt; ?fs#read</code></pre>
-<p>Reads the whole file `path` as raw bytes.  @PLN102 H4 — a MISSING / unreadable file reads as NULL (distinct from an EMPTY file, `[]`); discharge with `?? []` to keep the old shape.  Binary-exact (round-trips with write_bytes); use for non-UTF-8 data — for text prefer `file(path).content()`.</p>
+<p>Reads the whole file `path` as raw bytes.  A MISSING / unreadable file reads as NULL (distinct from an EMPTY file, `[]`); discharge with `?? []` to keep the old shape.  Binary-exact (round-trips with write_bytes); use for non-UTF-8 data — for text prefer `file(path).content()`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn write_bytes(path: text, bytes: vector&lt;u8&gt;) -&gt; boolean fs#update</code></pre>
@@ -4628,12 +4625,12 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 <div class="item">
 <pre><code>pub fn store_durable_check(path: text) -&gt; boolean fs#read</code></pre>
 <p>Durable-store integrity check.  Returns true iff the `.dmeta` sidecar at `&lt;path&gt;.dmeta` validates against the main file at `&lt;path&gt;` (signature, header CRC, payload length, payload CRC, tier_id all OK).  Returns false on any failure or missing file.  Pair with `store_durable_seal` after a clean write session to record the new state.</p>
-<p>Desktop-only: the sidecar is built over memory-mapped files, so on the wasm targets this answers false — &quot;nothing validates&quot;, which is the state that sends a caller down its rebuild branch (loft#1063).</p>
+<p>Desktop-only: the sidecar is built over memory-mapped files, so on the wasm targets this answers false — &quot;nothing validates&quot;, which is the state that sends a caller down its rebuild branch.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_durable_seal(path: text) -&gt; boolean fs#update</code></pre>
 <p>Write a fresh `.dmeta` sidecar capturing the current main-file's byte length + CRC32 + a clean-close timestamp. Returns true on success, false on any I/O error.  Call this after finishing a write session; if the program crashes between the last write and the seal, the sidecar stays stale and the next `store_durable_check` returns false → caller rebuilds.</p>
-<p>Desktop-only, like `store_durable_check`: on the wasm targets this answers false — the seal did not happen — so seal where the store is written and read it back with `store_load` (loft#1063).</p>
+<p>Desktop-only, like `store_durable_check`: on the wasm targets this answers false — the seal did not happen — so seal where the store is written and read it back with `store_load`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_persist_bind(r: reference, path: text) -&gt; boolean fs#update</code></pre>
@@ -4643,7 +4640,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 <p>Call on a path that DOES exist: opens the file via mmap; the caller's prior in-memory contents at that slot are dropped in favour of the on-disk image.  This is the load-on-startup path, assumes the on-disk layout matches the declared type.</p>
 <p>Both modes return `true` on success, `false` on any I/O / format error (no panic — the binding is fail-soft, callers fall back to JSON or rebuild-from-source).</p>
 <p>Typical dryopea-style pattern: pw = PaintedWorld { painted: [] }   // painted's declared type is hash&lt;PaintedHex[q, r]&gt; store_persist_bind(pw.painted, &quot;dryopea_world.store&quot;) // …mutations to pw.painted now hit mmap'd bytes… `r` is any store-rooted collection — `hash`, `sorted`, `index`, `spatial`. A bare `reference` parameter accepts them all.</p>
-<p>It snapshots the whole STORE `r` lives in, which is not always a store of just `r` (loft#757).  A keyed LOCAL owns its store, so binding it writes a file for that collection.  A keyed FIELD shares its container's store, so binding `pw.painted` above writes a file for `PaintedWorld` — carrying the container and every sibling collection — and that file will NOT load back into a bare `hash&lt;PaintedHex[q, r]&gt;`.  Both are usable; they are just different files.  Bind through the container consistently, or bind a local of the collection's own type when another program has to read the file. The compiler advises at the call when the argument is a field.  `hash` carries its bucket seed in its own record and the comparison-based kinds hold no per-process state, so every persisted image is portable across processes.</p>
+<p>It snapshots the whole STORE `r` lives in, which is not always a store of just `r`.  A keyed LOCAL owns its store, so binding it writes a file for that collection.  A keyed FIELD shares its container's store, so binding `pw.painted` above writes a file for `PaintedWorld` — carrying the container and every sibling collection — and that file will NOT load back into a bare `hash&lt;PaintedHex[q, r]&gt;`.  Both are usable; they are just different files.  Bind through the container consistently, or bind a local of the collection's own type when another program has to read the file. The compiler advises at the call when the argument is a field.  `hash` carries its bucket seed in its own record and the comparison-based kinds hold no per-process state, so every persisted image is portable across processes.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_persist_copy(r: reference, path: text) -&gt; boolean fs#update</code></pre>
@@ -4654,19 +4651,19 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </div>
 <div class="item">
 <pre><code>pub fn store_load(r: reference, path: text) -&gt; boolean fs#read</code></pre>
-<p>Load a persisted store IMAGE fully into memory, populating the empty store-rooted collection `r` so it can be queried like any in-memory collection.  The portable, read-only counterpart of `store_persist_bind`: it HEAP-COPIES the file (no mmap), so it works on EVERY backend — including wasm, which has no mmap — but is NOT durable (writes stay in memory and never reach the file).  Use it to open a snapshot for querying where `store_persist_bind` can't run (a browser / wasm target) or where a durable live binding isn't wanted.  Returns `false` on a missing / truncated / wrong-format file (no panic; assumes the on-disk layout matches `r`'s declared type).  @PLN97 arc G Phase 1 — the whole-file load the browser working-set path builds on (loft#522). h: hash&lt;Rec[id]&gt; = [] store_load(h, &quot;world.store&quot;)   // h now holds the file's records</p>
+<p>Load a persisted store IMAGE fully into memory, populating the empty store-rooted collection `r` so it can be queried like any in-memory collection.  The portable, read-only counterpart of `store_persist_bind`: it HEAP-COPIES the file (no mmap), so it works on EVERY backend — including wasm, which has no mmap — but is NOT durable (writes stay in memory and never reach the file).  Use it to open a snapshot for querying where `store_persist_bind` can't run (a browser / wasm target) or where a durable live binding isn't wanted.  Returns `false` on a missing / truncated / wrong-format file (no panic; assumes the on-disk layout matches `r`'s declared type).  This is the whole-file load that the browser's working-set path builds on. h: hash&lt;Rec[id]&gt; = [] store_load(h, &quot;world.store&quot;)   // h now holds the file's records</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_load_url(r: reference, url: text, sha256: text) -&gt; boolean fs#read</code></pre>
-<p>Load a persisted store IMAGE over HTTP(S) from a TRUSTED source, establishing authenticity BEFORE the bytes are adopted: fetch the whole image at `url`, verify its SHA-256 against the caller-pinned `sha256` (lowercase hex), and only on a match heap-load it into `r` — the bytes never touch disk. A fetch error or a hash mismatch REFUSES the load (returns false, loads nothing). The fetch→verify→trust discipline the registry install uses, bridged onto the store loader; `url` may be `http(s)://` or `file://`. Whole-file counterpart of the paged `store_load_key(s)`/`store_load_range` loaders. @PLN97 arc G Phase 0. h: hash&lt;Rec[id]&gt; = [] store_load_url(h, &quot;https://cdn.example/world.store&quot;, &quot;&lt;sha256-hex&gt;&quot;)</p>
+<p>Load a persisted store IMAGE over HTTP(S) from a TRUSTED source, establishing authenticity BEFORE the bytes are adopted: fetch the whole image at `url`, verify its SHA-256 against the caller-pinned `sha256` (lowercase hex), and only on a match heap-load it into `r` — the bytes never touch disk. A fetch error or a hash mismatch REFUSES the load (returns false, loads nothing). The fetch→verify→trust discipline the registry install uses, bridged onto the store loader; `url` may be `http(s)://` or `file://`. Whole-file counterpart of the paged `store_load_key(s)`/`store_load_range` loaders. h: hash&lt;Rec[id]&gt; = [] store_load_url(h, &quot;https://cdn.example/world.store&quot;, &quot;&lt;sha256-hex&gt;&quot;)</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_load_url_trusted(r: reference, url: text) -&gt; boolean fs#read</code></pre>
-<p>Load a whole store IMAGE over HTTP(S)/file:// from a TRUSTED source into `r` — the INSTANT counterpart of store_load_url: skips the SHA-256 pin (you trust the origin) for a fast read, but is still structurally validated, so a corrupt or malformed image is rejected (false), never adopted. Use store_load_url for an untrusted source. @PLN97 arc G Phase 0. world: hash&lt;Rec[id]&gt; = [] store_load_url_trusted(world, &quot;https://cdn.internal/world.store&quot;)</p>
+<p>Load a whole store IMAGE over HTTP(S)/file:// from a TRUSTED source into `r` — the INSTANT counterpart of store_load_url: skips the SHA-256 pin (you trust the origin) for a fast read, but is still structurally validated, so a corrupt or malformed image is rejected (false), never adopted. Use store_load_url for an untrusted source. world: hash&lt;Rec[id]&gt; = [] store_load_url_trusted(world, &quot;https://cdn.internal/world.store&quot;)</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_load_untrusted(r: reference, path: text) -&gt; boolean fs#read</code></pre>
-<p>Load a store IMAGE from a local file that may be UNTRUSTED into `r` — the structurally-validated counterpart of store_load. Reads the file and validates its block structure BEFORE adoption, so a crafted or corrupt file cannot hang (0-size block) or drive a heap over-read; it is rejected (false). store_load is faster (validates only in debug) for a file you produced yourself; use this for a file whose provenance you don't control. @PLN97 arc G Phase 2. h: hash&lt;Rec[id]&gt; = [] if !store_load_untrusted(h, &quot;downloaded.store&quot;) { /* rejected — malformed */ }</p>
+<p>Load a store IMAGE from a local file that may be UNTRUSTED into `r` — the structurally-validated counterpart of store_load. Reads the file and validates its block structure BEFORE adoption, so a crafted or corrupt file cannot hang (0-size block) or drive a heap over-read; it is rejected (false). store_load is faster (validates only in debug) for a file you produced yourself; use this for a file whose provenance you don't control. h: hash&lt;Rec[id]&gt; = [] if !store_load_untrusted(h, &quot;downloaded.store&quot;) { /* rejected — malformed */ }</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_verify(r: reference) -&gt; boolean</code></pre>
@@ -4677,7 +4674,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 <p>Give back the free space at the END of a store-rooted collection's store, and return the BYTES handed back (0 when there was nothing to give). For a store bound with `store_persist_bind` that is the FILE shrinking; otherwise it is memory returned to the allocator. Records are never moved, so every reference into the collection stays valid.</p>
 <p>You say when, because only the program knows whether a drop is permanent: a collection that shrinks and grows again would just pay to re-grow. Read `store_memory()` first, and read it as a RANKING rather than a quantity: its `tail%` says which store is worth reclaiming, and it is NOT the size of the return. A reclaimed store lands at `tail 11%` — a growth reserve the allocator keeps — so what comes back is `tail% - 11%` of the resulting capacity, never the whole tail. Measured across eight shapes with tails from 13% to 60%: at a 13% tail the report suggests ~36 KB and the call hands back 5832 bytes. Treat a reading near 11% as nothing to get back, not a little. Its `inner%` is the space BETWEEN records, which this does not touch — though the number RISES after a reclaim, because the capacity it is a percentage of has shrunk.</p>
 <p>WHERE the drop was matters as much as how big it was. `mergeable` counts adjacent free neighbours that never coalesced, so it measures how CONTIGUOUS the drop was, and that is exactly the part this call can fix: the same 2000 records dropped contiguously merge 2004 free blocks down to 7 and hand back 25400 bytes, while dropped alternately they leave 1997 blocks standing forever — the live records between them are what keeps them apart — and hand back 16312.</p>
-<p>You do NOT need this to right-size a file at the END of a run. A bound store keeps its file AS the live arena, and the arena's capacity grows by 7/3 and never shrinks by itself — so mid-run the file is a rung on a ladder, not a measure of content, and can sit 57% above what it holds. Releasing the collection hands that tail back on its own, so the file a program leaves behind follows its content whether or not this was ever called (loft#752). Call it MID-RUN, when a live set has dropped for good and the memory (or the disk) is wanted back before the end. world: hash&lt;Hex[q, r]&gt; = [] store_persist_bind(world, &quot;world.store&quot;) // …a region is unloaded for good… store_reclaim(world)          // the file follows what the world holds NOW Returns 0, changing nothing, for a store that is read-only, shares another store's memory, or carries a `store_durable_seal` sidecar — truncating behind that sidecar's back would report a healthy store as corrupt.</p>
+<p>You do NOT need this to right-size a file at the END of a run. A bound store keeps its file AS the live arena, and the arena's capacity grows by 7/3 and never shrinks by itself — so mid-run the file is a rung on a ladder, not a measure of content, and can sit 57% above what it holds. Releasing the collection hands that tail back on its own, so the file a program leaves behind follows its content whether or not this was ever called. Call it MID-RUN, when a live set has dropped for good and the memory (or the disk) is wanted back before the end. world: hash&lt;Hex[q, r]&gt; = [] store_persist_bind(world, &quot;world.store&quot;) // …a region is unloaded for good… store_reclaim(world)          // the file follows what the world holds NOW Returns 0, changing nothing, for a store that is read-only, shares another store's memory, or carries a `store_durable_seal` sidecar — truncating behind that sidecar's back would report a healthy store as corrupt.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_release(r: reference) -&gt; integer fs#update</code></pre>
@@ -4691,17 +4688,17 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 <div class="item">
 <pre><code>pub fn store_bind_lazy(local: reference, source: text) -&gt; boolean</code></pre>
 <p>Working-set load: fetch ONE integer-keyed entry from a persisted HASH image into the empty local hash `local`, reading only the pages the lookup touches — not the whole file. The bounded-fetch counterpart of `store_load`, for when `local` should hold only the entries actually asked for (a phone pulling the few map tiles a route needs from a large block). `path` is a local file or an `http(s)://` URL served with `Range`, on every target including the browser (`--html`), where the fetch goes through the same bridge `store_load_url_trusted` uses. Returns false when the key is absent, the file is unreadable, or the collection is not an integer-keyed hash.</p>
-<p>The entry's own fields are RELOCATED into the local store, so `text`, nested structs and flat vectors all come across; only a `vector&lt;text&gt;` or a `vector&lt;vector&gt;` is refused (its element pointers would dangle), and a refusal says so on stderr rather than looking like an absent key. @PLN97 arc G (loft#522). tiles: hash&lt;Tile[id]&gt; = [] store_load_key(tiles, &quot;block.store&quot;, 42)   // tiles now holds entry 42 only @F108 — Lazy store binding (catalogue anchor, @PLN92)</p>
-<p>@PLN129 arc A — bind a COLLECTION to a lazy source. After this, a lookup that MISSES fetches that one entry and inserts it, so the next lookup is an ordinary resident hit; a lookup that hits never leaves the process. The collection is therefore automatically the cached data set — there is no separate cache.</p>
+<p>The entry's own fields are RELOCATED into the local store, so `text`, nested structs and flat vectors all come across; only a `vector&lt;text&gt;` or a `vector&lt;vector&gt;` is refused (its element pointers would dangle), and a refusal says so on stderr rather than looking like an absent key. tiles: hash&lt;Tile[id]&gt; = [] store_load_key(tiles, &quot;block.store&quot;, 42)   // tiles now holds entry 42 only</p>
+<p>Bind a COLLECTION to a lazy source. After this, a lookup that MISSES fetches that one entry and inserts it, so the next lookup is an ordinary resident hit; a lookup that hits never leaves the process. The collection is therefore automatically the cached data set — there is no separate cache.</p>
 <p>Per COLLECTION, not per store: `persons` and `companies` are different sources, and two collections of one type can bind differently. Binding replaces, and may be done before the collection holds anything.</p>
 <p>`source` is either an IMAGE — what `store_load_key` accepts: a local `.store` file or an `http(s)://` URL served with Range — or a DATABASE, named by a driver prefix. Returns false for a null collection. persons: hash&lt;Person[id]&gt; = [] store_bind_lazy(persons, &quot;people.store&quot;) p = persons[42]        // fetches exactly entry 42, then holds it</p>
-<p>@PLN129 arc B — `sqlite:&lt;path&gt;` binds to a table instead, and the query is DERIVED from the collection's own type: the table is the element type's name lowercased, the columns are its fields, and the `WHERE` is the collection's key. Nothing is written down twice. persons: hash&lt;Person[id]&gt; = []              // struct Person { id: integer, name: text } store_bind_lazy(persons, &quot;sqlite:people.db&quot;) p = persons[42]        // SELECT &quot;id&quot;,&quot;name&quot; FROM &quot;person&quot; WHERE &quot;id&quot; = 42</p>
+<p>`sqlite:&lt;path&gt;` binds to a table instead, and the query is DERIVED from the collection's own type: the table is the element type's name lowercased, the columns are its fields, and the `WHERE` is the collection's key. Nothing is written down twice. persons: hash&lt;Person[id]&gt; = []              // struct Person { id: integer, name: text } store_bind_lazy(persons, &quot;sqlite:people.db&quot;) p = persons[42]        // SELECT &quot;id&quot;,&quot;name&quot; FROM &quot;person&quot; WHERE &quot;id&quot; = 42</p>
 <p>Read-only, and the connection enforces it. A binding that cannot be served — a field that is not a column, a collection whose KIND the source cannot read — is REFUSED rather than served wrongly, and says so through `store_lazy_error`. sqlite is opened on the first fault, so a program that binds no database loads nothing.</p>
-<p>FALSE means the binding was not made, and it is worth checking. A `.store` IMAGE is read a page at a time, which only a `hash` or a `trie` supports: a `sorted`, `index` or `spatial` bound to one is refused HERE, at the call that is wrong, rather than answering `null` at every later lookup (loft#802). Those kinds load whole — `store_load` / `store_load_url_trusted` carry all of them. A DATABASE source judges its own schema on the first fault instead, since what it can serve is a fact about the other end. if !store_bind_lazy(tiles, &quot;tiles.store&quot;) { store_load(tiles, &quot;tiles.store&quot;);     // whole-image, every kind }</p>
+<p>FALSE means the binding was not made, and it is worth checking. A `.store` IMAGE is read a page at a time, which only a `hash` or a `trie` supports: a `sorted`, `index` or `spatial` bound to one is refused HERE, at the call that is wrong, rather than answering `null` at every later lookup. Those kinds load whole — `store_load` / `store_load_url_trusted` carry all of them. A DATABASE source judges its own schema on the first fault instead, since what it can serve is a fact about the other end. if !store_bind_lazy(tiles, &quot;tiles.store&quot;) { store_load(tiles, &quot;tiles.store&quot;);     // whole-image, every kind }</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_lazy_query(local: reference, condition: text) -&gt; integer</code></pre>
-<p>@PLN129 arc B2 — run an explicit condition against this collection's bound DATABASE source and pull every matching row into the collection. Answers how many records the collection gained.</p>
+<p>Run an explicit condition against this collection's bound DATABASE source and pull every matching row into the collection. Answers how many records the collection gained.</p>
 <p>The escape hatch for what the collection's KEY cannot express — a predicate on another column, a pattern, a range nobody declared an index for. A keyed lookup derives its own query and needs no call; this one cannot be derived, so it is written down and visible rather than happening behind a lookup.</p>
 <p>found = store_lazy_query(persons, &quot;name LIKE 'Ada%'&quot;); p = persons[42]        // hits what the query already brought in</p>
 <p>The rows land IN the collection, not in a separate result: a person reached by this query and the same person reached by a later lookup are ONE record, and a row already resident is left alone rather than fetched twice. So `len` and iteration keep answering &quot;what have I got&quot; — after this, more.</p>
@@ -4709,65 +4706,65 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </div>
 <div class="item">
 <pre><code>pub fn store_lazy_range(local: reference, lo: integer, hi: integer) -&gt; integer</code></pre>
-<p>@PLN129 arc B step 8 — pull a whole KEY RANGE from this collection's bound DATABASE source in ONE query. Answers how many records the collection gained.</p>
+<p>Pull a whole KEY RANGE from this collection's bound DATABASE source in ONE query. Answers how many records the collection gained.</p>
 <p>This is what keeps lazy reading usable rather than merely correct. Fetching 500 records one lookup at a time is 500 round trips; the same 500 as a range is one. So when you know the span you want, ask for the span:</p>
-<p>store_lazy_range(events, 100, 199);   // one query, up to 100 records for e in events { ... }               // all resident, no further fetching</p>
+<p>store_lazy_range(events, 100, 199);   // one query, up to 100 records for e in events { .. }               // all resident, no further fetching</p>
 <p>The collection must be ORDERED (`sorted` or `index`) — a `hash` has no order to range over — and keyed on ONE column, since two numbers cannot say which value pins a composite key's leading column; use `store_lazy_query` for that. Both bounds are inclusive, in the collection's own key order. A record already resident is left alone. Answers 0 when nothing matched AND when the query could not run; `store_lazy_error` tells those apart.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_lazy_error(local: reference) -&gt; text</code></pre>
-<p>@PLN129 arc C — why a lazy fetch for this collection could not REACH its source, or &quot;&quot; when it is healthy.</p>
+<p>Why a lazy fetch for this collection could not REACH its source, or &quot;&quot; when it is healthy.</p>
 <p>A lookup cannot tell you this. C80 says a value read never raises, so a miss answers `null` whether the key is genuinely absent or the source is unreachable — and those are different facts, one stable and one not. Ask this after a null to tell them apart:</p>
 <p>p = persons[42]; if p == null { why = store_lazy_error(persons); if why == &quot;&quot; { /* really no such person */ } else { /* could not reach: {why} */ } }</p>
 <p>The FIRST failure's reason, kept — not the last: it names the original cause, and later ones are usually the same failure repeating. Nothing clears it but `store_lazy_clear`. An absence does NOT, and neither does a later success: reaching the source now says nothing about what an earlier failure already lost, and answering &quot;healthy&quot; over a traversal that missed data is the silent wrong answer this channel exists to prevent.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_lazy_faults(local: reference) -&gt; integer</code></pre>
-<p>@PLN129 arc C — how many fetches could not REACH this collection's source. 0 is healthy. The magnitude behind `store_lazy_error`: after a traversal it answers &quot;how incomplete am I&quot;.</p>
+<p>How many fetches could not REACH this collection's source. 0 is healthy. The magnitude behind `store_lazy_error`: after a traversal it answers &quot;how incomplete am I&quot;.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_lazy_clear(local: reference) -&gt; boolean</code></pre>
-<p>@PLN129 arc C — acknowledge this collection's fetch failures, returning whether there was anything to acknowledge.</p>
+<p>Acknowledge this collection's fetch failures, returning whether there was anything to acknowledge.</p>
 <p>The ONLY thing that clears them. A later fetch happening to succeed does NOT: a traversal whose first lookup could not reach the source and whose second could is MISSING data, and answering &quot;healthy&quot; afterwards would be exactly the silent wrong answer this channel exists to prevent. Clearing is a caller saying &quot;I have seen this&quot;, which is a different event entirely.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_lazy_fail(local: reference, why: text) fs#read</code></pre>
-<p>@PLN133 S8 — a loft DRIVER reporting that it could not reach its source.</p>
+<p>A loft DRIVER reporting that it could not reach its source.</p>
 <p>The writing end of the channel `store_lazy_error` reads. A driver written in loft (`fn lazy_fetch(...)`) has the same three answers a Rust source has, and two of them are an integer: `1` inserted, `0` absent. The third is not — &quot;the source is down&quot; carries a REASON, and answering `0` for it is exactly the silent wrong answer arc C exists to prevent, because a caller cannot tell it from &quot;no such person&quot;.</p>
-<p>fn lazy_fetch(coll: hash&lt;Person[id]&gt;, source: text, key_int: integer, key_text: text) -&gt; integer { if !db.db_open(source) { store_lazy_fail(coll, &quot;cannot open {source}: {db.db_last_error()}&quot;); return 0; } ... }</p>
+<p>fn lazy_fetch(coll: hash&lt;Person[id]&gt;, source: text, key_int: integer, key_text: text) -&gt; integer { if !db.db_open(source) { store_lazy_fail(coll, &quot;cannot open {source}: {db.db_last_error()}&quot;); return 0; } .. }</p>
 <p>Sticky and counted exactly like a Rust source's failure: the FIRST reason is kept, every failure is counted, and only `store_lazy_clear` clears them.</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_load_key(local: reference, path: text, key: integer) -&gt; boolean fs#read</code></pre>
-<p>Fetch ONE integer-keyed entry from a persisted collection image into `local`, reading only the pages the lookup touches. The singular of `store_load_keys` and the integer form of `store_load_key_text`; returns false when the key is absent or the image cannot serve this collection. @PLN97 arc G (loft#522). tiles: hash&lt;Tile[id]&gt; = [] store_load_key(tiles, &quot;block.store&quot;, 42)</p>
+<p>Fetch ONE integer-keyed entry from a persisted collection image into `local`, reading only the pages the lookup touches. The singular of `store_load_keys` and the integer form of `store_load_key_text`; returns false when the key is absent or the image cannot serve this collection. tiles: hash&lt;Tile[id]&gt; = [] store_load_key(tiles, &quot;block.store&quot;, 42)</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_load_key_text(local: reference, path: text, key: text) -&gt; boolean fs#read</code></pre>
-<p>Text-keyed form of `store_load_key`: fetch ONE entry from a persisted `hash&lt;T[textkey]&gt;` or `trie&lt;T[textkey]&gt;` (a place-name / string-id index) into `local`, reading only the pages the lookup touches. Returns false when the key is absent or the collection isn't a copyable text-keyed hash or trie. @PLN97 arc G (loft#522), @PLN134 for the trie. places: hash&lt;Place[name]&gt; = [] store_load_key_text(places, &quot;gazetteer.store&quot;, &quot;Amsterdam&quot;)</p>
+<p>Text-keyed form of `store_load_key`: fetch ONE entry from a persisted `hash&lt;T[textkey]&gt;` or `trie&lt;T[textkey]&gt;` (a place-name / string-id index) into `local`, reading only the pages the lookup touches. Returns false when the key is absent or the collection isn't a copyable text-keyed hash or trie. places: hash&lt;Place[name]&gt; = [] store_load_key_text(places, &quot;gazetteer.store&quot;, &quot;Amsterdam&quot;)</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_load_prefix(local: reference, path: text, pre: text, limit: integer) -&gt; integer fs#read</code></pre>
 <p>Prefix form: fetch every entry whose text key begins with `pre` from a persisted `trie&lt;T[k]&gt;` into `local`, reading only the pages the prefix walk touches — what a search box needs, and what a `sorted` range cannot express without a hand-built successor string. Returns the count loaded.</p>
-<p>`limit` caps the WALK, not just the answer: with `limit` 8 the ninth record is never stepped to, so its pages are never fetched. A negative `limit` means no cap, which on a common prefix reads the whole run. @PLN134. words: trie&lt;Word[w]&gt; = [] store_load_prefix(words, &quot;vocab.store&quot;, &quot;kerk&quot;, 20)</p>
+<p>`limit` caps the WALK, not just the answer: with `limit` 8 the ninth record is never stepped to, so its pages are never fetched. A negative `limit` means no cap, which on a common prefix reads the whole run. words: trie&lt;Word[w]&gt; = [] store_load_prefix(words, &quot;vocab.store&quot;, &quot;kerk&quot;, 20)</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_load_box(local: reference, path: text, from: vector&lt;integer&gt;, till: vector&lt;integer&gt;, limit: integer) -&gt; integer fs#read</code></pre>
 <p>Box form: fetch every entry inside the closed bounding box `from`..`till` from a persisted `spatial&lt;T[x, y]&gt;` into `local`, reading only the pages the box walk touches — what a map viewport needs. Returns the count loaded. The corners are vectors so the same call serves 1, 2 or 3 axes, and writing them the other way round names the same box.</p>
 <p>TWO bounds, and a map needs both. `limit` caps the WALK, not just the answer: with `limit` 200 the 201st marker is never stepped to, so its pages are never fetched (a negative `limit` means no cap). And the BOX bounds it — the Morton interval between two corners is a superset the Z-order curve threads in and out of, so a wide, shallow viewport would otherwise read 1.46 M records to return 4 k. Measured on a 3.2 M-point map index: 5.3 pages of 64 KB for the first viewport, ~1.5 for each pan after it, against a 158 MB whole-image download.</p>
-<p>Those numbers assume a dataset written with locality in every axis, which is the one thing this call cannot do for you. The Morton walk is symmetric; a file laid out along ONE axis is not, so a box crossing that axis pays for every stride it crosses. On a 62 500-point grid returning the same 500 records, a 250x2 box read 107 pages of 64 KiB against 7 for its 2x250 mirror, and the two swapped when the identical data was written in the other axis order — 81 % of the image to return 0.8 % of the records. Write such a dataset TILED: it has no bad orientation, and for the square-ish boxes a viewport uses it beats either linear order. @PLN136. pins: spatial&lt;Pin[x, y]&gt; = [] store_load_box(pins, &quot;map.store&quot;, [x1, y1], [x2, y2], 200)</p>
+<p>Those numbers assume a dataset written with locality in every axis, which is the one thing this call cannot do for you. The Morton walk is symmetric; a file laid out along ONE axis is not, so a box crossing that axis pays for every stride it crosses. On a 62 500-point grid returning the same 500 records, a 250x2 box read 107 pages of 64 KiB against 7 for its 2x250 mirror, and the two swapped when the identical data was written in the other axis order — 81 % of the image to return 0.8 % of the records. Write such a dataset TILED: it has no bad orientation, and for the square-ish boxes a viewport uses it beats either linear order. pins: spatial&lt;Pin[x, y]&gt; = [] store_load_box(pins, &quot;map.store&quot;, [x1, y1], [x2, y2], 200)</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_load_keys(local: reference, path: text, keys: vector&lt;integer&gt;) -&gt; integer fs#read</code></pre>
-<p>Plural form of `store_load_key`: fetch the given integer keys' entries into `local` in one call (the paged reader is opened once and its cache reused), returning how many were found. Keys absent from the remote are skipped. Same relocation rules as `store_load_key`. @PLN97 arc G (loft#522). tiles: hash&lt;Tile[id]&gt; = [] got = store_load_keys(tiles, &quot;block.store&quot;, [7, 13, 42])   // got == 3</p>
+<p>Plural form of `store_load_key`: fetch the given integer keys' entries into `local` in one call (the paged reader is opened once and its cache reused), returning how many were found. Keys absent from the remote are skipped. Same relocation rules as `store_load_key`. tiles: hash&lt;Tile[id]&gt; = [] got = store_load_keys(tiles, &quot;block.store&quot;, [7, 13, 42])   // got == 3</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_load_keys_text(local: reference, path: text, keys: vector&lt;text&gt;) -&gt; integer fs#read</code></pre>
-<p>Plural form of `store_load_key_text`, and the text twin of `store_load_keys`: fetch the given text keys' entries into `local` in ONE call, returning how many were found. Keys absent from the remote are skipped. Serves a `hash&lt;T[k]&gt;` and a `trie&lt;T[k]&gt;` alike, like the single-key form. loft#1064.</p>
+<p>Plural form of `store_load_key_text`, and the text twin of `store_load_keys`: fetch the given text keys' entries into `local` in ONE call, returning how many were found. Keys absent from the remote are skipped. Serves a `hash&lt;T[k]&gt;` and a `trie&lt;T[k]&gt;` alike, like the single-key form.</p>
 <p>Looping `store_load_key_text` is not the same call: each one opens its own reader, so a ring of twenty asset names re-fetches the same 64 KiB bucket-table page twenty times. This opens the reader once and shares its page cache — which is what makes it the PREFETCH call: ask for the ring at a load or level boundary, so no frame is ever the thing that discovers it needs an asset. art: hash&lt;Blob[bl_key]&gt; = [] got = store_load_keys_text(art, &quot;pack.store&quot;, [&quot;page/mobs&quot;, &quot;hit.ogg&quot;])</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_load_range(local: reference, path: text, lo: integer, hi: integer) -&gt; integer fs#read</code></pre>
-<p>Range form: fetch every entry whose integer key is in [lo, hi] from a persisted `sorted&lt;T[k]&gt;` into `local`, reading only the pages the range walk touches — the ordered-collection counterpart of `store_load_keys` (a phone pulling the corridor of map tiles a route crosses). Returns the count loaded. @PLN97 arc G (loft#522). tiles: sorted&lt;Tile[tkey]&gt; = [] store_load_range(tiles, &quot;block.store&quot;, lo_cell, hi_cell)</p>
+<p>Range form: fetch every entry whose integer key is in [lo, hi] from a persisted `sorted&lt;T[k]&gt;` into `local`, reading only the pages the range walk touches — the ordered-collection counterpart of `store_load_keys` (a phone pulling the corridor of map tiles a route crosses). Returns the count loaded. tiles: sorted&lt;Tile[tkey]&gt; = [] store_load_range(tiles, &quot;block.store&quot;, lo_cell, hi_cell)</p>
 </div>
 <div class="item">
 <pre><code>pub fn set_file_size(self: File, size: integer) -&gt; FileResult fs#update</code></pre>
@@ -4804,7 +4801,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </div>
 <div class="item">
 <pre><code>pub fn env_variable(name: text) -&gt; text env#read</code></pre>
-<p>Returns the value of the environment variable `name`, or `&quot;&quot;` when it is not set. An unset variable and one set to the empty string give the same answer, so this cannot tell them apart (loft#1302). Use to read configuration from the shell environment.</p>
+<p>Returns the value of the environment variable `name`, or `&quot;&quot;` when it is not set. An unset variable and one set to the empty string give the same answer, so this cannot tell them apart. Use to read configuration from the shell environment.</p>
 </div>
 <div class="item">
 <pre><code>pub fn arguments() -&gt; vector&lt;text&gt;</code></pre>
@@ -4972,7 +4969,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
   JObject { fields: vector&lt;JsonField&gt; },
   JInteger { value: integer },
 }</code></pre>
-<p>Typed union of JSON values.  The discriminant (1..6) picks the active variant; variant data lives in the variant's fields. Matches the RFC 8259 kinds, plus `JInteger` (@PLN109) for an integer-shaped number preserved to an exact `integer` (i64).</p>
+<p>Typed union of JSON values.  The discriminant (1..6) picks the active variant; variant data lives in the variant's fields. Matches the RFC 8259 kinds, plus `JInteger` for an integer-shaped number preserved to an exact `integer` (i64).</p>
 <p>`JInteger` MUST stay the LAST variant: the store discriminant it gets (7) is hard-coded as `JV_DISCR_INT` in `src/native.rs`, and the existing variants' discriminants (1–6) must not shift.</p>
 </div>
 <div class="item">
@@ -5019,7 +5016,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 <div class="item">
 <pre><code>pub fn as_bool(self: JsonValue) -&gt; boolean?</code></pre>
 <p>Typed extractor — returns `null` on kind mismatch.</p>
-<p>Declared `boolean?` and not `boolean`: the doc has always promised the null and the signature could not carry it.  Its three siblings keep the promise because `text`, `float` and `integer` each have an in-band sentinel a non-null return can hold; a two-state Rust `bool` has none, so this one answered `false` for every mismatching kind — for an absent field, for the string `&quot;true&quot;`, and for `1` — indistinguishably from a field that really says `false` (loft#1302).</p>
+<p>Declared `boolean?` and not `boolean`: the doc has always promised the null and the signature could not carry it.  Its three siblings keep the promise because `text`, `float` and `integer` each have an in-band sentinel a non-null return can hold; a two-state Rust `bool` has none, so this one answered `false` for every mismatching kind — for an absent field, for the string `&quot;true&quot;`, and for `1` — indistinguishably from a field that really says `false`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn kind(self: JsonValue) -&gt; text</code></pre>

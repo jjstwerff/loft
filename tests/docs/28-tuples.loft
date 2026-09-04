@@ -102,8 +102,8 @@ fn main() {
 
   // ⚠ Writing to a TEXT element of a value parameter — 'p.1 = "…"' where the
   // parameter is '(integer, text)' — will not compile on --native today,
-  // though the interpreter runs it (loft#1278).  Until that closes, copy the
-  // parameter into a local first and write there: 'q = p; q.1 = "…";'.
+  // though the interpreter runs it.  Copy the parameter into a local first and
+  // write there: 'q = p; q.1 = "…";'.
 
   // ## Tuples as reference parameters (swap in place)
   // A '&' tuple holds scalar elements only.  '&(text, …)' is refused when you

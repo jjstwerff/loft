@@ -53,7 +53,7 @@
 //   [levels]
 //   # Override the global level for one file, by its name alone:
 //   "debug_tool.loft" = info
-//   "src/"            = error   # a path prefix — see loft#1264 before relying on it
+//   "src/"            = error   # a path prefix, matched against the path as invoked
 // ## Production mode
 //
 // With 'production = true' in the '[log]' section of log.conf, or '--production'
@@ -67,8 +67,7 @@
 //
 // ⚠ This works on the interpreter only. On the '--native' backend — which is
 // what you get by default — 'panic()' still aborts and writes nothing to the
-// log (loft#1263). Until that is closed, run a service that relies on
-// production mode with '--interpret'.
+// log. Run a service that relies on production mode with '--interpret'.
 // ## Using format strings in log messages
 //
 // Log messages are plain text, but you can embed any expression using the
@@ -101,7 +100,7 @@ fn main() {
   // the source file and line number, then the message. This makes it easy to
   // search the file for errors or trace back to the exact line that produced a
   // message. The file path is the one the program was invoked by, so it is
-  // usually absolute (loft#1264).
+  // usually absolute — a `[levels]` path prefix has to match that form to apply.
   // A true assert never logs anything — it is only the false case that logs.
   assert(true, "this should never fail");
   // ## Typical usage pattern

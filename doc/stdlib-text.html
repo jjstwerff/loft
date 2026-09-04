@@ -26,11 +26,11 @@
 <div class="section-desc"><p>Functions for working with text (UTF-8 strings) and character values.</p></div>
 <div class="item">
 <pre><code>pub fn len(both: text) -&gt; integer</code></pre>
-<p>Number of characters (Unicode code points) in the text (@PLN110) — the human count, as in every mainstream language. For a byte length (bounds checks, the limit of byte-positioned indexing / slicing) use `size`.</p>
+<p>Number of characters (Unicode code points) in the text — the human count, as in every mainstream language. For a byte length (bounds checks, the limit of byte-positioned indexing / slicing) use `size`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn size(both: text) -&gt; integer</code></pre>
-<p>Number of bytes in the text (@PLN110). This is the bound for byte-positioned operations: `s[i]`, slices `s[a..b]`, and `find`/`rfind` all use byte offsets. For the human character count use `len`.</p>
+<p>Number of bytes in the text. This is the bound for byte-positioned operations: `s[i]`, slices `s[a..b]`, and `find`/`rfind` all use byte offsets. For the human character count use `len`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn len(both: character) -&gt; integer</code></pre>
@@ -71,11 +71,11 @@
 </div>
 <div class="item">
 <pre><code>pub fn find(self: text, value: text) -&gt; integer?</code></pre>
-<p>Returns the byte index of the first occurrence of value, or null if not found. Use to locate substrings before slicing.  Nullable: null when value is absent (@PLN102 keystone step 4 — the type is honest about the not-found case).</p>
+<p>Returns the byte index of the first occurrence of value, or null if not found. Use to locate substrings before slicing.  Nullable: null when value is absent (the type is honest about the not-found case).</p>
 </div>
 <div class="item">
 <pre><code>pub fn rfind(self: text, value: text) -&gt; integer?</code></pre>
-<p>Returns the byte index of the last occurrence of value, or null if not found. Use to find file extensions or the last path separator.  Nullable: null when value is absent (@PLN102 keystone step 4 — the type is honest about not-found).</p>
+<p>Returns the byte index of the last occurrence of value, or null if not found. Use to find file extensions or the last path separator.  Nullable: null when value is absent (the type is honest about not-found).</p>
 </div>
 <div class="item">
 <pre><code>pub fn contains(self: text, value: text) -&gt; boolean</code></pre>
@@ -155,7 +155,7 @@
 </div>
 <div class="item">
 <pre><code>pub fn byte_at(self: text, i: integer) -&gt; integer</code></pre>
-<p>These two are TEXT functions that happen to sit after the Environment marker. Re-opening the section files them under Text in the generated reference, which is where a reader looks for them — `text_from_bytes` existed for two releases and was reported as missing (loft#748) because `doc/stdlib-text.html` did not list it.  Declaring the section rather than MOVING the definitions is deliberate: definition order is the order types are minted, and the native `init()` replays that order, so relocating `vector&lt;u8&gt;`'s first mention shifts every type id after it (loft#739 / #742).  A comment cannot. Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text[i]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  ~5-10× faster than `text[i]` for pure-ASCII checks.</p>
+<p>Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text[i]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  ~5-10× faster than `text[i]` for pure-ASCII checks.</p>
 </div>
 <div class="item">
 <pre><code>pub fn text_from_bytes(bytes: vector&lt;u8&gt;) -&gt; text</code></pre>

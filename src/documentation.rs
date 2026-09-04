@@ -212,6 +212,29 @@ fn opens_example_tag(trimmed: &str) -> bool {
         .is_some_and(is_example_tag)
 }
 
+/// Is this comment line a feature-catalogue ANCHOR (`@F40 — file & directory I/O
+/// (catalogue anchor, @PLN92)`)?
+///
+/// An anchor ties a stdlib file to its `@F` entry in the feature catalogue.
+/// `scripts/feature_hygiene.sh` reads it out of `default/` as the CODE anchor — the
+/// answer to *where does this feature live* — so it has to stay in the source. It is
+/// bookkeeping for that script and for nothing else, so it must not reach the page: an
+/// anchor sitting above a `pub` item became that item's published description, and
+/// `store_bind_lazy` opened with `@F108 — Lazy store binding (catalogue anchor, @PLN92)`.
+///
+/// Keyed on BOTH halves — an opening `@F<n>` and the `catalogue anchor` marker — so a
+/// sentence that merely mentions a feature id stays prose.
+#[must_use]
+pub fn is_catalogue_anchor(trimmed: &str) -> bool {
+    let Some(text) = trimmed.strip_prefix("//").map(str::trim_start) else {
+        return false;
+    };
+    let opens_with_feature = text
+        .strip_prefix("@F")
+        .is_some_and(|r| r.starts_with(|c: char| c.is_ascii_digit()));
+    opens_with_feature && text.contains("catalogue anchor")
+}
+
 /// Does this doc line OPEN a worked-example citation (`Example: @AAA-### — what it shows`)?
 ///
 /// A citation points a maintainer at the call site that teaches this item; it is

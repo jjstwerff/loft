@@ -157,8 +157,7 @@ fn main() {
 
   // ## What a closure cannot capture
   // A '&' parameter cannot be captured at all, in any shape — copy it into a
-  // local, capture the local, and write the local back before returning
-  // (loft#1276).
+  // local, capture the local, and write the local back before returning.
   //
   // A capturing closure cannot be stored in a COLLECTION either: 'vector<fn(…)>'
   // and the keyed collections take non-capturing lambdas only.  A struct FIELD

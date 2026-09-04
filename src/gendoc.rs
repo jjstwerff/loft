@@ -8,7 +8,8 @@
 use loft::documentation::typst_escape;
 use loft::documentation::{
     StdlibSection, TopicSource, build_nav, gather_topic_info, generate_docs, get_topic_sources,
-    is_example_tag, page_html, render_topic_body, render_topic_typst, without_example_citations,
+    is_catalogue_anchor, is_example_tag, page_html, render_topic_body, render_topic_typst,
+    without_example_citations,
 };
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -161,6 +162,14 @@ fn parse_loft(content: &str, entries: &mut Vec<Entry>, fallback_section: &str) {
             named_a_section = true;
             doc.clear();
             after_section = true;
+            i += 1;
+            continue;
+        }
+
+        // A catalogue anchor is metadata for `feature_hygiene.sh`, not prose.  Skipped
+        // like a `#` attribute — it must not JOIN the doc block and must not break one
+        // either, since a real doc comment can sit on both sides of it.
+        if is_catalogue_anchor(trimmed) {
             i += 1;
             continue;
         }

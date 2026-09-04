@@ -42,7 +42,7 @@
   // Was the field DECLARED nullable (`text?` rather than `text`)?
   //
   // The payload variants above are typed non-null, and `τ?` shares `τ`'s
-  // runtime layout (@PLN25) — a nullable field spells absence with a SENTINEL
+  // runtime layout — a nullable field spells absence with a SENTINEL
   // rather than a wrapper. So a null field's value arrives inside `FvText` /
   // `FvInt` / … as that sentinel, and this flag is what says so; without it a
   // reader would have to discover the possibility by being surprised.

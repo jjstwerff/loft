@@ -3572,7 +3572,7 @@ collections (sorted/hash/index), and integer ranges with
 'integer limit(min, max)' — in parameter, field, and return position
 ```
 
-Three constructs it does NOT accept yet, all of them ordinary Loft that the language itself compiles: an index expression ('v\[0\]'), the null-coalescing operator ('a ?? 0'), and a formatted string literal ('"v={n}"'). A snippet containing one answers a non-zero count even though it is valid, so a validator built on this today will reject input it should accept. Tracked as loft\#1259.
+Three constructs it does NOT accept yet, all of them ordinary Loft that the language itself compiles: an index expression ('v\[0\]'), the null-coalescing operator ('a ?? 0'), and a formatted string literal ('"v={n}"'). A snippet containing one answers a non-zero count even though it is valid, so a validator built on this today will reject input it should accept.
 
 ```rust
 use parser;
@@ -4314,7 +4314,7 @@ per_site = 5       # suppress messages from the same source line after 5/minute
 [levels]
 # Override the global level for one file, by its name alone:
 "debug_tool.loft" = info
-"src/"            = error   # a path prefix — see loft#1264 before relying on it
+"src/"            = error   # a path prefix, matched against the path as invoked
 ```
 
 === Production mode
@@ -4326,7 +4326,7 @@ With 'production = true' in the '\[log\]' section of log.conf, or '--production'
 
 The program keeps running and the problem is captured in the log — useful for long-running services where a single error should not bring everything down. It still exits non-zero at the end, so a supervisor watching the exit status learns that something went wrong.
 
-⚠ This works on the interpreter only. On the '--native' backend — which is what you get by default — 'panic()' still aborts and writes nothing to the log (loft\#1263). Until that is closed, run a service that relies on production mode with '--interpret'.
+⚠ This works on the interpreter only. On the '--native' backend — which is what you get by default — 'panic()' still aborts and writes nothing to the log. Run a service that relies on production mode with '--interpret'.
 
 === Using format strings in log messages
 
@@ -4358,7 +4358,7 @@ When a 'log.conf' is present with 'level = info', the four calls above produce e
 2026-09-01T08:35:38.971Z FATAL  /home/you/app/app.loft:6  critical failure
 ```
 
-Each line contains: a UTC timestamp to the millisecond, the severity level, the source file and line number, then the message. This makes it easy to search the file for errors or trace back to the exact line that produced a message. The file path is the one the program was invoked by, so it is usually absolute (loft\#1264). A true assert never logs anything — it is only the false case that logs.
+Each line contains: a UTC timestamp to the millisecond, the severity level, the source file and line number, then the message. This makes it easy to search the file for errors or trace back to the exact line that produced a message. The file path is the one the program was invoked by, so it is usually absolute — a `\[levels\]` path prefix has to match that form to apply. A true assert never logs anything — it is only the false case that logs.
 
 ```rust
   assert(true, "this should never fail");
@@ -4656,7 +4656,7 @@ All bitwise operators (AND, OR, XOR, shift) work correctly with zero. Zero is th
 
 === Float null compares uniformly with every other scalar
 
-Floats store null as `NaN` internally, but null COMPARISON is uniform with every other scalar type (\@PLN102 null model): `null == null` is TRUE, null is not equal to any real value, and null orders as the low extreme. Detect a null float with `f == null` (or `!f` / `f ?? default`) — NOT the old `f != f` trick, which no longer works now that `null == null` is true. Both the defended and the undefended division yield null and continue (C80 / E-Uncomp — see tests/scripts/184-i333-div-zero-null-continues.loft); the undefended site additionally reports a warning.
+Floats store null as `NaN` internally, but null COMPARISON is uniform with every other scalar type: `null == null` is TRUE, null is not equal to any real value, and null orders as the low extreme. Detect a null float with `f == null` (or `!f` / `f ?? default`) — NOT the old `f != f` trick, which no longer works now that `null == null` is true. Both the defended and the undefended division yield null and continue (C80 / E-Uncomp — see tests/scripts/184-i333-div-zero-null-continues.loft); the undefended site additionally reports a warning.
 
 ```rust
   bad = 0.0 / 0.0 ?? null;
@@ -5193,7 +5193,7 @@ fn first_element<T>(gen_v: vector<T>) -> T {
 }
 ```
 
-\@PLN25 index flip — a computed index `gen\_v.len() - 1` is not provably in-bounds, so the read is nullable; a generic has no `?? default`, so the honest result type is `T?`.
+A computed index `gen\_v.len() - 1` is not provably in-bounds, so the read is nullable; a generic has no `?? default`, so the honest result type is `T?`.
 
 ```rust
 fn last_element<T>(gen_v: vector<T>) -> T? {
@@ -5317,7 +5317,7 @@ fn test_user_type_bounds() {
   dear = Money { cents: 700 };
 ```
 
-Bind a generic's result before reading through it — loft\#1273 retains one record per call when the value is consumed inline.
+Bind a generic's result before reading through it: consuming the value inline retains one record per call.
 
 ```rust
   best = gen_max(cheap, dear);
@@ -5573,7 +5573,7 @@ No capture needed here — the lambda uses only its own parameter.
 
 === What a closure cannot capture
 
-A '&' parameter cannot be captured at all, in any shape — copy it into a local, capture the local, and write the local back before returning (loft\#1276).
+A '&' parameter cannot be captured at all, in any shape — copy it into a local, capture the local, and write the local back before returning.
 
 A capturing closure cannot be stored in a COLLECTION either: 'vector\<fn(…)\>' and the keyed collections take non-capturing lambdas only.  A struct FIELD holds one without trouble, which is the shape to reach for.
 
@@ -5793,7 +5793,7 @@ So 'while !exhausted(g)' runs one iteration too many.  Drive the generator with 
   assert(yf_total == 33, "yield from: 1+10+20+2={yf_total}");
 ```
 
-⚠ 'yield from' works today only for a sub-generator that takes NO arguments; with an argument it will not compile on --native, though the interpreter runs it (loft\#1277).  Until that closes, forward such a generator with a plain loop — 'for v in sub(arg) { yield v; }', which means the same thing and works on both backends.
+⚠ 'yield from' works today only for a sub-generator that takes NO arguments; with an argument it will not compile on --native, though the interpreter runs it.  Forward such a generator with a plain loop — 'for v in sub(arg) { yield v; }', which means the same thing and works on both backends.
 
 ```rust
   fwd_total = 0;
@@ -5977,7 +5977,7 @@ A tuple element may itself be a tuple.
   assert(p.0 == 10, "and the caller's tuple is untouched: {p.0}");
 ```
 
-⚠ Writing to a TEXT element of a value parameter — 'p.1 = "…"' where the parameter is '(integer, text)' — will not compile on --native today, though the interpreter runs it (loft\#1278).  Until that closes, copy the parameter into a local first and write there: 'q = p; q.1 = "…";'.
+⚠ Writing to a TEXT element of a value parameter — 'p.1 = "…"' where the parameter is '(integer, text)' — will not compile on --native today, though the interpreter runs it.  Copy the parameter into a local first and write there: 'q = p; q.1 = "…";'.
 
 === Tuples as reference parameters (swap in place)
 
@@ -7681,20 +7681,20 @@ pub interface Numeric
 ```
 
 Types that support `\*` and `-` (unary negation). Separate from `Addable` so a generic can ask for the fewest operators it needs. Satisfied by integer, single, float, and user types defining OpMul and OpMin.
-Binary subtraction is `Subtractable` below and deliberately NOT here.  Both arities of `-` CAN now be declared by one interface — that is what loft\#1275 fixed, and `Subtractable` beside `Numeric` is only a choice about the shipped surface — but adding a requirement to `Numeric` would take satisfaction away from every user type that provides `OpMul` and unary `OpMin` today, which is exactly what COMPATIBILITY.md forbids.
+Binary subtraction is `Subtractable` below and deliberately NOT here.  One interface CAN declare both arities of `-`, so keeping them apart is a choice about the shipped surface rather than a limitation: adding a requirement to `Numeric` would take satisfaction away from every user type that provides `OpMul` and unary `OpMin` today, which is what COMPATIBILITY.md forbids.
 
 ```rust
 pub interface Subtractable
 ```
 
 Types that support binary `-` (subtraction), returning the same type. Satisfied by integer, single, float, and user types defining a two-operand OpMin.
-A bound of its own rather than a third requirement on `Numeric`: a bound set may declare one name at two arities since loft\#1275 (`-` desugars to `OpMin` either way, and the stub key carries the arity), so `\<T: Numeric + Subtractable\>` gets negation and subtraction together from two interfaces that each name `OpMin`.  Before that it could get only one of them.
+A bound of its own rather than a third requirement on `Numeric`: a bound set may declare one name at two arities (`-` desugars to `OpMin` either way, and the stub key carries the arity), so `\<T: Numeric + Subtractable\>` gets negation and subtraction together from two interfaces that each name `OpMin`.
 
 ```rust
 pub interface Scalable
 ```
 
-Types that support integer scaling via a `scale` method. Uses a method (not `op \*`) because a `\<T: Numeric + Scalable\>` would then need two signatures of one name from ONE bound set, which is still refused (loft\#1275). Two SEPARATE generics may each bound their own `T` by an interface declaring the same method differently — a header binds its own type variable. User types satisfy Scalable by defining `fn scale(self: T, factor: integer) -\> integer`.
+Types that support integer scaling via a `scale` method. Uses a method (not `op \*`) because a `\<T: Numeric + Scalable\>` would then need two signatures of one name from ONE bound set, which is refused. Two SEPARATE generics may each bound their own `T` by an interface declaring the same method differently — a header binds its own type variable. User types satisfy Scalable by defining `fn scale(self: T, factor: integer) -\> integer`.
 
 ```rust
 pub interface Printable
@@ -7704,7 +7704,7 @@ Types that can be converted to text via a `to\_text` method. User types satisfy 
 
 == Math
 
-Functions for numeric computation. All trigonometric functions work in radians. Both single and float variants exist for every function — choose single for speed, float for precision. Integer operations loft\#984 — the declared-RANGE guard, applied to the VALUE at a store into a slot that declares one (`integer limit(lo, hi)`, a narrow width).  A value outside `lo..=hi` takes the slot's DEFAULT — `dflt` is the lowest value in range, or the null sentinel where the slot admits null — and reports it, rather than being wrapped, aliased, or dropped.
+Functions for numeric computation. All trigonometric functions work in radians. Both single and float variants exist for every function — choose single for speed, float for precision. Integer operations The declared-RANGE guard, applied to the VALUE at a store into a slot that declares one (`integer limit(lo, hi)`, a narrow width).  A value outside `lo..=hi` takes the slot's DEFAULT — `dflt` is the lowest value in range, or the null sentinel where the slot admits null — and reports it, rather than being wrapped, aliased, or dropped.
 
 It guards the VALUE rather than the store, which is what lets one op reach both a FIELD and a VARIABLE: a variable has no store op to carry the range, and that is why a declared range on a local went unenforced entirely.
 
@@ -7964,7 +7964,7 @@ Double-precision base-10 logarithm.
 pub fn min(both: integer, b: integer) -> integer
 ```
 
-\@PLN25 F1b(b): each has a NON-NULL overload (`-\> τ`) and a `τ?` overload (`-\> τ?`). The call dispatch picks the `τ?` overload whenever ANY argument is STATICALLY nullable, so an explicit `integer?`/`single?`/`float?` argument — INCLUDING a division result (`1 / z`, now typed `τ?` under DN3) — gets a correctly-typed nullable RESULT and routes to the `τ?` body. The non-null bodies are therefore CLEAN (no `return null` guard): they only ever receive truly-non-null args, so they no longer rely on the STD\_SOURCE (N-Store) exemption, which is now retired. The `τ?` overloads carry the propagation: null if either argument is null. Smallest of two integer values.
+Each of these has two overloads: one over non-null values (`-\> τ`) and one over nullable ones (`-\> τ?`).  You get the nullable overload whenever ANY argument is statically nullable — an `integer?`/`single?`/`float?`, or a division result such as `1 / z` — and it propagates: the answer is null if either argument is null.  Otherwise you get the non-null overload and a non-null answer, so a plain `min(a, b)` needs no discharge. Smallest of two integer values.
 
 ```rust
 pub fn max(both: integer, b: integer) -> integer
@@ -8018,7 +8018,7 @@ Clamps v into the inclusive range \[lo, hi\]. Returns null if any argument is nu
 pub fn approx(both: float, b: float, eps: float) -> boolean
 ```
 
-Approximate equality: true when a and b differ by at most eps (inclusive). `==` on float/single is EXACT IEEE equality (\@PLN102) — use `approx` when you want a tolerance, e.g. comparing computed transcendentals: `approx(sqrt(2.0) \* sqrt(2.0), 2.0, 1e-9)`. A null (NaN) operand is not approximately equal to anything, so the result is false.
+Approximate equality: true when a and b differ by at most eps (inclusive). `==` on float/single is EXACT IEEE equality — use `approx` when you want a tolerance, e.g. comparing computed transcendentals: `approx(sqrt(2.0) \* sqrt(2.0), 2.0, 1e-9)`. A null (NaN) operand is not approximately equal to anything, so the result is false.
 
 ```rust
 pub fn approx(both: single, b: single, eps: single) -> boolean
@@ -8034,13 +8034,13 @@ Functions for working with text (UTF-8 strings) and character values.
 pub fn len(both: text) -> integer
 ```
 
-Number of characters (Unicode code points) in the text (\@PLN110) — the human count, as in every mainstream language. For a byte length (bounds checks, the limit of byte-positioned indexing / slicing) use `size`.
+Number of characters (Unicode code points) in the text — the human count, as in every mainstream language. For a byte length (bounds checks, the limit of byte-positioned indexing / slicing) use `size`.
 
 ```rust
 pub fn size(both: text) -> integer
 ```
 
-Number of bytes in the text (\@PLN110). This is the bound for byte-positioned operations: `s\[i\]`, slices `s\[a..b\]`, and `find`/`rfind` all use byte offsets. For the human character count use `len`.
+Number of bytes in the text. This is the bound for byte-positioned operations: `s\[i\]`, slices `s\[a..b\]`, and `find`/`rfind` all use byte offsets. For the human character count use `len`.
 
 ```rust
 pub fn len(both: character) -> integer
@@ -8099,13 +8099,13 @@ Removes trailing whitespace only.
 pub fn find(self: text, value: text) -> integer?
 ```
 
-Returns the byte index of the first occurrence of value, or null if not found. Use to locate substrings before slicing.  Nullable: null when value is absent (\@PLN102 keystone step 4 — the type is honest about the not-found case).
+Returns the byte index of the first occurrence of value, or null if not found. Use to locate substrings before slicing.  Nullable: null when value is absent (the type is honest about the not-found case).
 
 ```rust
 pub fn rfind(self: text, value: text) -> integer?
 ```
 
-Returns the byte index of the last occurrence of value, or null if not found. Use to find file extensions or the last path separator.  Nullable: null when value is absent (\@PLN102 keystone step 4 — the type is honest about not-found).
+Returns the byte index of the last occurrence of value, or null if not found. Use to find file extensions or the last path separator.  Nullable: null when value is absent (the type is honest about not-found).
 
 ```rust
 pub fn contains(self: text, value: text) -> boolean
@@ -8225,7 +8225,7 @@ Joins parts with sep between each consecutive pair. Returns "" for an empty vect
 pub fn byte_at(self: text, i: integer) -> integer
 ```
 
-These two are TEXT functions that happen to sit after the Environment marker. Re-opening the section files them under Text in the generated reference, which is where a reader looks for them — `text\_from\_bytes` existed for two releases and was reported as missing (loft\#748) because `doc/stdlib-text.html` did not list it.  Declaring the section rather than MOVING the definitions is deliberate: definition order is the order types are minted, and the native `init()` replays that order, so relocating `vector\<u8\>`'s first mention shifts every type id after it (loft\#739 / \#742).  A comment cannot. Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text\[i\]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte\_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  ~5-10× faster than `text\[i\]` for pure-ASCII checks.
+Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text\[i\]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte\_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  ~5-10× faster than `text\[i\]` for pure-ASCII checks.
 
 ```rust
 pub fn text_from_bytes(bytes: vector<u8>) -> text
@@ -8271,7 +8271,7 @@ Number of elements in a hash collection.
 pub fn size(both: hash) -> integer
 ```
 
-The byte footprint of a hash (\@PLN110): its full bucket table, holes included.  The table is the hash's own allocation — `elms` slots, each a 4-byte record-id (an empty slot is a hole and still counts, because open addressing's spare capacity IS the format).  Allocation-local: the entry records live in separate allocations and are not counted.  Grows in steps as the table rehashes (load factor 0.75).  0 for an empty (unallocated) hash.
+The byte footprint of a hash: its full bucket table, holes included.  The table is the hash's own allocation — `elms` slots, each a 4-byte record-id (an empty slot is a hole and still counts, because open addressing's spare capacity IS the format).  Allocation-local: the entry records live in separate allocations and are not counted.  Grows in steps as the table rehashes (load factor 0.75).  0 for an empty (unallocated) hash.
 
 == Output and Diagnostics
 
@@ -8353,26 +8353,25 @@ Number of elements in the trie.
 pub fn min_of < T: Ordered > (v: vector<T>) -> T?
 ```
 
-Smallest element in a vector, or null when the vector is empty (\@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op \<).
+Smallest element in a vector, or null when the vector is empty (the type is honest about the empty case).  Works on any Ordered type (op \<).
 
 ```rust
 pub fn max_of < T: Ordered > (v: vector<T>) -> T?
 ```
 
-Largest element in a vector, or null when the vector is empty (\@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op \<).
+Largest element in a vector, or null when the vector is empty (the type is honest about the empty case).  Works on any Ordered type (op \<).
 
 ```rust
 pub fn sum < T: Addable > (v: vector<T>, init: T? = null) -> T
 ```
 
 Sum of vector elements.  Works on any Addable type.  `init` is the identity to start from; leave it out and the element type's own zero is used (0, 0.0, ""). Example: sum(\[10, 20, 12\], 0) == 42 Example: sum(\[10, 20, 12\]) == 42
-\@PLN102 arc C — `init` gained its default so `sum\_of(v)` can be REWRITTEN to `sum(v)`: `superseded-call` offers that rename and `loft fix` verifies every edit by compiling the result, so while `init` was required the only `\#superseded` symbol loft ships had its fix rejected on every program (loft\#1003).  A literal default is not spellable here (`init: T = 0` is "expected T, got integer"), so it is the nullable-with-discharge form, which needs loft\#1016's per-monomorph `construct\_default(T)`.  Additive: every existing `sum(v, init)` call is unchanged.
 
 ```rust
 pub fn sum_of(v: vector<integer>) -> integer
 ```
 
-Sum of all integer elements. Returns 0 for an empty vector. \@PLN102 arc C — superseded by the general `sum(v, init)`; kept as a shim over it (the old form keeps working). `sum\_of(v)` == `sum(v, 0)`. Defined AFTER `sum` so the shim's call resolves — a forward reference to a generic is not yet supported.
+Sum of all integer elements. Returns 0 for an empty vector. Superseded by the general `sum(v, init)`; kept as a shim over it (the old form keeps working). `sum\_of(v)` == `sum(v, 0)`. Defined AFTER `sum` so the shim's call resolves — a forward reference to a generic is not yet supported.
 
 ```rust
 pub interface Walkable
@@ -8395,7 +8394,6 @@ pub fn assert_eq < AssertValue: Equatable + Printable > (got: AssertValue, want:
 Assert that two values are equal, naming BOTH of them when they are not.
 `assert(got == want, "…")` puts the expected value in the CONDITION, so a failure says what was got and leaves the reader to recover what was wanted by reading the expression. This says both.  Works on any type that is `Equatable` (op ==) and `Printable` (to\_text) — every built-in scalar, and a user type defining both.
 Failure behaves exactly as `assert` does, because it IS `assert`: the run aborts (and in `--production` logs an error instead), and the reported position is the CALLER's, not this function's.  The file and line are injected by the compiler; do not pass them manually.
-The type variable is spelled `AssertValue` and NOT `T` on purpose.  A type variable's bound stubs are keyed by its NAME (`t\_1T\_to\_text`), so every generic in the program spelling its variable `T` shares one namespace with a user `struct T` — and a bound declaring a method as common as `to\_text` or `op ==` then blocks that struct from defining its own.  Measured: with these bounds on `T`, every user struct named `T` formatted as EMPTY and could not declare `to\_text` at all.  loft\#1153 tracks the collision itself; until it closes, a stdlib generic bound to a common method needs a name no one would write.
 
 ```rust
 pub fn assert_ne < AssertValue: Equatable + Printable > (got: AssertValue, want: AssertValue, what: text, file: text, line: integer)
@@ -8426,7 +8424,7 @@ pub struct StructField {
   // Was the field DECLARED nullable (`text?` rather than `text`)?
   //
   // The payload variants above are typed non-null, and `τ?` shares `τ`'s
-  // runtime layout (@PLN25) — a nullable field spells absence with a SENTINEL
+  // runtime layout — a nullable field spells absence with a SENTINEL
   // rather than a wrapper. So a null field's value arrives inside `FvText` /
   // `FvInt` / … as that sentinel, and this flag is what says so; without it a
   // reader would have to discover the possibility by being surprised.
@@ -8477,7 +8475,7 @@ Returns the text unchanged — the identity case, so `text` satisfies `Printable
 
 == File System
 
-Types and functions for reading and writing files. A File value is obtained via file() and carries the path, format, and an internal reference. An environment variable as a name/value pair. Capability groups (\@PLN86) — the fs/env split a sandbox profile grants via `fs\#read` / `fs\#update` / `env\#read`; the functions below link in their signature.
+Types and functions for reading and writing files. A File value is obtained via file() and carries the path, format, and an internal reference. An environment variable as a name/value pair. Capability groups — the fs/env split a sandbox profile grants via `fs\#read` / `fs\#update` / `env\#read`; the functions below link in their signature.
 
 ```rust
 pub struct EnvVariable {
@@ -8525,10 +8523,9 @@ pub struct File {
 
   size: integer,
 
-  // @PLN116 — a bare enum field needs an explicit default (an enum's 0 is null, and a
-  // non-null field may not hold null).  A fresh File is `NotExists` until `OpGetFile`
-  // determines the real format for a valid path (see `file()`), so `NotExists` is the
-  // honest placeholder — it is overwritten before any read.
+  // A fresh File reads as `NotExists` until `file()` has determined the real format for
+  // the path, so this default is a placeholder rather than a claim about the path — it is
+  // overwritten before any read.
   format: Format = NotExists,
 
   ref: i32?,
@@ -8563,7 +8560,7 @@ Returns the platform path separator character: '\\' on Windows, '/' elsewhere. D
 pub fn file(path: text) -> File fs#read
 ```
 
-Plan-06 phase 5a: \#impure(host\_io) — reads a host-detected constant.  Could be \#pure once detected (it's invariant for the lifetime of a process), but the runtime caches it inside Stores so the access is observable. Use as the entry point for all file I/O. A relative path resolves against the program's own directory (\#255 / \@PLN9), so `../data.txt` names the file above the script — the same file an absolute path would name, and it answers the same either way (loft\#712).
+Plan-06 phase 5a: \#impure(host\_io) — reads a host-detected constant.  Could be \#pure once detected (it's invariant for the lifetime of a process), but the runtime caches it inside Stores so the access is observable. Use as the entry point for all file I/O. A relative path resolves against the program's own directory, so `../data.txt` names the file above the script — the same file an absolute path would name, and it answers the same either way.
 
 ```rust
 pub fn exists(path: text) -> boolean fs#read
@@ -8575,7 +8572,7 @@ Stat-equivalent filesystem read; par-safe. Use to check whether a path is access
 pub fn exists(both: File) -> boolean fs#read
 ```
 
-Filesystem stat (via file()); par-safe. Method form: f = file("path"); if f.exists() { ... } Also callable as exists(file\_obj) via the 'both' parameter name.
+Filesystem stat (via file()); par-safe. Method form: f = file("path"); if f.exists() { .. } Also callable as exists(file\_obj) via the 'both' parameter name.
 
 ```rust
 pub fn delete(path: text) -> FileResult fs#update
@@ -8593,13 +8590,13 @@ Par-safe filesystem write; the host bridge serialises mutations. Use to rename o
 pub fn mkdir(path: text) -> FileResult fs#update
 ```
 
-Create a single directory level; the parent must already exist. FileResult.Other when the directory is already there.  There is no counterpart that REMOVES a directory (loft\#1256).
+Create a single directory level; the parent must already exist. FileResult.Other when the directory is already there.  There is no counterpart that REMOVES a directory.
 
 ```rust
 pub fn mkdir_all(path: text) -> FileResult fs#update
 ```
 
-Create a directory and all missing parents (like Unix mkdir -p). Idempotent: a directory that already exists is FileResult.Ok, which is what makes it safe on the way into a run.  There is no counterpart that REMOVES a directory (loft\#1256).
+Create a directory and all missing parents (like Unix mkdir -p). Idempotent: a directory that already exists is FileResult.Ok, which is what makes it safe on the way into a run.  There is no counterpart that REMOVES a directory.
 
 ```rust
 pub fn rmdir(path: text) -> FileResult fs#update
@@ -8623,13 +8620,13 @@ Returns true if `path` exists and is a regular file. Use to confirm a directory 
 pub fn list_dir(path: text) -> vector<text> ?fs#read
 ```
 
-Lists the entry NAMES of directory `path` (base names, not full paths), sorted.  \@PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct from an EMPTY directory, `\[\]`); discharge with `?? \[\]` to keep the old shape. Use to enumerate a directory; join with `path` to build full child paths.
+Lists the entry NAMES of directory `path` (base names, not full paths), sorted.  A MISSING / non-directory path lists as NULL (distinct from an EMPTY directory, `\[\]`); discharge with `?? \[\]` to keep the old shape. Use to enumerate a directory; join with `path` to build full child paths.
 
 ```rust
 pub fn read_bytes(path: text) -> vector<u8> ?fs#read
 ```
 
-Reads the whole file `path` as raw bytes.  \@PLN102 H4 — a MISSING / unreadable file reads as NULL (distinct from an EMPTY file, `\[\]`); discharge with `?? \[\]` to keep the old shape.  Binary-exact (round-trips with write\_bytes); use for non-UTF-8 data — for text prefer `file(path).content()`.
+Reads the whole file `path` as raw bytes.  A MISSING / unreadable file reads as NULL (distinct from an EMPTY file, `\[\]`); discharge with `?? \[\]` to keep the old shape.  Binary-exact (round-trips with write\_bytes); use for non-UTF-8 data — for text prefer `file(path).content()`.
 
 ```rust
 pub fn write_bytes(path: text, bytes: vector<u8>) -> boolean fs#update
@@ -8648,14 +8645,14 @@ pub fn store_durable_check(path: text) -> boolean fs#read
 ```
 
 Durable-store integrity check.  Returns true iff the `.dmeta` sidecar at `\<path\>.dmeta` validates against the main file at `\<path\>` (signature, header CRC, payload length, payload CRC, tier\_id all OK).  Returns false on any failure or missing file.  Pair with `store\_durable\_seal` after a clean write session to record the new state.
-Desktop-only: the sidecar is built over memory-mapped files, so on the wasm targets this answers false — "nothing validates", which is the state that sends a caller down its rebuild branch (loft\#1063).
+Desktop-only: the sidecar is built over memory-mapped files, so on the wasm targets this answers false — "nothing validates", which is the state that sends a caller down its rebuild branch.
 
 ```rust
 pub fn store_durable_seal(path: text) -> boolean fs#update
 ```
 
 Write a fresh `.dmeta` sidecar capturing the current main-file's byte length + CRC32 + a clean-close timestamp. Returns true on success, false on any I/O error.  Call this after finishing a write session; if the program crashes between the last write and the seal, the sidecar stays stale and the next `store\_durable\_check` returns false → caller rebuilds.
-Desktop-only, like `store\_durable\_check`: on the wasm targets this answers false — the seal did not happen — so seal where the store is written and read it back with `store\_load` (loft\#1063).
+Desktop-only, like `store\_durable\_check`: on the wasm targets this answers false — the seal did not happen — so seal where the store is written and read it back with `store\_load`.
 
 ```rust
 pub fn store_persist_bind(r: reference, path: text) -> boolean fs#update
@@ -8667,7 +8664,7 @@ First call on a path that does NOT yet exist: serialises the current in-memory S
 Call on a path that DOES exist: opens the file via mmap; the caller's prior in-memory contents at that slot are dropped in favour of the on-disk image.  This is the load-on-startup path, assumes the on-disk layout matches the declared type.
 Both modes return `true` on success, `false` on any I/O / format error (no panic — the binding is fail-soft, callers fall back to JSON or rebuild-from-source).
 Typical dryopea-style pattern: pw = PaintedWorld { painted: \[\] }   // painted's declared type is hash\<PaintedHex\[q, r\]\> store\_persist\_bind(pw.painted, "dryopea\_world.store") // …mutations to pw.painted now hit mmap'd bytes… `r` is any store-rooted collection — `hash`, `sorted`, `index`, `spatial`. A bare `reference` parameter accepts them all.
-It snapshots the whole STORE `r` lives in, which is not always a store of just `r` (loft\#757).  A keyed LOCAL owns its store, so binding it writes a file for that collection.  A keyed FIELD shares its container's store, so binding `pw.painted` above writes a file for `PaintedWorld` — carrying the container and every sibling collection — and that file will NOT load back into a bare `hash\<PaintedHex\[q, r\]\>`.  Both are usable; they are just different files.  Bind through the container consistently, or bind a local of the collection's own type when another program has to read the file. The compiler advises at the call when the argument is a field.  `hash` carries its bucket seed in its own record and the comparison-based kinds hold no per-process state, so every persisted image is portable across processes.
+It snapshots the whole STORE `r` lives in, which is not always a store of just `r`.  A keyed LOCAL owns its store, so binding it writes a file for that collection.  A keyed FIELD shares its container's store, so binding `pw.painted` above writes a file for `PaintedWorld` — carrying the container and every sibling collection — and that file will NOT load back into a bare `hash\<PaintedHex\[q, r\]\>`.  Both are usable; they are just different files.  Bind through the container consistently, or bind a local of the collection's own type when another program has to read the file. The compiler advises at the call when the argument is a field.  `hash` carries its bucket seed in its own record and the comparison-based kinds hold no per-process state, so every persisted image is portable across processes.
 
 ```rust
 pub fn store_persist_copy(r: reference, path: text) -> boolean fs#update
@@ -8682,25 +8679,25 @@ Returns `false` on an I/O or format error, and for a collection whose shape the 
 pub fn store_load(r: reference, path: text) -> boolean fs#read
 ```
 
-Load a persisted store IMAGE fully into memory, populating the empty store-rooted collection `r` so it can be queried like any in-memory collection.  The portable, read-only counterpart of `store\_persist\_bind`: it HEAP-COPIES the file (no mmap), so it works on EVERY backend — including wasm, which has no mmap — but is NOT durable (writes stay in memory and never reach the file).  Use it to open a snapshot for querying where `store\_persist\_bind` can't run (a browser / wasm target) or where a durable live binding isn't wanted.  Returns `false` on a missing / truncated / wrong-format file (no panic; assumes the on-disk layout matches `r`'s declared type).  \@PLN97 arc G Phase 1 — the whole-file load the browser working-set path builds on (loft\#522). h: hash\<Rec\[id\]\> = \[\] store\_load(h, "world.store")   // h now holds the file's records
+Load a persisted store IMAGE fully into memory, populating the empty store-rooted collection `r` so it can be queried like any in-memory collection.  The portable, read-only counterpart of `store\_persist\_bind`: it HEAP-COPIES the file (no mmap), so it works on EVERY backend — including wasm, which has no mmap — but is NOT durable (writes stay in memory and never reach the file).  Use it to open a snapshot for querying where `store\_persist\_bind` can't run (a browser / wasm target) or where a durable live binding isn't wanted.  Returns `false` on a missing / truncated / wrong-format file (no panic; assumes the on-disk layout matches `r`'s declared type).  This is the whole-file load that the browser's working-set path builds on. h: hash\<Rec\[id\]\> = \[\] store\_load(h, "world.store")   // h now holds the file's records
 
 ```rust
 pub fn store_load_url(r: reference, url: text, sha256: text) -> boolean fs#read
 ```
 
-Load a persisted store IMAGE over HTTP(S) from a TRUSTED source, establishing authenticity BEFORE the bytes are adopted: fetch the whole image at `url`, verify its SHA-256 against the caller-pinned `sha256` (lowercase hex), and only on a match heap-load it into `r` — the bytes never touch disk. A fetch error or a hash mismatch REFUSES the load (returns false, loads nothing). The fetch→verify→trust discipline the registry install uses, bridged onto the store loader; `url` may be `http(s)://` or `file://`. Whole-file counterpart of the paged `store\_load\_key(s)`/`store\_load\_range` loaders. \@PLN97 arc G Phase 0. h: hash\<Rec\[id\]\> = \[\] store\_load\_url(h, "https://cdn.example/world.store", "\<sha256-hex\>")
+Load a persisted store IMAGE over HTTP(S) from a TRUSTED source, establishing authenticity BEFORE the bytes are adopted: fetch the whole image at `url`, verify its SHA-256 against the caller-pinned `sha256` (lowercase hex), and only on a match heap-load it into `r` — the bytes never touch disk. A fetch error or a hash mismatch REFUSES the load (returns false, loads nothing). The fetch→verify→trust discipline the registry install uses, bridged onto the store loader; `url` may be `http(s)://` or `file://`. Whole-file counterpart of the paged `store\_load\_key(s)`/`store\_load\_range` loaders. h: hash\<Rec\[id\]\> = \[\] store\_load\_url(h, "https://cdn.example/world.store", "\<sha256-hex\>")
 
 ```rust
 pub fn store_load_url_trusted(r: reference, url: text) -> boolean fs#read
 ```
 
-Load a whole store IMAGE over HTTP(S)/file:// from a TRUSTED source into `r` — the INSTANT counterpart of store\_load\_url: skips the SHA-256 pin (you trust the origin) for a fast read, but is still structurally validated, so a corrupt or malformed image is rejected (false), never adopted. Use store\_load\_url for an untrusted source. \@PLN97 arc G Phase 0. world: hash\<Rec\[id\]\> = \[\] store\_load\_url\_trusted(world, "https://cdn.internal/world.store")
+Load a whole store IMAGE over HTTP(S)/file:// from a TRUSTED source into `r` — the INSTANT counterpart of store\_load\_url: skips the SHA-256 pin (you trust the origin) for a fast read, but is still structurally validated, so a corrupt or malformed image is rejected (false), never adopted. Use store\_load\_url for an untrusted source. world: hash\<Rec\[id\]\> = \[\] store\_load\_url\_trusted(world, "https://cdn.internal/world.store")
 
 ```rust
 pub fn store_load_untrusted(r: reference, path: text) -> boolean fs#read
 ```
 
-Load a store IMAGE from a local file that may be UNTRUSTED into `r` — the structurally-validated counterpart of store\_load. Reads the file and validates its block structure BEFORE adoption, so a crafted or corrupt file cannot hang (0-size block) or drive a heap over-read; it is rejected (false). store\_load is faster (validates only in debug) for a file you produced yourself; use this for a file whose provenance you don't control. \@PLN97 arc G Phase 2. h: hash\<Rec\[id\]\> = \[\] if !store\_load\_untrusted(h, "downloaded.store") { /\* rejected — malformed \*/ }
+Load a store IMAGE from a local file that may be UNTRUSTED into `r` — the structurally-validated counterpart of store\_load. Reads the file and validates its block structure BEFORE adoption, so a crafted or corrupt file cannot hang (0-size block) or drive a heap over-read; it is rejected (false). store\_load is faster (validates only in debug) for a file you produced yourself; use this for a file whose provenance you don't control. h: hash\<Rec\[id\]\> = \[\] if !store\_load\_untrusted(h, "downloaded.store") { /\* rejected — malformed \*/ }
 
 ```rust
 pub fn store_verify(r: reference) -> boolean
@@ -8715,7 +8712,7 @@ pub fn store_reclaim(r: reference) -> integer fs#update
 Give back the free space at the END of a store-rooted collection's store, and return the BYTES handed back (0 when there was nothing to give). For a store bound with `store\_persist\_bind` that is the FILE shrinking; otherwise it is memory returned to the allocator. Records are never moved, so every reference into the collection stays valid.
 You say when, because only the program knows whether a drop is permanent: a collection that shrinks and grows again would just pay to re-grow. Read `store\_memory()` first, and read it as a RANKING rather than a quantity: its `tail%` says which store is worth reclaiming, and it is NOT the size of the return. A reclaimed store lands at `tail 11%` — a growth reserve the allocator keeps — so what comes back is `tail% - 11%` of the resulting capacity, never the whole tail. Measured across eight shapes with tails from 13% to 60%: at a 13% tail the report suggests ~36 KB and the call hands back 5832 bytes. Treat a reading near 11% as nothing to get back, not a little. Its `inner%` is the space BETWEEN records, which this does not touch — though the number RISES after a reclaim, because the capacity it is a percentage of has shrunk.
 WHERE the drop was matters as much as how big it was. `mergeable` counts adjacent free neighbours that never coalesced, so it measures how CONTIGUOUS the drop was, and that is exactly the part this call can fix: the same 2000 records dropped contiguously merge 2004 free blocks down to 7 and hand back 25400 bytes, while dropped alternately they leave 1997 blocks standing forever — the live records between them are what keeps them apart — and hand back 16312.
-You do NOT need this to right-size a file at the END of a run. A bound store keeps its file AS the live arena, and the arena's capacity grows by 7/3 and never shrinks by itself — so mid-run the file is a rung on a ladder, not a measure of content, and can sit 57% above what it holds. Releasing the collection hands that tail back on its own, so the file a program leaves behind follows its content whether or not this was ever called (loft\#752). Call it MID-RUN, when a live set has dropped for good and the memory (or the disk) is wanted back before the end. world: hash\<Hex\[q, r\]\> = \[\] store\_persist\_bind(world, "world.store") // …a region is unloaded for good… store\_reclaim(world)          // the file follows what the world holds NOW Returns 0, changing nothing, for a store that is read-only, shares another store's memory, or carries a `store\_durable\_seal` sidecar — truncating behind that sidecar's back would report a healthy store as corrupt.
+You do NOT need this to right-size a file at the END of a run. A bound store keeps its file AS the live arena, and the arena's capacity grows by 7/3 and never shrinks by itself — so mid-run the file is a rung on a ladder, not a measure of content, and can sit 57% above what it holds. Releasing the collection hands that tail back on its own, so the file a program leaves behind follows its content whether or not this was ever called. Call it MID-RUN, when a live set has dropped for good and the memory (or the disk) is wanted back before the end. world: hash\<Hex\[q, r\]\> = \[\] store\_persist\_bind(world, "world.store") // …a region is unloaded for good… store\_reclaim(world)          // the file follows what the world holds NOW Returns 0, changing nothing, for a store that is read-only, shares another store's memory, or carries a `store\_durable\_seal` sidecar — truncating behind that sidecar's back would report a healthy store as corrupt.
 
 ```rust
 pub fn store_release(r: reference) -> integer fs#update
@@ -8733,19 +8730,19 @@ pub fn store_bind_lazy(local: reference, source: text) -> boolean
 ```
 
 Working-set load: fetch ONE integer-keyed entry from a persisted HASH image into the empty local hash `local`, reading only the pages the lookup touches — not the whole file. The bounded-fetch counterpart of `store\_load`, for when `local` should hold only the entries actually asked for (a phone pulling the few map tiles a route needs from a large block). `path` is a local file or an `http(s)://` URL served with `Range`, on every target including the browser (`--html`), where the fetch goes through the same bridge `store\_load\_url\_trusted` uses. Returns false when the key is absent, the file is unreadable, or the collection is not an integer-keyed hash.
-The entry's own fields are RELOCATED into the local store, so `text`, nested structs and flat vectors all come across; only a `vector\<text\>` or a `vector\<vector\>` is refused (its element pointers would dangle), and a refusal says so on stderr rather than looking like an absent key. \@PLN97 arc G (loft\#522). tiles: hash\<Tile\[id\]\> = \[\] store\_load\_key(tiles, "block.store", 42)   // tiles now holds entry 42 only \@F108 — Lazy store binding (catalogue anchor, \@PLN92)
-\@PLN129 arc A — bind a COLLECTION to a lazy source. After this, a lookup that MISSES fetches that one entry and inserts it, so the next lookup is an ordinary resident hit; a lookup that hits never leaves the process. The collection is therefore automatically the cached data set — there is no separate cache.
+The entry's own fields are RELOCATED into the local store, so `text`, nested structs and flat vectors all come across; only a `vector\<text\>` or a `vector\<vector\>` is refused (its element pointers would dangle), and a refusal says so on stderr rather than looking like an absent key. tiles: hash\<Tile\[id\]\> = \[\] store\_load\_key(tiles, "block.store", 42)   // tiles now holds entry 42 only
+Bind a COLLECTION to a lazy source. After this, a lookup that MISSES fetches that one entry and inserts it, so the next lookup is an ordinary resident hit; a lookup that hits never leaves the process. The collection is therefore automatically the cached data set — there is no separate cache.
 Per COLLECTION, not per store: `persons` and `companies` are different sources, and two collections of one type can bind differently. Binding replaces, and may be done before the collection holds anything.
 `source` is either an IMAGE — what `store\_load\_key` accepts: a local `.store` file or an `http(s)://` URL served with Range — or a DATABASE, named by a driver prefix. Returns false for a null collection. persons: hash\<Person\[id\]\> = \[\] store\_bind\_lazy(persons, "people.store") p = persons\[42\]        // fetches exactly entry 42, then holds it
-\@PLN129 arc B — `sqlite:\<path\>` binds to a table instead, and the query is DERIVED from the collection's own type: the table is the element type's name lowercased, the columns are its fields, and the `WHERE` is the collection's key. Nothing is written down twice. persons: hash\<Person\[id\]\> = \[\]              // struct Person { id: integer, name: text } store\_bind\_lazy(persons, "sqlite:people.db") p = persons\[42\]        // SELECT "id","name" FROM "person" WHERE "id" = 42
+`sqlite:\<path\>` binds to a table instead, and the query is DERIVED from the collection's own type: the table is the element type's name lowercased, the columns are its fields, and the `WHERE` is the collection's key. Nothing is written down twice. persons: hash\<Person\[id\]\> = \[\]              // struct Person { id: integer, name: text } store\_bind\_lazy(persons, "sqlite:people.db") p = persons\[42\]        // SELECT "id","name" FROM "person" WHERE "id" = 42
 Read-only, and the connection enforces it. A binding that cannot be served — a field that is not a column, a collection whose KIND the source cannot read — is REFUSED rather than served wrongly, and says so through `store\_lazy\_error`. sqlite is opened on the first fault, so a program that binds no database loads nothing.
-FALSE means the binding was not made, and it is worth checking. A `.store` IMAGE is read a page at a time, which only a `hash` or a `trie` supports: a `sorted`, `index` or `spatial` bound to one is refused HERE, at the call that is wrong, rather than answering `null` at every later lookup (loft\#802). Those kinds load whole — `store\_load` / `store\_load\_url\_trusted` carry all of them. A DATABASE source judges its own schema on the first fault instead, since what it can serve is a fact about the other end. if !store\_bind\_lazy(tiles, "tiles.store") { store\_load(tiles, "tiles.store");     // whole-image, every kind }
+FALSE means the binding was not made, and it is worth checking. A `.store` IMAGE is read a page at a time, which only a `hash` or a `trie` supports: a `sorted`, `index` or `spatial` bound to one is refused HERE, at the call that is wrong, rather than answering `null` at every later lookup. Those kinds load whole — `store\_load` / `store\_load\_url\_trusted` carry all of them. A DATABASE source judges its own schema on the first fault instead, since what it can serve is a fact about the other end. if !store\_bind\_lazy(tiles, "tiles.store") { store\_load(tiles, "tiles.store");     // whole-image, every kind }
 
 ```rust
 pub fn store_lazy_query(local: reference, condition: text) -> integer
 ```
 
-\@PLN129 arc B2 — run an explicit condition against this collection's bound DATABASE source and pull every matching row into the collection. Answers how many records the collection gained.
+Run an explicit condition against this collection's bound DATABASE source and pull every matching row into the collection. Answers how many records the collection gained.
 The escape hatch for what the collection's KEY cannot express — a predicate on another column, a pattern, a range nobody declared an index for. A keyed lookup derives its own query and needs no call; this one cannot be derived, so it is written down and visible rather than happening behind a lookup.
 found = store\_lazy\_query(persons, "name LIKE 'Ada%'"); p = persons\[42\]        // hits what the query already brought in
 The rows land IN the collection, not in a separate result: a person reached by this query and the same person reached by a later lookup are ONE record, and a row already resident is left alone rather than fetched twice. So `len` and iteration keep answering "what have I got" — after this, more.
@@ -8755,16 +8752,16 @@ The rows land IN the collection, not in a separate result: a person reached by t
 pub fn store_lazy_range(local: reference, lo: integer, hi: integer) -> integer
 ```
 
-\@PLN129 arc B step 8 — pull a whole KEY RANGE from this collection's bound DATABASE source in ONE query. Answers how many records the collection gained.
+Pull a whole KEY RANGE from this collection's bound DATABASE source in ONE query. Answers how many records the collection gained.
 This is what keeps lazy reading usable rather than merely correct. Fetching 500 records one lookup at a time is 500 round trips; the same 500 as a range is one. So when you know the span you want, ask for the span:
-store\_lazy\_range(events, 100, 199);   // one query, up to 100 records for e in events { ... }               // all resident, no further fetching
+store\_lazy\_range(events, 100, 199);   // one query, up to 100 records for e in events { .. }               // all resident, no further fetching
 The collection must be ORDERED (`sorted` or `index`) — a `hash` has no order to range over — and keyed on ONE column, since two numbers cannot say which value pins a composite key's leading column; use `store\_lazy\_query` for that. Both bounds are inclusive, in the collection's own key order. A record already resident is left alone. Answers 0 when nothing matched AND when the query could not run; `store\_lazy\_error` tells those apart.
 
 ```rust
 pub fn store_lazy_error(local: reference) -> text
 ```
 
-\@PLN129 arc C — why a lazy fetch for this collection could not REACH its source, or "" when it is healthy.
+Why a lazy fetch for this collection could not REACH its source, or "" when it is healthy.
 A lookup cannot tell you this. C80 says a value read never raises, so a miss answers `null` whether the key is genuinely absent or the source is unreachable — and those are different facts, one stable and one not. Ask this after a null to tell them apart:
 p = persons\[42\]; if p == null { why = store\_lazy\_error(persons); if why == "" { /\* really no such person \*/ } else { /\* could not reach: {why} \*/ } }
 The FIRST failure's reason, kept — not the last: it names the original cause, and later ones are usually the same failure repeating. Nothing clears it but `store\_lazy\_clear`. An absence does NOT, and neither does a later success: reaching the source now says nothing about what an earlier failure already lost, and answering "healthy" over a traversal that missed data is the silent wrong answer this channel exists to prevent.
@@ -8773,42 +8770,42 @@ The FIRST failure's reason, kept — not the last: it names the original cause, 
 pub fn store_lazy_faults(local: reference) -> integer
 ```
 
-\@PLN129 arc C — how many fetches could not REACH this collection's source. 0 is healthy. The magnitude behind `store\_lazy\_error`: after a traversal it answers "how incomplete am I".
+How many fetches could not REACH this collection's source. 0 is healthy. The magnitude behind `store\_lazy\_error`: after a traversal it answers "how incomplete am I".
 
 ```rust
 pub fn store_lazy_clear(local: reference) -> boolean
 ```
 
-\@PLN129 arc C — acknowledge this collection's fetch failures, returning whether there was anything to acknowledge.
+Acknowledge this collection's fetch failures, returning whether there was anything to acknowledge.
 The ONLY thing that clears them. A later fetch happening to succeed does NOT: a traversal whose first lookup could not reach the source and whose second could is MISSING data, and answering "healthy" afterwards would be exactly the silent wrong answer this channel exists to prevent. Clearing is a caller saying "I have seen this", which is a different event entirely.
 
 ```rust
 pub fn store_lazy_fail(local: reference, why: text) fs#read
 ```
 
-\@PLN133 S8 — a loft DRIVER reporting that it could not reach its source.
+A loft DRIVER reporting that it could not reach its source.
 The writing end of the channel `store\_lazy\_error` reads. A driver written in loft (`fn lazy\_fetch(...)`) has the same three answers a Rust source has, and two of them are an integer: `1` inserted, `0` absent. The third is not — "the source is down" carries a REASON, and answering `0` for it is exactly the silent wrong answer arc C exists to prevent, because a caller cannot tell it from "no such person".
-fn lazy\_fetch(coll: hash\<Person\[id\]\>, source: text, key\_int: integer, key\_text: text) -\> integer { if !db.db\_open(source) { store\_lazy\_fail(coll, "cannot open {source}: {db.db\_last\_error()}"); return 0; } ... }
+fn lazy\_fetch(coll: hash\<Person\[id\]\>, source: text, key\_int: integer, key\_text: text) -\> integer { if !db.db\_open(source) { store\_lazy\_fail(coll, "cannot open {source}: {db.db\_last\_error()}"); return 0; } .. }
 Sticky and counted exactly like a Rust source's failure: the FIRST reason is kept, every failure is counted, and only `store\_lazy\_clear` clears them.
 
 ```rust
 pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#read
 ```
 
-Fetch ONE integer-keyed entry from a persisted collection image into `local`, reading only the pages the lookup touches. The singular of `store\_load\_keys` and the integer form of `store\_load\_key\_text`; returns false when the key is absent or the image cannot serve this collection. \@PLN97 arc G (loft\#522). tiles: hash\<Tile\[id\]\> = \[\] store\_load\_key(tiles, "block.store", 42)
+Fetch ONE integer-keyed entry from a persisted collection image into `local`, reading only the pages the lookup touches. The singular of `store\_load\_keys` and the integer form of `store\_load\_key\_text`; returns false when the key is absent or the image cannot serve this collection. tiles: hash\<Tile\[id\]\> = \[\] store\_load\_key(tiles, "block.store", 42)
 
 ```rust
 pub fn store_load_key_text(local: reference, path: text, key: text) -> boolean fs#read
 ```
 
-Text-keyed form of `store\_load\_key`: fetch ONE entry from a persisted `hash\<T\[textkey\]\>` or `trie\<T\[textkey\]\>` (a place-name / string-id index) into `local`, reading only the pages the lookup touches. Returns false when the key is absent or the collection isn't a copyable text-keyed hash or trie. \@PLN97 arc G (loft\#522), \@PLN134 for the trie. places: hash\<Place\[name\]\> = \[\] store\_load\_key\_text(places, "gazetteer.store", "Amsterdam")
+Text-keyed form of `store\_load\_key`: fetch ONE entry from a persisted `hash\<T\[textkey\]\>` or `trie\<T\[textkey\]\>` (a place-name / string-id index) into `local`, reading only the pages the lookup touches. Returns false when the key is absent or the collection isn't a copyable text-keyed hash or trie. places: hash\<Place\[name\]\> = \[\] store\_load\_key\_text(places, "gazetteer.store", "Amsterdam")
 
 ```rust
 pub fn store_load_prefix(local: reference, path: text, pre: text, limit: integer) -> integer fs#read
 ```
 
 Prefix form: fetch every entry whose text key begins with `pre` from a persisted `trie\<T\[k\]\>` into `local`, reading only the pages the prefix walk touches — what a search box needs, and what a `sorted` range cannot express without a hand-built successor string. Returns the count loaded.
-`limit` caps the WALK, not just the answer: with `limit` 8 the ninth record is never stepped to, so its pages are never fetched. A negative `limit` means no cap, which on a common prefix reads the whole run. \@PLN134. words: trie\<Word\[w\]\> = \[\] store\_load\_prefix(words, "vocab.store", "kerk", 20)
+`limit` caps the WALK, not just the answer: with `limit` 8 the ninth record is never stepped to, so its pages are never fetched. A negative `limit` means no cap, which on a common prefix reads the whole run. words: trie\<Word\[w\]\> = \[\] store\_load\_prefix(words, "vocab.store", "kerk", 20)
 
 ```rust
 pub fn store_load_box(local: reference, path: text, from: vector<integer>, till: vector<integer>, limit: integer) -> integer fs#read
@@ -8816,26 +8813,26 @@ pub fn store_load_box(local: reference, path: text, from: vector<integer>, till:
 
 Box form: fetch every entry inside the closed bounding box `from`..`till` from a persisted `spatial\<T\[x, y\]\>` into `local`, reading only the pages the box walk touches — what a map viewport needs. Returns the count loaded. The corners are vectors so the same call serves 1, 2 or 3 axes, and writing them the other way round names the same box.
 TWO bounds, and a map needs both. `limit` caps the WALK, not just the answer: with `limit` 200 the 201st marker is never stepped to, so its pages are never fetched (a negative `limit` means no cap). And the BOX bounds it — the Morton interval between two corners is a superset the Z-order curve threads in and out of, so a wide, shallow viewport would otherwise read 1.46 M records to return 4 k. Measured on a 3.2 M-point map index: 5.3 pages of 64 KB for the first viewport, ~1.5 for each pan after it, against a 158 MB whole-image download.
-Those numbers assume a dataset written with locality in every axis, which is the one thing this call cannot do for you. The Morton walk is symmetric; a file laid out along ONE axis is not, so a box crossing that axis pays for every stride it crosses. On a 62 500-point grid returning the same 500 records, a 250x2 box read 107 pages of 64 KiB against 7 for its 2x250 mirror, and the two swapped when the identical data was written in the other axis order — 81 % of the image to return 0.8 % of the records. Write such a dataset TILED: it has no bad orientation, and for the square-ish boxes a viewport uses it beats either linear order. \@PLN136. pins: spatial\<Pin\[x, y\]\> = \[\] store\_load\_box(pins, "map.store", \[x1, y1\], \[x2, y2\], 200)
+Those numbers assume a dataset written with locality in every axis, which is the one thing this call cannot do for you. The Morton walk is symmetric; a file laid out along ONE axis is not, so a box crossing that axis pays for every stride it crosses. On a 62 500-point grid returning the same 500 records, a 250x2 box read 107 pages of 64 KiB against 7 for its 2x250 mirror, and the two swapped when the identical data was written in the other axis order — 81 % of the image to return 0.8 % of the records. Write such a dataset TILED: it has no bad orientation, and for the square-ish boxes a viewport uses it beats either linear order. pins: spatial\<Pin\[x, y\]\> = \[\] store\_load\_box(pins, "map.store", \[x1, y1\], \[x2, y2\], 200)
 
 ```rust
 pub fn store_load_keys(local: reference, path: text, keys: vector<integer>) -> integer fs#read
 ```
 
-Plural form of `store\_load\_key`: fetch the given integer keys' entries into `local` in one call (the paged reader is opened once and its cache reused), returning how many were found. Keys absent from the remote are skipped. Same relocation rules as `store\_load\_key`. \@PLN97 arc G (loft\#522). tiles: hash\<Tile\[id\]\> = \[\] got = store\_load\_keys(tiles, "block.store", \[7, 13, 42\])   // got == 3
+Plural form of `store\_load\_key`: fetch the given integer keys' entries into `local` in one call (the paged reader is opened once and its cache reused), returning how many were found. Keys absent from the remote are skipped. Same relocation rules as `store\_load\_key`. tiles: hash\<Tile\[id\]\> = \[\] got = store\_load\_keys(tiles, "block.store", \[7, 13, 42\])   // got == 3
 
 ```rust
 pub fn store_load_keys_text(local: reference, path: text, keys: vector<text>) -> integer fs#read
 ```
 
-Plural form of `store\_load\_key\_text`, and the text twin of `store\_load\_keys`: fetch the given text keys' entries into `local` in ONE call, returning how many were found. Keys absent from the remote are skipped. Serves a `hash\<T\[k\]\>` and a `trie\<T\[k\]\>` alike, like the single-key form. loft\#1064.
+Plural form of `store\_load\_key\_text`, and the text twin of `store\_load\_keys`: fetch the given text keys' entries into `local` in ONE call, returning how many were found. Keys absent from the remote are skipped. Serves a `hash\<T\[k\]\>` and a `trie\<T\[k\]\>` alike, like the single-key form.
 Looping `store\_load\_key\_text` is not the same call: each one opens its own reader, so a ring of twenty asset names re-fetches the same 64 KiB bucket-table page twenty times. This opens the reader once and shares its page cache — which is what makes it the PREFETCH call: ask for the ring at a load or level boundary, so no frame is ever the thing that discovers it needs an asset. art: hash\<Blob\[bl\_key\]\> = \[\] got = store\_load\_keys\_text(art, "pack.store", \["page/mobs", "hit.ogg"\])
 
 ```rust
 pub fn store_load_range(local: reference, path: text, lo: integer, hi: integer) -> integer fs#read
 ```
 
-Range form: fetch every entry whose integer key is in \[lo, hi\] from a persisted `sorted\<T\[k\]\>` into `local`, reading only the pages the range walk touches — the ordered-collection counterpart of `store\_load\_keys` (a phone pulling the corridor of map tiles a route crosses). Returns the count loaded. \@PLN97 arc G (loft\#522). tiles: sorted\<Tile\[tkey\]\> = \[\] store\_load\_range(tiles, "block.store", lo\_cell, hi\_cell)
+Range form: fetch every entry whose integer key is in \[lo, hi\] from a persisted `sorted\<T\[k\]\>` into `local`, reading only the pages the range walk touches — the ordered-collection counterpart of `store\_load\_keys` (a phone pulling the corridor of map tiles a route crosses). Returns the count loaded. tiles: sorted\<Tile\[tkey\]\> = \[\] store\_load\_range(tiles, "block.store", lo\_cell, hi\_cell)
 
 ```rust
 pub fn set_file_size(self: File, size: integer) -> FileResult fs#update
@@ -8889,7 +8886,7 @@ Returns all environment variables as a vector of EnvVariable records (fields: na
 pub fn env_variable(name: text) -> text env#read
 ```
 
-Returns the value of the environment variable `name`, or `""` when it is not set. An unset variable and one set to the empty string give the same answer, so this cannot tell them apart (loft\#1302). Use to read configuration from the shell environment.
+Returns the value of the environment variable `name`, or `""` when it is not set. An unset variable and one set to the empty string give the same answer, so this cannot tell them apart. Use to read configuration from the shell environment.
 
 ```rust
 pub fn arguments() -> vector<text>
@@ -9123,7 +9120,7 @@ pub enum JsonValue {
 }
 ```
 
-Typed union of JSON values.  The discriminant (1..6) picks the active variant; variant data lives in the variant's fields. Matches the RFC 8259 kinds, plus `JInteger` (\@PLN109) for an integer-shaped number preserved to an exact `integer` (i64).
+Typed union of JSON values.  The discriminant (1..6) picks the active variant; variant data lives in the variant's fields. Matches the RFC 8259 kinds, plus `JInteger` for an integer-shaped number preserved to an exact `integer` (i64).
 `JInteger` MUST stay the LAST variant: the store discriminant it gets (7) is hard-coded as `JV\_DISCR\_INT` in `src/native.rs`, and the existing variants' discriminants (1–6) must not shift.
 
 ```rust
@@ -9190,7 +9187,7 @@ pub fn as_bool(self: JsonValue) -> boolean?
 ```
 
 Typed extractor — returns `null` on kind mismatch.
-Declared `boolean?` and not `boolean`: the doc has always promised the null and the signature could not carry it.  Its three siblings keep the promise because `text`, `float` and `integer` each have an in-band sentinel a non-null return can hold; a two-state Rust `bool` has none, so this one answered `false` for every mismatching kind — for an absent field, for the string `"true"`, and for `1` — indistinguishably from a field that really says `false` (loft\#1302).
+Declared `boolean?` and not `boolean`: the doc has always promised the null and the signature could not carry it.  Its three siblings keep the promise because `text`, `float` and `integer` each have an in-band sentinel a non-null return can hold; a two-state Rust `bool` has none, so this one answered `false` for every mismatching kind — for an absent field, for the string `"true"`, and for `1` — indistinguishably from a field that really says `false`.
 
 ```rust
 pub fn kind(self: JsonValue) -> text

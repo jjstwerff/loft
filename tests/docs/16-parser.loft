@@ -38,7 +38,7 @@
 // language itself compiles: an index expression ('v[0]'), the null-coalescing
 // operator ('a ?? 0'), and a formatted string literal ('"v={n}"'). A snippet
 // containing one answers a non-zero count even though it is valid, so a validator
-// built on this today will reject input it should accept. Tracked as loft#1259.
+// built on this today will reject input it should accept.
 use parser;
 // @PAR-001 — validate a source string before acting on it: `== 0` is good, `> 0` is not
 fn main() {

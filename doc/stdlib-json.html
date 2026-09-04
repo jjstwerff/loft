@@ -33,7 +33,7 @@
   JObject { fields: vector&lt;JsonField&gt; },
   JInteger { value: integer },
 }</code></pre>
-<p>Typed union of JSON values.  The discriminant (1..6) picks the active variant; variant data lives in the variant's fields. Matches the RFC 8259 kinds, plus `JInteger` (@PLN109) for an integer-shaped number preserved to an exact `integer` (i64).</p>
+<p>Typed union of JSON values.  The discriminant (1..6) picks the active variant; variant data lives in the variant's fields. Matches the RFC 8259 kinds, plus `JInteger` for an integer-shaped number preserved to an exact `integer` (i64).</p>
 <p>`JInteger` MUST stay the LAST variant: the store discriminant it gets (7) is hard-coded as `JV_DISCR_INT` in `src/native.rs`, and the existing variants' discriminants (1–6) must not shift.</p>
 </div>
 <div class="item">
@@ -80,7 +80,7 @@
 <div class="item">
 <pre><code>pub fn as_bool(self: JsonValue) -&gt; boolean?</code></pre>
 <p>Typed extractor — returns `null` on kind mismatch.</p>
-<p>Declared `boolean?` and not `boolean`: the doc has always promised the null and the signature could not carry it.  Its three siblings keep the promise because `text`, `float` and `integer` each have an in-band sentinel a non-null return can hold; a two-state Rust `bool` has none, so this one answered `false` for every mismatching kind — for an absent field, for the string `&quot;true&quot;`, and for `1` — indistinguishably from a field that really says `false` (loft#1302).</p>
+<p>Declared `boolean?` and not `boolean`: the doc has always promised the null and the signature could not carry it.  Its three siblings keep the promise because `text`, `float` and `integer` each have an in-band sentinel a non-null return can hold; a two-state Rust `bool` has none, so this one answered `false` for every mismatching kind — for an absent field, for the string `&quot;true&quot;`, and for `1` — indistinguishably from a field that really says `false`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn kind(self: JsonValue) -&gt; text</code></pre>

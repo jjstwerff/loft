@@ -2438,3 +2438,141 @@ fn the_source_browsers_still_show_the_citations_in_their_source() {
         "…and every one of them sits inside a comment span"
     );
 }
+
+/// Pages this repo generates carry no internal tracker tag in their reader-facing prose.
+///
+/// `@PLN…`, `@P###` and `loft#…` name a plan, a P-issue and an issue. A reader of the
+/// published reference cannot open any of them, so a tag in a description is a dead end
+/// that reads as the reader's ignorance — CLAUDE.md § User-facing output rules them out
+/// of what a command prints, and DOC_QUALITY.md § D says the same for the pages (#1348).
+///
+/// The exclusions below are the whole difficulty of this guard: each one is a place where
+/// the same characters are NOT a leak, and a guard that excluded one case too many would
+/// pass over the thing it exists to catch. Each is therefore justified, and
+/// [`the_tag_guard_still_sees_a_leak_in_prose`] proves the filter still fires.
+#[test]
+fn no_internal_tracker_tag_reaches_the_reference_prose() {
+    let mut leaked: Vec<String> = Vec::new();
+    let mut pages = 0usize;
+    for entry in fs::read_dir("doc").expect("doc/ is readable") {
+        let path = entry.expect("readable entry").path();
+        if path.extension().is_none_or(|e| e != "html") {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        if page_is_exempt(&name) {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        pages += 1;
+        for prose in strip_comment_spans(&text) {
+            for tag in internal_tags(&prose) {
+                leaked.push(format!("{}: {tag}", path.display()));
+            }
+        }
+    }
+    // The library pages are exempt and there are many of them, so the floor is over what
+    // REMAINS — the stdlib sections, the topic chapters and the site pages. A count that
+    // collapsed would mean the exemption had swallowed the population.
+    assert!(pages > 50, "expected the generated pages, saw {pages}");
+    assert!(
+        leaked.is_empty(),
+        "an internal tracker tag is published as prose in {} place(s). A reader cannot \
+         open one — state the rule instead, and keep the tag in the commit or the issue:\n  {}",
+        leaked.len(),
+        leaked.join("\n  ")
+    );
+}
+
+/// Pages where these characters are not a leak, and why each is genuinely different.
+fn page_is_exempt(name: &str) -> bool {
+    match name {
+        // The feature catalogue and the print sheet that embeds it: `@F…` IS the subject
+        // here, one per catalogue entry. Excluding them costs nothing, because a PLAN tag
+        // on those pages is still caught — `internal_tags` never matches `@F`.
+        "33-features.html" | "print.html" => false,
+        // Single-file app exports. The tags sit in embedded JavaScript and loft source —
+        // the page's own runtime shim — which a reader meets as a running program, not as
+        // documentation.
+        "brick-buster.html"
+        | "playground.html"
+        | "gallery-run.html"
+        | "kernel-differential.html"
+        | "kernel-swap.html" => true,
+        // Quotes real `--explain` output, which prints `[dead-code lint · @F100]`. The doc
+        // is faithful; whether the compiler should print a catalogue id is a question about
+        // the OUTPUT, not about this page.
+        "34-running.html" => true,
+        // Rendered from the registry's stored `api` field, which is derived from each
+        // library's own source. Not editable from this repo (#1342 routes the same way).
+        n => n.starts_with("lib-"),
+    }
+}
+
+/// The tag families a READER cannot resolve. `@F`/`@I` are deliberately absent: the
+/// feature catalogue is published, so a feature id has somewhere to land.
+fn internal_tags(prose: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for (i, _) in prose.match_indices('@') {
+        let rest = &prose[i + 1..];
+        for fam in ["PLN", "PLAN"] {
+            if let Some(d) = rest.strip_prefix(fam)
+                && d.starts_with(|c: char| c.is_ascii_digit())
+            {
+                found.push(format!("@{fam}{}", digits(d)));
+            }
+        }
+        // `@P` followed by two or more digits is a P-issue; `@PLN3` is caught above and
+        // `@PLAN` cannot reach here because `L` is not a digit.
+        if let Some(d) = rest.strip_prefix('P')
+            && d.starts_with(|c: char| c.is_ascii_digit())
+            && digits(d).len() >= 2
+        {
+            found.push(format!("@P{}", digits(d)));
+        }
+    }
+    for (i, _) in prose.match_indices("loft#") {
+        let d = digits(&prose[i + 5..]);
+        if !d.is_empty() {
+            found.push(format!("loft#{d}"));
+        }
+    }
+    found
+}
+
+fn digits(s: &str) -> String {
+    s.chars().take_while(char::is_ascii_digit).collect()
+}
+
+/// The control: the filter still finds a tag in ordinary prose.
+///
+/// Without this, `no_internal_tracker_tag_reaches_the_reference_prose` would pass if
+/// `internal_tags` ever stopped matching, or if the exemption list grew to cover
+/// everything — the two ways a guard over a shrinking population goes quiet.
+#[test]
+fn the_tag_guard_still_sees_a_leak_in_prose() {
+    let sample = "Number of characters in the text (@PLN110) — the human count.";
+    assert_eq!(internal_tags(sample), vec!["@PLN110".to_string()]);
+    assert_eq!(
+        internal_tags("kept as a shim (loft#1003) and @P259 besides"),
+        vec!["@P259".to_string(), "loft#1003".to_string()]
+    );
+    assert!(
+        internal_tags("the dead-code lint is @F100").is_empty(),
+        "a feature id is published and resolvable, so it is not in this family"
+    );
+    assert!(
+        !page_is_exempt("stdlib-file-system.html"),
+        "the page that carried 42 of them must be covered"
+    );
+    assert!(
+        !page_is_exempt("20-logging.html"),
+        "the topic pages must be covered"
+    );
+}

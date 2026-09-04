@@ -51,7 +51,7 @@
 <pre><code><span class="kw">fn</span> first_element&lt;<span class="en">T</span>&gt;(gen_v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">T</span>&gt;) -&gt; <span class="en">T</span> {
   gen_v[<span class="nm">0</span>]
 }</code></pre>
-<p>@PLN25 index flip — a computed index <code>gen_v.len() - 1</code> is not provably in-bounds, so the read is nullable; a generic has no <code>?? default</code>, so the honest result type is <code>T?</code>.</p>
+<p>A computed index <code>gen_v.len() - 1</code> is not provably in-bounds, so the read is nullable; a generic has no <code>?? default</code>, so the honest result type is <code>T?</code>.</p>
 <pre><code><span class="kw">fn</span> last_element&lt;<span class="en">T</span>&gt;(gen_v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">T</span>&gt;) -&gt; <span class="en">T</span>? {
   gen_v[gen_v.<span class="bi"><a href="stdlib-text.html">len</a></span>() - <span class="nm">1</span>]
 }
@@ -141,7 +141,7 @@ Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 <span class="kw">fn</span> <span class="fn-call">test_user_type_bounds</span>() {
   cheap = <span class="en">Money</span> { cents: <span class="nm">300</span> };
   dear = <span class="en">Money</span> { cents: <span class="nm">700</span> };</code></pre>
-<p>Bind a generic's result before reading through it — loft#1273 retains one record per call when the value is consumed inline.</p>
+<p>Bind a generic's result before reading through it: consuming the value inline retains one record per call.</p>
 <pre><code>  best = <span class="fn-call">gen_max</span>(cheap, dear);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(best.cents == <span class="nm">700</span>, <span class="st">"Ordered on a user type: {best.cents}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cheap &lt; dear, <span class="st">"…and the bare operator, from the same definition"</span>);
@@ -227,7 +227,7 @@ fn test_pick_second() {
 fn first_element&lt;T&gt;(gen_v: vector&lt;T&gt;) -&gt; T {
   gen_v[0]
 }
-// @PLN25 index flip — a computed index `gen_v.len() - 1` is not provably in-bounds, so the
+// A computed index `gen_v.len() - 1` is not provably in-bounds, so the
 // read is nullable; a generic has no `?? default`, so the honest result type is `T?`.
 fn last_element&lt;T&gt;(gen_v: vector&lt;T&gt;) -&gt; T? {
   gen_v[gen_v.len() - 1]
@@ -342,8 +342,8 @@ fn to_text(self: Money) -&gt; text { "{self.cents}c" }
 fn test_user_type_bounds() {
   cheap = Money { cents: 300 };
   dear = Money { cents: 700 };
-  // Bind a generic's result before reading through it — loft#1273 retains one
-  // record per call when the value is consumed inline.
+  // Bind a generic's result before reading through it: consuming the value inline
+  // retains one record per call.
   best = gen_max(cheap, dear);
   assert(best.cents == 700, "Ordered on a user type: {best.cents}");
   assert(cheap &lt; dear, "…and the bare operator, from the same definition");
