@@ -1,0 +1,34 @@
+{
+  "M-changelog-read": {
+    "at": "2026-09-04 19:51",
+    "note": "2026-09 section re-read after the day: the four roll-up bullets for the later fixes (every type described, tags gone from the reference, the four warned-off things that work, the [V.Null] leak, the native tuple binding) are under Smaller things; no tracker numbers in the friendly log"
+  },
+  "M-close-plans": {
+    "at": "2026-09-04 13:55",
+    "note": "scripts/close-shipped-plans.sh --range v2026.8.0..HEAD --dry-run: all 14 plans named by the range are already closed (23 24 77 119 124 127 129 131 136 139 140 141 145 146)"
+  },
+  "M-docs-review": {
+    "at": "2026-09-04 19:39",
+    "note": "step 1: PROBLEMS.md is the closed archive by design, PLANNING.md carries one struck WITHDRAWN row and no done-in-place item; step 2: scripts/linkcheck.sh 368 links OK; step 3: 5 orphans found by scan \u2014 SESSION_354_HANDOFF, SPLIT, GAME_TESTING, GAPS removed (a June handoff, an April function audit with 7 of 8 cited fns gone, a GL-testing guide whose 4 scripts no longer exist and whose subject TESTING.md now owns, an April coverage table the Makefile target supersedes), GALLERY_CI and BRITTLE linked from the CLAUDE.md index; step 4/5b: doc_history_report run \u2014 the top entries stay with the reason recorded in RELEASE.md \u00a7 2026-09; step 8: make clippy-review run, dead suppressions struck in its output"
+  },
+  "M-leaks": {
+    "at": "2026-09-04 19:39",
+    "note": "JOINED tree at cf7d0c81: LOFT_STORES=warn over 1121 tests/scripts files: 0 leaking; LOFT_LOG=stores on 22-threading and 80-parallel-block: nothing unfreed (target/m-leaks-joined.log)"
+  },
+  "M-libs": {
+    "at": "2026-09-04 19:34",
+    "note": "2026-09-04 17:34 \u2014 scripts/revalidate_libs_local.sh on the JOINED tree at 4c9a950e: 42 pass, 0 runtime/env, 0 skipped, 0 COMPILE-BREAK (target/m-libs-joined.log)"
+  },
+  "M-monthly-bugs": {
+    "at": "2026-09-04 19:35",
+    "note": "make bug-review on the joined tree: three classes RISING in the newest band \u2014 null/sentinel 22.8% (+9.9pp), ownership/free 22.3% (+8.3pp), keyed collections 16.3% (+6.5pp); the 2026-09 pass (BUG_REVIEW.md \u00a7 2026-09) collapsed three of the six free_vars routing sites and routes the remaining trigger question to STABILITY_ROADMAP. Contract pressure 2026-09: 77 settled / 16 strained (17.2%), 1 unjudged"
+  },
+  "M-monthly-docs": {
+    "at": "2026-09-04 19:39",
+    "note": "make libraries-review: the 5 in-tree libraries that moved (default, lib/code, lib/lexer, lib/parser, lib/testlib) re-read and their LIBRARY_DOC_REVIEW.md watermarks bumped with what changed \u2014 nothing reviewed has moved. 41 never reviewed and 6 owing a worked-example verdict are all in loft-libs-* repos. make features-review: F47 and F100 deferred examples, nothing owing"
+  },
+  "M-wasm": {
+    "at": "2026-09-04 19:39",
+    "note": "JOINED tree: make wasm-html-test 32 passed (headless chromium); make gallery: bundle built, assets probed over http, exit 0 (target/m-wasm-joined.log). Not done by hand: opening doc/gallery.html and watching its console"
+  }
+}

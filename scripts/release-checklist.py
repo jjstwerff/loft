@@ -36,7 +36,8 @@ Usage:
     scripts/release-checklist.py --undo M-win-selfupdate
     scripts/release-checklist.py --json
 
-Progress on the manual half is kept in `.release-checklist/<version>.json` -- local
+Progress on the manual half is kept in `doc/claude/releases/<cycle>/checklist.json`,
+committed with the tree -- a tick made on one machine is a tick on every machine
 state, never committed, and never consulted for an automatic item.
 """
 
@@ -51,7 +52,18 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STATE_DIR = os.path.join(ROOT, ".release-checklist")
+def cycle_of(version: str) -> str:
+    """The release cycle a Cargo version belongs to: `2026.9.0` -> `2026-09`, which is both the
+    `YYYY-MM` branch name and the directory under `doc/claude/releases/`.  A pre-calendar
+    version (`0.8.4`) is its own cycle."""
+    major, minor, *_ = version.split(".")
+    return f"{major}-{int(minor):02d}" if int(major) >= 2000 else version
+
+
+def state_path(version: str) -> str:
+    """Where this version's manual-item record lives: beside the cycle's release write-up,
+    committed, so the evidence survives the machine it was gathered on."""
+    return os.path.join(ROOT, "doc", "claude", "releases", cycle_of(version), "checklist.json")
 REPO = "loft-lang/loft"
 
 # States an item can be in.  `UNKNOWN` is deliberately not a pass: a check that could not
@@ -1028,7 +1040,7 @@ def build_items(version: str, network: bool) -> list[tuple[str, list[Item]]]:
 
 
 def load_state(version: str) -> dict:
-    p = os.path.join(STATE_DIR, f"{version}.json")
+    p = state_path(version)
     if os.path.isfile(p):
         with open(p, encoding="utf-8") as f:
             return json.load(f)
@@ -1036,8 +1048,9 @@ def load_state(version: str) -> dict:
 
 
 def save_state(version: str, state: dict) -> None:
-    os.makedirs(STATE_DIR, exist_ok=True)
-    with open(os.path.join(STATE_DIR, f"{version}.json"), "w", encoding="utf-8") as f:
+    p = state_path(version)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2, sort_keys=True)
         f.write("\n")
 
