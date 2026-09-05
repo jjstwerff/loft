@@ -3091,7 +3091,37 @@ use a separate collection or add after the loop"
         // classifier is told to SHARE instead — `d` binds to the source's DbRef with no
         // deep copy and is NON-OWNING (its dep names the source, so `owns = dep.is_empty()`
         // is false and it never frees the source's store).  `d[i] = x` then writes THROUGH.
-        let amp_vector_bind = op == "=" && self.amp_pending && matches!(s_type, Type::Vector(_, _));
+        // Asked through the `RefVar` wrapper: the ANNOTATED spelling (`pe: &vector<T> = e`)
+        // arrives with `s_type` already coerced to the annotation's target, so an unpeeled
+        // test saw no vector, took the whole vector COPY lowering, and still left the
+        // variable carrying the annotation's `RefVar` over a value — the interpreter then
+        // read the vector's buffer as a stack ref and panicked (loft#1371).
+        let amp_vector_source = match &s_type {
+            Type::RefVar(inner) => inner.base(),
+            other => other.base(),
+        };
+        let amp_vector_bind =
+            op == "=" && self.amp_pending && matches!(amp_vector_source, Type::Vector(_, _));
+        // loft#1371 — the share aliases element writes and appends, but a WHOLE-VALUE write
+        // (`pe = [2, 2]`) would mint a fresh store and re-point `pe` at it, leaving the
+        // source untouched with nothing said.  Name the local here so `create_vector` clears
+        // the SHARED store and refills it in place instead — `@FR-B-Ref-Write`, and the
+        // lowering a `&vector` PARAMETER already takes.
+        if amp_vector_bind && var_nr != u16::MAX {
+            let name = self.vars.name(var_nr).to_string();
+            self.amp_vector_locals.insert((self.context, name));
+            // `pe: &vector<T> = e` IS `pe = &e` (@PLN87 #2), and a vector link is the SHARED
+            // `DbRef` rather than a stack deref — so both spellings give the variable the
+            // same vector type.  Kept as `RefVar(vector<T>)` the annotation described a link
+            // the bind never built, and every read went through a deref that had nothing
+            // behind it.
+            if let Type::RefVar(inner) = self.vars.tp(var_nr).clone() {
+                self.change_var_type(var_nr, &inner);
+            }
+            if let Type::RefVar(inner) = s_type.clone() {
+                s_type = *inner;
+            }
+        }
         // @PLN130 F9 step 2 — track whether the `&` finds a lowering below.  A STRUCT-typed
         // projection (`c = &v[0]`, `c = &o.inner`) finds none: it is already a VIEW under
         // B-View, so both spellings emit byte-identical IR and the `&` was dropped as
@@ -3138,12 +3168,23 @@ use a separate collection or add after the loop"
             // it must LINK), and `b: &(integer, integer) = a` typed `b` as a reference
             // over a value, so the interpreter read an element as a store index and
             // `--native` handed the user a raw `E0308` (D-tup-2).
+            // @FR-B-Ref-Uniform — the link is carried by the TYPE, and the source's type
+            // kind does not narrow which sources may have one: a `&` local bind takes the
+            // SAME `RefVar(τ)` + `OpCreateStack(src)` form for every τ the `&` PARAMETER
+            // channel already carries (calls.md F-ParamRef), TEXT and VECTOR included.
+            // Asked for `Reference | Tuple` alone, a TEXT source reached no lowering at
+            // all: the `&` was dropped and the bind COPIED, so neither a read nor a write
+            // crossed the link, and the annotated spelling (`pc: &text = c`) typed the
+            // variable as a link over a value and read the buffer as a stack ref
+            // (loft#1371).  A VECTOR source keeps the DbRef share below — it aliases the
+            // element writes and the appends already — and only its whole-value write
+            // needs the link.
             let stack_src = match *code.unspan() {
                 Value::Var(src)
                     if is_scalar(self.vars.tp(src))
                         || matches!(
                             self.vars.tp(src).base(),
-                            Type::Reference(..) | Type::Tuple(_)
+                            Type::Reference(..) | Type::Tuple(_) | Type::Text(_)
                         ) =>
                 {
                     Some(src)
@@ -3203,7 +3244,11 @@ use a separate collection or add after the loop"
                         inner = Type::Reference(d, Deps::none());
                     }
                 }
-                let is_ref = matches!(inner, Type::Reference(..));
+                // Every HEAP inner — a record, a text buffer, a vector — makes the link
+                // NON-OWNING: the borrow fact rides `deps` (@FR-O-Borrow), so the source
+                // frees its store and the link frees nothing.  A scalar inner carries no
+                // `Deps` slot and owns no store, so there is no free decision to derive.
+                let is_ref = matches!(inner, Type::Reference(..) | Type::Text(_));
                 *code = self.cl("OpCreateStack", &[Value::Var(src)]);
                 // @PLN85 D-own-5 — the borrow fact rides `deps` (O-Borrow), not a
                 // side-flag: a heap whole-value alias (`p = &o`, L5) is NON-OWNING
