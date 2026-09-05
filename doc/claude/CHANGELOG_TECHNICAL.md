@@ -97,6 +97,39 @@ the undischarged receiver exactly as for a `S?` local.  Guards:
 `153-a-tagged-element-read-by-a-variable-index-is-one-null.loft`,
 `153-a-method-call-on-a-tagged-element-reports-the-undischarged-receiver.loft`.
 `Fixes #1374`.
+### loft#1369: a nullable rebind from an ABSENT source releases the record it displaces (2026-09-06)
+
+`@FR-O-Proxy` — the destination owns the store it holds, so a rebind that displaces it must
+release it — with `@FR-O-Borrow` bounding it from the other side: a local that only VIEWS a
+parameter owns nothing and frees nothing.  Native's nullable record bind emits two arms,
+`if src.rec == 0 { dest = DbRef::NULL } else { dest = OpDatabase(dest); OpCopyRecord(…) }`.
+The else arm needs no release — `OpDatabase` recycles the slot's existing store — while the
+null arm displaces it, and the release was emitted at a FIRST bind only.
+
+At a REASSIGNMENT the two native sites that could emit it each named the OTHER as the one
+that frees: the nullable arm's comment said a reassignment "is already wrapped by
+`output_set`'s `_old_*` stash", and the stash's own gate excludes a bare `Var` right-hand
+side because it "is a copy whose own arm frees what it displaces".  Both comments were
+internally consistent and the behaviour was not — for `x = <nullable Var>` at a reassignment
+neither site emitted a free, and the record orphaned once per call whose source was ABSENT AT
+RUN TIME.  The interpreter's twin was clean throughout, so `--native` alone lost the store.
+
+The release moves to the one site that knows which arm it is on, gated on the same
+`owns_displaced_store` predicate the stash asks, so a view of a parameter still frees
+nothing.  Both comments now state which site owns the free rather than pointing at each
+other.
+
+The boundary is not the one the issue described: it is not the rebind between two parameters
+but the RUNTIME absence of the source — two absent calls leak two records, and the same
+function with the argument present is clean.  Seventeen cells on both backends (source
+nullability, rebind count, declared vs inferred local, source kind, read shape, runtime
+null, call count); the interpreter was green on every one before and after.  Guards:
+`tests/scripts/1369-a-nullable-rebind-from-an-absent-source-releases-what-it-displaces.loft`
+(`@falsified-at: 964bab93` — native leaked `kt=81 S1369×2`, interpret INERT, which is what a
+backend-divergence guard should read) and
+`tests/leak_cross_mode.rs::issue1369_…`, which arms the native leak check.
+
+
 ### loft#1371: a `&` link to a text or vector LOCAL is a link, and a whole-value write through one reaches the source (2026-09-05)
 
 `@FR-B-Ref-Write` is the `&` ladder's north star and `@FR-B-Ref-Uniform` says a `&τ`

@@ -208,7 +208,9 @@ impl Output<'_> {
             // PRODUCE a store — a call in either spelling, an inline object `Insert`, or a
             // `Block` that builds one (the `nullable_unwrap_copy` / `ncc` materialisers,
             // `chosen = v[i] ?? d`), where a bare `Var` rhs is a copy whose own arm frees what it
-            // displaces (loft#1328: `CallRef` is the second call spelling and was missing — one
+            // displaces — which is true, but only became true for the NULLABLE bare `Var` with
+            // loft#1369: that arm deferred back to here, and the two exclusions closed a circle
+            // in which nothing freed the displaced store (loft#1328: `CallRef` is the second call spelling and was missing — one
             // store per iteration to frame exit and a `store table exhausted` abort at 70 000
             // iterations on this backend alone, an accept/reject split the rule forbids); and a
             // retbuf-attr return-local frees only with an entry-buffer witness, guarded below so
@@ -1030,22 +1032,42 @@ impl Output<'_> {
             // Allocating first and copying second would be worse than the panic — it leaves
             // the destination holding the record allocated for it, PRESENT where its source
             // was absent.  Same shape and same predicate as the element-read arm above
-            // (loft#823): `rec == 0` is the absence test every store accessor uses.  Which
-            // binds may carry absence is `Variables::bind_admits_absence`'s question, asked
-            // of both sides and shared with the interpreter's record bind.
+            // (loft#823): `rec == 0` is the absence test every store accessor uses.  WHICH
+            // binds may carry absence is `Variables::bind_admits_absence`'s question, asked of
+            // BOTH sides and shared with the interpreter's record bind — a source typed
+            // non-null can still hold `nullref`, and a nullable destination has to receive it
+            // as absence.
             if variables.bind_admits_absence(var, *src) {
-                // On the absent arm the placeholder must go back: at a FIRST bind that is
-                // the `null_named` store allocated just above, while a REASSIGNMENT is
-                // already wrapped by `output_set`'s `_old_*` stash, which frees the
-                // displaced store itself — freeing here too would free it twice.
-                let release = if first_bind {
-                    format!(
-                        "if var_{name}.store_nr != u16::MAX \
+                // On the absent arm the placeholder must go back: writing `DbRef::NULL`
+                // DISPLACES whatever the destination held, and nothing downstream releases
+                // it.  At a FIRST bind that is the `null_named` store allocated just above.
+                // At a REASSIGNMENT it is whatever the destination held, and this is the ONE
+                // site that can free it — `output_set`'s `_old_*` stash wraps only a
+                // right-hand side that PRODUCES a store (`Call` / `CallRef` / `Insert` /
+                // `Block`), and this arm's is a bare `Var`, which is none of those.
+                //
+                // The two sites used to name EACH OTHER as the one that frees — the stash
+                // says a bare `Var` "is a copy whose own arm frees what it displaces", and
+                // this comment said a reassignment "is already wrapped by `output_set`'s
+                // `_old_*` stash".  For `x = <nullable Var>` at a reassignment neither did,
+                // so the record the destination held orphaned once per call whose source was
+                // absent AT RUNTIME (loft#1369 — the `x: S? = z; x = y` shape, native only:
+                // the interpreter's twin frees it).  The ELSE arm needs nothing, which is why
+                // only the null side lost a store: `OpDatabase(cell, var_x, …)` recycles the
+                // slot's existing store rather than displacing it.
+                //
+                // Gated on the same predicate the stash asks (@FR-O-Proxy), so @FR-O-Borrow
+                // still holds through it: a destination that only VIEWS a parameter owns no
+                // store and frees nothing here.
+                let release =
+                    if first_bind || variables.owns_displaced_store(var, to_unspanned, self.data) {
+                        format!(
+                            "if var_{name}.store_nr != u16::MAX \
                          {{ OpFreeRef(cell, var_{name}, \"{name}(absent)\"); }} "
-                    )
-                } else {
-                    String::new()
-                };
+                        )
+                    } else {
+                        String::new()
+                    };
                 let target = copy_target(&format!("var_{name}"), first_bind);
                 write!(
                     w,

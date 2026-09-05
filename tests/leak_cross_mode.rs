@@ -102,3 +102,47 @@ fn test() {
 "#,
     );
 }
+
+/// loft#1369 — a nullable heap local REBOUND from a source that is ABSENT at run time
+/// orphaned the record it displaced, on `--native` only.
+///
+/// `@FR-O-Borrow` and `@FR-O-Proxy`: the destination owns the store it holds, so writing
+/// `DbRef::NULL` over it has to release it.  Native's nullable record bind emits two arms —
+/// `if src.rec == 0 { dest = NULL } else { dest = OpDatabase(dest); OpCopyRecord(…) }` — and
+/// the ELSE arm is safe because `OpDatabase` recycles the slot's existing store, while the
+/// null arm displaces it.  The release was emitted only at a FIRST bind: at a reassignment
+/// each of the two native sites named the OTHER as the one that frees, so neither did.
+///
+/// The leak is per CALL WHOSE SOURCE IS ABSENT AT RUN TIME, not per rebind — the same
+/// function with the argument present is clean, which is why it reads as a nullability bug
+/// and is really a missing displacement release.  `absent` and `present` are both exercised
+/// here so the fix cannot be a blanket free: a present source must still recycle, not free.
+#[test]
+#[ignore = "heavy (shells out + rustc) — run with --test leak_cross_mode -- --ignored"]
+fn issue1369_nullable_rebind_absent_source_leak_free_both_backends() {
+    run_cross_mode_leak_free(
+        "issue1369_nullable_rebind_absent_source",
+        r#"
+struct S1369 { n: integer }
+fn join_ref(y: S1369?, z: S1369) -> integer {
+  x: S1369? = z;
+  x = y;
+  if x != null { return x.n; }
+  return -1;
+}
+// The control the fix must not break: the destination only VIEWS a parameter, owns no
+// store, and must free nothing (@FR-O-Borrow).
+fn read_only(y: S1369?) -> integer { if y != null { return y.n; } return -1; }
+fn test() {
+  // absent twice — one displaced record each before the fix
+  assert(join_ref(null, S1369 { n: 4 }) == -1, "absent 1");
+  assert(join_ref(null, S1369 { n: 5 }) == -1, "absent 2");
+  // present — the else arm recycles; must stay clean
+  assert(join_ref(S1369 { n: 8 }, S1369 { n: 4 }) == 8, "present");
+  assert(read_only(null) == -1, "view absent");
+  assert(read_only(S1369 { n: 3 }) == 3, "view present");
+  print("ok 1369");
+}
+"#,
+    );
+}
