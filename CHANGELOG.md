@@ -18,6 +18,14 @@ The **say-what-you-do** release. Two threads, and they turned out to be one: eve
 the language reference was read against the compiler that ships, and most of what came back
 was not a wrong sentence but a promise nothing was keeping.
 
+**A value that may be null is reported wherever it lands in a slot that cannot hold one.**
+`t: (integer, integer) = (v[i], 1)`, `H { f: w[i] }` with a vector field, and `s[at + 1..]`
+after a `find` — a tuple member, a vector field and an index or key — said nothing when the
+value was null, while the same value into an element, an argument or a return already
+warned.  All of them now warn, with the discharge to write (`?? d`, `?`, `match`); a program
+that compiled yesterday still compiles.  The check moved to the one place every such value
+passes, so a position nobody had listed cannot be silent again.
+
 **`loft introspect` shows the program as it is parsed.**  When a program had already run
 once, the startup cache answered the next `introspect` from its bundle, and the dump then
 named every variable `65535` with a `-` where its slot number and span belong — two runs of

@@ -9,7 +9,7 @@ Tracker: [@PLN153](https://github.com/loft-lang/plans/issues/153).
 
 ## Status
 
-**Active — phases 0, 1 and 2 done (2026-09-05); phase 3 (the design call) next.**  The null MODEL is decided and not reopened here: @PLN102's
+**Active — phases 0, 1, 2 and 3a done (2026-09-05); 3b (the declared local's severity) and 3c (loft#1367) next.**  The null MODEL is decided and not reopened here: @PLN102's
 [keystone](../102-stability-contract/keystone-null-model.md) chose **B** (an in-band sentinel
 for scalars, out-of-band absence for references and for a struct stored inline), frozen in
 [DESIGN_DECISIONS.md § C90](../../DESIGN_DECISIONS.md), with @PLN25 (the dense element
@@ -279,6 +279,45 @@ and leave the test/discharge/internal callers on `convert`; the `types.md:135` v
 severity inconsistency (local ERROR vs full-width WARN) is settled by the rule's own text and
 the local's ERROR becomes the split's warn — recorded as `Contract: strained` if the local's
 severity moves.
+
+## Phase 3a — the τ? refusal at ONE arm, and eight silent stores reported (2026-09-05)
+
+**Where the one point is (open question 1, answered by measurement).**  `convert`'s
+Optional-SOURCE arm: a census instrument (`#[track_caller]` + `LOFT_TRACE_UNWRAP=1`, kept)
+run over the corpus in a scratch worktree counted 6014 `τ? ⤳ τ` peels in 1268 files and
+every one passed that arm — eleven site-level asks each followed by a peel there, and the
+peels WITHOUT an ask were the admitting faces (comparisons and null-transparent callees at
+the call-argument site ×2650, null tests ×16, conditions ×3) plus one hole nobody had listed:
+a nullable INDEX (×6).  So the arm asks the rule's τ? half (`nstore_unwrap_report`, one body)
+and `convert`'s entry asks the bare-`null` half (`nstore_null_report`); `convert_store(…,
+what, at)` names the slot through a context stack the arm reads, `convert_admitting` says a
+read is not a store, and a bare `convert` is asked with generic wording.  Omission is loud in
+both directions: a store that forgot its name degrades the message, a face that forgot to
+admit warns spuriously (measured: the if-arm join did, once — `(N-Join)` — and was named).
+The lowerings that never reach `convert` (the if-join accumulator, the append routes, the
+struct literal's vector-field deep copy, a `null` return's sentinel, a rewritten tuple
+return) keep `n_store_violation`, now a thin caller of the same two bodies.
+
+**Does the heap half share the chokepoint (open question 2)?**  Yes for the τ? face — a
+`vector<τ>?` peels through the same arm — and the bare-`null` heap gate (loft#1313) rides the
+same entry ask.  The one heap lowering that bypasses `convert` (the deep copy) asks for
+itself and is named.
+
+**Measured.**  Stage A (102 cells): exactly the seven silent cells moved, silent → WARNING
+(`stageA_p3a.txt` vs `stageA_today.txt`), the 66 discharged cells silent, every other cell
+unchanged.  The admitting-faces guard (`153-n-store-admitting-faces-hold.loft`, 16 reads of a
+`τ?` that are not stores) is silent on both builds with every value pinned.
+`scripts/introspect_diff.sh` over the corpus, stderr included: `DIFFERENT 16 of 1272` — every one a stderr line and none an emission: the thirteen corpus files that gained a warning (nine nullable indexes after a `find`, three `null` keys, one `null` into a vector field), reviewed one by one, and the three new guards, which differ by construction.  New guards:
+`1366-a-nullable-into-a-tuple-literal-member-is-reported`,
+`1366-a-nullable-vector-into-a-non-null-struct-field-is-reported`,
+`153-a-nullable-index-is-reported` (each 0 warnings on 806a8d84).  `(N-Store)` in `types.md`
+now names its slots — the index among them — and its non-stores.  Every seam first covered
+warns at every width (loft#1232's doctrine), so `tuple__narrow__none` warns where
+`arg__narrow__none` errors; raising it is COMPATIBILITY.md's process.
+
+**Left for 3b and 3c.**  The declared local (`change_var_type`) still ERRORS where the split
+warns (open question 3 and `types.md:159`); loft#1367's bind of a tagged projection into a
+pointer-spelled local.
 
 ## Phase ordering
 

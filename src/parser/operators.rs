@@ -695,7 +695,8 @@ impl Parser {
         } else if matches!(tp.base(), Type::Float | Type::Single) {
             // `valid` is is-NON-null, so the two answers are the other way round here.
             let mut valid = operand;
-            self.convert(&mut valid, tp, &Type::Boolean);
+            // A null TEST, not a store — @FR-N-Store admits the read.
+            self.convert_admitting(&mut valid, tp, &Type::Boolean);
             return Some(if negate {
                 valid
             } else {
@@ -2339,10 +2340,16 @@ impl Parser {
         if !self.lexer.peek_token(";") && !self.lexer.peek_token("}") {
             let ret_pos = self.lexer.peek_pos().clone();
             let t = self.expression(&mut ret_val);
-            // @PLN25 (N-Store): `lhs ?? return ret` returns `ret` into the caller's
-            // non-null return slot — an un-discharged nullable `ret` is a violation.
-            self.n_store_violation(&t, &r_type, "the return value", None);
-            if t != Type::Null && !self.convert(&mut ret_val, &t, &r_type) && !self.first_pass {
+            // @FR-N-Store: `lhs ?? return ret` returns `ret` into the caller's non-null return
+            // slot — the store face asks; a bare `null` return takes the sentinel path below
+            // and is asked at the site.
+            if t == Type::Null {
+                self.n_store_violation(&t, &r_type, "the return value", None);
+            }
+            if t != Type::Null
+                && !self.convert_store(&mut ret_val, &t, &r_type, "the return value", None)
+                && !self.first_pass
+            {
                 self.validate_convert("return", &t, &r_type, &ret_pos);
             }
         } else if r_type != Type::Void && !self.first_pass {
@@ -2717,7 +2724,11 @@ impl Parser {
         };
         // Bring the default to the result type (widen narrow→i64, or the original
         // default→value-type convert); report a genuine mismatch (e.g. `text ?? 0`).
-        if !self.convert(&mut rhs, &rhs_type, &result_type) && !self.first_pass {
+        // The default meets the coalesce's RESULT type — `(N-Coal)`'s `d ⇐ τ` is the
+        // coalesce's own typing (`?? null` keeps the value nullable, a nullable default
+        // widens it), not a store into a slot: @FR-N-Store admits it here and is asked
+        // wherever the coalesced value lands.
+        if !self.convert_admitting(&mut rhs, &rhs_type, &result_type) && !self.first_pass {
             // @PLN102 arc-E — `convert` FAILED: the default `d` is not assignable to the
             // coalesce type, i.e. `τ? ?? d` with `d` not usable where a `τ` is expected.
             // Left unreported (the old dead `can_convert` call), this built a MISMATCHED

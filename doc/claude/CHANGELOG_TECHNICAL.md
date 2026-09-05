@@ -9,6 +9,35 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### @PLN153 phase 3a: `(N-Store)` is asked at the one arm every `τ? ⤳ τ` peel passes, and eight silent stores now report (2026-09-05)
+
+`Parser::convert`'s Optional-SOURCE arm is where every nullable value is peeled to its base,
+and a census over the whole corpus (`LOFT_TRACE_UNWRAP=1`, kept as an instrument: 6014 peels
+in 1268 files, each with its caller) showed no peel happens anywhere else.  So the rule's
+τ? half is asked THERE — `nstore_unwrap_report`, one body — and its bare-`null` half at
+`convert`'s entry (`nstore_null_report`), instead of at eleven store sites that each had to
+remember to ask first and a twelfth that did not.  A store names its slot through
+`convert_store(…, what, at)` (a context stack the arm reads for its wording; the tuple arm
+prefixes `element i of` as it recurses), a read that is not a store admits the peel through
+`convert_admitting` — a null test, a condition, `&&`/`||`, an overload trial, a
+null-transparent callee, an `if` arm meeting its sibling — and a bare `convert` is asked with
+generic wording: a site that forgets degrades the message, never the rule, and a face that
+forgets to admit warns spuriously, which the corpus shows.  The lowerings that store without
+converting (the if-join accumulator, the append routes, a struct literal's vector-field deep
+copy, a `null` return's sentinel, a rewritten tuple return) keep `n_store_violation`, now a
+thin caller of the same two bodies.
+
+What it found: the seven cells of loft#1366 (a `τ?` into a tuple literal's member, all six
+kinds; a `vector<τ>?` into a non-null struct field) and an eighth the census named — a
+nullable INDEX (`v[j]`, `s[at + 1..]` after a `find`, six corpus files, every one behind an
+`if at < 0` guard that a null never takes).  Each reports as a WARNING at every width, the
+loft#1232 doctrine for a seam first covered: reporting where there was silence is the gain,
+refusing what compiled yesterday is the break the freeze forbids.  The 102-cell Stage A
+matrix moved on exactly those seven cells and nowhere else; `scripts/introspect_diff.sh` over
+the corpus (stderr included) reads `DIFFERENT 16 of 1272` — every one a stderr line and none an emission: the thirteen corpus files that gained a warning (nine nullable indexes after a `find`, three `null` keys, one `null` into a vector field), reviewed one by one, and the three new guards, which differ by construction; the admitting-faces guard is silent on both
+builds with every value pinned.  `(N-Store)` in `formal/types.md` now names its slots and
+its non-stores.  `Fixes #1366`.
+
 ### The per-path fact reaches the nullable spellings (2026-09-05, `@FR-O-Complete` walk, D-own-33)
 
 Four defects, one shape — a nullable local not treated as the heap local it is — found by

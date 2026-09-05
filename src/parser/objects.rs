@@ -4707,6 +4707,11 @@ impl Parser {
             // Emit OpAppendVector to deep-copy the source vector into the
             // struct's field so the data is independent of the source store.
             //
+            // @FR-N-Store — this lowering never reaches `convert`, so it asks for itself:
+            // `H { f: w[i] }` with `w[i]: vector<integer>?` was the one struct-field cell of
+            // loft#1366's matrix that said nothing.
+            self.n_store_violation(exp_tp, &td, "the field", None);
+            //
             // the same holds for any non-Insert vector-typed
             // expression (e.g. `C { v: build() }` where `build` returns a
             // vector).  Before this was a plain push, which left the field
@@ -4883,9 +4888,9 @@ impl Parser {
                 let dst_name = self.int_type_name(&td);
                 if let Some(hint) = self.nullable_sentinel_hint(value, &td, &dst_name) {
                     diagnostic!(self.lexer, Level::Error, "{hint}");
-                } else if self.n_store_violation(exp_tp, &td, "the field", None) {
-                    // @PLN25 (N-Store): a nullable into a non-null field — diagnostic emitted.
-                } else if !self.convert(value, exp_tp, &td) {
+                } else if !self.convert_store(value, exp_tp, &td, "the field", None) {
+                    // @FR-N-Store is asked inside the store face; this arm is the plain
+                    // type mismatch.
                     // Plan-07 phase 6 (partial) — name the value side first
                     // ("cannot assign <got> to <expected>"), the field-type
                     // side last.  Old shape "Cannot write {field_type} on

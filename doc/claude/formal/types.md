@@ -135,7 +135,13 @@ semantics live in [binding.md](binding.md); here it is just one more thing `⤳`
   (N-Store)    storing  e:τ?  into a  τ  slot without discharge is REJECTED — a WARNING for
                most τ (the null is representable-and-distinct in τ's non-null form), a hard
                ERROR only for narrow widths (u8…u32, § Null-flow below, where the null would
-               collide with a real value); discharge first (`?? d` / `match`) either way
+               collide with a real value); discharge first (`?? d` / `match`) either way.
+               A SLOT is every position that holds a τ: a local, a field, a collection
+               element, a tuple member, a call argument, a return, an INDEX (`v[i]`,
+               `s[a..b]` — a null index reads null).  Reading a τ? is not storing it: a
+               comparison, a null test, a condition, `??`'s subject, `match`, a
+               null-transparent callee and an `if` arm meeting its sibling's type
+               (`(N-Join)`) say nothing.
 
   inference — declared vs inferred storage (the "by definition vs by use" split)
   (N-Decl)     a DECLARED slot `x: τ` is a COMMITMENT: `x = e` checks `e ⇐ τ`. If e:τ? it is

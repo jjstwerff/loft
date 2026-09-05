@@ -341,7 +341,9 @@ impl Parser {
         precedence: usize,
         is_or: bool,
     ) {
-        if !self.convert(code, tp, &Type::Boolean) && !self.first_pass {
+        // An operand of `&&`/`||` is READ as a boolean, not stored — @FR-N-Store admits it,
+        // as `convert_condition` does for the same reading in an `if`.
+        if !self.convert_admitting(code, tp, &Type::Boolean) && !self.first_pass {
             self.can_convert(tp, &Type::Boolean);
         }
         let mut second_code = Value::Null;
@@ -354,7 +356,9 @@ impl Parser {
             precedence + 1,
         );
         self.known_var_or_type(&second_code, &second_pos);
-        if !self.convert(&mut second_code, &second_type, &Type::Boolean) && !self.first_pass {
+        if !self.convert_admitting(&mut second_code, &second_type, &Type::Boolean)
+            && !self.first_pass
+        {
             self.can_convert(&second_type, &Type::Boolean);
         }
         // `&&`/`||` do not route through `call_op_as`, so its deferral counter cannot see an
@@ -4204,14 +4208,12 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
         // WARNS with the store proceeding; a narrow one has no room and errors) and it already
         // declines on a nullable target, which is what keeps `vector<t?>` and the synthetic
         // `vector<__nullable<S>>` quiet.
+        // @FR-N-Store: the element is a slot; both halves of the rule are asked by the store
+        // face at the `convert` below (lenient — loft#1232 — so a narrow element warns).  The
+        // arms between here and there that bypass `convert` are the nullable-wrapper
+        // spellings, whose slot holds absence by construction.
         let elem_index = res.len();
-        self.n_store_violation_inner(
-            &t,
-            in_t,
-            &format!("element {elem_index} of this vector literal"),
-            None,
-            true,
-        );
+        let elem_slot = format!("element {elem_index} of this vector literal");
         if let (Type::Reference(t_nr, _), Type::Reference(in_nr, _)) = (&t, &in_t.clone())
             && let (Type::Enum(t_e, true, _), Type::Enum(in_e, true, _)) = (
                 self.data.def(*t_nr).returned(),
@@ -4280,7 +4282,7 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
             // two spellings of the SAME type — an error that aborted the run before pass 2
             // could re-check against the resolved element.  Say nothing; pass 2 decides.
             // The struct-field store guard (`objects.rs`) already works this way.
-        } else if !self.convert(&mut p, &t, in_t) {
+        } else if !self.convert_store_lenient(&mut p, &t, in_t, &elem_slot, None) {
             if declared {
                 // @P315 — the element type is DECLARED (typed local / struct
                 // field).  A value that does not convert TO it must be cast

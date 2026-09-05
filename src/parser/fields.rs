@@ -1650,7 +1650,11 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
                 concept_ref: "@F6",
             });
         }
-        if !self.first_pass && !self.convert(&mut p, &index_t, &I32) {
+        // @FR-N-Store — an index is a slot: `v[i]` with `i: integer?` reads null on a null
+        // index, and nothing said so (the eighth hole of @PLN153 phase 3's census).
+        if !self.first_pass
+            && !self.convert_store_lenient(&mut p, &index_t, &I32, "the index", None)
+        {
             diagnostic!(
                 self.lexer,
                 Level::Error,
@@ -2048,7 +2052,8 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
         // for two releases.  Pass 2 sees the real type and still refuses a genuinely
         // non-integer index, which is the case this message is for.
         let deferred = self.first_pass && index_t.is_unknown();
-        if !self.convert(p, index_t, &I32) && !deferred {
+        // @FR-N-Store — the index is a slot (see the vector index above).
+        if !self.convert_store_lenient(p, index_t, &I32, "the index", None) && !deferred {
             // Name the offending type: the bare "invalid index" this used to
             // print reads as "indexing text is unsupported" and sent a consumer
             // hunting for a missing feature instead of at their index expression.
@@ -2094,7 +2099,9 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
                 // unresolved, which is why guarding only the start left the shape still
                 // refused — with a different message, from four lines down.
                 let end_deferred = self.first_pass && ot_type.is_unknown();
-                if !self.convert(&mut other, &ot_type, &I32) && !end_deferred {
+                if !self.convert_store_lenient(&mut other, &ot_type, &I32, "the index", None)
+                    && !end_deferred
+                {
                     diagnostic!(
                         self.lexer,
                         Level::Error,
@@ -2518,7 +2525,10 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
             Type::Null // from=[] → no lower bound
         } else {
             let t = self.expression(&mut p);
-            if !self.convert(&mut p, &t, &key_types[0]) && !self.first_pass {
+            // @FR-N-Store — a lookup KEY is a slot like an index: a null key reads null.
+            if !self.convert_store_lenient(&mut p, &t, &key_types[0], "the key", None)
+                && !self.first_pass
+            {
                 // A tuple key is the one place the arity is worth naming: `h[(1, 2, 3)]` on
                 // a `(integer, integer)` key is a plain miscount, and "Invalid index key"
                 // leaves the reader comparing the two spellings by eye.
@@ -2558,7 +2568,9 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
                 }
                 let mut ex = Value::Null;
                 let ex_t = self.expression(&mut ex);
-                if !self.convert(&mut ex, &ex_t, &key_types[nr]) && !self.first_pass {
+                if !self.convert_store_lenient(&mut ex, &ex_t, &key_types[nr], "the key", None)
+                    && !self.first_pass
+                {
                     diagnostic!(self.lexer, Level::Error, "Invalid index key");
                 }
                 key.push(ex);
@@ -2633,7 +2645,9 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
             if !open_end {
                 let mut n = Value::Null;
                 let n_t = self.expression(&mut n);
-                if !self.convert(&mut n, &n_t, &key_types[0]) && !self.first_pass {
+                if !self.convert_store_lenient(&mut n, &n_t, &key_types[0], "the key", None)
+                    && !self.first_pass
+                {
                     diagnostic!(self.lexer, Level::Error, "Invalid index key");
                 }
                 key.push(n);
@@ -2647,7 +2661,9 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
                     }
                     let mut ex = Value::Null;
                     let ex_t = self.expression(&mut ex);
-                    if !self.convert(&mut ex, &ex_t, &key_types[nr]) && !self.first_pass {
+                    if !self.convert_store_lenient(&mut ex, &ex_t, &key_types[nr], "the key", None)
+                        && !self.first_pass
+                    {
                         diagnostic!(self.lexer, Level::Error, "Invalid index key");
                     }
                     key.push(ex);

@@ -11844,6 +11844,8 @@ fn test() {
 /// The test depends on `tests/docs/*.loft` existing (it does in-tree)
 /// because the bug requires a real `file(...).files()` iterator —
 /// synthetic vector iteration doesn't reproduce the slot overlap.
+// The slice bound discharges its `find` (`?? 0`): since @PLN153 phase 3 a nullable INDEX is
+// an `(N-Store)` slot and warns, and this fixture expects no diagnostics.
 #[test]
 fn p185_slot_alias_on_late_local_in_nested_for() {
     code!(
@@ -11856,7 +11858,7 @@ fn p185_slot_alias_on_late_local_in_nested_for() {
         for i in 0..3 {
             body += \"{i}\";
         }
-        key = path[path.find(\"/\") + 1..path.len() - 5];
+        key = path[(path.find(\"/\") ?? 0) + 1..path.len() - 5];
         out += `
           {key}
         `;

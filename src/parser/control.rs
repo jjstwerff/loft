@@ -1883,18 +1883,6 @@ impl Parser {
             // not an `if`/`match` arm (whose `result` may legitimately be nullable).
             // A scalar `τ?` tail hits none of the vector/tuple special cases above,
             // and `convert` below peels `Optional`, so no double-diagnose.
-            if context == "return from block" {
-                // @PLN102 (N-Store) — this check runs at BLOCK FINALIZATION, so `self.lexer`
-                // has advanced to the block's `}` (reporting the NEXT function).  Anchor to
-                // the tail expression's own span; fall back to the enclosing function's
-                // position (a bare-var/rewritten tail may have lost its span) — always the
-                // RIGHT function, never the next.  See nstore-position-fix.md.
-                let at = l[last]
-                    .span_pos()
-                    .cloned()
-                    .or_else(|| Some(self.data.def(self.context).position().clone()));
-                self.n_store_violation(t, result, "the return value", at.as_ref());
-            }
             // A tail conversion is checked once the block is CLOSED, so `report_pos`
             // would attribute anything it raises to the `}`.  `tail_pos` is the tail
             // statement's own first token (captured per statement by the block loop), and
@@ -1913,9 +1901,34 @@ impl Parser {
                 && !vec_match_candidate
                 && !vec_arm_handled
                 && !sibling_variant;
+            // @FR-N-Store — the tail is a STORE into the return slot.  The store face asks
+            // where the tail converts; a tail that does not convert (a rewritten tuple, a
+            // unified `if`, a vector match, a sibling variant) is asked here.  Anchored to
+            // the tail's OWN span, because this runs at block FINALIZATION with `self.lexer`
+            // on the `}` — reporting the NEXT function otherwise (nstore-position-fix.md);
+            // a bare-var tail has no span and falls back to the enclosing function's.
+            let is_return = context == "return from block";
+            let ret_at = if is_return {
+                l[last]
+                    .span_pos()
+                    .cloned()
+                    .or_else(|| Some(self.data.def(self.context).position().clone()))
+            } else {
+                None
+            };
+            if is_return && !needs_convert {
+                self.n_store_violation(t, result, "the return value", ret_at.as_ref());
+            }
             let converted = if needs_convert {
                 self.lexer.to((tail_pos.line, tail_pos.pos));
-                let done = self.convert(&mut l[last], t, result);
+                let done = if is_return {
+                    self.convert_store(&mut l[last], t, result, "the return value", ret_at.as_ref())
+                } else {
+                    // An arm meeting its sibling's type is the JOIN (`(N-Join)`: the `if` is
+                    // `τ?` when an arm is), not a store — wherever the joined value lands is
+                    // asked there.
+                    self.convert_admitting(&mut l[last], t, result)
+                };
                 // `end_seek`, not a second `to`: the diagnostics raised just below are
                 // block-tail checks too, and a seek left standing switches `report_pos`
                 // off for them.
@@ -14039,15 +14052,18 @@ impl Parser {
                     self.rewrite_tail_tuple_to_synthetic_struct(synthetic_d_nr, &mut v);
                     true
                 };
-            // @PLN25 (N-Store): an explicit `return` is a STORE into the caller's
-            // non-null return slot — an un-discharged nullable `τ?` must be
-            // discharged (`?? d` / `match`) first.  Emitted here; `convert` below
-            // still peels `Optional`, so no double-diagnose.  Gate-OFF / first-pass:
-            // a no-op (`n_store_violation` returns `false`).
-            self.n_store_violation(&t, &r_type, "the return value", None);
+            // @FR-N-Store: an explicit `return` is a STORE into the caller's non-null return
+            // slot.  The store face asks where the value converts; the two lowerings that do
+            // not convert — a bare `null` (the sentinel) and a tuple rewritten into its
+            // synthetic struct — are asked at the site.
+            if t == Type::Null || tuple_rewritten {
+                self.n_store_violation(&t, &r_type, "the return value", None);
+            }
             if t == Type::Null {
                 v = self.null_value(&r_type);
-            } else if !tuple_rewritten && !self.convert(&mut v, &t, &r_type) {
+            } else if !tuple_rewritten
+                && !self.convert_store(&mut v, &t, &r_type, "the return value", None)
+            {
                 self.validate_convert("return", &t, &r_type, &expr_start.position);
             }
             // loft#822 — `convert` can UNBOX a stored tuple into its stack spelling, and

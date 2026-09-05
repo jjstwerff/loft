@@ -1,0 +1,24 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN153 phase 3 — an INDEX is a slot: `v[j]` and `s[a..b]` with a nullable index read null
+// on a null index, and nothing said so.  The corpus census of `convert`'s `τ? ⤳ τ` arm found
+// six files doing exactly this after a `find` (which answers `integer?` on a miss, so the
+// `if at < 0` guard they carry never fires on the null).  Reported with the rule's split as a
+// WARNING at every width, like every seam the phase covers for the first time.
+//
+// @falsified-at: 806a8d84 → here (warnings 0 → 2): both cells silent on the build this
+//   guard was written to catch, same values on both.
+// @EXPECT_WARNING: is stored into the index
+fn main() {
+  i = 0;
+  v: vector<integer> = [1, 2, 3];
+  j = v[i];                       // integer? — a runtime index
+  x = v[j];                       // the vector index
+  s = "name=value";
+  at = s.find("=");               // integer? — null on a miss
+  rest = s[at + 1..];             // the text slice bound
+  assert(x == 2, "v[v[0]] is 2: {x}");
+  assert(rest == "value", "the slice after `=`: {rest}");
+  println("index reported");
+}

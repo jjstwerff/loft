@@ -169,6 +169,18 @@ pub(crate) enum AmpHead {
     StoredRefField,
 }
 
+/// The slot a store-flavoured [`Parser::convert`] writes into — what `(N-Store)`'s diagnostic
+/// names, where it anchors, and whether this seam may escalate to an ERROR at a narrow width
+/// (`never_error`: loft#1232's collection-literal seam warns at every width, and so does every
+/// seam this phase covers for the first time — reporting where there was silence is a gain,
+/// refusing what compiled yesterday is the break the freeze forbids).
+#[derive(Clone, Debug)]
+pub(crate) struct StoreCtx {
+    pub what: String,
+    pub at: Option<Position>,
+    pub never_error: bool,
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct Parser {
     pub todo_files: Vec<(String, u16)>,
@@ -904,6 +916,15 @@ pub struct Parser {
     /// every `f += (i as i32)` besides.  An explicit cast keeps the range-containment
     /// rule alone; DN4 is what governs it.
     pub(crate) in_explicit_cast: bool,
+    /// @FR-N-Store — the slot a `convert` is storing into, pushed by [`Parser::convert_store`]
+    /// for the duration of that one conversion (a stack: a nested literal converts inside an
+    /// outer one).  `convert`'s `τ? ⤳ τ` arm reads the top for its wording; an EMPTY stack
+    /// still asks, worded generically — a site that forgot to name its slot degrades the
+    /// message, never the rule.
+    pub(crate) store_ctx: Vec<StoreCtx>,
+    /// @FR-N-Store — depth of [`Parser::convert_admitting`]: a null TEST, a condition or an
+    /// overload trial converts `τ?` to `τ` without storing anything, and says so here.
+    pub(crate) admit_unwrap: u32,
     /// @PLN116 `x?` — a pre-built default RHS for the postfix default-fallback
     /// operator.  `x?` desugars to `x ?? construct_default(T)`; rather than parse a
     /// `??` right operand from source, the postfix-`?` site builds the type's default
@@ -1350,6 +1371,8 @@ impl Parser {
             last_cast_alias: u32::MAX,
             dn4_checked_narrow: None,
             in_explicit_cast: false,
+            store_ctx: Vec::new(),
+            admit_unwrap: 0,
             pending_default_rhs: None,
             pending_default_src: None,
             ncc_default_end: None,
@@ -4174,51 +4197,33 @@ impl Parser {
             }
             return hit;
         }
-        // DN3: an un-discharged nullable `τ?` (Optional value) into a non-null target.
-        if crate::keys::pln25_dn3_enabled()
-            && let Type::Optional(inner) = value_tp
-            && !matches!(
-                target_tp,
-                Type::Optional(_) | Type::Void | Type::Never | Type::Null
-            )
-            // `τ?` has a second spelling: an INLINE slot holds an absent `S` as the synthetic
-            // `__nullable<S>` enum, which is not a `Type::Optional` and is exactly as nullable.
-            // A tuple ELEMENT is such a slot, so recursing into a promoted tuple return reaches
-            // one — and reading it as non-null made the check warn that a `W2?` becomes null in
-            // `__nullable<W2>` (loft#1123).
-            && !self.data.is_nullable_wrapper(target_tp)
-        {
-            let nm = inner.name(&self.data);
-            // @FR-N-Decl — a DECLARED `x: τ` is a commitment, so a later nullable write is
-            // @FR-N-Store's refusal; this split is where a declared slot's promise is kept.
-            // @PLN102 (N-Store) Phase 1 — the warn/error split (types.md § Null-flow, (N-Store)).
-            // WARN (a nudge; the store PROCEEDS — `convert` peels the Optional and the slot holds
-            // the null sentinel) where τ reserves its null DISTINCTLY even in the non-null form
-            // (full `integer`, `float`, `single`, `boolean`, `character`, `text`, refs, aggregates).
-            // Keep the hard ERROR only for a NARROW width (`byte_width < 8`), whose non-null form
-            // spends the whole width on real values, so a null there would silently corrupt.
-            // Gate OFF → the current uniform hard error (this branch stays byte-identical).
-            let narrow = Self::nstore_narrow(target_tp, never_error);
-            if crate::keys::nstore_softens(narrow) {
-                let msg = diagnostic_format(
-                    Level::Warning,
-                    format_args!(
-                        "a nullable `{nm}?` is stored into {what} of the non-null type `{}` — it becomes null there; discharge with `?` (the type's default), `?? <default>`, or `match` if that is not intended",
-                        target_tp.name(&self.data)
-                    ),
-                );
-                self.nstore_diag(at, Level::Warning, &msg);
-                return false; // store proceeds — `convert` peels the Optional and stores the sentinel
-            }
-            let msg = diagnostic_format(
-                Level::Error,
-                format_args!(
-                    "a nullable `{nm}?` cannot be stored into {what} of the non-null type `{}` — discharge it first with `?` (the type's default), `?? <default>`, or `match`",
-                    target_tp.name(&self.data)
-                ),
-            );
-            self.nstore_diag(at, Level::Error, &msg);
-            return true;
+        // The τ? half — one body, [`Parser::nstore_unwrap_report`], shared with `convert`'s
+        // `τ? ⤳ τ` arm.  This entry is for the lowerings that never reach `convert` (the
+        // if-join accumulator, the append routes, a struct literal's vector-field deep copy).
+        if let Type::Optional(inner) = value_tp {
+            return self.nstore_unwrap_report(inner, target_tp, what, at, never_error);
+        }
+        if matches!(value_tp, Type::Null) {
+            return self.nstore_null_report(target_tp, what, at, never_error);
+        }
+        false
+    }
+
+    /// @FR-N-Store's bare-`null` half (@PLN25 DN1 + loft#1313's heap gate), the ONE body:
+    /// `null` written into a slot whose type does not hold it.  A full-width scalar and every
+    /// heap target WARN (the slot holds null; a heap target never escalates, loft#1232), a
+    /// narrow width ERRORS.  Answers whether the store was REFUSED.  Asked from
+    /// [`Parser::convert`]'s entry for every store it lowers, and from
+    /// [`Parser::n_store_violation`] for the lowerings that bypass it.
+    fn nstore_null_report(
+        &mut self,
+        target_tp: &Type,
+        what: &str,
+        at: Option<&Position>,
+        never_error: bool,
+    ) -> bool {
+        if self.first_pass {
+            return false;
         }
         // DN1 (the default flip): under DN1 a plain scalar is NON-null, so a bare `null` cannot be
         // stored into a non-Optional scalar target — declare the target `τ?` to allow null.
@@ -4247,9 +4252,7 @@ impl Parser {
             && crate::keys::nstore_softens(false)
             && crate::data::is_dbref(target_tp)
             && !self.data.is_nullable_wrapper(target_tp);
-        if crate::keys::pln25_dn1_enabled()
-            && matches!(value_tp, Type::Null)
-            && (Self::is_non_null_scalar(target_tp) || heap_target)
+        if crate::keys::pln25_dn1_enabled() && (Self::is_non_null_scalar(target_tp) || heap_target)
         {
             let nm = self.cure_spelling(target_tp);
             // @PLN102 (N-Store) Phase 1 — same warn/error split as the DN3 branch: a bare `null`
@@ -4284,6 +4287,70 @@ impl Parser {
             return true;
         }
         false
+    }
+
+    /// @FR-N-Store's τ? half, the ONE body: an un-discharged `τ?` reaching a non-null `τ`
+    /// slot is reported with the rule's split — a WARNING where τ's non-null form reserves
+    /// its null distinctly (the store proceeds and the slot holds the sentinel), an ERROR for a
+    /// narrow width (`nstore_narrow`).  Answers whether the store was REFUSED.
+    ///
+    /// Two askers and no third: [`Parser::convert`]'s `τ? ⤳ τ` arm, which every peel passes
+    /// (measured over the whole corpus, @PLN153 phase 3), and [`Parser::n_store_violation`]
+    /// for the few lowerings that store without converting.
+    fn nstore_unwrap_report(
+        &mut self,
+        inner: &Type,
+        target_tp: &Type,
+        what: &str,
+        at: Option<&Position>,
+        never_error: bool,
+    ) -> bool {
+        if self.first_pass
+            || !crate::keys::pln25_dn3_enabled()
+            || matches!(
+                target_tp,
+                Type::Optional(_) | Type::Void | Type::Never | Type::Null
+            )
+            // `τ?` has a second spelling: an INLINE slot holds an absent `S` as the synthetic
+            // `__nullable<S>` enum, which is not a `Type::Optional` and is exactly as nullable.
+            // A tuple ELEMENT is such a slot, so recursing into a promoted tuple return reaches
+            // one — and reading it as non-null made the check warn that a `W2?` becomes null in
+            // `__nullable<W2>` (loft#1123).
+            || self.data.is_nullable_wrapper(target_tp)
+        {
+            return false;
+        }
+        let nm = inner.name(&self.data);
+        // @FR-N-Decl — a DECLARED `x: τ` is a commitment, so a later nullable write is
+        // @FR-N-Store's refusal; this split is where a declared slot's promise is kept.
+        // @PLN102 (N-Store) Phase 1 — the warn/error split (types.md § Null-flow, (N-Store)).
+        // WARN (a nudge; the store PROCEEDS — `convert` peels the Optional and the slot holds
+        // the null sentinel) where τ reserves its null DISTINCTLY even in the non-null form
+        // (full `integer`, `float`, `single`, `boolean`, `character`, `text`, refs, aggregates).
+        // Keep the hard ERROR only for a NARROW width (`byte_width < 8`), whose non-null form
+        // spends the whole width on real values, so a null there would silently corrupt.
+        // Gate OFF → the current uniform hard error (this branch stays byte-identical).
+        let narrow = Self::nstore_narrow(target_tp, never_error);
+        if crate::keys::nstore_softens(narrow) {
+            let msg = diagnostic_format(
+                Level::Warning,
+                format_args!(
+                    "a nullable `{nm}?` is stored into {what} of the non-null type `{}` — it becomes null there; discharge with `?` (the type's default), `?? <default>`, or `match` if that is not intended",
+                    target_tp.name(&self.data)
+                ),
+            );
+            self.nstore_diag(at, Level::Warning, &msg);
+            return false; // store proceeds — `convert` peels the Optional and stores the sentinel
+        }
+        let msg = diagnostic_format(
+            Level::Error,
+            format_args!(
+                "a nullable `{nm}?` cannot be stored into {what} of the non-null type `{}` — discharge it first with `?` (the type's default), `?? <default>`, or `match`",
+                target_tp.name(&self.data)
+            ),
+        );
+        self.nstore_diag(at, Level::Error, &msg);
+        true
     }
 
     /// The WIDTH half of @FR-N-Store's warn/error split: a slot whose non-null form spends
@@ -4393,9 +4460,91 @@ impl Parser {
             }
             return true;
         }
-        self.convert(code, tp, &Type::Boolean)
+        self.convert_admitting(code, tp, &Type::Boolean)
     }
 
+    /// The STORE face of [`convert`](Parser::convert) — @FR-N-Store's home for every store
+    /// that converts: `what` names the slot for the diagnostic ("the field", "parameter 2 of
+    /// `f`", "the return value"), `at` anchors it (a block tail reports at the tail, not the
+    /// `}`), and the rule's two halves are asked inside `convert` where the value meets the
+    /// slot: a bare `null` at the entry, a `τ?` at the one arm that peels it.  Returns what
+    /// `convert` returns; after a REFUSAL (a narrow width) it returns `true`, because the
+    /// refusal has been reported and the caller's generic "cannot assign" would be a second
+    /// diagnostic for one store.
+    pub(crate) fn convert_store(
+        &mut self,
+        code: &mut Value,
+        is_type: &Type,
+        should: &Type,
+        what: &str,
+        at: Option<&Position>,
+    ) -> bool {
+        self.convert_store_as(code, is_type, should, what, at, false)
+    }
+
+    /// [`convert_store`](Parser::convert_store) for a seam that warns at EVERY width — the
+    /// collection-literal element (loft#1232) and every seam first covered by @PLN153 phase 3
+    /// (a tuple literal's member, an index): where there was silence yesterday an ERROR
+    /// today refuses a program that compiled, which the freeze forbids; a warning is the
+    /// strict gain, and raising the tier is COMPATIBILITY.md's process.
+    pub(crate) fn convert_store_lenient(
+        &mut self,
+        code: &mut Value,
+        is_type: &Type,
+        should: &Type,
+        what: &str,
+        at: Option<&Position>,
+    ) -> bool {
+        self.convert_store_as(code, is_type, should, what, at, true)
+    }
+
+    fn convert_store_as(
+        &mut self,
+        code: &mut Value,
+        is_type: &Type,
+        should: &Type,
+        what: &str,
+        at: Option<&Position>,
+        never_error: bool,
+    ) -> bool {
+        self.store_ctx.push(StoreCtx {
+            what: what.to_string(),
+            at: at.cloned(),
+            never_error,
+        });
+        let accepted = self.convert(code, is_type, should);
+        self.store_ctx.pop();
+        accepted
+    }
+
+    /// The TEST face of [`convert`](Parser::convert): the caller reads a `τ?` as a `τ` (or a
+    /// `null` as a value) without STORING it anywhere — a null test (`x != null`, `valid`), a
+    /// condition, an overload trial, `&&`/`||` operands — so @FR-N-Store has nothing to say
+    /// and is not asked.  Every admitting caller is one of those and is named at its site; a
+    /// caller that should admit and does not gets a spurious warning, which the corpus shows.
+    pub(crate) fn convert_admitting(
+        &mut self,
+        code: &mut Value,
+        is_type: &Type,
+        should: &Type,
+    ) -> bool {
+        self.admit_unwrap += 1;
+        let accepted = self.convert(code, is_type, should);
+        self.admit_unwrap -= 1;
+        accepted
+    }
+
+    /// The slot the current store names, for @FR-N-Store's wording: the top of the context
+    /// stack, or the generic spelling when a bare `convert` stores (lenient, so a seam nobody
+    /// has classified yet can only warn).
+    fn store_slot(&self) -> (String, Option<Position>, bool) {
+        match self.store_ctx.last() {
+            Some(c) => (c.what.clone(), c.at.clone(), c.never_error),
+            None => ("a slot".to_string(), None, true),
+        }
+    }
+
+    #[track_caller]
     fn convert(&mut self, code: &mut Value, is_type: &Type, should: &Type) -> bool {
         // @PLAN48 P2: implicitly narrowing a loft `integer` to a smaller explicit
         // width (e.g. `integer` → `i32`) loses data and must be an explicit `as`.
@@ -4442,6 +4591,27 @@ impl Parser {
             let holds_null = matches!(should, Type::Optional(_));
             self.guard_declared_range(code, should, is_type, holds_null);
         }
+        // @FR-N-Store, the bare-`null` half, asked where every converting store passes.  An
+        // explicit cast (`null as integer?`) is the author naming the type, not a store.
+        if !self.first_pass
+            && self.admit_unwrap == 0
+            && !self.in_explicit_cast
+            && matches!(is_type, Type::Null)
+        {
+            if std::env::var_os("LOFT_TRACE_UNWRAP").is_some() {
+                let (what, _, _) = self.store_slot();
+                eprintln!(
+                    "[null] -> {} what={} at {}",
+                    should.name(&self.data),
+                    what.replace(' ', "_"),
+                    std::panic::Location::caller()
+                );
+            }
+            let (what, at, lenient) = self.store_slot();
+            if self.nstore_null_report(should, &what, at.as_ref(), lenient) {
+                return true;
+            }
+        }
         if is_type.is_equal(should) {
             return true;
         }
@@ -4473,8 +4643,11 @@ impl Parser {
                 // null into a nullable target: run the base's null→typed-null coercion so
                 // `code` becomes the base sentinel op (e.g. `OpConvIntFromNull`, not a bare
                 // `null` that natively renders `()`), but a nullable target ALWAYS accepts
-                // null regardless of the base's own nullability.
-                self.convert(code, is_type, inner);
+                // null regardless of the base's own nullability.  The recursion is the
+                // base's null→sentinel coercion, not a second store: the OUTER target holds
+                // null, so @FR-N-Store's bare-null ask at the entry must not see the peeled
+                // base (`File { ref: null }` on an `i32?` field read as a narrow refusal).
+                self.convert_admitting(code, is_type, inner);
                 return true;
             }
             // Implicit CHECKED narrowing into a nullable narrow target — see
@@ -4510,11 +4683,33 @@ impl Parser {
             return self.convert(code, is_type, inner);
         }
         if let Type::Optional(inner) = is_type {
-            // @PLN25 slice (b): the behaviour-preserving implicit unwrap. The `(N-Store)` teeth
-            // (DN3) do NOT belong here — `convert` also services COMPARISONS (`x == null`), so
-            // rejecting an Optional source here wrongly flags the very null-CHECKS that are how
-            // you test nullability. (N-Store) must live at the STORE / decl / index sites (the
-            // design's per-site checks), exempting null-compare. See RESUME.md § Step 3 slice c.
+            // @FR-N-Store — THE junction: every `τ? ⤳ τ` peel in the compiler passes this arm
+            // (measured over the whole corpus, @PLN153 phase 3 — no peel happens anywhere
+            // else), so the rule's τ? half is asked HERE and at no store site.  A caller that
+            // TESTS nullability rather than storing (`x == null`, a condition, an overload
+            // trial) admits the peel through `convert_admitting`; a store names its slot
+            // through `convert_store`; a bare `convert` is asked with generic wording.  The
+            // one-time census instrument stays: `LOFT_TRACE_UNWRAP=1` names every peel's
+            // caller, face and slot.
+            if !self.first_pass && !matches!(should, Type::Optional(_)) {
+                if std::env::var_os("LOFT_TRACE_UNWRAP").is_some() {
+                    let (what, _, _) = self.store_slot();
+                    eprintln!(
+                        "[unwrap] {} -> {} admit={} what={} at {}",
+                        is_type.name(&self.data),
+                        should.name(&self.data),
+                        self.admit_unwrap,
+                        what.replace(' ', "_"),
+                        std::panic::Location::caller()
+                    );
+                }
+                if self.admit_unwrap == 0 && !self.in_explicit_cast {
+                    let (what, at, lenient) = self.store_slot();
+                    if self.nstore_unwrap_report(inner, should, &what, at.as_ref(), lenient) {
+                        return true;
+                    }
+                }
+            }
             return self.convert(code, inner, should);
         }
         // Plan-06 phase 4d: tuple-to-tuple convert is element-wise.
@@ -4542,10 +4737,24 @@ impl Parser {
                 _ => Vec::new(),
             };
             let mut all_compatible = true;
+            // @FR-N-Store — a tuple stores ELEMENT-WISE, so each member is its own slot and
+            // the diagnostic names which (`element 0 of the field`); the six tuple-literal
+            // cells loft#1366 lists were silent because nothing named them.
+            let (what, at, lenient) = match self.store_ctx.last() {
+                Some(c) => (c.what.clone(), c.at.clone(), c.never_error),
+                None => ("this tuple".to_string(), None, true),
+            };
             for (i, (s, d)) in src_elems.iter().zip(dst_elems.iter()).enumerate() {
                 let mut placeholder = Value::Null;
                 let elem = items.get_mut(i).unwrap_or(&mut placeholder);
-                if !self.convert(elem, s, d) {
+                self.store_ctx.push(StoreCtx {
+                    what: format!("element {i} of {what}"),
+                    at: at.clone(),
+                    never_error: lenient,
+                });
+                let ok = self.convert(elem, s, d);
+                self.store_ctx.pop();
+                if !ok {
                     all_compatible = false;
                     break;
                 }
@@ -8578,7 +8787,9 @@ impl Parser {
             Value::Block(bl) if bl.name == Self::TV_NULL_BLOCK => {
                 let tp = bl.result.clone();
                 let mut null = Value::Null;
-                if self.convert(&mut null, &Type::Null, &tp) {
+                // "What is `τ`'s null?" builds a VALUE; it stores nothing, so @FR-N-Store's
+                // bare-null ask is not for it.
+                if self.convert_admitting(&mut null, &Type::Null, &tp) {
                     null
                 } else {
                     // The conversion the template deferred does not exist for this `T`.
@@ -11911,18 +12122,6 @@ impl Parser {
             // `convert`'s generic diagnostic; otherwise fall through and let `convert` peel it.
             // The position anchors to the argument's own span (nstore-position-fix.md) so a TAIL
             // call reports at the call, not the next line.
-            if report
-                && callarg_nstore
-                && self.n_store_violation(
-                    actual_type,
-                    &tp,
-                    &format!("parameter {} of `{callee_name}`", nr + 1),
-                    actual_code.span_pos(),
-                )
-            {
-                actual.push(actual_code);
-                continue;
-            }
             // loft#1287 — a plain heap PARAMETER handed to a `&` parameter the callee
             // REBINDS.  The write-back installs a store the callee minted and displaces the
             // one this binding named, so BOTH ownership questions land here: a plain heap
@@ -11958,7 +12157,22 @@ impl Parser {
             if amp_rebind_arg != u16::MAX {
                 self.ensure_rebind_witness(amp_rebind_arg);
             }
-            if !self.convert(&mut actual_code, actual_type, &tp) {
+            // @FR-N-Store — the parameter is a slot when this binding is REPORTED and the callee
+            // is not null-transparent; an overload TRIAL (`!report`) and a null-transparent
+            // callee (`abs(x)` propagates the null through a runtime guard) only test the fit.
+            let arg_at = actual_code.span_pos().cloned();
+            let accepted = if report && callarg_nstore {
+                self.convert_store(
+                    &mut actual_code,
+                    actual_type,
+                    &tp,
+                    &format!("parameter {} of `{callee_name}`", nr + 1),
+                    arg_at.as_ref(),
+                )
+            } else {
+                self.convert_admitting(&mut actual_code, actual_type, &tp)
+            };
+            if !accepted {
                 if report {
                     let context = format!(
                         "argument {} of call to {}",

@@ -526,6 +526,14 @@ because a warm bundle carries no variable table and rendered every variable as `
 @PLN153 phase 2 is its first customer: `IDENTICAL 1268/1268` under the default and under
 `LOFT_NO_NULLFLOW=1` for the null-flow fold.
 
+**Where does a nullable get peeled?  `LOFT_TRACE_UNWRAP=1`** prints one line per `τ? ⤳ τ`
+peel and per bare-`null` conversion inside `Parser::convert` — the types, whether the caller
+admitted it as a TEST (`admit=`), the slot it is stored into (`what=`), and the caller's
+`file:line` (`#[track_caller]`).  It is the census that located @FR-N-Store's one home
+(@PLN153 phase 3: 6014 peels over the corpus, all through one arm), and the first thing to
+run when a store warns with the generic wording *"into a slot"* — that names the lowering
+that has not said which slot it is.
+
 `loft --introspect <file>` packages the dump primitives behind one
 flag, dumping bytecode + generated Rust + slot tables + per-fn type
 tables to stdout (or per-section files).  No env vars, no test

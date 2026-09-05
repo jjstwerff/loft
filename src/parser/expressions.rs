@@ -1750,7 +1750,9 @@ use a separate collection or add after the loop"
             return false;
         }
         let saved_owned = self.conv_owned_result.take();
-        let accepted = self.convert(&mut Value::Null, s_type, f_type);
+        // A TRIAL of the fit, on a placeholder — @FR-N-Store is asked where the value is
+        // actually stored, not here.
+        let accepted = self.convert_admitting(&mut Value::Null, s_type, f_type);
         self.conv_owned_result = saved_owned;
         !accepted
     }
@@ -2958,19 +2960,13 @@ use a separate collection or add after the loop"
             self.vars.track_write(var_nr, &mut self.lexer);
         }
         // Convert untyped null to typed null for scalar assignments (not collections).
-        if s_type == Type::Null
-            && op == "="
-            && !matches!(
-                f_type,
-                Type::Reference(_, _)
-                    | Type::Enum(_, true, _)
-                    | Type::Vector(_, _)
-                    | Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-            )
-        {
-            self.convert(code, &Type::Null, f_type);
+        // `is_dbref`, not a spelled list: the list this used to carry named six heap kinds
+        // and not `spatial` or `trie`, so `g.sp = null` took the SCALAR sentinel path —
+        // found when @FR-N-Store's one home started asking here (the drifted-deny-list
+        // shape QUALITY.md § Design P8 records).  The store face asks the bare-null half
+        // for the scalar slot; a heap slot's `= null` is its clear, asked where it lowers.
+        if s_type == Type::Null && op == "=" && !crate::data::is_dbref(f_type) {
+            self.convert_store(code, &Type::Null, f_type, "the assignment target", None);
         }
         if var_nr == u16::MAX && !skip_validate {
             // Use the LHS target's parent type saved BEFORE the RHS parse — the RHS
@@ -3298,7 +3294,8 @@ use a separate collection or add after the loop"
             // keyed destination took it quietly.  Peeling here is what `convert` already does
             // for `=`, so both operators reach the same reading of the same value.
             let peeled = s_type.base().clone();
-            self.convert(code, &s_type, &peeled);
+            // Asked just above; this peel is the store proceeding, not a second store.
+            self.convert_admitting(code, &s_type, &peeled);
             s_type = peeled;
         }
         // loft#1215 — the append routes below are a partial list, and nothing said so.  A
@@ -4865,13 +4862,12 @@ use a separate collection or add after the loop"
             && !self.first_pass
             && !f_type.is_unknown()
             && !s_type.is_unknown();
-        if typed_scalar_store {
-            self.n_store_violation(&s_type, f_type, "the assignment target", None);
-        }
+        // @FR-N-Store: a bare `null` is asked where its sentinel conversion lowers, a few
+        // lines down; a value is asked by the store face where it converts.
         if typed_scalar_store
             && !matches!(s_type, Type::Null)
             && !f_type.is_equal(&s_type)
-            && !self.convert(code, &s_type, f_type)
+            && !self.convert_store(code, &s_type, f_type, "the assignment target", None)
         {
             diagnostic!(
                 self.lexer,
