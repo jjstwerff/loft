@@ -1364,6 +1364,42 @@ impl Function {
         }
     }
 
+    /// Is `incoming` the placeholder `declared` with its stubs RESOLVED — the same shape at
+    /// every constructor, where a stub in `declared` accepts whatever `incoming` has there?
+    ///
+    /// The question the declared-placeholder arm of [`Self::change_var_type`] asks: a
+    /// declaration still carrying a forward stub must be kept against an ASSIGNMENT that would
+    /// overwrite it with an unrelated type (`x: Maybe? = 5` must not become `integer`), and
+    /// must be REPLACED by pass 2's re-declaration of the same type with the name resolved
+    /// (`c: (integer, Q)` over `(integer, Unknown)`).  Shape, not identity: `Optional(Unknown)`
+    /// against `Integer` is not a refinement; `Tuple[Int, Unknown]` against
+    /// `Tuple[Int, Reference]` is.  Walks the same variant families
+    /// [`crate::data::Type::for_each_child`] names; a leaf compares by `is_equal`.
+    fn refines(declared: &Type, incoming: &Type) -> bool {
+        use crate::data::Type as T;
+        if declared.is_unknown() {
+            return true;
+        }
+        match (declared, incoming) {
+            (T::Optional(a), T::Optional(b))
+            | (T::RefVar(a), T::RefVar(b))
+            | (T::Rewritten(a), T::Rewritten(b))
+            | (T::Vector(a, _), T::Vector(b, _)) => Self::refines(a, b),
+            (T::Tuple(xs), T::Tuple(ys)) => {
+                xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| Self::refines(x, y))
+            }
+            (T::Function(xa, xr, _), T::Function(ya, yr, _)) => {
+                xa.len() == ya.len()
+                    && xa.iter().zip(ya).all(|(x, y)| Self::refines(x, y))
+                    && Self::refines(xr, yr)
+            }
+            (T::Iterator(a1, a2), T::Iterator(b1, b2)) => {
+                Self::refines(a1, b1) && Self::refines(a2, b2)
+            }
+            _ => declared.is_equal(incoming),
+        }
+    }
+
     /// [`Self::make_independent`] one level down: strip `remove` from the deps of each
     /// ELEMENT of a tuple-typed variable, and say whether anything moved.
     ///
@@ -2150,9 +2186,15 @@ impl Function {
         // once the declaration adopts the stub, and pass 2 re-derives the value's type.
         // A BARE `Unknown` declaration is not this case — `is_unknown()` — and keeps the
         // pass-1 inference it always had.
+        // …unless the incoming type is the placeholder RESOLVED — pass 2 re-declaring
+        // `c: (integer, Q)` as `(integer, Reference(Q))` over pass 1's `(integer, Unknown)` is
+        // exactly the write this must let through (loft#944's own guard, c1: keeping the
+        // placeholder there left the member unresolved for good).  `refines` tells the two
+        // apart by SHAPE: same constructors down to the stubs, and a stub accepts anything.
         if !var_tp.is_unknown()
             && crate::data::Data::type_has_unresolved(var_tp)
             && !crate::data::Data::type_has_unresolved(type_def)
+            && !Self::refines(var_tp, type_def)
         {
             self.depend_all(var_nr, type_def);
             return self.is_new(var_nr);
