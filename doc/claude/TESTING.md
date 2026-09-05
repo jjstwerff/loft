@@ -640,6 +640,16 @@ Comparing a compiler arm's effect under `--tests` on a `main`-ful guard answered
 "4 passed / 4 passed" — which reads as *this changes nothing* and means *neither side ran
 the thing that changes*.
 
+**The control builds are cached and never pruned.**  Each ref costs about 2 GB under
+`~/.cache/tmp/loft-falsify/<ref>` and `<ref>-target`, beside a `head-target` and a
+`shared-target`, and nothing removes them: on 2026-09-05 the directory held 364 GB, the root
+filesystem was full, and `make ci` failed in the NATIVE corpus with `FAIL unknown-mode` after
+four `loft: low space in /var/tmp/loft-test-scratch-… — reclaimed … MB` lines — a disk-full
+symptom that reads like a code fault.  A gate that fails on an unrelated suite right after
+those lines is the disk; `df -h /` before a gate, and prune with
+`find ~/.cache/tmp/loft-falsify -mindepth 1 -maxdepth 1 -mtime +0 -exec rm -rf {} +` (every
+entry is a regenerable build).
+
 ### The set a suite RUNS is not the set it CONTAINS (`LOFT_TRACE_ASSERTS`)
 
 The third shape of self-satisfaction, and the quietest: an `assert` that is written,
