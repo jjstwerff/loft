@@ -14,6 +14,12 @@ invariants, internal phase numbers)?  See
 
 ## 2026-09
 
+**A value that turns out to be absent no longer costs you memory.**  Assigning a
+may-be-missing value over one a variable already held (`x = maybe`) quietly kept the old
+record alive when `maybe` turned out to be nothing — once per time it happened, on compiled
+programs only.  A long-running loop that reassigned such a variable grew for as long as it
+ran.
+
 **A `&` link to a text or a vector now behaves like the `&` you already know.**  Writing a
 `&` variable is supposed to write the thing it links — `a = 3; b = &a; b = 4` leaves `a` at
 4 — and that held for numbers, and for a `&` PARAMETER of any kind.  A `&` to a text or a
