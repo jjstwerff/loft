@@ -369,6 +369,11 @@ impl Output<'_> {
         // `&integer` PARAMETER already uses).  First-Set (the `OpCreateStack` value)
         // (re)binds the reference to the source local; any other value is a
         // write-THROUGH (`*var_b = …`).
+        // A local `&text` link joins them (loft#1371): a text local is a `String`, so the
+        // link is `*mut String` and every read derefs it, exactly as the scalar link does.
+        // The `&mut String` a `&text` PARAMETER carries cannot serve here — it would freeze
+        // the source local for the link's whole life, and loft allows reading `c` while
+        // `pc` links it.
         if !variables.is_argument(var)
             && let Type::RefVar(inner) = variables.tp(var)
             && matches!(
@@ -379,6 +384,7 @@ impl Output<'_> {
                     | Type::Boolean
                     | Type::Character
                     | Type::Tuple(_)
+                    | Type::Text(_)
             )
         {
             let name = sanitize(variables.name(var));
@@ -452,13 +458,22 @@ impl Output<'_> {
                 // Write half of the same conversion the read does (loft#655): the
                 // slot is the `u8` storage byte, the RHS is a `bool`.
                 let bool_link = matches!(**inner, Type::Boolean);
+                // A text RHS yields a `&str` or a `String`; the slot is a `String`.  The
+                // same coercion the `&text` PARAMETER write-back carries.
+                let text_link = matches!(**inner, Type::Text(_));
                 write!(w, "unsafe {{ *var_{name} = ")?;
                 if bool_link {
                     write!(w, "u8::from(")?;
                 }
+                if text_link {
+                    write!(w, "(")?;
+                }
                 self.output_code_inner(w, to)?;
                 if bool_link {
                     write!(w, ")")?;
+                }
+                if text_link {
+                    write!(w, ").to_string()")?;
                 }
                 write!(w, " }}")?;
             }
@@ -479,12 +494,39 @@ impl Output<'_> {
         {
             let name = sanitize(variables.name(var));
             let src_name = sanitize(variables.name(*src));
+            // loft#1371 — a `*mut DbRef` into the source's slot, not the source's DbRef by
+            // VALUE.  By value the link could carry a read and an interior write but never
+            // a WHOLE-VALUE one: `pd = S { n: 2 }` re-pointed the alias and left `d` alone,
+            // so `@FR-B-Ref-Write` held on the interpreter (a real stack ref) and not here.
+            // The same raw-pointer shape the scalar and text links use, for the same
+            // reason: the source local stays readable while the link is alive.
+            self.local_record_link.insert(var);
             if self.declared.contains(&var) {
-                write!(w, "var_{name} = var_{src_name}")?;
+                write!(w, "var_{name} = std::ptr::addr_of_mut!(var_{src_name})")?;
             } else {
                 self.declared.insert(var);
-                write!(w, "let mut var_{name}: DbRef = var_{src_name}")?;
+                write!(
+                    w,
+                    "let mut var_{name}: *mut DbRef = std::ptr::addr_of_mut!(var_{src_name})"
+                )?;
             }
+            return Ok(());
+        }
+        // loft#1371 — a WRITE through a local `&struct` link (`pd = S { n: 2 }`).  The bind
+        // just above is the only value that re-points the link; every other value writes
+        // THROUGH it, which is `@FR-B-Ref-Write`.  The store it DISPLACES has to be released
+        // or it orphans — the same stash / install / free-if-distinct the `&` PARAMETER
+        // write-back does, and aliasing-safe for the same reason: the old `DbRef` is taken
+        // by value, so a self-reading right-hand side keeps it live across the evaluation
+        // and a same-store install degrades to a no-op.
+        if !variables.is_argument(var)
+            && self.local_record_link.contains(&var)
+            && to != &Value::Null
+        {
+            let name = sanitize(variables.name(var));
+            write!(w, "unsafe {{ let _old_disp = *var_{name}; *var_{name} = ")?;
+            self.output_code_inner(w, to)?;
+            write!(w, "; OpFreeRefIfDistinct(cell, _old_disp, *var_{name}); }}")?;
             return Ok(());
         }
         // #257: aliasing a `&ref` param into a fresh local (`snap = s`), both

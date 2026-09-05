@@ -36,7 +36,23 @@ impl OpEmitter for TextDispatchEmitter {
         } else {
             &name
         };
-        match dispatch {
+        // loft#1371 — a `&text` LOCAL link holds `*mut String`: a RAW pointer, so the source
+        // local stays readable while the link is alive (a `&mut String` would freeze it, and
+        // loft allows `println("{c}")` beside a live `pc = &c`).  A `&text` PARAMETER holds
+        // the `&mut String` and needs no block.  Every `Stack` variant writes THROUGH the
+        // destination, so the wrapper goes here, once, rather than per op — a variant added
+        // to `refvar_text_stack_variant` cannot then arrive without its dereference.
+        let writes_through_dest = dispatch.starts_with("OpAppendStack")
+            || dispatch.starts_with("OpClearStack")
+            || dispatch.starts_with("OpFormatStack");
+        let raw_link = refvar_text_first
+            && writes_through_dest
+            && matches!(args.first().map(Value::unspan), Some(Value::Var(v))
+                if !ctx.output.data.def(ctx.output.def_nr).variables().is_argument(*v));
+        if raw_link {
+            write!(ctx.w, "unsafe {{ ")?;
+        }
+        let emitted = match dispatch {
             "OpFormatInt" | "OpFormatStackInt" => {
                 ctx.output
                     .format_long(&mut *ctx.w, args, name == "OpFormatStackInt")
@@ -88,6 +104,10 @@ impl OpEmitter for TextDispatchEmitter {
             // Registered only for the names above, so this is unreachable; fall
             // back to the template path for safety.
             _ => super::default::DefaultEmitter.emit(ctx, args),
+        };
+        if raw_link {
+            write!(ctx.w, " }}")?;
         }
+        emitted
     }
 }

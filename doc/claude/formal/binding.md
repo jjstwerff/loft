@@ -105,6 +105,16 @@ different type former doing a different job (`B-Ref-StoredRef`).
                       a = 3; b = &a; a = 5;  b == 5
   (B-Ref-Write)   writing a `&τ` variable writes the SOURCE — the NORTH STAR:
                       a = 3; b = &a; b = 4;  a == 4
+                  At a HEAP τ the write REPLACES the source's contents; it does not
+                  re-point the link, and the value it displaces is released:
+                      c = "a"; pc = &c; pc = "z";        c == "z"
+                      d = S{n:1}; pd = &d; pd = S{n:2};  d.n == 2, the first record freed
+                      e = [1]; pe = &e; pe = [2, 2];     len(e) == 2, in e's OWN store
+                  That is this rule read at τ = a heap value rather than a second rule,
+                  and it is what the `&τ` PARAMETER write-back has always done
+                  ([calls.md](calls.md) F-ParamRef).  It went unstated long enough for the
+                  LOCAL bind to answer three different ways — a silent copy for a text, a
+                  re-point for a vector, an orphaned record for a struct (loft#1371).
   (B-Ref-Uniform) a `&τ` variable is used EXACTLY like a τ variable — read, write,
                   field/element mutate — and every operation goes through the link via
                   the EXISTING mutation code.  The TYPE carries the linkage; no

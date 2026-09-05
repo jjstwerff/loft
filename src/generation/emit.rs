@@ -346,13 +346,29 @@ impl Output<'_> {
                             | Type::Single
                             | Type::Boolean
                             | Type::Character
+                            | Type::Text(_)
                     )
                 {
                     // @PLN87 L1 — a local scalar `&`-link holds `*mut T` (raw); deref
-                    // to read the linked source's current value.
+                    // to read the linked source's current value.  loft#1371 — a local
+                    // `&text` link holds `*mut String` and reads as a borrow of it, the
+                    // same shape the `&text` PARAMETER reads through.
                     if matches!(**inner, Type::Boolean) {
                         return write!(w, "unsafe {{ *var_{var_name} == 1 }}");
                     }
+                    if matches!(**inner, Type::Text(_)) {
+                        return write!(w, "unsafe {{ &*var_{var_name} }}");
+                    }
+                    return write!(w, "unsafe {{ *var_{var_name} }}");
+                } else if let Type::RefVar(inner) = variables.tp(var)
+                    && matches!(**inner, Type::Reference(..))
+                    && self.local_record_link.contains(&var)
+                {
+                    // loft#1371 — a local `&struct` link built from `OpCreateStack` holds
+                    // `*mut DbRef`; deref to read the source slot's CURRENT record.  Only
+                    // the links this function actually built that way: a `RefVar` local
+                    // that aliases another `RefVar` (the #257 shape) still holds the
+                    // pointer it copied.
                     return write!(w, "unsafe {{ *var_{var_name} }}");
                 } else if matches!(variables.tp(var).base(), Type::Text(_))
                     && !self.tuple_text_to_string

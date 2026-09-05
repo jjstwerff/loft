@@ -167,12 +167,14 @@ impl Output<'_> {
             // When the variable is a `&mut String` parameter (RefVar(Text)), the capacity
             // re-allocation assignment needs an explicit dereference; auto-deref does not
             // apply to assignment left-hand sides in Rust.
-            let deref =
-                if variables.is_argument(*nr) && matches!(variables.tp(*nr), Type::RefVar(_)) {
-                    "*"
-                } else {
-                    ""
-                };
+            // loft#1371 — the LOCAL `&text` link needs it for the same reason the parameter
+            // does: the destination is the link, and an assignment left-hand side does not
+            // auto-deref.  Its raw-pointer `unsafe` block is opened by the op dispatch.
+            let deref = if matches!(variables.tp(*nr), Type::RefVar(_)) {
+                "*"
+            } else {
+                ""
+            };
             let n = self.next_format_count;
             self.next_format_count = 0;
             if n > 1 {
