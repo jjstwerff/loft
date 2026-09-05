@@ -227,6 +227,10 @@ fn null_discharge_subject<'a>(v: &'a Value, data: &crate::parser::Data) -> Optio
         // zero-argument null-sentinel ELSE arm is what tells the two apart.  A discharge's else
         // arm is the type's DEFAULT, so the guard is the only `if` this must not claim — its
         // then arm is the receiver, and peeling to it would write through the wrong place.
+        //
+        // ⚠ Sound on a LEFT-hand side only, where no author's `if` can stand.  A reader of a
+        // right-hand side meets every value-`if` an author writes in this same node, and must
+        // ask the builder instead (`Parser::bare_variable_discharge`, loft#1379).
         Value::If(_, then, els)
             if !matches!(els.unspan(), Value::Call(d, a)
                 if a.is_empty() && data.def(*d).name() == "OpNullRefSentinel") =>
@@ -6924,9 +6928,19 @@ use a separate collection or add after the loop"
                 Some(Value::Set(_, subject)) => vec![(**subject).clone()],
                 _ => return false,
             },
+            // The bare-variable spelling, and ONLY that: the `if` is asked whether it is the
+            // lowering of `v ?? d` (`bare_variable_discharge`), never assumed to be one for
+            // being an `if`.  Every value-`if` an author writes reaches this seam in the same
+            // node, and claiming it guarded the then arm — a checked cast, so a `u8` local
+            // read null and a `limit(…)` slot lost its default — and range-cast the first
+            // operand of the author's own CONDITION, so `c: u8 = if k == 1000 { a } else { b }`
+            // took the else arm (loft#1379).  For the coalesce itself both reads of the
+            // subject are guarded: the condition `coalesce_not_null` built, and the then arm.
             Value::If(cond, then, _) => {
+                if self.bare_variable_discharge(cond, then).is_none() {
+                    return false;
+                }
                 let mut v = vec![(**then).clone()];
-                // the condition is `OpConvBoolFromInt(subject)` — guard the read inside it too
                 if let Value::Call(_, args) = cond.unspan()
                     && let Some(first) = args.first()
                 {
@@ -6969,6 +6983,40 @@ use a separate collection or add after the loop"
             _ => return false,
         }
         true
+    }
+
+    /// `@FR-N-Coal` — the variable `v` when this `if` is the lowering of `v ?? d` for a BARE
+    /// variable, and `None` for every other `if`.
+    ///
+    /// The `??` lowering reads a bare variable twice for free, so it builds a plain
+    /// `if coalesce_not_null(v) { v } else { d }` and leaves no marker on it — the same node
+    /// an author's value-`if` is.  So the shape is asked of the BUILDER rather than read off
+    /// the node: the then arm must be a plain read of `v`, and the condition must be exactly
+    /// what `coalesce_not_null` builds for `v`'s type.  An author's `if` fails one or the
+    /// other — its condition is its own, or its then arm is an expression — and an author's
+    /// `if x != null { x } else { d }` fails too, because `!= null` lowers to `OpNeInt(x, null)`
+    /// where the builder spells `OpConvBoolFromInt(x)`: that spelling asked for no coalesce
+    /// and is judged as the narrowing it is.
+    ///
+    /// Only an integer subject is asked, because only a narrow integer TARGET reaches the one
+    /// caller; the builder's other arms (a collection, a tagged enum, a type variable) are
+    /// not re-run here.  The LEFT-hand-side readers of a discharge ([`null_discharge_subject`])
+    /// keep a looser test, and that is sound where they read: no author's `if` can stand on
+    /// the left of `=`.
+    fn bare_variable_discharge(&mut self, cond: &Value, then: &Value) -> Option<u16> {
+        let Value::Var(v) = then.unspan() else {
+            return None;
+        };
+        let v = *v;
+        if v >= self.vars.count() {
+            return None;
+        }
+        let tp = self.vars.tp(v).clone();
+        if !matches!(tp.base(), Type::Integer(_)) {
+            return None;
+        }
+        let expected = self.coalesce_not_null(&Value::Var(v), &tp);
+        (*cond.unspan() == expected).then_some(v)
     }
 
     pub(crate) fn guard_declared_range(

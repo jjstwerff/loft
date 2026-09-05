@@ -10,6 +10,24 @@ All notable changes to the loft language and interpreter.
 ## [Unreleased]
 
 ### loft#1368: a return that may borrow one of two sources is FRESH (2026-09-06)
+### A value-`if` is not a coalesce, and an `else if` chain converts at its arms (2026-09-06, `@FR-E-Uncomp-NN` walk, loft#1379 / loft#1380)
+
+`Parser::range_guard_inside_discharge` (@PLN152) matched the bare-variable `??` lowering — a
+plain `Value::If` — by node shape, so every author's value-`if` stored into a narrow slot was
+"discharged": the then arm wrapped in a `dn4cast` (null in a `u8`; the `limit(…)` default
+lost), the condition's first operand range-cast (`(k as u8?) == 1000`), and the narrowing
+refusal skipped.  `Parser::bare_variable_discharge` now asks `coalesce_not_null` to rebuild the
+condition for the then arm's variable and accepts only an exact match; `null_discharge_subject`
+keeps its looser `If` arm for the left-hand side, where no author's `if` can stand.
+`Parser::parse_if` became a wrapper over `parse_if_expecting(code, expected)`: an `else if`
+chain's then block is parsed with the enclosing then arm's type, so `parse_block`'s tail
+conversion covers it (literal-fit exemption included); the three `context == "else"`
+carve-outs there — the loft#1350 tuple boxing, the sibling-variant carve-out, the
+loft#978/#1103 honest deps — read `arm_of_sibling` (`"else"`, or `"if"` with a known expected
+type).  Guards `1379`/`1379b`/`1380`/`1380b`; `optional` audit row 714/355.  Filed loft#1381
+(`--native`: a statement `if` with a value-bearing else arm, E0308).
+
+### An element-level write through a group's vector member acts on the group (2026-09-05, `@FR-Col-Group` walk, D-col-1 opened)
 
 `@FR-F-Ret` — a returned whole heap value is FRESH, never a view of a parameter; the only
 borrow a caller may get back is an explicit `&T`.  A return whose tail is a value BRANCH hands

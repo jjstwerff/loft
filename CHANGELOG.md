@@ -96,6 +96,15 @@ once, the startup cache answered the next `introspect` from its bundle, and the 
 named every variable `65535` with a `-` where its slot number and span belong — two runs of
 the same command on the same file did not print the same thing.  `introspect` now always
 parses; ordinary runs keep the cache.
+**An `if` you write is yours, and an `else if` arm is an `else` arm.**  Storing an
+if-expression into a `u8` (or any narrow type) used to treat it as a `??` fallback: the then
+arm could read `null` in a slot that has no null, and the first thing compared in your
+CONDITION was silently range-checked too, so `c: u8 = if k == 1000 { a } else { b }` took the
+else arm.  Both now behave like every other spelling — a value that may not fit is refused at
+compile time with the message `c: u8 = a + b` gets, and your condition is left alone.  And an
+`else if` arm is now held to the first arm's type: `x: integer = if a { 1 } else if b { 2.5 }
+else { 3 }` is refused instead of printing the float's bits, and `else if b { 2 }` behind a
+`1.5` becomes `2.0`.  (loft#1379, loft#1380)
 
 **A generic function returns a value of its own, like a plain function does.**  `fn same<T>(x: T)
 -> T { x }` used to hand back the argument itself when `T` was a struct, a vector or a keyed

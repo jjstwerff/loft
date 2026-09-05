@@ -1844,8 +1844,15 @@ impl Parser {
             // The work-ref an `else` arm was boxed into (loft#1350) — the arm's own
             // ownership fact, read where the arm's type is settled below.
             let mut boxed_arm_w: Option<u16> = None;
+            // A block handed a SIBLING EXPRESSION's type as its expected type: the `else`
+            // arm (`parse_if` passes the then arm's), and the then arm of an `else if`
+            // CHAIN (`parse_if_expecting` passes the enclosing then arm's; a top-level `if`
+            // expects `Unknown`).  Every other caller's expected type is a DECLARED one.
+            // The three carve-outs below are about the sibling, not about the keyword, so
+            // they read this and not `context == "else"` (loft#1380).
+            let arm_of_sibling = context == "else" || (context == "if" && !result.is_unknown());
             let tuple_rewritten = !self.first_pass
-                && (context == "return from block" || context == "else")
+                && (context == "return from block" || arm_of_sibling)
                 && matches!(t, Type::Tuple(_))
                 && tail_has_tuple_leaf(l[last].unspan(), &self.vars)
                 && matches!(result, Type::Reference(d, _) if self.data.def(*d).name().starts_with("__tuple<"))
@@ -1855,7 +1862,7 @@ impl Parser {
                     } else {
                         unreachable!()
                     };
-                    if context == "else" {
+                    if arm_of_sibling {
                         let same_shape = if let Type::Tuple(elems) = t {
                             let names: Vec<String> =
                                 elems.iter().map(|e| e.name(&self.data)).collect();
@@ -2000,26 +2007,24 @@ impl Parser {
             // of them and nothing is licensed BETWEEN them, so asking `convert` produced
             // *"expected A, got B on else"* for a join `match` accepts (loft#1117).  The
             // arm keeps its own type and `parse_if` joins the two to their enum.
-            let sibling_variant = context == "else" && self.sibling_variants(t, result);
-            // @FR-F-Block — the arms of a STATEMENT `if` yield nothing anybody reads, so
-            // their types need not agree.  Only one order used to compile: a void THEN arm
-            // makes the expected type `void`, which accepts any else arm, while a void ELSE
-            // arm arrived as a conversion `void ⤳ integer` that nothing licenses — so
-            // `{ println } else { 5 }` was accepted and its mirror refused (loft#1382),
-            // both backends, where `match` accepted both.
-            //
-            // Gated on POSITION, not on the arms' types: `Type::Void` on an arm is not one
-            // fact — it is also what a block reports when its value travels through a
-            // BUFFER — so keying on it dropped the retbuf delivery of twenty other tests.
-            // …and only where one arm yields NOTHING.  `@FR-F-Block` discards the value of a
-            // `;`-terminated construct, but the corpus pins `if c { 2 } else { "a" };` as a
-            // refusal — two VALUES of different types is a mistake worth reporting wherever it
-            // sits, and widening that is not what loft#1382 asks.  What it asks is narrower: a
-            // void arm beside a value arm, which is not a type mistake at all, since there is
-            // no value for the two to disagree about.  Only one ORDER of it used to compile —
+            let sibling_variant = arm_of_sibling && self.sibling_variants(t, result);
+            // @FR-F-Block — the arms of a construct in STATEMENT position yield nothing
+            // anybody reads, so their types need not agree.  Only one ORDER used to compile:
             // a void THEN arm makes the expected type `void`, which accepts any else arm,
-            // while a void ELSE arm arrived as `void ⤳ integer`, licensed by nothing.
-            let stmt_arm = context == "else"
+            // while a void ELSE arm arrived as a conversion `void ⤳ integer` that nothing
+            // licenses — `{ println } else { 5 };` was accepted and its mirror refused
+            // (loft#1382), on both backends, where `match` accepted both.
+            //
+            // Gated on POSITION, not on the arms' types alone: `Type::Void` on an arm is not
+            // one fact — it is also what a block reports when its value travels through a
+            // BUFFER — so keying on it dropped the retbuf delivery of twenty other tests.
+            //
+            // And only where one arm yields NOTHING.  The corpus pins
+            // `if c { 2 } else { "a" };` as a refusal: two VALUES of different types is a
+            // mistake worth reporting wherever it sits, and widening that is not what
+            // loft#1382 asks.  A void arm beside a value arm is not a type mistake at all —
+            // there is no value for the two to disagree about.
+            let stmt_arm = arm_of_sibling
                 && self.arms_of_statement_construct
                 && (matches!(t, Type::Void) || matches!(result, Type::Void));
             let needs_convert = !tuple_rewritten
@@ -2102,8 +2107,8 @@ impl Parser {
                     self.validate_convert(context, t, result, tail_pos);
                 }
             }
-            // loft#978 — an `else` arm is the ONE block handed a SIBLING EXPRESSION as
-            // its expected type (`parse_if` passes the THEN arm's), and an expected type
+            // loft#978 — an `else` arm (and a chain's then arm, `arm_of_sibling`) is a block
+            // handed a SIBLING EXPRESSION as its expected type, and an expected type
             // cannot say what the value in hand borrows: it was written before that value
             // existed.  Taking it whole republished the then-arm's dep list as the else
             // arm's, so a fresh-record then-arm erased the container view the else arm
@@ -2113,7 +2118,7 @@ impl Parser {
             // different space entirely — grafting frame vars onto those is the
             // cross-space read loft#666 was made of, so the shape alone is taken there,
             // exactly as before.
-            tp = if context == "else" {
+            tp = if arm_of_sibling {
                 // loft#1103 — the SHAPE comes from the expected type, but the arm's own
                 // NULLABILITY does not: `(N-Join)` says a join is optional iff some arm is,
                 // and this is the arm whose answer was being dropped.  `x: integer = if c
@@ -3826,16 +3831,22 @@ impl Parser {
         // loft#1382 — take statement position from the caller and CLEAR it, so a value-`if`
         // nested inside a statement one (`if c { v = if d { 1 } else { 2 } }`) does not
         // inherit it.  Held across the arms in `arms_of_statement_construct`, which is what
-        // the arm-agreement gate reads; restored at every exit so a sibling construct in the
-        // same statement is unaffected.
+        // the arm-agreement gate reads, and restored at exit so a sibling construct in the
+        // same statement is unaffected.  Cleared HERE and not in `parse_if_expecting`,
+        // because an `else if` CHAIN recurses through that one and its arms belong to the
+        // same statement construct.
         let is_stmt = std::mem::replace(&mut self.stmt_if_pending, false);
         let outer_arms = std::mem::replace(&mut self.arms_of_statement_construct, is_stmt);
-        let r = self.parse_if_inner(code);
+        let r = self.parse_if_expecting(code, &Type::Unknown(0));
         self.arms_of_statement_construct = outer_arms;
         r
     }
 
-    fn parse_if_inner(&mut self, code: &mut Value) -> Type {
+    /// [`parse_if`](Self::parse_if) with the type its THEN arm is expected to answer in:
+    /// `Unknown` for an `if` that names its own type — every one an author opens — and the
+    /// enclosing then arm's type for an `else if` CHAIN, whose arms are else arms and convert
+    /// at their tails exactly as a plain `else` block does (@FR-N-Decl, loft#1380).
+    fn parse_if_expecting(&mut self, code: &mut Value, expected: &Type) -> Type {
         let mut test = Value::Null;
         // loft#986 — the `{` after this condition opens a BLOCK; an empty `{ }` must not
         // read as a struct literal here.
@@ -3873,7 +3884,7 @@ impl Parser {
         let mut true_code = Value::Null;
         let write_state = self.vars.save_and_clear_write_state();
         self.vars.clear_write_state();
-        let mut true_type = self.parse_block("if", &mut true_code, &Type::Unknown(0));
+        let mut true_type = self.parse_block("if", &mut true_code, expected);
         if !is_bindings.is_empty()
             && let Value::Block(bl) = &mut true_code
         {
@@ -3927,10 +3938,35 @@ impl Parser {
                 // unreachable, on both backends and on released 2026.8.0.  A THEN arm
                 // that already names the merged type keeps `false_type` at `Void`
                 // exactly as before; nothing downstream reads the chain's type there.
-                let chain_type = self.parse_if(&mut false_code);
+                // @FR-N-Decl — the chain's arms are ELSE arms, and an else arm answers in
+                // the then arm's type or is refused, at its own tail, through the same
+                // `parse_block` conversion the plain `else` block below takes.  The chain
+                // used to be parsed expecting nothing, so its value was never held to the
+                // type this expression reports: `if a { 1 } else if b { 2.5 } else { 3 }`
+                // into an `integer` read the float's bits as a number, and `if a { p } else
+                // if b { p + q } else { q }` put 260 into a `u8` — a local, an argument and
+                // a return alike, both backends (loft#1380).  A statement `if` (a `Void`
+                // then arm) expects nothing of its chain, as before; a then arm that names
+                // no type yet (`null`, a return) adopts the chain's, as before.
+                let chain_expected = if matches!(true_type, Type::Void) {
+                    Type::Unknown(0)
+                } else {
+                    true_type.clone()
+                };
+                let chain_type = self.parse_if_expecting(&mut false_code, &chain_expected);
                 if true_type == Type::Unknown(0) {
                     false_type = chain_type;
                 } else {
+                    // @FR-C-Var — a chain whose arms are OTHER variants of the then arm's
+                    // enum joins to that enum, exactly as the plain else below does; the
+                    // inner `if` has already joined its own two arms, so the chain arrives
+                    // as the enum or as one sibling variant.
+                    let variant_enum = self.variant_parent_enum(&true_type);
+                    if let Some(enum_tp) = &variant_enum
+                        && Self::joins_to_enum(enum_tp, &true_type, &chain_type)
+                    {
+                        true_type = enum_tp.clone();
+                    }
                     // loft#978 — the chain's TYPE deliberately stays out of `false_type`
                     // (above), but what it BORROWS is still a value this if-expression can
                     // deliver, so it has to reach the join below.  Without it an
