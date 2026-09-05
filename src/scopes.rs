@@ -1652,7 +1652,8 @@ fn run_scan_phase(
     for v in mixed_ownership_locals(orig_code, &function, data, d_nr) {
         function.mark_borrow_arm(v);
     }
-    for v in nullable_locals_that_displace(orig_code, &function, data) {
+    let displace_locals = nullable_locals_that_displace(orig_code, &function, data);
+    for &v in &displace_locals {
         let name = format!("__lbo_{}", function.name(v));
         let flag = function.add_temp_var(&name, &Type::Boolean);
         scopes.var_scope.insert(flag, 0);
@@ -1666,13 +1667,14 @@ fn run_scan_phase(
     // free, the transition frees, the scope-exit sweep — declines it and the witness is the
     // ONE thing that releases its stores.  The witness carries a self-dep: not a borrow, and
     // not the empty list @FR-O-Proxy reads as "owner", so no site frees it on its own.
-    for v in owner_witness_locals(
+    let witness_locals = owner_witness_locals(
         orig_code,
         &function,
         data,
         d_nr,
         &scopes.views_to_materialise,
-    ) {
+    );
+    for &v in &witness_locals {
         if !crate::keys::owner_witness_enabled() {
             break;
         }
@@ -1687,6 +1689,22 @@ fn run_scan_phase(
         scopes.var_scope.insert(w, 0);
         scopes.var_order.push(w);
         scopes.owner_witness.insert(v, w);
+    }
+    // A nullable heap local that holds a PROJECTION VIEW owns no store it must free (a view
+    // is never owned, @FR-O-Owner).  Mark it never-free (@FR-O-Override) so the D-own-16
+    // `borrows_one_argument` residual — which reads its single-ARGUMENT dep as ownership —
+    // does not free the viewed store it displaces at a reassignment (the caller's nested
+    // record, or a local's field).  The two mixed-ownership shapes that DO own a store are
+    // excluded: a solely-owned minting call keeps its loft#1200 runtime flag, and a view+mint
+    // mix its owner witness (loft#1336).  What remains frees nothing of its own, so this
+    // leaks nothing.
+    for v in nullable_view_locals(orig_code, &function, data) {
+        if !displace_locals.contains(&v)
+            && !witness_locals.contains(&v)
+            && !scopes.views_to_materialise.contains_key(&v)
+        {
+            function.set_skip_free(v);
+        }
     }
     let mut code = scopes.scan(orig_code, &mut function, data);
     // The witness starts FALSE: on entry the buffer holds the CALLER's store, which this
@@ -10683,6 +10701,75 @@ fn mixed_ownership_locals(code: &Value, function: &Function, data: &Data, d_nr: 
 /// through the local double-frees it against the work-ref's own scope-exit free.  One static
 /// site cannot separate the first iteration from the rest, which is what `formal/ownership.md`
 /// D-own-16 records; the flag answers it per RUN.
+/// Which nullable heap-record LOCALS hold a PROJECTION VIEW on some assignment — a field
+/// read (`d = q.inner`), a vector-element read (`d = vs[i]`), a tuple element — a store the
+/// local only borrows and never owns (@FR-O-Owner)?
+///
+/// Such a local is marked never-free (@FR-O-Override).  Its single-ARGUMENT dep otherwise
+/// reads as ownership at the D-own-16 `borrows_one_argument` residual (`state/codegen.rs`,
+/// this file's scope-exit `borrow_witness`, `generation/dispatch.rs`), which then frees the
+/// store the local DISPLACES at a reassignment — the caller's nested store, or a local's
+/// field — a store the local only VIEWED.  A view owns nothing, so the proxy that licenses
+/// that free is wrong and @FR-O-Override vetoes it.
+///
+/// A DIRECT projection — a field read (`OpGetField`), a vector-element read (`OpGetVector`
+/// &c) or a tuple element — ALIASES its base (@FR-B-View / @FR-B-View-Depth): the local
+/// holds a store it does not own.  A whole-value bind of a heap variable COPIES (@FR-B-Copy,
+/// pE) and a CALL that returns a borrowed view is COPIED into the local by the set-lowering
+/// (@FR-F-Ret, loft#1346) — both mint the local a store of its own, so neither is matched
+/// here; the set is exactly the ops in [`crate::use_analysis`]'s projection set plus a tuple
+/// read.  The mixed-ownership shapes that own a store are excluded by the caller: a
+/// solely-owned minting call by the loft#1200 runtime flag ([`nullable_locals_that_displace`]),
+/// a view+mint mix by the owner witness ([`owner_witness_locals`], loft#1336), and a
+/// MATERIALISED view (its container is disturbed while it is live, so it takes its own copy,
+/// @FR-B-View) by `views_to_materialise`.
+fn nullable_view_locals(code: &Value, function: &Function, data: &Data) -> Vec<u16> {
+    // Cost gate: restrict the walk to bodies that actually declare a nullable heap-record
+    // local (the only thing this marks).
+    let has_candidate = (0..function.count()).any(|v| {
+        matches!(function.tp(v), Type::Optional(_))
+            && matches!(
+                function.tp(v).base(),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            )
+            && !function.is_argument(v)
+            && !function.is_captured(v)
+    });
+    if !has_candidate {
+        return Vec::new();
+    }
+    let projections = &data.op_sets().projections;
+    let mut out: Vec<u16> = Vec::new();
+    let mut walk = |node: &Value| {
+        if let Value::Set(t, val) = node.unspan()
+            && !out.contains(t)
+            // A DIRECT projection that ALIASES: a tuple element, or one of the projection
+            // reads.  NOT a bare `Var` (copies, @FR-B-Copy) and NOT a user/native call
+            // returning a borrow (copied into the local, @FR-F-Ret / loft#1346).
+            && match val.unspan() {
+                Value::TupleGet(_, _) => true,
+                Value::Call(fn_nr, _) => projections.contains(fn_nr),
+                _ => false,
+            }
+        {
+            out.push(*t);
+        }
+    };
+    code.walk(&mut |n| walk(n));
+    out.retain(|&v| {
+        v < function.count()
+            && matches!(function.tp(v), Type::Optional(_))
+            && matches!(
+                function.tp(v).base(),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            )
+            && !function.is_argument(v)
+            && !function.is_captured(v)
+            && !function.is_compiler_generated(v)
+    });
+    out
+}
+
 fn nullable_locals_that_displace(code: &Value, function: &Function, data: &Data) -> Vec<u16> {
     fn walk(node: &Value, seen: &mut HashSet<u16>, out: &mut Vec<u16>, data: &Data) {
         if let Value::Set(t, val) = node.unspan() {

@@ -9,6 +9,28 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A nullable local holding a projection view does not free the store it displaces (2026-09-05)
+
+The D-own-16 `borrows_one_argument` residual reads a nullable heap local's single-ARGUMENT
+dep as ownership and frees the store it displaces at a reassignment — sound for a WHOLE-value
+argument borrow (`d: S? = p`, free-protected on the borrow path), a silent over-free for a
+PROJECTION.  `d: In? = q.inner` aliases q's NESTED store (no free-protection), so the
+reassignment released the caller's record; a view of a local's field (`o.inner`) or a vector
+element (`vs[i]`) failed the same way, the dep naming its base.  Silent-wrong: the freed store
+read correct until a later allocation reused its slot, then returned the filler's value (`777`
+for `71`, both backends); the vector-element shape crashed out of bounds under `LOFT_POISON`.
+
+A view owns no store (`@FR-O-Owner`), so the empty/argument-dep proxy is wrong for a
+view-holder and `@FR-O-Override` vetoes it.  `scopes::nullable_view_locals` names the nullable
+heap locals that hold a projection view (the oracle calls it `Borrowed` and it is not a bare
+`Var` — a whole-value bind COPIES) and marks them never-free before the scan; the three
+free-site twins (`state/codegen.rs`, `scopes.rs` scope-exit, `generation/dispatch.rs`) already
+consult `is_skip_free`.  Excluded, and kept on their own machinery: a solely-owned minting
+call (the loft#1200 runtime flag) and a view+mint mix (the loft#1336 owner witness).  Found on
+the `@FR-O-Latest` rule-led walk (QUALITY.md B7p, `formal/ownership-history.md` D-own-30),
+guarded by `tests/scripts/a-nullable-view-local-does-not-free-what-it-displaces.loft`,
+falsified at `51646648` on both backends.
+
 ### A reassignment releases the droppable it displaces, and the hand-off fact follows the assignment (2026-09-05)
 
 loft#1362.  `scopes::displaced_drop` — at a `Set` of an owned droppable-typed local already

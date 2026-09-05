@@ -6,7 +6,7 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — D-own-29 OPENED AND CLOSED 2026-09-04 (loft#1346, below), after D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
+OPEN: **0** — D-own-30 OPENED AND CLOSED 2026-09-05 (a nullable local holding a projection VIEW freed the store it displaced, below), after D-own-29 2026-09-04 (loft#1346, below) and D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
 single cell, its Face B CLOSED the same day, that cell's one known SYMPTOM closed 2026-08-26
 with the FACT still wrong, loft#1098, and the fact itself closed by giving every path of a
 value branch its own binding — below).  D-own-26 CLOSED 2026-09-03: its gate existed all
@@ -38,6 +38,30 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-30 — OPENED AND CLOSED (2026-09-05): a nullable local holding a projection VIEW freed the store it displaced
+
+`(O-Owner)` says one thing owns each store and only it frees it; `(O-Latest)` places the free
+from the LATEST assignment.  The D-own-16 residual `borrows_one_argument` reads a nullable
+local's single-ARGUMENT dep as ownership and frees the store it displaces at a reassignment —
+correct for the WHOLE-value argument borrow it was written for (`d: S? = p`, whose store is
+free-protected on the borrow path), wrong for a PROJECTION.  `d: In? = q.inner` aliases q's
+NESTED store, which carries no free-protection, so the reassignment released the CALLER's
+record; a view of a LOCAL's field or a vector element failed the same way, the dep still
+naming its base.  A SILENT-WRONG: the freed store read correct until a later allocation reused
+its slot, then returned the filler's value (`777` for `71`, both backends); the vector-element
+shape crashed out of bounds under `LOFT_POISON`.
+
+Found on the `@FR-O-Latest` rule-led walk (QUALITY.md B7p), 1266 cells KIND × first source ×
+second source × position, scored under poison because the plain build hid it.  Closed at the
+FACT: a view owns no store, so the empty/argument-dep proxy is wrong for a view-holder and
+`(O-Override)` vetoes it.  `scopes::nullable_view_locals` marks such locals never-free before
+the scan; all three free-site twins (`state/codegen.rs`, this file's scope-exit, `generation/
+dispatch.rs`) already consult `is_skip_free`.  The two mixed-ownership shapes that DO own a
+store are excluded and keep their machinery: a solely-owned minting call the loft#1200 runtime
+flag, a view+mint mix the owner witness (loft#1336).  Guard
+`a-nullable-view-local-does-not-free-what-it-displaces.loft`, falsified at `51646648` on both
+backends via the value channel.
 
 ### D-own-29 — OPENED AND CLOSED (2026-09-04, loft#1346): the interpreter kept a nullable record's borrowed-view result raw where native copied it
 

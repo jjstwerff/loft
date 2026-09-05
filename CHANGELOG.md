@@ -47,6 +47,13 @@ backends.  A copy taken from a parameter leaves the caller as the owner.  Two co
 one value are reported by the `double-move` warning, as two containers built from it
 already were.
 
+**A nullable local that views someone else's record no longer frees it.**  `d: In? =
+q.inner; d = …` on a value with a nullable field of a parameter freed the caller's nested
+record when `d` was reassigned — invisible until a later allocation reused the slot, at
+which point the read returned the wrong value.  A view of a local's field or a vector
+element failed the same way.  A projection is a view and owns nothing, so it is left alone;
+a nullable local that actually mints a record of its own still releases it.
+
 **Every text buffer a frame mints is released.**  A handful of shapes answered the right
 value on both backends while the interpreter left one text buffer behind per call: a
 lambda returning a captured text through `??`, a nullable text local returned, a

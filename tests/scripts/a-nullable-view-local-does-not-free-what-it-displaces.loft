@@ -1,0 +1,137 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A nullable heap-record local that holds a PROJECTION VIEW owns no store, so a reassignment
+// must not free the store it displaces (@FR-O-Owner, @FR-O-Override).
+//
+// The D-own-16 `borrows_one_argument` residual reads a nullable local's single-ARGUMENT dep
+// as ownership and frees the store it displaces at a reassignment — sound when the local
+// WHOLE-VALUE-borrowed the argument (its store is the free-protected argument), but wrong
+// when the local only VIEWED a projection of it: `d: In? = q.inner` aliases q's NESTED
+// store, which is not free-protected, so freeing it releases the CALLER'S record.  The same
+// residual fires for a view of a LOCAL'S field (`d: In? = o.inner`) and a vector element
+// (`d: In? = vs[i]`), because the projection's dep still names its base.
+//
+// `scopes::nullable_view_locals` names these before the scan and marks them never-free.  The
+// two mixed-ownership shapes that DO own a store keep their machinery and are excluded: a
+// solely-owned minting call by the loft#1200 runtime flag, a view+mint mix by the owner
+// witness (loft#1336).  A whole-value bind of a heap variable COPIES (@FR-B-Copy — see
+// `test_a_whole_value_parameter_bind_still_frees`), so it keeps the residual.
+//
+// @falsified-at: 51646648 — the FIRST cell below reads 777 (the filler that reused the freed
+// slot) instead of 71 on BOTH backends, on a plain dev build, and pinpoints a SILENT-WRONG:
+// the over-free is invisible until a later allocation reuses the freed slot, so each cell
+// forces that reuse rather than trusting the freed bytes to survive.  Under `LOFT_POISON=1`
+// the same pre-fix build reads 0xDEADBEEFDEADBEEF, and the vector-element cell CRASHES with
+// an out-of-bounds store access — three faces of one displaced-view free.
+
+struct In { v: integer }
+struct Out { inner: In, w: integer }
+fn mk(v: integer) -> In { In { v: v } }
+fn mk_or(v: integer) -> In? { if v < 0 { null } else { In { v: v } } }
+
+// A view of an ARGUMENT's field, then a fresh mint, then fillers that reuse the freed slot.
+// The pre-fix free released q.inner (the caller's nested store); the reads then see a filler.
+fn view_arg_field_then_mint(q: Out) -> integer {
+  d: In? = q.inner;
+  d = In { v: 11 };
+  f1 = In { v: 777 };
+  f2 = In { v: 888 };
+  d.v = 99;
+  q.inner.v
+}
+fn test_a_view_of_an_argument_field_is_not_freed_at_a_reassignment() {
+  q = Out { inner: In { v: 71 }, w: 1 };
+  got = view_arg_field_then_mint(q);
+  assert(got == 71, "the caller's q.inner survived: got {got}, want 71");
+  assert(q.inner.v == 71, "and it still reads 71 in the caller: got {q.inner.v}");
+}
+
+// A view of a LOCAL's field, then a view of an argument's field (the dep ends on the
+// argument, firing the residual), then fillers.  o.inner must survive.
+fn view_local_field_then_view_arg(q: Out) -> integer {
+  o = Out { inner: In { v: 41 }, w: 1 };
+  d: In? = o.inner;
+  d = q.inner;
+  f1 = In { v: 777 };
+  f2 = In { v: 888 };
+  d.v = 99;
+  assert(q.inner.v == 99, "the write reaches the last view (q.inner): got {q.inner.v}");
+  o.inner.v
+}
+fn test_a_view_of_a_local_field_is_not_freed_at_a_reassignment() {
+  q = Out { inner: In { v: 71 }, w: 1 };
+  got = view_local_field_then_view_arg(q);
+  assert(got == 41, "the local's o.inner survived: got {got}, want 41");
+}
+
+// A view of a local VECTOR ELEMENT, then a view of an argument's field, then fillers.  The
+// pre-fix free corrupted the element's store — a crash under poison, a filler read here.
+fn view_elem_then_view_arg(q: Out) -> integer {
+  vs = [In { v: 15 }, In { v: 16 }];
+  d: In? = vs[1];
+  d = q.inner;
+  f1 = In { v: 777 };
+  f2 = In { v: 888 };
+  d.v = 99;
+  vs[1].v
+}
+fn test_a_view_of_a_vector_element_is_not_freed_at_a_reassignment() {
+  q = Out { inner: In { v: 71 }, w: 1 };
+  got = view_elem_then_view_arg(q);
+  assert(got == 16, "the vector element vs[1] survived: got {got}, want 16");
+}
+
+// The loop shape: the residual keys on loop depth, so the reassignment inside a loop is the
+// position the filed shapes usually take.
+fn view_arg_field_reassigned_in_a_loop(q: Out) -> integer {
+  d: In? = q.inner;
+  for i in 0..5 { d = In { v: i }; }
+  f1 = In { v: 777 };
+  q.inner.v
+}
+fn test_a_view_reassigned_in_a_loop_is_not_freed() {
+  q = Out { inner: In { v: 71 }, w: 1 };
+  got = view_arg_field_reassigned_in_a_loop(q);
+  assert(got == 71, "q.inner survived the loop reassignments: got {got}, want 71");
+}
+
+// CONTROL — a whole-value bind of a heap PARAMETER COPIES (@FR-B-Copy): the local owns its
+// copy, the residual correctly frees the copy it displaces, and the caller is untouched.
+// This is the shape `nullable_view_locals` must NOT mark (a bare `Var` source is not a view).
+fn whole_value_param_bind(p: In) -> integer {
+  d: In? = p;
+  d = mk(9);
+  f1 = In { v: 777 };
+  d.v = 99;
+  p.v
+}
+fn test_a_whole_value_parameter_bind_still_frees() {
+  got = whole_value_param_bind(In { v: 7 });
+  assert(got == 7, "a whole-value bind copies, so the caller's p is untouched: got {got}");
+}
+
+// CONTROL — a view+mint mix owns the mint and must NOT leak it: the loop reassigns from a
+// solely-owned minting call, which the owner witness (loft#1336) releases.  The value
+// survives and nothing leaks.
+fn view_then_owned_mint_in_a_loop(q: Out) -> integer {
+  d: In? = q.inner;
+  for i in 0..5 { d = mk(i); }
+  d?.v ?? -1
+}
+fn test_a_view_then_owned_mint_keeps_its_witness() {
+  q = Out { inner: In { v: 71 }, w: 1 };
+  got = view_then_owned_mint_in_a_loop(q);
+  assert(got == 4, "the last minted value survives: got {got}, want 4");
+  assert(q.inner.v == 71, "and the caller's q.inner is untouched: got {q.inner.v}");
+}
+
+fn main() {
+  test_a_view_of_an_argument_field_is_not_freed_at_a_reassignment();
+  test_a_view_of_a_local_field_is_not_freed_at_a_reassignment();
+  test_a_view_of_a_vector_element_is_not_freed_at_a_reassignment();
+  test_a_view_reassigned_in_a_loop_is_not_freed();
+  test_a_whole_value_parameter_bind_still_frees();
+  test_a_view_then_owned_mint_keeps_its_witness();
+  println("ok");
+}

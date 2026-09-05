@@ -481,7 +481,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 |---:|---:|---:|
 | 388 | 364 | **24** |
 
-loft#1356 added two peeling sites (the eager factory's tail scan reads a `Return` and a `Set` through their `Span`), loft#1357 one, loft#1361 one (the tuple member copy reads its `Var` or `TupleGet` source through the `Span`), loft#1362 two (`scopes::in_place_rebuild` reads the statement-level `OpDatabase` through its `Span`, and `copy_hands_off` walks a nested destination place through each level's) — the statement scan in `scopes::convert` takes a `Span` off an `if` whose condition consumes a `??` temp, so it can put the evaluated condition back under the same position.  `scripts/ir_walker_audit.py unspan` re-measures it, and
+loft#1356 added two peeling sites (the eager factory's tail scan reads a `Return` and a `Set` through their `Span`), loft#1357 one, loft#1361 one (the tuple member copy reads its `Var` or `TupleGet` source through the `Span`), loft#1362 two (`scopes::in_place_rebuild` reads the statement-level `OpDatabase` through its `Span`, and `copy_hands_off` walks a nested destination place through each level's), and the projection-view marking one (`scopes::nullable_view_locals` reads each `Set`'s source through its `Span` to match a `Value::TupleGet` or a projection `Value::Call`) — the statement scan in `scopes::convert` takes a `Span` off an `if` whose condition consumes a `??` temp, so it can put the evaluated condition back under the same position.  `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
 It moved from 384 · 360 to 385 · 361 with loft#1354's `arm_moves_a_live_tuple_local`, which
 discriminates on `Value::Var` and `Value::Block` to find the local an `if` arm hands over — it
@@ -2458,7 +2458,7 @@ and who does not.
 |---:|---:|---:|---:|
 | 703 | 346 | 5 | **352** |
 
-loft#1362 moved one FUNCTION-half site: `scopes::scan_set`'s latest-assignment memo (`owned_refs`) reads the local's type through `base()` now, so a nullable record local has an entry for the reassignment release to read.
+loft#1362 moved one FUNCTION-half site: `scopes::scan_set`'s latest-assignment memo (`owned_refs`) reads the local's type through `base()` now, so a nullable record local has an entry for the reassignment release to read.  The projection-view marking added one on the seeing-through side (`scopes::nullable_view_locals`, which reads `function.tp(v).base()`), taking it to `702 | 345`.
 
 The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.  It happened again on the 2026-09-03 join — one side carried `684 | 330 | 5 | 349` and the other `687 | 331 | 5 | 351`, and the tree that holds both measures `689 | 332 | 5 | 352`; the 2026-09-03 evening join (D-bind-11 onto the #1318 tree) measured `692 | 333 | 5 | 354`, loft#1327's opaque-fn-ref clause moved one function off the opaque column, and the D-own-8 closure moved two more onto the peeled one — one arm peeled (`gen_set_first_at_tos`'s null-init) beside two new scope-pass predicates.  The tree that holds BOTH measures `694 | 337 | 5 | 352`, which is neither side's number: two branches each adding predicates cannot have their counts added, because the audit classifies FUNCTIONS and a merged body is one function however many branches touched it.  loft#1333 then moved it to `695 | 338 | 5 | 352` with `scopes::mixed_ownership_locals`, the pre-scan that asks whether a binding is assigned a VIEW on one path and a delivered collection on another; it reads `function.tp(v).base()`, so it peels the wrapper and lands on the seeing-through side, leaving the opaque column where it was.  loft#1335 moved one function the other way, from opaque to seeing-through — `697 | 341 | 5 | 351` — because `fnref_result_type` stopped listing the shapes it bridges and asks `Type::base()` / `borrow_deps` instead, which is the cure that closed it.  loft#1349 added one opaque function, `Parser::boxed_tuple_return` — `698 | 341 | 5 | 352` — which matches `Type::Tuple` bare on purpose: a nullable tuple is not a shape it boxes, so peeling there would be a wrong answer rather than a wider one.  loft#1357 added two on the seeing-through side — `700 | 343 | 5 | 352` — `Parser::lambda_text_buffer_var` and `scopes::any_text_return_buffer`, both asking which hidden attribute is a `RefVar(Text)` buffer, the one home the text-return deliveries read.
 
@@ -5037,6 +5037,48 @@ resource is released by nobody (leak direction, pre-existing since the copy-move
 overwritten FIELD's old value is the same class as a variable rebind one level in; it is
 kept on the documented boundary because the parser's field write cannot yet tell a
 construction from an overwrite, and a hook on a zeroed fresh field would be a false release.
+
+#### B7p — `@FR-O-Latest` walked: the residual reads a single-argument dep as ownership, and frees a view (2026-09-05)
+
+Picked by `rule_tags.py dups`: at 18 sites `@FR-O-Latest` is the most scattered rule not
+yet walked, and it sits under the store-lifetime class this cycle keeps producing.  Its
+sites split into two questions — *which store does the LATEST assignment give this binding*
+(`owned_refs`, the memo, and the transition frees that read it) and *which assignment does a
+CAPTURE / a fn-ref join name AT ITS BUILD* (`capture_build_backing`, `callref_join_bases`).
+The walk built the latest-assignment matrix: a nullable heap local reassigned from a second
+source, KIND × first source × second source × POSITION, 1266 cells on both backends, scored
+under `LOFT_POISON` because the defect it found is invisible on a plain build.
+
+**The disagreement.**  Codegen's `borrows_one_argument` (the D-own-16 residual, spelled again
+at this file's scope-exit `borrow_witness` and in `generation/dispatch.rs`) reads a nullable
+local's single-ARGUMENT dep as ownership and frees the store it DISPLACES at a reassignment.
+Sound for the shape it was written for — `d: S? = p` WHOLE-value-borrows the argument, whose
+store is free-protected, so the free is declined on the borrow path and taken on the mint
+path.  Wrong for a PROJECTION: `d: In? = q.inner` aliases q's NESTED store, which carries no
+free-protection, so the reassignment released the CALLER'S record; the same fired for a view
+of a LOCAL's field (`d: In? = o.inner`) and a vector element (`d: In? = vs[i]`), because the
+projection's dep still names its base.  A SILENT-WRONG: the read was correct until a later
+allocation reused the freed slot, at which point `q.inner.v` returned the filler's value —
+`777` for `71`, both backends — and the vector-element shape crashed out of bounds.
+
+**The fix, at the fact.**  A view owns no store (@FR-O-Owner), so the proxy that licenses
+the free is wrong for a view-holder and @FR-O-Override vetoes it.  `scopes::nullable_view_locals`
+names the nullable heap locals that hold a projection view (the oracle calls it `Borrowed`
+and it is not a bare `Var` — a whole-value bind COPIES, @FR-B-Copy) and marks them
+never-free before the scan, which all three free-site twins already consult through
+`is_skip_free`.  The two mixed-ownership shapes that DO own a store are excluded and keep
+their machinery: a solely-owned minting call its loft#1200 runtime flag, a view+mint mix its
+owner witness (loft#1336).  What remains owns nothing it must free — all views, or a view
+plus a literal that frees through its own work-ref — so never-free leaks nothing.
+
+**Verified.**  1266 cells green on the interpreter and the fixed shapes on native, all under
+poison, with the 42 collection-off-a-parameter cells re-scored as a CORRECTED oracle (B-Copy's
+own `d = self.data` copies, so a parameter is an owned base for a collection projection — the
+first read expected a view and was wrong).  Guard
+`a-nullable-view-local-does-not-free-what-it-displaces.loft`: four displaced-view cells that
+force slot reuse so the free is a wrong VALUE rather than surviving bytes, and two controls
+(the whole-value parameter bind that still frees, the view+mint that keeps its witness),
+falsified at `51646648` on both backends.
 
 #### B2 — open, and the owner's call
 
