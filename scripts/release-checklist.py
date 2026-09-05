@@ -964,8 +964,10 @@ def build_items(version: str, network: bool) -> list[tuple[str, list[Item]]]:
             "M-install-sh",
             "`scripts/install.sh` end-to-end on one platform",
             "sh scripts/install.sh --version " + version,
-            "the documented curl|sh path.  Nothing in CI runs it — only a static test "
-            "that its uname→triple mapping matches PUBLISHED_TRIPLES",
+            "the documented curl|sh path.  CI runs it against a locally built bundle over "
+            "file:// (tests/self_update_swap.rs); this run adds the real transport and the "
+            "SHIPPED binary's verify-self — read its verdict, the script exits 1 on a "
+            "failed one",
         ),
         Item(
             "M-vscode",

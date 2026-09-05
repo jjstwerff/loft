@@ -11,9 +11,25 @@
     "at": "2026-09-04 19:39",
     "note": "step 1: PROBLEMS.md is the closed archive by design, PLANNING.md carries one struck WITHDRAWN row and no done-in-place item; step 2: scripts/linkcheck.sh 368 links OK; step 3: 5 orphans found by scan \u2014 SESSION_354_HANDOFF, SPLIT, GAME_TESTING, GAPS removed (a June handoff, an April function audit with 7 of 8 cited fns gone, a GL-testing guide whose 4 scripts no longer exist and whose subject TESTING.md now owns, an April coverage table the Makefile target supersedes), GALLERY_CI and BRITTLE linked from the CLAUDE.md index; step 4/5b: doc_history_report run \u2014 the top entries stay with the reason recorded in RELEASE.md \u00a7 2026-09; step 8: make clippy-review run, dead suppressions struck in its output"
   },
+  "M-hands-linux": {
+    "at": "2026-09-05 02:25",
+    "note": "Unzipped loft-2026.9.0-x86_64-unknown-linux-musl.zip from the draft on this box: --version = loft 2026.9.0; verify-self intact (origin not yet traced \u2014 the splice comes after publish); examples/fibonacci.loft prints 0 1 1 2 3 5 8 13 21 34; all 7 examples run with empty stderr"
+  },
+  "M-hands-macos": {
+    "at": "2026-09-05 02:12",
+    "note": "Per the owner: the release run's bundle smoke IS the macOS walkthrough \u2014 run 33931351450 unzipped its own aarch64-apple-darwin and x86_64-apple-darwin zips, asserted --version, verify-self and every examples/*.loft with empty stderr; A-smoke reports it ran (no skip) on both legs. Gatekeeper on an unsigned download not observed here (no Mac at hand)"
+  },
+  "M-hands-windows": {
+    "at": "2026-09-05 02:12",
+    "note": "Per the owner: the release run's bundle smoke IS the Windows walkthrough \u2014 run 33931351450 unzipped its own x86_64-pc-windows-msvc zip, asserted --version, verify-self and every examples/*.loft with empty stderr; A-smoke reports it ran. The VS Code grammar symlink not exercised (no Windows box at hand)"
+  },
   "M-ignores": {
     "at": "2026-09-04 22:22",
     "note": "Owner, 2026-09-04: 'acceptable to me when it is documented well enough' \u2014 validated on e77ef442+: 33 #[ignore]s, each in tests/ignored_tests.baseline with a reason naming the run it rides (17 measurements by hand, 13 sweeps nightly or by hand, 2 Windows cfg_attr, 1 maintenance), held by doc_hygiene::{ignored_tests_baseline_is_current, every_ignore_reason_says_how_it_runs}; every suite skip list EMPTY; the four html_wasm platform limits (server, hex_world, imaging, input) each state the missing host facility, which gates still run the package, and what removes it; TESTING.md \u00a7 Every skip says why, how it runs instead, and when it ends is the rule; the record's M-ignores paragraph carries the same"
+  },
+  "M-install-sh": {
+    "at": "2026-09-05 02:32",
+    "note": "Ran on this box over a local http.server serving the draft's zips (LOFT_INSTALL_BASE) into a scratch --prefix. FOUND A DEFECT: the script copied bin/ and default/ only, then handed verify-self the manifest of the whole bundle, which counts a missing file as a failure \u2014 'files: 14 missing', 'the installation does not verify', exit 1 \u2014 and the public 2026.8.0 bundle fails the same way, so it shipped broken last month. FIXED in scripts/install.sh (installs the whole bundle, the unit self-update installs): 2026.9.0 draft -> 'files: 22 file(s) match', exit 0; 2026.8.0 public -> 'files: 21 file(s) match', origin matches the signed index. New end-to-end test tests/self_update_swap.rs::install_sh_installs_the_whole_bundle_and_it_verifies (file:// base, Linux x86_64) \u2014 passes on the fix, fails on HEAD's script. The fix is uncommitted on this tree pending a branch"
   },
   "M-leaks": {
     "at": "2026-09-04 22:10",
@@ -30,6 +46,18 @@
   "M-monthly-docs": {
     "at": "2026-09-04 19:39",
     "note": "make libraries-review: the 5 in-tree libraries that moved (default, lib/code, lib/lexer, lib/parser, lib/testlib) re-read and their LIBRARY_DOC_REVIEW.md watermarks bumped with what changed \u2014 nothing reviewed has moved. 41 never reviewed and 6 owing a worked-example verdict are all in loft-libs-* repos. make features-review: F47 and F100 deferred examples, nothing owing"
+  },
+  "M-ndb": {
+    "at": "2026-09-05 02:29",
+    "note": "Built /tmp/ndb_hello.loft with the local 2026.9.0 binary under --native --native-debug: objdump shows every .debug_* section and DW_AT_name points at the preserved ~/.cache/tmp/loft_native_<pid>.rs; gdb 15.1 hits a breakpoint by qualified name (break loft_native_<pid>::n_main) and by file:line, steps through the generated source, info locals/bt name the frames (NDB.0 level \u2014 identifiers are the generated Rust's, NDB.1's .loft-term view is not done). The debug binary is the native cache copy <script-dir>/.loft/cache/<stem>-<hash>; --native-debug does not print that path. lldb is not installed on this box"
+  },
+  "M-pages": {
+    "at": "2026-09-05 02:25",
+    "note": "The site is served from main:/docs (a symlink to doc/) and rebuilt on every push to main \u2014 the tag commit b1016d00 built at 23:56Z and the pages show 2026.9.0. Headless Chromium (--dump-dom, 20s budget) loaded gallery.html (no console lines) and brick-buster.html (canvas mounted, inlined wasm, one INFO console line: Chromium's software-WebGL notice). The release job's own Pages leg is dead weight: it pushes doc/ to gh-pages (unserved since April) and has failed at make game \u2014 no binaryen \u2014 on every release since 2026.7.1"
+  },
+  "M-rosetta": {
+    "at": "2026-09-05 02:35",
+    "note": "Not needed: A-smoke reports the bundle smoke ran (no skip) on all four legs of run 33931351450, the x86_64-apple-darwin bundle included"
   },
   "M-valgrind": {
     "at": "2026-09-04 22:10",
