@@ -6328,19 +6328,33 @@ impl Parser {
     }
 
     fn tuple_return_rewrite(&mut self, returned: Type, from_type_var: bool) -> Type {
-        // Only the `-> T` shape needs this.  When the template return type IS the
-        // bare type variable, the body delivers T as a DbRef (the template compiled
-        // T as a `Reference` dummy), so a tuple substitution must wrap it in the
-        // synthetic struct.  A return type that is a LITERAL tuple in the signature
-        // (e.g. `-> (integer, integer)`) is constructed BY VALUE in the body and
-        // correctly uses the bare-tuple ABI — rewriting it would break the
-        // value-tuple generic returns (p329/p330/p240/plan17).
-        if !from_type_var {
-            return returned;
-        }
         let Type::Tuple(elems) = &returned else {
             return returned;
         };
+        // When the template return type IS the bare type variable (`-> T`), the body
+        // delivers T as a DbRef (the template compiled T as a `Reference` dummy), so a
+        // tuple substitution must wrap it in the synthetic struct — the arm below.
+        //
+        // A LITERAL tuple in the signature whose SHAPE depends on `T` (`-> (T, integer)`) is
+        // the case the declaration DEFERRED to instantiation
+        // (`return_shape_depends_on_type_var`), and this is the instantiation — reached from
+        // the pass-1 prediction and the pass-2 signature alike, so the two agree.  A
+        // pure-value shape (`-> (integer, integer)`) is constructed BY VALUE in the body and
+        // keeps the bare tuple ABI, which is what the old unconditional gate protected
+        // (p329/p330/p240/plan17); a lifetime-bearing one is boxed exactly as
+        // `boxed_tuple_return` boxes a concrete declaration, and
+        // `promote_monomorph_tuple_return` rewrites the body's tuple tails to match.  Left
+        // bare, the instance handed up a stack tuple whose heap member was the ARGUMENT's own
+        // store, on both backends (QUALITY.md B7t; loft#1365's collection half,
+        // `formal/tuples.md` D-tup-9).
+        if !from_type_var {
+            if !elems.iter().any(crate::data::has_lifetime_concern) {
+                return returned;
+            }
+            let elems_clone = elems.clone();
+            let synth = self.data.tuple_def(&mut self.lexer, &elems_clone);
+            return Type::Reference(synth, crate::data::Deps::none());
+        }
         let wide = u32::from(crate::variables::size(
             &returned,
             &crate::data::Context::Argument,
@@ -6625,8 +6639,23 @@ impl Parser {
         // `predict_generic_return_type`, so the second-pass instantiated return type
         // matches the first-pass prediction (the cross-pass H5 contract).
         let from_tv = matches!(&tmpl_returned, Type::Reference(d, _) if *d == tv_nr);
-        let new_returned =
+        let tmpl_ret_deps: Vec<u16> = tmpl_returned.depend();
+        let mut new_returned =
             self.tuple_return_rewrite(Self::substitute_all(tmpl_returned, &bindings), from_tv);
+        // @FR-F-Ret — the template's RETURN DEPS come along.  `substitute_all` replaces the
+        // type variable and drops the deps it carried, and those deps are what say *this
+        // result borrows argument N*: without them a `fn g<T>(x: T) -> T { x }` instance
+        // reads as a fresh owner, the caller binds the raw argument store, and mutating
+        // the result mutated the argument on both backends (QUALITY.md B7t) — where the
+        // concrete twin, whose `-> Ctr["x"]` says so, is copied by the caller.  Attribute
+        // indices are frame-independent and the instance copies the template's parameters
+        // in order, so re-attaching is exact; `expand_deferred_par` does the same for a
+        // par worker's return.  A tuple carries no dep list of its own and is boxed below.
+        if !matches!(new_returned.base(), Type::Tuple(_)) {
+            for d in tmpl_ret_deps {
+                new_returned = new_returned.depending(d);
+            }
+        }
         // Register the new definition.
         let d_nr = self.data.add_def(&mangled, &tmpl_pos, DefType::Function);
         for a in &tmpl_attrs {
@@ -6650,6 +6679,44 @@ impl Parser {
             new_returned,
         );
         self.fill_monomorph_body(d_nr, new_code, &tmpl_vars, &bindings, &concrete);
+        // @FR-F-Ret / @FR-O-Oracle — a template's `-> T` record return carries NO deps: its
+        // `ref_return` is skipped (the promotion is deferred to instantiation), so the
+        // `MergeAttr` that writes `-> Ctr["x"]` on a concrete twin never ran, and the instance
+        // read as a fresh owner while its body hands the ARGUMENT up.  The caller then bound
+        // the argument's own store and a write through the result wrote the argument, on both
+        // backends (QUALITY.md B7t: struct/vector, whole/local/early/arm).  Ask the ONE
+        // derivation the body itself answers to — the oracle's return summary — and let the
+        // instance's declared return say what its twin's says, so the caller copies a
+        // borrowed return exactly as it does for a named function (loft#1346).
+        //
+        // A pure BORROW only.  A `Join` — a mint on one arm and the argument on the other —
+        // is delivered through a return buffer on a named function (`ref_return`'s per-arm
+        // leg), which a monomorph does not have yet; a dep alone would make the caller copy
+        // the mint arm and orphan the minted store.  That shape stays as it is, named in
+        // QUALITY.md B7t as the residual with its cure.
+        //
+        // And only where every return LEAF is the parameter itself.  A local bound from it
+        // (`y: T = x; y`) COPIES at codegen for a record (@FR-B-Copy) — a copy the IR does
+        // not show, so the oracle reads the local as a borrow of `x` — and declaring that a
+        // borrow made the caller decline its lift and free nothing: three corpus generics
+        // leaked one record per call under `LOFT_STRICT_STORES`.  What comes back through a
+        // local is owned, and the caller adopts it as before.
+        if new_returned.depend().is_empty() && crate::data::has_lifetime_concern(&new_returned) {
+            let attrs_n = self.data.def(d_nr).attributes().len();
+            if let crate::use_analysis::Own::Borrowed { base } =
+                crate::use_analysis::return_ownership(&self.data, d_nr)
+                && (base as usize) < attrs_n
+                && !self.data.def(d_nr).attributes()[base as usize].hidden
+                && matches!(&self.data.def(d_nr).code, Value::Block(bl)
+                    if Self::every_return_leaf_is_var(&bl.operators, base))
+            {
+                // Written directly: `set_returned` refuses a second write on purpose (a return
+                // type must not change), and this does not change it — it adds the deps the
+                // type was declared without.
+                let with_dep = self.data.def(d_nr).returned().clone().depending(base);
+                self.data.definitions[d_nr as usize].returned = with_dep;
+            }
+        }
         // loft#1023 — a template declared BELOW its caller has not had its pass-2 body
         // parsed yet when the call instantiates, so the monomorph above was built from the
         // PASS-1 body.  Record it and re-derive once the whole file is through.
@@ -6744,6 +6811,14 @@ impl Parser {
         // delivers through a hidden `&text` buffer (no orphaned owned String).
         // Runs BEFORE returning `d_nr` so the call site sees the promoted ABI.
         self.promote_monomorph_text_return(d_nr);
+        // @FR-F-Ret — and its tuple twin: a `-> (T, …)` whose shape the declaration deferred
+        // is boxed by `tuple_return_rewrite` above, and the body's tuple tails are rewritten
+        // into that synthetic record here, so signature and body agree on both passes.
+        self.promote_monomorph_tuple_return(d_nr);
+        // @FR-F-Ret / @FR-B-Copy — and the vector twin: a `T`-typed local bound from another
+        // vector COPIES, and a `-> T` that hands a vector argument up returns a copy of it.
+        let holders: Vec<u32> = bindings.iter().map(|(h, _)| *h).collect();
+        self.promote_monomorph_vector_return(d_nr, tmpl_vars, &holders);
         // loft#845 — a `"{v}"` on a `vector<T>` was emitted against the row the TEMPLATE
         // could see, which is a vector over the type variable's own storage.  Substitution
         // replaces the type and leaves that row behind, so the dump walked a
@@ -10189,7 +10264,36 @@ impl Parser {
             | Type::Index(_, _, _)
             | Type::Radix(_, _, _)
             | Type::Trie(_, _, _)
-            | Type::Sorted(_, _, _) => self.cl("OpSetInt4", &[ref_code.clone(), pos_v, value]),
+            | Type::Sorted(_, _, _) => {
+                // A KEYED element is a record SET, and the element write COPIES it —
+                // `OpReplaceKeyed`, exactly as `set_field_check` writes a keyed struct field
+                // (loft#698).  Writing the source's 4-byte header with `OpSetInt4` left two
+                // owners of one record set, and on the return path the `__tuple` record then
+                // held the header of a frame-local backing the frame freed: the interpreter
+                // wrote into a released, reused store (`Write to read-only store`, the const
+                // store had taken the slot) and `--native` refused an int for a `DbRef`
+                // (E0308) — an accept/reject split on `s = x; t = (s, 7); return t` with a
+                // keyed `x` (QUALITY.md B7t; the cell D-tup-8's guard did not cross).  A bare
+                // `Int` source is a raw header and keeps the raw write.
+                let keyed_tp = elem_tp.base().clone();
+                if matches!(value.unspan(), Value::Int(_))
+                    || self.keyed_field_kt(&keyed_tp).is_none()
+                {
+                    self.cl("OpSetInt4", &[ref_code.clone(), pos_v, value])
+                } else {
+                    let kt = self.keyed_field_kt(&keyed_tp).unwrap_or(u16::MAX);
+                    let tp_val = if self.is_struct_returning_call(&value) {
+                        i32::from(kt) | 0x8000
+                    } else {
+                        i32::from(kt)
+                    };
+                    let field_ref = self.cl(
+                        "OpGetField",
+                        &[ref_code.clone(), pos_v, Value::Int(i32::from(kt))],
+                    );
+                    self.cl("OpReplaceKeyed", &[value, field_ref, Value::Int(tp_val)])
+                }
+            }
             // Plan-06 phase 4d: nested tuple element — recurse into
             // `emit_tuple_set_ops` with the inner tuple's offsets so
             // each leaf primitive lands at `outer_pos +

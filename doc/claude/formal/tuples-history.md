@@ -84,6 +84,16 @@ enters the literal.
 
 ### D-tup-8 — OPENED AND CLOSED (2026-09-04, loft#1361): a tuple with a heap member was shared where the rules say copy
 
+> **The cell this entry's guard did not cross (2026-09-05, QUALITY.md B7t).**  A keyed member
+> reaching the tuple literal through a LOCAL bound from a parameter and then RETURNED —
+> `s = x; t = (s, 7); return t` — was written into the synthetic `__tuple` record by
+> `emit_set_one_element` as a 4-byte header where a struct field write copies
+> (`OpReplaceKeyed`): the interpreter wrote into a released, reused store and native refused
+> the int for a `DbRef`.  Fixed in that leg; the cell lives in
+> `a-generic-instance-returns-what-its-concrete-twin-returns.loft`.  The same walk boxed a
+> generic's `-> (T, integer)` at instantiation, which is the return-ABI half of D-tup-9's
+> collection case as the sibling stream named it.
+
 `(T-Cons)` copies a heap element INTO a tuple literal and `binding.md (B-Copy)` copies a plain
 bind, whole-value and heap alike; `layout.md (L-Tuple)` makes a tuple a synthetic struct, so a
 struct's own boundary applies to it.  Three places kept the tuple's stack WORDS instead — and a

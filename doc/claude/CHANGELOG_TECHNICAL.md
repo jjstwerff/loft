@@ -9,6 +9,25 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A generic's instance returns what its concrete twin returns (2026-09-05)
+
+`@FR-F-Ret` says a returned whole heap value is fresh.  A monomorph kept the RECORD lowering
+its template parsed `T` as, because the declaration defers a generic's return promotion to
+instantiation and nothing there received it: a `-> T { x }` bound to a struct, vector or
+keyed collection handed the ARGUMENT up (a write through the result wrote the argument, both
+backends), a `-> (T, integer)` stayed a stack tuple aliasing the argument, a vector `s = x`
+aliased and the frame freed the caller's vector.  Four cures at instantiation, each what the
+concrete twin does: return deps from the oracle where every return leaf is the parameter
+itself; the deferred tuple boxed by `tuple_return_rewrite` (shared by the pass-1 prediction
+and the pass-2 signature) with `promote_monomorph_tuple_return` rewriting the body; vector
+binds and a borrowed vector return copied by `promote_monomorph_vector_return`; and, in the
+tuple return leg every declaration uses, a keyed member copied instead of written as a 4-byte
+header, a nullable record member tag-written instead of landing on the discriminant, and a
+nullable vector member's `null` written as the absent id instead of an empty vector — the
+last two pre-existing on concrete code.  Guard: 52 cells with concrete twins as the oracle,
+falsified at `babf9e64` on both backends; five corpus files' IR moved, all green under
+`LOFT_STRICT_STORES`.
+
 ### The displacement free reads one predicate on both backends (2026-09-05)
 
 `@FR-O-NoDiverge` says both backends translate the same `deps` facts.  The one store-lifetime

@@ -18,6 +18,14 @@ The **say-what-you-do** release. Two threads, and they turned out to be one: eve
 the language reference was read against the compiler that ships, and most of what came back
 was not a wrong sentence but a promise nothing was keeping.
 
+**A generic function returns a value of its own, like a plain function does.**  `fn same<T>(x: T)
+-> T { x }` used to hand back the argument itself when `T` was a struct, a vector or a keyed
+collection, so `r = same(v); r[0] = 99` changed `v`, and `fn pair<T>(x: T) -> (T, integer)`
+did the same through the tuple; a plain function written the same way copied.  Every generic
+now returns what its plain twin returns.  Two nullable tuple members were wrong for plain
+functions as well: `(x, 1)` with `x: S?` read back garbage, and `(null, 2)` with a
+`vector<T>?` member read back as an empty vector instead of `null`.
+
 **A tuple built inside a generic copies what it holds.**  `t = (s, 1)` inside a
 `fn f<T: …>(…)` now behaves the same as the version with the concrete type written in
 place — mutating `s` afterwards no longer shows through `t.0` when `T` is a struct.  The

@@ -6,11 +6,37 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — `D-call-12` opened and closed 2026-09-04 (loft#1357, the residue of
+OPEN: **0** — `D-call-13` opened and closed 2026-09-05 (a generic's instance returned the argument it was handed, below); `D-call-12` opened and closed 2026-09-04 (loft#1357, the residue of
 `D-call-9` under the release valgrind sweep), the same day as `D-call-10` and `D-call-11`
 (loft#1345, loft#1347), `D-call-9` (loft#1338) and `D-call-8` (loft#1337); before them
 `D-call-7` closed 2026-09-02 and `D-call-6` was opened and closed the same day by the
 reference review of chapter 31.
+
+### D-call-13 — OPENED AND CLOSED (2026-09-05): a generic's instance returned the argument it was handed, and the tuple return leg wrote three members wrong
+
+`(F-Ret)` says a returned whole heap value is FRESH — owned by the caller, never a view of
+a local or of the argument.  A monomorph is an ordinary program and owes the same; it did not
+deliver it.  The declaration DEFERS a generic's return promotion to instantiation
+(`return_shape_depends_on_type_var`) and nothing at instantiation received it, so the instance
+kept the RECORD lowering the template parsed `T` as: a `-> T { x }` carried no return deps
+and the caller bound the argument's own store; a `-> (T, integer)` stayed a stack tuple whose
+heap member was the argument; a vector `s = x` aliased and the frame then freed the caller's
+vector.  Measured on the F-Ret independence matrix (QUALITY.md B7t): 13 generic cells failed
+identically on both backends, every concrete twin passed.  Boxing the generic then routed it
+through the concrete tuple-return leg, which had two pre-existing defects of its own — a
+nullable record member written on the tag's discriminant (`4294967199` for `7`) and a nullable
+vector member's `null` appended as an EMPTY vector — plus a keyed member written as a 4-byte
+header (an interpreter panic and a native E0308, an accept/reject split).
+
+Closed at instantiation, each half mirroring the concrete twin: the return deps from the
+oracle where every leaf is the parameter itself (`(O-Oracle)`; a local bound from it copies,
+so it is left owned); the deferred tuple boxed by the one function both passes share and its
+body tails rewritten (`promote_monomorph_tuple_return`); the vector bind and the vector
+return copied (`promote_monomorph_vector_return`); and the tuple leg's three members
+written as a struct field writes them.  Guard
+`a-generic-instance-returns-what-its-concrete-twin-returns.loft`, 52 cells, falsified at
+`babf9e64` on both backends.  Residual, named: a `-> T` that MIXES a mint and the argument
+adopts on the borrow arm, wanting the return buffer at instantiation.
 
 ### D-call-12 — OPENED AND CLOSED (2026-09-04, loft#1357): eight shapes still minted a text buffer nothing released
 

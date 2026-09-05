@@ -216,6 +216,13 @@ shows up in the other (verified: `a = mk(); a[0]=99; b = mk()` leaves `b[0]==1`)
 leaks a view of its own local: the returned heap value is owned by the caller. The only borrow you
 can get back is an explicit `&T` return, which binding.md governs.
 
+**A generic's instance owes exactly this, and nothing in the rule distinguishes it.**  The
+declaration defers a generic's return promotion to instantiation, and for a long time nothing at
+instantiation received it, so `fn same<T>(x: T) -> T { x }` bound to a struct, a vector or a keyed
+collection handed the argument up while its concrete twin copied — measured on the 48-cell
+independence matrix the sentence above states, 13 generic cells wrong on both backends and every
+concrete one right (D-call-13, QUALITY.md B7t).  The concrete twin is the oracle for the instance.
+
 ---
 
 ## Deviations

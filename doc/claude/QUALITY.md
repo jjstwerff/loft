@@ -5298,6 +5298,83 @@ of an IR op, reached by a different mechanism and agreed by result, which `diffe
 and `leak_cross_mode` measure).  The rule's direction of travel is unchanged: a decision both
 backends need belongs in the IR; one they cannot share belongs behind one predicate.
 
+#### B7t — `@FR-F-Ret` walked: a generic's instance returned the argument it was handed, and the tuple return leg wrote three members wrong (2026-09-05)
+
+Picked by `rule_tags.py dups`: 13 sites.  The rule says a returned whole heap value is FRESH —
+mutating one call's result changes neither the argument nor another call's result.  Its sites
+split into *is this return leaf a view or owned* (five parser-side classifiers, the deps
+proxy, and the oracle) and *how is an owned return DELIVERED* (the buffer machinery, and
+`boxed_tuple_return`, which a named declaration and both lambda forms pass through).  The walk
+did not start from the sites: it built the matrix the rule itself states — T binding (record,
+vector, keyed, text) × return shape (the argument, through a local, an early return, an
+if-arm, a tuple literal, a tuple through a local) × generic vs concrete, 48 cells, each
+mutating the first result and reading both the argument and a second call's result — and the
+CONCRETE twin is every cell's oracle.
+
+**Every concrete cell passed; 13 generic cells failed identically on both backends.**  A
+template binds `T` as a record, so its instance keeps the RECORD lowering whatever `T`
+becomes, and a generic's return promotion is deferred to instantiation by the declaration
+(`return_shape_depends_on_type_var`) where nothing received it — the site @PLN85's
+generic-tuple-return-fix.md had already named as missing.  Four consequences, four cures, all
+at instantiation and all mirroring what the concrete twin does:
+
+- A `-> T` record return carried NO deps (the declaration's `ref_return` never ran, so the
+  `MergeAttr` that writes `-> Ctr["x"]` on a concrete twin never happened); the caller bound
+  the argument's own store.  The instance now takes its return deps from the ORACLE
+  (`return_ownership`, @FR-O-Oracle), and only where every return leaf is literally the
+  parameter — a local bound from it copies at codegen, a copy the IR does not show, and
+  declaring THAT a borrow made the caller decline its lift and free nothing (three corpus
+  generics leaked one record per call under `LOFT_STRICT_STORES`, caught by the strict sweep
+  of the corpus files whose IR moved under that first cut).
+- A `-> (T, integer)` stayed a STACK tuple whose heap member was the argument (the teammate's
+  D-tup-9 collection half, loft#1365).  `tuple_return_rewrite` — the one function the pass-1
+  prediction and the pass-2 signature share — now boxes a lifetime-bearing literal tuple the
+  declaration deferred, and `promote_monomorph_tuple_return` rewrites the body's tuple tails
+  and `return (…)`s into the synthetic record, the tuple twin of the text promotion.
+- A vector `s = x` in the instance ALIASED where a concrete bind copies, and the frame then
+  freed the caller's vector; a vector `-> T { x }` handed the argument up where the concrete
+  callee copies into its buffer (a caller never copies a vector it is handed).
+  `promote_monomorph_vector_return` gives both the copy: `OpReplaceVector` into the local's
+  own store, and into one fresh local the frame returns.
+- A keyed member reached the synthetic tuple record through `emit_set_one_element` as a
+  4-byte header (`OpSetInt4`) where a struct field write copies (`OpReplaceKeyed`): the
+  interpreter wrote into a released, reused store (`Write to read-only store`) and native
+  refused the int for a `DbRef` — an accept/reject split on a CONCRETE `s = x; t = (s, 7);
+  return t` with a keyed `x`, the cell D-tup-8's guard did not cross.
+
+**Boxing the generic routed it through the concrete tuple-return leg, and that leg had two
+defects of its own, both pre-existing on concrete code.**  A NULLABLE record member: the plain
+field write put the dense payload on the tagged slot's discriminant, and `(x, 1)` read back
+`4294967199` for `7` (the loft#1134 shape at the return; `tuple_elem_tag_write`, which the
+element-wise path already used, now runs first — decided by the ELEMENT's own type, because a
+struct literal in that position is already lowered to the tagged `#NullableSome` record and the
+first cut wrapped it a second time, reading the tag `2` for `7`: two corpus tests, 1123 and
+1139, went red on both backends, and the IR census over the corpus is what caught it — a walk
+verifies the FILES whose IR moved, not the cells it wrote).  A nullable VECTOR member's `null`: appended
+nothing and left an EMPTY vector, so `miss.0 == null` was false (the reserved absent id
+`mark_collection_absent` writes for `H { xs: null }` now goes into the slot, for the bare
+`null` a declaration spells and the typed `OpNullRefSentinel()` a template gives a `T?`).
+
+**Verified.**  Guard `a-generic-instance-returns-what-its-concrete-twin-returns.loft`: 52
+cells (the 48 plus nullable record and vector members, generic and concrete), green on both
+backends under `LOFT_POISON` + `LOFT_STRICT_STORES`, falsified at `babf9e64` (interpret exit
+1 → 0 with 12 assertion failures → 0, native exit 1 → 0).  Corpus: `introspect` output moved
+in five of 1247 files, the generic-return and nullable-tuple-return tests (1028, 1273, 808,
+1123, 1139), every one green on both backends under strict stores; `template_matrix` (827)
+and `issues` (29) green.  The first cut moved eleven — the oracle deps attached through a
+local and on a `Join` as well — and the strict sweep of those eleven is what narrowed the
+deps rule to the parameter-only leaf.  The `optional` and `unspan` audit
+rows moved by the six new IR walkers and five `Type` discriminators, all peeling.
+
+**Recorded, not fixed.**  A `-> T` whose body MIXES a mint and the argument (`Join`) still
+adopts on the borrow arm — a named function delivers that through a return buffer the
+instance does not have; the cure is the buffer at instantiation, and the teammate's
+`boxed_tuple_return` note names the same machinery.  The five parser-side return classifiers
+(`return_leaf_is_owned_or_null`, `return_views_local`, `return_projects_into_local`,
+`classify_reference_delivery`, `returns_borrowed_view`) each answer *is this leaf a view* by
+their own walk beside the oracle; the walk did not fold them, and it is the next question
+this rule asks.
+
 #### B2 — open, and the owner's call
 
 | decision | evidence | why it is not mine to take |

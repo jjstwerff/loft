@@ -4336,7 +4336,7 @@ impl Parser {
     /// declared `xs: τ? = null` that the literal OMITS — are written in different
     /// functions, and a marker only one of them wrote is exactly how the omitted spelling
     /// came to read back present-and-empty.
-    fn mark_collection_absent(&mut self, code: &Value, item_pos: i32) -> Value {
+    pub(crate) fn mark_collection_absent(&mut self, code: &Value, item_pos: i32) -> Value {
         #[allow(clippy::cast_possible_wrap)]
         let absent = Value::Int(crate::keys::DbRef::ABSENT_REC as i32);
         self.cl("OpSetInt4", &[code.clone(), Value::Int(item_pos), absent])

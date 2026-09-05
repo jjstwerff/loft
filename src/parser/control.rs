@@ -3389,6 +3389,40 @@ impl Parser {
             // struct-field construction does. Raw `Value::Null` made native emit `()` into the
             // typed slot → E0308; interp tolerated it. `self.null` peels `Optional` to the base
             // sentinel, so a `τ?` element types correctly too.
+            // A `null` for a nullable COLLECTION member is the reserved ABSENT id in the
+            // slot, exactly as `H { xs: null }` writes it (loft#917) — `self.null(&ftp)`
+            // appends nothing and leaves an EMPTY collection, so `(null, 2)` read back as
+            // `[]` and `miss.0 == null` answered false, on both backends (QUALITY.md B7t).
+            // The null arrives as a bare `Value::Null` from a concrete declaration and as the
+            // TYPED null a template gave a `T?` element (`OpNullRefSentinel()`, since the
+            // template compiled `T` as a record) from a monomorph — one absence, two
+            // spellings, and the slot takes the same id for both.
+            let is_null_elem = match elem.unspan() {
+                Value::Null => true,
+                Value::Call(d, args) if args.is_empty() => {
+                    let n = self.data.def(*d).name();
+                    n == "OpNullRefSentinel" || (n.starts_with("OpConv") && n.ends_with("FromNull"))
+                }
+                _ => false,
+            };
+            if is_null_elem
+                && let stored = self.data.attr_type(synthetic_d_nr, i)
+                && (matches!(stored.base(), Type::Vector(_, _))
+                    || crate::parser::vectors::is_keyed(stored.base()))
+                && (matches!(stored, Type::Optional(_))
+                    || self.data.attr_nullable(synthetic_d_nr, i))
+                && let Some(pos) = crate::data::stored_tuple_offsets_for_def(
+                    &self.data,
+                    &self.database,
+                    synthetic_d_nr,
+                    self.data.def(synthetic_d_nr).attributes().len(),
+                )
+                .and_then(|o| o.get(i).copied())
+            {
+                let mark = self.mark_collection_absent(&Value::Var(w), i32::from(pos));
+                ops.push(mark);
+                continue;
+            }
             let elem = if matches!(elem.unspan(), Value::Null) {
                 let ftp = self.data.attr_type(synthetic_d_nr, i).clone();
                 self.null(&ftp)
@@ -3404,7 +3438,58 @@ impl Parser {
                 Some(src) => src,
                 None => elem,
             };
-            ops.push(self.set_field_no_check(synthetic_d_nr, i, 0, Value::Var(w), elem));
+            // A NULLABLE record member is a TAGGED slot (`__nullable<S>`: discriminant +
+            // payload), and a dense `S` written into it by the plain field write lands on
+            // the discriminant — presence becomes a data byte, and `(x, 1)` read back as
+            // `4294967199` where `x.a` was `7`, on both backends (QUALITY.md B7t; the
+            // loft#1134 shape, at the tuple return).  The tagged write the element-wise
+            // path already uses (`tuple_elem_tag_write`) decides from the STORED type and
+            // the member's own spelling, so ask it first and fall back to the field write.
+            // The member's spelling is the ELEMENT's own static type, not the slot's: a
+            // struct literal in a `S?` position is already lowered to the tagged
+            // `__nullable<S>::Some` record (`#NullableSome`), and so is a nullable field
+            // read (`#ncc`), and for those the plain copy IS the right write — wrapping one
+            // a second time buried the real discriminant one payload deep and `(NvW { nv_n:
+            // 7 }, 9)` read `2`, the tag, for `7` (tests 1123/1139 on the corpus census).
+            // Only a dense pointer — a `S` or `S?` local, a parameter, a call — needs the tag.
+            let tagged = match self.data.attr_type(synthetic_d_nr, i) {
+                Type::Enum(syn, true, _) => self.nullable_payload_struct(syn).and_then(|payload| {
+                    let in_slot_form =
+                        |tp: &Type| matches!(tp.base(), Type::Enum(s, true, _) if *s == syn);
+                    let already = match elem.unspan() {
+                        Value::Var(v) => in_slot_form(self.vars.tp(*v)),
+                        Value::Block(bl) => in_slot_form(&bl.result),
+                        Value::Call(d, _) => in_slot_form(self.data.def(*d).returned()),
+                        _ => false,
+                    };
+                    if already {
+                        return None;
+                    }
+                    let spelled = Type::Optional(Box::new(Type::Reference(payload, Deps::none())));
+                    let pos = crate::data::stored_tuple_offsets_for_def(
+                        &self.data,
+                        &self.database,
+                        synthetic_d_nr,
+                        self.data.def(synthetic_d_nr).attributes().len(),
+                    )
+                    .and_then(|o| o.get(i).copied())?;
+                    self.tuple_elem_tag_write(
+                        synthetic_d_nr,
+                        i,
+                        &Value::Var(w),
+                        pos,
+                        &spelled,
+                        &elem,
+                    )
+                }),
+                _ => None,
+            };
+            match tagged {
+                Some(writes) => ops.extend(writes),
+                None => {
+                    ops.push(self.set_field_no_check(synthetic_d_nr, i, 0, Value::Var(w), elem));
+                }
+            }
         }
         ops.push(Value::Var(w));
         *tail = crate::data::v_block(
@@ -9856,6 +9941,400 @@ impl Parser {
             && l.last().is_some_and(Self::if_tail_yields_text)
     }
 
+    /// The tuple twin of [`Self::promote_monomorph_text_return`] (@FR-F-Ret).
+    ///
+    /// A declaration whose tuple return SHAPE depends on `T` defers its boxing to
+    /// instantiation; `tuple_return_rewrite` boxes the instance's signature to the synthetic
+    /// `__tuple<…>` record, and this rewrites every tuple TAIL and every `return (…)` of the
+    /// body into that record — the same `synthetic_tuple_return` block a concrete declaration
+    /// gets from `block_result`, with the member copies `set_field_no_check` performs.  Signature
+    /// without body was the mismatch @PLN85's generic-tuple-return-fix.md measured (a `__tuple`
+    /// signature over a bare-tuple body: garbage on the interpreter, E0308 on native), which
+    /// is why this runs where the signature is rewritten and not elsewhere.
+    ///
+    /// Runs in the MONOMORPH's frame (the same swap the text twin makes): the work-ref belongs
+    /// to the function the code lands in.  A body that yields no stack tuple — a concrete-shaped
+    /// template boxed at its declaration, whose body `block_result` already rewrote — is left
+    /// untouched, so the work-ref is minted only where a tail is rewritten.
+    pub(crate) fn promote_monomorph_tuple_return(&mut self, d_nr: u32) {
+        let Type::Reference(synth, _) = self.data.def(d_nr).returned().base().clone() else {
+            return;
+        };
+        if !self.data.def(synth).name().starts_with("__tuple<") {
+            return;
+        }
+        let saved_ctx = self.context;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = d_nr;
+        let mut code =
+            std::mem::replace(&mut self.data.definitions[d_nr as usize].code, Value::Null);
+        if let Value::Block(bl) = &mut code
+            && bl
+                .operators
+                .iter()
+                .any(|op| Self::yields_stack_tuple(op, &self.vars, true))
+        {
+            let synth_ref = Type::Reference(synth, Deps::none());
+            let w = self.vars.work_refs(&synth_ref, &mut self.lexer);
+            let kt = self.data.def(synth).known_type();
+            for op in &mut bl.operators {
+                self.rewrite_tuple_returns_with_work_ref(synth, kt, w, op);
+            }
+            if let Some(last) = bl.operators.last_mut() {
+                self.rewrite_tail_tuple_with_work_ref(synth, kt, w, last);
+            }
+            bl.result = synth_ref;
+        }
+        self.data.definitions[d_nr as usize].code = code;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = saved_ctx;
+    }
+    /// Does `v` yield a STACK tuple — a tuple literal, a local of tuple type, or a
+    /// branch/block whose tail does — where `tail` says the value is in tail position (so a
+    /// bare leaf counts) rather than a statement (where only a `return` counts)?
+    fn yields_stack_tuple(v: &Value, vars: &crate::variables::Function, tail: bool) -> bool {
+        match v.unspan() {
+            Value::Return(inner) => Self::yields_stack_tuple(inner, vars, true),
+            Value::Tuple(_) => tail,
+            Value::Var(x) => {
+                tail && (*x as usize) < vars.count() as usize
+                    && matches!(vars.tp(*x).base(), Type::Tuple(_))
+            }
+            Value::If(_, t, e) => {
+                Self::yields_stack_tuple(t, vars, tail) || Self::yields_stack_tuple(e, vars, tail)
+            }
+            Value::Block(b) | Value::Loop(b) => {
+                let n = b.operators.len();
+                b.operators
+                    .iter()
+                    .enumerate()
+                    .any(|(i, op)| Self::yields_stack_tuple(op, vars, tail && i + 1 == n))
+            }
+            Value::Insert(ops) => {
+                let n = ops.len();
+                ops.iter()
+                    .enumerate()
+                    .any(|(i, op)| Self::yields_stack_tuple(op, vars, tail && i + 1 == n))
+            }
+            _ => false,
+        }
+    }
+    /// Rewrite every `return <tuple>` reachable from `node` into the synthetic record `w`
+    /// — the early-return half of [`Self::promote_monomorph_tuple_return`]; the tail is the
+    /// caller's own `rewrite_tail_tuple_with_work_ref`.
+    fn rewrite_tuple_returns_with_work_ref(
+        &mut self,
+        synth: u32,
+        kt: u16,
+        w: u16,
+        node: &mut Value,
+    ) {
+        match node {
+            Value::Span(b) => self.rewrite_tuple_returns_with_work_ref(synth, kt, w, &mut b.1),
+            Value::Return(inner) => self.rewrite_tail_tuple_with_work_ref(synth, kt, w, inner),
+            Value::Block(b) | Value::Loop(b) => {
+                for op in &mut b.operators {
+                    self.rewrite_tuple_returns_with_work_ref(synth, kt, w, op);
+                }
+            }
+            Value::Insert(ops) => {
+                for op in ops.iter_mut() {
+                    self.rewrite_tuple_returns_with_work_ref(synth, kt, w, op);
+                }
+            }
+            Value::If(_, t, e) => {
+                self.rewrite_tuple_returns_with_work_ref(synth, kt, w, t);
+                self.rewrite_tuple_returns_with_work_ref(synth, kt, w, e);
+            }
+            _ => {}
+        }
+    }
+    /// The vector twin of [`Self::promote_monomorph_text_return`] (@FR-F-Ret / @FR-B-Copy).
+    ///
+    /// A template binds `T` as a record, so a whole-value bind `s = x` and a returned `x` are
+    /// lowered for a RECORD: the bind copies at codegen and the return hands the argument up
+    /// raw, which the caller copies off the declared `["x"]` dep.  Substituting a VECTOR for
+    /// `T` changes neither lowering, and a vector's are different: a vector bind copies at the
+    /// parse (`OpClearVector` + `OpAppendVector` into the local's own store) and a vector
+    /// return copies in the CALLEE (`borrow_tail_copy`), because a caller never copies a
+    /// vector it is handed.  So the instance aliased on both counts — `s = x` bound the
+    /// argument's store and the frame then FREED it, `{ x }` handed the argument's store up
+    /// and a write through the result wrote the argument, on both backends (QUALITY.md B7t).
+    ///
+    /// Two rewrites, both on the substituted body: a `Set(v, Var(u))` whose target the TEMPLATE
+    /// typed as the type variable and both sides now type as vectors becomes
+    /// `OpReplaceVector(v, u)` — the copy into the store the vector local's null-init allocates
+    /// (@FR-B-Copy); and where the return's own summary says the body hands a PARAMETER up
+    /// (@FR-O-Oracle, a pure borrow), every such leaf is copied into one fresh local the frame
+    /// then returns, so the caller adopts a mint as it does for the concrete twin.  Runs in the
+    /// MONOMORPH's frame, like the other two.
+    pub(crate) fn promote_monomorph_vector_return(
+        &mut self,
+        d_nr: u32,
+        tmpl_vars: &crate::variables::Function,
+        holders: &[u32],
+    ) {
+        // The borrowed-parameter verdict is read while the body is still in place — the
+        // oracle classifies `def.code`, which the swap below moves out.
+        let borrowed_param: Option<u16> =
+            if matches!(self.data.def(d_nr).returned().base(), Type::Vector(_, _)) {
+                match crate::use_analysis::return_ownership(&self.data, d_nr) {
+                    crate::use_analysis::Own::Borrowed { base }
+                        if (base as usize) < self.data.def(d_nr).attributes().len()
+                            && !self.data.def(d_nr).attributes()[base as usize].hidden =>
+                    {
+                        Some(base)
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+        let saved_ctx = self.context;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = d_nr;
+        let mut code =
+            std::mem::replace(&mut self.data.definitions[d_nr as usize].code, Value::Null);
+        // Which locals did the template type as the type variable?  Those are the binds the
+        // record lowering was written for; a local the template already typed as a vector
+        // got the vector lowering at the parse and is left alone.
+        let tv_typed = |v: u16, vars: &crate::variables::Function| -> bool {
+            (v as usize) < tmpl_vars.count() as usize
+                && matches!(tmpl_vars.tp(v).base(), Type::Reference(h, _) if holders.contains(h))
+                && (v as usize) < vars.count() as usize
+                && matches!(vars.tp(v).base(), Type::Vector(_, _))
+        };
+        if let Value::Block(bl) = &mut code {
+            // B-Copy: the whole-value vector binds.
+            let mut declared: Vec<u16> = Vec::new();
+            for op in &mut bl.operators {
+                self.rewrite_generic_vector_binds(op, &tv_typed, &mut declared);
+            }
+            // F-Ret: the borrowed return.
+            if let Some(param) = borrowed_param
+                && (param as usize) < self.vars.count() as usize
+                && let Type::Vector(elm, _) = self.vars.tp(param).base().clone()
+                && Self::yields_var(&bl.operators, param)
+            {
+                let owned = Type::Vector(elm.clone(), Deps::none());
+                let copy = self.create_unique("__ret_copy", &owned);
+                if copy != u16::MAX {
+                    self.vars.defined(copy);
+                    let rec_tp = self.append_elem_tp(&elm);
+                    for op in &mut bl.operators {
+                        self.copy_returned_var_into(op, param, copy, rec_tp, false);
+                    }
+                    if let Some(last) = bl.operators.last_mut() {
+                        self.copy_returned_var_into(last, param, copy, rec_tp, true);
+                    }
+                    bl.operators
+                        .insert(0, crate::data::v_set(copy, Value::Null));
+                    bl.result = owned;
+                }
+            }
+        }
+        self.data.definitions[d_nr as usize].code = code;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = saved_ctx;
+    }
+    /// The bind half of [`Self::promote_monomorph_vector_return`]: every `Set(v, Var(u))` with
+    /// `v` type-variable-typed in the template and both sides vectors now becomes the copy.
+    /// The FIRST assignment of a local is also its declaration — the null-init that allocates
+    /// an owned vector local's store on both backends — so a first bind keeps a `Set(v, null)`
+    /// in front of the copy; a rebind copies into the store the local already has.
+    fn rewrite_generic_vector_binds(
+        &mut self,
+        node: &mut Value,
+        tv_typed: &dyn Fn(u16, &crate::variables::Function) -> bool,
+        declared: &mut Vec<u16>,
+    ) {
+        match node {
+            Value::Span(b) => self.rewrite_generic_vector_binds(&mut b.1, tv_typed, declared),
+            Value::Set(v, rhs) => {
+                let first = !declared.contains(v);
+                declared.push(*v);
+                if let Value::Var(u) = rhs.unspan()
+                    && *u != *v
+                    && tv_typed(*v, &self.vars)
+                    && (*u as usize) < self.vars.count() as usize
+                    && !self.vars.is_argument(*v)
+                    && let Type::Vector(elm, _) = self.vars.tp(*u).base().clone()
+                {
+                    let (v, u) = (*v, *u);
+                    let rec_tp = self.append_elem_tp(&elm);
+                    let replace = self.cl(
+                        "OpReplaceVector",
+                        &[Value::Var(v), Value::Var(u), Value::Int(rec_tp)],
+                    );
+                    *node = if first {
+                        Value::Insert(vec![crate::data::v_set(v, Value::Null), replace])
+                    } else {
+                        replace
+                    };
+                } else {
+                    self.rewrite_generic_vector_binds(rhs, tv_typed, declared);
+                }
+            }
+            Value::Block(b) | Value::Loop(b) => {
+                for op in &mut b.operators {
+                    self.rewrite_generic_vector_binds(op, tv_typed, declared);
+                }
+            }
+            Value::Insert(ops) => {
+                for op in ops.iter_mut() {
+                    self.rewrite_generic_vector_binds(op, tv_typed, declared);
+                }
+            }
+            Value::If(_, t, e) => {
+                self.rewrite_generic_vector_binds(t, tv_typed, declared);
+                self.rewrite_generic_vector_binds(e, tv_typed, declared);
+            }
+            _ => {}
+        }
+    }
+    /// Is EVERY return leaf of the body — the tail, each `return`, each arm of a branch in
+    /// either position — the variable `x` itself?  A body with no leaf at all answers no.
+    pub(crate) fn every_return_leaf_is_var(ops: &[Value], x: u16) -> bool {
+        // (found, all) over the leaves reached.
+        fn walk(v: &Value, x: u16, tail: bool, acc: &mut (bool, bool)) {
+            match v.unspan() {
+                Value::Return(inner) => walk(inner, x, true, acc),
+                Value::If(_, t, e) => {
+                    walk(t, x, tail, acc);
+                    walk(e, x, tail, acc);
+                }
+                Value::Block(b) | Value::Loop(b) => {
+                    let n = b.operators.len();
+                    for (i, op) in b.operators.iter().enumerate() {
+                        walk(op, x, tail && i + 1 == n, acc);
+                    }
+                }
+                Value::Insert(ops) => {
+                    let n = ops.len();
+                    for (i, op) in ops.iter().enumerate() {
+                        walk(op, x, tail && i + 1 == n, acc);
+                    }
+                }
+                Value::Var(y) if tail => {
+                    acc.0 = true;
+                    if *y != x {
+                        acc.1 = false;
+                    }
+                }
+                Value::Null if tail => {}
+                _ if tail => {
+                    acc.0 = true;
+                    acc.1 = false;
+                }
+                _ => {}
+            }
+        }
+        let mut acc = (false, true);
+        let n = ops.len();
+        for (i, op) in ops.iter().enumerate() {
+            walk(op, x, i + 1 == n, &mut acc);
+        }
+        acc.0 && acc.1
+    }
+    /// Does the body hand `x` up — as the tail or through a `return`?
+    fn yields_var(ops: &[Value], x: u16) -> bool {
+        fn leaf(v: &Value, x: u16, tail: bool) -> bool {
+            match v.unspan() {
+                Value::Return(inner) => leaf(inner, x, true),
+                Value::Var(y) => tail && *y == x,
+                Value::If(_, t, e) => leaf(t, x, tail) || leaf(e, x, tail),
+                Value::Block(b) | Value::Loop(b) => {
+                    let n = b.operators.len();
+                    b.operators
+                        .iter()
+                        .enumerate()
+                        .any(|(i, op)| leaf(op, x, tail && i + 1 == n))
+                }
+                Value::Insert(ops) => {
+                    let n = ops.len();
+                    ops.iter()
+                        .enumerate()
+                        .any(|(i, op)| leaf(op, x, tail && i + 1 == n))
+                }
+                _ => false,
+            }
+        }
+        let n = ops.len();
+        ops.iter()
+            .enumerate()
+            .any(|(i, op)| leaf(op, x, i + 1 == n))
+    }
+    /// The return half of [`Self::promote_monomorph_vector_return`]: every leaf `x` in return
+    /// position — the tail when `tail`, a `return x` anywhere — becomes a copy into `copy`
+    /// followed by `copy`, so what leaves the frame is a store the frame minted.
+    fn copy_returned_var_into(
+        &mut self,
+        node: &mut Value,
+        x: u16,
+        copy: u16,
+        rec_tp: i32,
+        tail: bool,
+    ) {
+        match node {
+            Value::Span(b) => self.copy_returned_var_into(&mut b.1, x, copy, rec_tp, tail),
+            Value::Return(inner) => {
+                if matches!(inner.unspan(), Value::Var(y) if *y == x) {
+                    let replace = self.cl(
+                        "OpReplaceVector",
+                        &[Value::Var(copy), Value::Var(x), Value::Int(rec_tp)],
+                    );
+                    *node = Value::Insert(vec![replace, Value::Return(Box::new(Value::Var(copy)))]);
+                } else {
+                    self.copy_returned_var_into(inner, x, copy, rec_tp, true);
+                }
+            }
+            Value::Var(y) if tail && *y == x => {
+                let replace = self.cl(
+                    "OpReplaceVector",
+                    &[Value::Var(copy), Value::Var(x), Value::Int(rec_tp)],
+                );
+                *node = Value::Insert(vec![replace, Value::Var(copy)]);
+            }
+            Value::If(_, t, e) => {
+                self.copy_returned_var_into(t, x, copy, rec_tp, tail);
+                self.copy_returned_var_into(e, x, copy, rec_tp, tail);
+            }
+            Value::Block(b) | Value::Loop(b) => {
+                let n = b.operators.len();
+                for (i, op) in b.operators.iter_mut().enumerate() {
+                    self.copy_returned_var_into(op, x, copy, rec_tp, tail && i + 1 == n);
+                }
+                if tail {
+                    b.result = Type::Vector(
+                        match self.vars.tp(copy).base() {
+                            Type::Vector(elm, _) => elm.clone(),
+                            other => Box::new(other.clone()),
+                        },
+                        Deps::none(),
+                    );
+                }
+            }
+            Value::Insert(ops) => {
+                let n = ops.len();
+                for (i, op) in ops.iter_mut().enumerate() {
+                    self.copy_returned_var_into(op, x, copy, rec_tp, tail && i + 1 == n);
+                }
+            }
+            _ => {}
+        }
+    }
     pub(crate) fn promote_monomorph_text_return(&mut self, d_nr: u32) {
         // Only plain `text` / `text?` returns (tuple-of-text is a separate arc).
         if !matches!(
