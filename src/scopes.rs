@@ -11030,7 +11030,9 @@ fn nullable_view_locals(code: &Value, function: &Function, data: &Data) -> Vec<u
             // A DIRECT projection that ALIASES: a tuple element, or one of the projection
             // reads.  NOT a bare `Var` (copies, @FR-B-Copy) and NOT a user/native call
             // returning a borrow (copied into the local, @FR-F-Ret / loft#1346).
-            && match val.unspan() {
+            // A tagged slot read through its tag (`if <present> { <projection> } else {
+            // nullref }`, the bind of `x = o.opt`) is the projection its present arm is.
+            && match crate::use_analysis::through_null_arm(data, val).unspan() {
                 Value::TupleGet(_, _) => true,
                 Value::Call(fn_nr, _) => projections.contains(fn_nr),
                 _ => false,
@@ -11186,6 +11188,12 @@ fn is_view_of_storage(value: &Value, data: &Data) -> bool {
         | Value::Block(_)
         | Value::Insert(_)
         | Value::TupleGet(_, _) => true,
+        // A tagged slot read through its tag (`Parser::emit_nullable_slot_read`, the bind
+        // of `x = o.opt` under `@FR-L-Null-Which`) answers as its present arm does.
+        Value::If(_, _, _) => {
+            let seen = crate::use_analysis::through_null_arm(data, value);
+            !matches!(seen.unspan(), Value::If(_, _, _)) && is_view_of_storage(seen, data)
+        }
         _ => false,
     }
 }

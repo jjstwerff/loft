@@ -9,7 +9,7 @@ Tracker: [@PLN153](https://github.com/loft-lang/plans/issues/153).
 
 ## Status
 
-**Active — phases 0, 1, 2, 3a and 3b done (2026-09-05); 3c (loft#1367) next.**  The null MODEL is decided and not reopened here: @PLN102's
+**Active — phase 3 complete (3a, 3b, 3c — 2026-09-05); phases 4, 5, 6 next.**  The null MODEL is decided and not reopened here: @PLN102's
 [keystone](../102-stability-contract/keystone-null-model.md) chose **B** (an in-band sentinel
 for scalars, out-of-band absence for references and for a struct stored inline), frozen in
 [DESIGN_DECISIONS.md § C90](../../DESIGN_DECISIONS.md), with @PLN25 (the dense element
@@ -84,7 +84,7 @@ the axes it reports unreached are the cells still to build, not a note.
 | **0** | **Probe first.**  Is `τ??` constructible today (`N-Idem` — `Type::optional` in `data.rs` is the candidate home), and is `N-Intro` the only null-direction conversion in `⤳`?  A corpus census with an env-gated report, since `[profile.dev.package.loft]` compiles a `debug_assert` OUT of the library. | The report over the 1247-file corpus reads 0 for `τ??` — and a probe that constructs one by hand makes it read 1, so the zero is not vacuous. | **Done** 2026-09-05 — § Phase 0 result |
 | **1** | **Census: one home per N rule.**  For each of the 18, the predicate or emitter that decides it today.  Candidates: `N-Coal` → `parser/operators.rs::build_null_coalesce_default`; `N-Default` → the `x?` lowering + `Data::has_default`; `N-Store`/`N-Decl` → the `(N-Store)` teeth (`keys.rs`: the DN3 gate, the call-arg gate, the heap gate); `N-Prop` → `nullflow_enabled()`; `N-Join` → the inferred-assignment join; `N-Match` → the null arm; `N-Div`/`N-Arith`/`N-Cast`/`N-Cast?` → operator typing ([float-null-domain-typing.md](../102-stability-contract/float-null-domain-typing.md)); `N-Dense` → element storage; `N-Parse` → folded into `N-Cast`; `N-Index`, `N-Reserve`, `N-Store` already cited. | Per rule, ONE probe pair on both backends — a program where the rule must hold and one where its negation must be refused — green BEFORE the `@FR-` citation is added.  `rule_tags.py check` then reports 18/18 cited; a rule whose only evidence is the citation is the B6u failure and does not count. | **Done** 2026-09-05 — § Phase 1 census |
 | **2** | **`N-Prop` has 10 `nullflow_enabled()` sites in 4 files.**  Which question does each ask — propagate, gate, or warn?  Fold the fact-reading half onto one predicate; the per-site residue stays where it is per-site. | `introspect` output (IR, bytecode, Rust) byte-identical over the 1247-file corpus against the committed compiler (the B7r/B7s method), under the default AND under `LOFT_NO_NULLFLOW=1`. | **Done** 2026-09-05 — § Phase 2 fold |
-| **3** | **The `N-Store` refusal at ONE point.**  Today the teeth sit at the local slot, the field, the return, the index, the call argument and the heap half as separate gates, each a spelling; a nullable reaching a non-null slot through a position none of them covers is answered wrong in silence.  One check where every store passes — the `⇐` lowering, whose ten push sites and six admission lists B6t already measured — is the chokepoint. | The Stage A matrix, position × type kind × discharge, with an `@EXPECT_WARNING` / `@EXPECT_ERROR` cell wherever a nullable meets a non-null slot undischarged and a silent cell wherever it is discharged; `make falsify` against the current build names the cells that pass silently today. | 3a + 3b **done** 2026-09-05 (§ Phase 3a, § Phase 3b); 3c (loft#1367) open |
+| **3** | **The `N-Store` refusal at ONE point.**  Today the teeth sit at the local slot, the field, the return, the index, the call argument and the heap half as separate gates, each a spelling; a nullable reaching a non-null slot through a position none of them covers is answered wrong in silence.  One check where every store passes — the `⇐` lowering, whose ten push sites and six admission lists B6t already measured — is the chokepoint. | The Stage A matrix, position × type kind × discharge, with an `@EXPECT_WARNING` / `@EXPECT_ERROR` cell wherever a nullable meets a non-null slot undischarged and a silent cell wherever it is discharged; `make falsify` against the current build names the cells that pass silently today. | **Done** 2026-09-05 — 3a, 3b, 3c (§ Phase 3a–3c) |
 | **4** | **The `optional` screen, ranked.**  The 352 opaque functions ordered by *can an undischarged value reach here*: declaration reads (a field's, a local's, a return's declared type) and lvalue places first, use-path sites last.  Each function in the top tier either peels through `base()` or is shown unreachable by a probe cell. | The gated `optional` audit row in QUALITY.md moves DOWN and every moved function has a cell; a peel added with no cell is the B6u receipt and is not counted. | Open |
 | **5** | **`@FR-L-Null`'s 45 citations converged.**  The two questions B6u split — *what value means absent in this storage?* (the per-type sentinel table frozen in C90, `Stores::is_null`) and *is this the same storage?* (`base()`) — each have a home; every citation either reads it or is removed as a redundant spelling. | The site count goes DOWN, and where a change is a fold the emission is byte-identical over the corpus; where it is a fix, a probe cell. | Open |
 | **6** | **Re-measure.**  `make bug-review` on the null/sentinel class after the plan's watermark against the window before it. | The class falls, or the residual names a mechanism this plan did not touch and a follow-on plan is filed for it. | Open |
@@ -316,7 +316,7 @@ warns at every width (loft#1232's doctrine), so `tuple__narrow__none` warns wher
 `arg__narrow__none` errors; raising it is COMPATIBILITY.md's process.
 
 **Left for 3c.**  loft#1367's bind of a tagged projection into a pointer-spelled local
-(3b took the declared local's severity below).
+(3b took the declared local's severity below; 3c the bind).
 
 ## Phase 3b — the declared local takes the rule's severity, and the inferred one widens (2026-09-05)
 
@@ -378,6 +378,66 @@ on both backends and the native suite does not arm the leak check.
 the rules corrected (`a: integer = 2; a = v[i]` → warning, `a` stays `integer`).  A documented
 refusal became a warning: `Contract: strained`.  Open question 3 (whether the warning becomes
 an error at the freeze) is unchanged and stays COMPATIBILITY.md's.
+
+## Phase 3c — a tagged projection reaching a local is read through its tag (2026-09-05, loft#1367)
+
+**The rule already said where a LOCAL's `S?` lives** — `(L-Null)`: a binding is a pointer with
+`nullref` for absence; `(L-Null-Tag)`: only INLINE storage (a field, an element, a tuple
+member) spends the discriminant; `(L-Null-Which)`: the slot decides.  The code left the
+decision to whichever assignment parsed LAST: `x = y; x = o.opt` typed `x` as the tagged
+slot and read the pointer parameter `y` as a record with a tag byte (a use-after-free, the
+witness freeing `y`'s store); `x = o.opt ?? y` refused the program naming the synthetic
+(`__nullable<S>?`); `d: S = o.opt` was silent and read a present record of zeroes for an
+absent slot; `x = o.opt; if c { x = null }` was refused.  Stage B's other cells — `x = o.opt;
+x = y` and the branch forms — were CORRECT all along under `@FR-B-Copy` (a bind off a
+parameter copies, so the write through `x` lands in the copy and `y` keeps its value), and
+loft#1367's table had expected write-through there; the table in this section is the
+hand-computed one.
+
+**One home.**  `Parser::read_through_tag(code, tp)`: a tagged `__nullable<S>` value reaching a
+NON-SLOT position is read through its tag there — `emit_nullable_slot_read`, the read half of
+`@FR-L-Null-Tag` — and both the value and its type become the pointer, on BOTH passes (a
+`vector<S?>` element is the synthetic from pass 1, and converting only on pass 2 typed the
+local as the slot on pass 1 and refused pass 2's pointer as a type change).  Four callers,
+each a position the rule names as not-a-slot: the assignment seam (a plain local target,
+never a `&` link or a field/element target), the tuple destructure (the type half,
+`tagged_pointer_type`, is asked before the read exists), the `??` subject
+(`handle_null_coalesce`) and the postfix `?` subject (`handle_default_fallback`) — so the
+default is hinted and built for the pointer's base `S`, the shape the present arm now has,
+and the special hint arm for a tagged subject beside a dense target is no longer reached.
+
+**What the read looks like to the store-lifetime layer, and the three sites that read it.**
+The read is `if <present> { <payload projection> } else { nullref }` — an `If` where the
+ownership oracle saw a JOIN of a view and an owned value, `owner_witness_locals` saw
+neither a mint nor a view (so `x = y; x = o.opt` freed `o`'s store at scope exit as the
+copy's), and `nullable_view_locals` saw no projection (so `x = o.opt; x = null` released
+`o`'s store at the rebind).  One predicate answers all three: `use_analysis::through_null_arm`
+— a two-arm `if` whose other arm HOLDS NO STORE (`holds_no_store`: a `null`, the null sentinel)
+delivers its present arm, and the classifier, the witness's view test and the view marking
+read through it.  `holds_no_store` is also the identity of the var-level join (`x = null` says
+nothing about what `x` owns elsewhere) — the fact the argument witness and the view-root walk
+already spelled twice each.
+
+**A consequence to know.**  A local viewing a tagged slot holds the PAYLOAD's address, so a
+later `o.opt = null` is not visible through it (`x != null` stays true and `x.n` reads the
+old payload), exactly as a view through a `reference<S>?` field behaves after the field is
+cleared; the slot's own reads see the tag.  The synthetic spelling re-read the tag on every
+use and saw the clear.  This is what the pointer rule implies, not a new rule; it is recorded
+beside `(L-Null-Which)`.
+
+**Measured.**  The 3c cell list (`stage3c/CELLS.md`, 17 cells written first): every cell
+right on both backends under strict stores and poison, `dn` reporting `(N-Store)`'s warning
+and reading null for an absent slot; the existing
+`a-nullable-struct-has-one-notion-and-two-spellings` guard green on both (it caught the
+pass-1 half); loft#1369's leak unchanged (its own issue).  Guard:
+`1367-a-tagged-projection-bound-to-a-local-is-the-pointer` (21 cells: both orders, both
+branch orders, both declared spellings, the vector element, the destructure, the pointer
+null, the view handed up, `??` with a pointer default / a literal / a call in a local, a
+declared dense local, a return and an argument, the postfix `?`, and the dense declared
+local).  `matrix_axes.py`: element type reaches struct only — the tagged spelling exists for
+a struct alone, so the other kinds are out of this family by construction.
+`scripts/introspect_diff.sh` over the corpus: `DIFFERENT 15 of 1281` — every one an emission (a tagged projection now read through its tag at its bind or its `??`) and none a diagnostic, each green on both backends under strict stores after.  `Fixes #1367`, `Contract: settled` —
+the rules named the local's spelling; the code failed to convert at the boundary.
 
 ## Phase ordering
 

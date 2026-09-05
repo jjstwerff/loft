@@ -2209,10 +2209,15 @@ impl<'a> Ownership<'a> {
                 // `Join`/`Borrowed`; Check A's fact-disagree on 1017b/1326/1331 was that
                 // shortcut, not the shadow (@FR-O-Oracle, QUALITY.md B7r).
                 let minted = defs.db_vars.contains(v);
+                // A definition that binds NO STORE — `x = null` — says nothing about what
+                // `x` may own on its other definitions and is left out of the join, exactly
+                // as a null arm is in the `If` arm below; a var with only such definitions
+                // owns nothing anyone could mis-free.
                 let class = match defs.rhs.get(v) {
-                    Some(rhss) if !rhss.is_empty() => {
+                    Some(rhss) if rhss.iter().any(|r| !holds_no_store(self.data, r)) => {
                         let bound = rhss
                             .iter()
+                            .filter(|r| !holds_no_store(self.data, r))
                             .map(|r| {
                                 if minted && matches!(r.unspan(), Value::Var(_)) {
                                     Own::Owned
@@ -2272,10 +2277,21 @@ impl<'a> Ownership<'a> {
                     self.call_ownership(*d, args, func, defs)
                 }
             }
-            // `??` / `if-else` lowers to `If`: the join of its two arms.
-            Value::If(_, then, els) => self
-                .classify(then, func, defs)
-                .join(self.classify(els, func, defs)),
+            // `??` / `if-else` lowers to `If`: the join of its two arms.  An arm that holds
+            // NO STORE — a `null`, the reference null sentinel — is the join's identity, not
+            // an owned value: `if <present> { <projection> } else { null }` (the tag read of
+            // a nullable slot, `Parser::emit_nullable_slot_read`) views exactly what its
+            // present arm views, and calling the pair a `Join` made a rebind release the
+            // container's store as if the local had owned it.
+            Value::If(_, then, els) => {
+                let seen = through_null_arm(self.data, node);
+                if matches!(seen.unspan(), Value::If(_, _, _)) {
+                    self.classify(then, func, defs)
+                        .join(self.classify(els, func, defs))
+                } else {
+                    self.classify(seen, func, defs)
+                }
+            }
             // A block's value is its tail; passthrough wrappers forward.
             Value::Block(b) => b
                 .operators
@@ -3685,6 +3701,39 @@ pub fn classifies_structurally(data: &Data, d: u32) -> bool {
     d == data.def_nr("OpDatabase")
         || d == data.def_nr("OpNewRecord")
         || data.op_sets().projections.contains(&d)
+}
+
+/// Does this value hold NO STORE at all — a `null` literal, or the reference null sentinel
+/// `Parser::convert` lowers it to in a reference-typed position?  Such a value neither needs
+/// protecting nor can be borrowed from, and in a join it is the identity: the other arm's
+/// class is the pair's.  The one spelling of that fact for the classifier, the argument
+/// witness and the view-root walk.
+#[must_use]
+pub(crate) fn holds_no_store(data: &Data, value: &Value) -> bool {
+    match value.unspan() {
+        Value::Null => true,
+        Value::Call(d, args) => args.is_empty() && data.def(*d).name() == "OpNullRefSentinel",
+        _ => false,
+    }
+}
+
+/// The value a two-arm `if` DELIVERS when one arm holds no store: the other arm.  A tagged
+/// nullable slot is read as `if <present> { <payload projection> } else { nullref }`
+/// (`Parser::emit_nullable_slot_read`), and for every question about ownership — does this
+/// bind a view, what does it own, may it be freed at a rebind — the pair answers as its
+/// present arm does.  Any other value answers as itself, so a caller can read through
+/// unconditionally.
+#[must_use]
+pub(crate) fn through_null_arm<'v>(data: &Data, value: &'v Value) -> &'v Value {
+    if let Value::If(_, then, els) = value.unspan() {
+        if holds_no_store(data, els) {
+            return through_null_arm(data, then);
+        }
+        if holds_no_store(data, then) {
+            return through_null_arm(data, els);
+        }
+    }
+    value
 }
 
 /// The bare verdict name (no base) — for the free-site dump's `class=` field.

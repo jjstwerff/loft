@@ -188,6 +188,14 @@ The rule wants splitting rather than weakening, and the split is decidable from 
                is what tells them apart — the same bit `Data::has_value_cycle` reads to skip
                pointer edges.  Marked ⟹ `(L-Null)`, a 12-byte pointer with `nullref` for
                absence; unmarked ⟹ `(L-Null-Tag)`.  One home: `synth_nullable_struct_fields`.
+               And what is NOT a slot takes `(L-Null)`: a local, a parameter, a return, the
+               subject of `??` or `?` spell `S?` as the pointer, so a tagged value reaching one
+               is read through its tag AT THAT POINT — `Parser::read_through_tag`, the read half
+               of `(L-Null-Tag)` applied once, both passes.  Left in the slot's spelling, a
+               local took whichever spelling its last assignment parsed (loft#1367).  A view
+               taken this way holds the PAYLOAD's address: a later clear of the slot is not
+               visible through it, exactly as through a `reference<S>?` field after the field
+               is cleared; the slot's own reads see the tag.
   (L-Null-Text) `text` reserves TWO spellings of absence and they are ONE value: an UNSET
                handle (str_rec 0 — the `nullref` above) and an ALLOCATED record holding the
                `STRING_NULL` (`"\0"`) bytes.  A reader tests the CONTENT, never the handle

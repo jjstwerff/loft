@@ -2120,6 +2120,10 @@ impl Parser {
         ctp: &mut Type,
         op_pos: &Position,
     ) {
+        // A tagged slot's value is read through its tag before anything else asks about it:
+        // the subject is a pointer from here on (`@FR-L-Null-Which`), so the null test, the
+        // default's hint and the result type all see `S?`, never the slot's synthetic.
+        self.read_through_tag(code, ctp);
         // Redundant-coalesce warning — fire ONLY when the LHS type is genuinely
         // non-null.  `expr_not_null` tracks the last-read name's not-null-ness but
         // does NOT account for a fault op (`sqrt`, `/`, `ln`, …) nulling a non-null
@@ -2947,6 +2951,10 @@ impl Parser {
         parent_tp: &mut Type,
         ctp: &mut Type,
     ) {
+        // The subject of a postfix `?` is read through its tag first, as a `??` subject is:
+        // the default is then built for the pointer's base `S`, the shape the present arm
+        // has.
+        self.read_through_tag(code, ctp);
         // Same C54.G-hybrid swap `??` does: if the operand is an immediate trapping
         // arithmetic / index op (`(a / b)?`, `v[i]?`), swap it to the Nullable peer so
         // it yields the sentinel silently instead of raising, then the fallback below

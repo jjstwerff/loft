@@ -9,6 +9,25 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### @PLN153 phase 3c: a tagged projection reaching a local is read through its tag (2026-09-05)
+
+`(L-Null-Tag)` reserves the tagged `__nullable<S>` for INLINE storage and `(L-Null)` gives
+everything else the pointer; the code left a LOCAL's spelling to whichever assignment parsed
+last, so `x = y; x = o.opt` read the pointer `y` as a tagged record and the owner witness freed
+its store, `x = o.opt ?? y` was refused naming the synthetic, `x = o.opt; if c { x = null }`
+was refused, and `d: S = o.opt` was silent and read zeroes for an absent slot (loft#1367).
+`Parser::read_through_tag` is the one home — a tagged value reaching a non-slot position is
+read through its tag there and becomes the pointer on both passes — with four callers: the
+assignment seam's plain-local target, the tuple destructure (`tagged_pointer_type` for the
+type half), the `??` subject and the postfix `?` subject.  The read is an `if` (payload
+projection | nullref) that three ownership predicates each misread in turn; one predicate
+now answers for all, `use_analysis::through_null_arm`, with `holds_no_store` the join's
+identity in the var-level oracle as well.  The reverse order (`x = o.opt; x = y`) had been
+right all along under `@FR-B-Copy` (a bind off a parameter copies), against loft#1367's own
+expectation.  Corpus: 15 files moved, all emission, each green on both backends under strict
+stores; guard `1367-a-tagged-projection-bound-to-a-local-is-the-pointer` (21 cells);
+`D-Null-Local` opened and closed in `layout-history.md`.  `Fixes #1367`, `Contract: settled`.
+
 ### @PLN153 phase 3b: the declared local takes `(N-Store)`'s severity, and the inferred one widens (2026-09-05)
 
 One question — what is a LOCAL's type after a `τ?` is written to it — with two answers in

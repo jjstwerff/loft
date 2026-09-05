@@ -36,6 +36,16 @@ An inferred local written a nullable value widens to `integer?` instead of being
 where the warning lands.  A write-back `&integer` parameter, which used to take the null in
 silence, warns with the rest.
 
+**A nullable struct read out of a field or an element is one value, whichever way you
+reach it.**  `x = y; x = o.opt` — a local first bound to a nullable parameter and then to a
+nullable field — used to read `y` as if it carried the field's tag byte and free its record
+underneath the caller; `x = o.opt ?? y` was refused with an internal name in the message;
+`x = o.opt; if c { x = null }` was refused; and `d: S = o.opt` read a record of zeroes when the
+field was absent.  A field's or an element's nullable struct is now read as the plain `S?` it
+is the moment it leaves its slot, so every such local, `??` and `?` behaves as it does for a
+plain `S?` value.  One thing to know: such a local views the field's record, so clearing the
+field afterwards is not visible through the local, exactly as with a pointer field.
+
 **`loft introspect` shows the program as it is parsed.**  When a program had already run
 once, the startup cache answered the next `introspect` from its bundle, and the dump then
 named every variable `65535` with a `-` where its slot number and span belong — two runs of

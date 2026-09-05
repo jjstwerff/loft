@@ -2654,6 +2654,20 @@ use a separate collection or add after the loop"
         let prev_target = std::mem::replace(&mut self.assign_target, var_nr);
         let prev_replaces = std::mem::replace(&mut self.assign_replaces, op == "=");
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
+        // `@FR-L-Null-Which` — a LOCAL spells `S?` as the POINTER (`Optional(Reference(S))`,
+        // `nullref` for absence); the tagged `__nullable<S>` is a SLOT's spelling — an embedded
+        // field, a vector element, a tuple member.  A projection of such a slot bound to a
+        // local is therefore read THROUGH THE TAG here, at the bind, so the local's IR type is
+        // the pointer in both passes (pass 1 types the field read as `Optional(Reference(S))`
+        // already; the synth arrives in pass 2, after `fill_all`).  Left as the slot's
+        // spelling, the binding took whichever spelling parsed LAST and the other assignment's
+        // value went in unconverted: `x = y; x = o.opt` read the pointer `y` as a tagged record
+        // and freed its store, `x = o.opt; x = y` wrote `x.n` onto the tag byte (loft#1367).
+        // A `&` link keeps the slot (it IS the slot), and a field or element TARGET is a
+        // slot-to-slot copy with its own lowering — a plain local target only.
+        if op == "=" && !self.amp_pending && matches!(to.unspan(), Value::Var(_)) {
+            self.read_through_tag(code, &mut s_type);
+        }
         // `@FR-B-Copy` (with `@FR-T-Cons`) — a whole-tuple bind `u = t` COPIES every heap
         // member.  It is lowered onto the literal's own per-member copy: the source
         // becomes the tuple of its member reads and `tuple_member_owned_copy` gives each heap
@@ -5663,16 +5677,24 @@ use a separate collection or add after the loop"
                     // local (`parse_assign_op_inner`): a WARNING at full width, an ERROR at a
                     // narrow one.  The retype below sees the peeled type, so it never refuses
                     // what the rule only warns about; an inferred name widens to the join.
+                    // `@FR-L-Null-Which` — a tagged `__nullable<S>` member is read through the tag
+                    // into the local, as the plain bind in `parse_assign_op_inner` does: the
+                    // local's spelling is the pointer.
+                    let tagged_member = self.tagged_pointer_type(&rhs_elems[i]);
+                    let elem_tp = match &tagged_member {
+                        Some((_, pointer)) => pointer.clone(),
+                        None => rhs_elems[i].clone(),
+                    };
                     let declared_nullable_member = self.vars.exists(v_nr)
                         && self.author_declared(v_nr)
-                        && matches!(rhs_elems[i], Type::Optional(_))
+                        && matches!(elem_tp, Type::Optional(_))
                         && !matches!(self.vars.tp(v_nr), Type::Optional(_) | Type::RefVar(_))
                         && !self.vars.tp(v_nr).is_unknown()
-                        && self.vars.tp(v_nr).is_equal(rhs_elems[i].base());
+                        && self.vars.tp(v_nr).is_equal(elem_tp.base());
                     let member_tp = if declared_nullable_member {
-                        rhs_elems[i].base().clone()
+                        elem_tp.base().clone()
                     } else {
-                        rhs_elems[i].clone()
+                        elem_tp.clone()
                     };
                     let member_what = if declared_nullable_member {
                         format!(
@@ -5693,14 +5715,11 @@ use a separate collection or add after the loop"
                     }
                     let step = if ref_def_nr == u32::MAX {
                         let mut read = Value::TupleGet(tmp, i as u16);
+                        if let Some((syn, _)) = tagged_member {
+                            read = self.emit_nullable_slot_read(syn, read, &rhs_elems[i]);
+                        }
                         if declared_nullable_member {
-                            self.convert_store(
-                                &mut read,
-                                &rhs_elems[i],
-                                &member_tp,
-                                &member_what,
-                                None,
-                            );
+                            self.convert_store(&mut read, &elem_tp, &member_tp, &member_what, None);
                         }
                         if owned_base
                             && Self::is_collection_type(rhs_elems[i].base())
@@ -5736,16 +5755,13 @@ use a separate collection or add after the loop"
                             Value::Var(tmp),
                             u32::MAX,
                         );
-                        if declared_nullable_member {
-                            self.convert_store(
-                                &mut view,
-                                &rhs_elems[i],
-                                &member_tp,
-                                &member_what,
-                                None,
-                            );
+                        if let Some((syn, _)) = tagged_member {
+                            view = self.emit_nullable_slot_read(syn, view, &rhs_elems[i]);
                         }
-                        self.materialize_tuple_element(v_nr, tmp, &rhs_elems[i], view)
+                        if declared_nullable_member {
+                            self.convert_store(&mut view, &elem_tp, &member_tp, &member_what, None);
+                        }
+                        self.materialize_tuple_element(v_nr, tmp, &elem_tp, view)
                     };
                     steps.push(step);
                 }

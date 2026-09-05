@@ -501,6 +501,9 @@ fn introspect_parses_fresh_under_a_warm_program_cache() {
         first, second,
         "two introspect runs of one binary must emit identically"
     );
+    let _ = std::fs::remove_file(&script);
+    let _ = std::fs::remove_dir_all(&cache_dir);
+}
 
 /// `@FR-O-Witness` — a heap-record local whose assignments MIX ownership releases its
 /// stores through an owner witness both emitters READ (`Function::owner_witness`) to copy

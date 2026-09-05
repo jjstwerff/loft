@@ -263,3 +263,15 @@ bind of a tagged projection into a pointer-spelled local (`Fixes #1367`).
   `hidden` attribute, not declared per hoist site.
 - Stage A: 5 cells moved (local × integer/float/text/ref/vector, none: error → warn).
 - loft#1369 filed (native leak, pre-existing on the declared spelling).
+
+## Phase 3c built and measured (2026-09-05, scratch worktree on 7a93a7b3 + faa38979)
+- The cell list is `~/workspace/pln153-scratch/stage3c/CELLS.md`; `run.sh <loft> [mode] [--path]`.
+- Stage B's expectation for `c2`/`b2`/`w2` (write-through to `y`) was wrong: `x = y` off a
+  parameter COPIES (`@FR-B-Copy`), so those cells were right on `main`; the defects are the
+  reverse order (UAF), `??` (refused), `d: S = o.opt` (silent, zeroes) and `x = null` (refused).
+- `read_through_tag` at four sites; `through_null_arm` + `holds_no_store` in `use_analysis`
+  read by the classifier, `is_view_of_storage` and `nullable_view_locals`.
+- Traps met: the pass-1 guard on the read (a `vector<S?>` element is tagged from pass 1 —
+  the two-spellings corpus guard caught it); the `If`-shaped read defeating three ownership
+  predicates one after another (witness, oracle join, view marking) — each measured by a cell
+  going from UAF to right, none by reading.

@@ -10692,6 +10692,45 @@ impl Parser {
         list
     }
 
+    /// The POINTER spelling a tagged `__nullable<S>` value takes once it leaves its slot:
+    /// `Optional(Reference(S))` carrying the slot's deps — or `None` when `tp` is not a
+    /// tagged nullable.  The type half of [`Self::read_through_tag`], for a site that has
+    /// to know the local's type before the value's read exists (the tuple destructure).
+    pub(crate) fn tagged_pointer_type(&self, tp: &Type) -> Option<(u32, Type)> {
+        let Type::Enum(syn, true, _) = tp else {
+            return None;
+        };
+        let struct_d = self.nullable_payload_struct(*syn)?;
+        let pointer = Type::Optional(Box::new(
+            Type::Reference(struct_d, crate::data::Deps::none()).with_deps_of(tp),
+        ));
+        Some((*syn, pointer))
+    }
+
+    /// `@FR-L-Null-Which` — a tagged `__nullable<S>` is a SLOT's spelling of `S?` (an
+    /// embedded field, a vector element, a tuple member); everywhere else `S?` is the
+    /// pointer, `nullref` for absence.  A tagged value reaching a non-slot position — a
+    /// local's bind, a `??` or `?` subject — is therefore read through its tag HERE, once,
+    /// and both the value and its type become the pointer.  `false` when `tp` was not a
+    /// tagged nullable and nothing moved.  Left in the slot's spelling, a local took
+    /// whichever spelling its LAST assignment parsed and the other assignment's value went
+    /// in unconverted (loft#1367), and a `??` joined a tagged arm with a pointer arm and
+    /// refused the program naming the synthetic (`__nullable<S>?`).
+    ///
+    /// BOTH passes, so the local's type is the pointer on each: a `vector<S?>` element is the
+    /// synthetic from pass 1 (the element type is rewritten where the vector type resolves),
+    /// and converting only on pass 2 typed the local as the slot on pass 1 and refused pass
+    /// 2's pointer as a type change.  The pass-1 VALUE may come back unconverted — the
+    /// emitter declines while the layout has no known type yet — and is rebuilt anyway.
+    pub(crate) fn read_through_tag(&mut self, code: &mut Value, tp: &mut Type) -> bool {
+        let Some((syn, pointer)) = self.tagged_pointer_type(tp) else {
+            return false;
+        };
+        *code = self.emit_nullable_slot_read(syn, code.clone(), tp);
+        *tp = pointer;
+        true
+    }
+
     /// Read a tagged `__nullable<S>` slot back as the dense-or-absent value its declared
     /// type `S?` promises — the mirror of [`emit_nullable_slot_write`].
     ///

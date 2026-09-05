@@ -1,4 +1,4 @@
-# QUALITY — Open Issues, Active Designs, Enhancement Plan
+# QUALITY — Open Issues, Active Design  Re-measured again (re-measured after @PLN153 phase 3c joined with the @FR-O-Witness walk): optional `716 | 358 | 5 | 353`, unspan `402 | 378 | 24`.s, Enhancement Plan
 
 This document is the single source of truth for **what's broken, what's
 being fixed, and what should be fixed next**.  It replaces the earlier
@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 399 | 375 | **24** |
+| 402 | 378 | **24** |
 
 The `@FR-O-Complete` walk (B7u) added one peeling site — `scopes::adopted_work_refs` reads a
 right-hand side's `If` arms, `Block` and `Insert` tails through their `Span` to find the
@@ -2458,7 +2458,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 709 | 352 | 5 | **352** |
+| 716 | 358 | 5 | **353** |
 
 The `@FR-O-Complete` walk (B7u) moved one function from opaque to seeing-through:
 `scopes::needs_pre_init`, which names the locals that get a null before a branch and the

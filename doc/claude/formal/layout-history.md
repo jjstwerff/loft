@@ -121,6 +121,32 @@ The rules doc used to carry these beside its `OPEN` line — closure summaries, 
 the times the count read 0 over a live entry.  They are timeline, so they moved here
 unchanged; [layout.md](layout.md) now states only what is open.
 
+### D-Null-Local — OPENED AND CLOSED (2026-09-05, loft#1367, @PLN153 phase 3c): a tagged projection bound to a local kept the slot's spelling
+
+`(L-Null)` gives a binding the pointer spelling of `S?`; `(L-Null-Tag)` reserves the tagged
+`__nullable<S>` for INLINE storage.  A projection of a tagged slot bound to a local (`x = o.opt`,
+`x = nv[i]`, a destructured member) was bound AS THE SLOT — the local's type became the synthetic
+— and the binding then carried whichever spelling its LAST assignment parsed: after `x = y; x =
+o.opt` the pointer parameter `y` was read as a tagged record and the owner witness freed its
+store (a use-after-free in the caller, silent without `LOFT_STRICT_STORES`); `x = o.opt ?? y` was
+refused naming the synthetic (*cannot change type from `S?` to `__nullable<S>?`*); `x = o.opt; if
+c { x = null }` was refused; and `d: S = o.opt` was silent and read a present record of zeroes
+for an absent slot.  The reverse order (`x = o.opt; x = y`) was right all along: a bind off a
+parameter copies (`@FR-B-Copy`), and the write through `x` lands in the copy.
+
+Closed at one point: `Parser::read_through_tag` — a tagged value reaching a non-slot position
+(the assignment seam's plain-local target, the tuple destructure, the `??` subject, the postfix
+`?` subject) is read through its tag there, and the value and its type become the pointer on
+both passes.  The read is `if <present> { <payload projection> } else { nullref }`, and three
+ownership predicates each read that `if` wrong in turn — the witness saw neither mint nor view,
+the oracle joined a view with an owned null, the view marking saw no projection — until one
+predicate answered for all: `use_analysis::through_null_arm` (a two-arm `if` whose other arm
+holds no store delivers its present arm; `holds_no_store` is the join's identity).  Guard:
+`tests/scripts/1367-a-tagged-projection-bound-to-a-local-is-the-pointer.loft` (21 cells, both
+backends under strict stores); the corpus moved on fifteen files, every one an emission and none
+a diagnostic, each green on both backends.  `Contract: settled` — the rules named the local's
+spelling; the code failed to convert at the boundary.
+
 ### the status line formal/README.md's area table carried until 2026-09-04
 
 **rules written (2026-07-07), 1 open** — the FORMAT counterpart to heap.md's steps (it defines the `field_offset` heap.md reads at); one format (RAM = disk); nullability is a sentinel, not a layout (`L-Null`); **D-layout-1** (no version guard on persisted bytes, #477) is **mechanism-shipped** — the golden test + the `.dschema` sidecar — pending a durable-store consumer to auto-invoke it (@PLN97)
