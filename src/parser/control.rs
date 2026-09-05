@@ -13303,7 +13303,10 @@ impl Parser {
         // return re-mints its destination through `materialize_return_into`, so the rebind
         // has nothing to abandon there.
         let bound_to_vector_join = matches!(ctx.ret.ret_promo_base(), Type::Vector(_, _))
-            && Self::var_bound_to_branch(body, v);
+            && (Self::var_bound_to_branch(body, v)
+                || self
+                    .branch_sunk_vectors
+                    .contains(&(self.context, n.to_string())));
         // loft#1101 — the candidate is a VIEW of another local (`e = vv[0]; e`), the
         // binding twin of the tail projection `returns_own_field` above suppresses.
         // That rung reads the tail SHAPE, so it only sees a projection written at the

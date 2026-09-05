@@ -1171,6 +1171,11 @@ fn analyze_fn_survival(
         let src = appends[0];
         let single_def = u.def_count.get(&v).copied().unwrap_or(0) == 1;
         let v_readonly = !u.ineligible.contains(&v);
+        // A PARAMETER is defined at entry, a definition the def count does not see: its
+        // reads ahead of the copy-fill see the caller's value, and rewriting them onto the
+        // source would answer the source there (`for … { s += v[i]; v = w }` read `w` on
+        // the first turn).  The verdicts below are for a LOCAL, as their own words say.
+        let v_is_local = !function.is_argument(v);
         let src_is_param = src.is_some_and(|s| function.is_argument(s));
         let src_unmutated = src.is_some_and(|s| !written.contains(&s));
 
@@ -1194,58 +1199,58 @@ fn analyze_fn_survival(
         // Implicit = a literal source is construction, not a copy of existing data (owned by
         // the model — silent). Forced = the result escapes / is reassigned / mutated, or the
         // source is mutated (the value must own its store). `Borrow` is already eliminated.
-        let (verdict, reason, class) = if single_def && v_readonly && src_is_param && src_unmutated
-        {
-            (
-                Verdict::Borrow,
-                "tier0: read-only local, unmutated param source",
-                CopyClass::Eliminated,
-            )
-        } else if single_def && v_readonly && src_local_stable {
-            (
-                Verdict::Borrow,
-                "tier1: read-only local, ordering-proven read-only local source",
-                CopyClass::Eliminated,
-            )
-        } else if crate::keys::link_widen_enabled()
-            && bind_link_safe(&u, function, v, src)
-            && bind_link_unobservable(&u, function, v, src)
-        {
-            // @PLN102 build step 4 — the transparent-link WIDENING (gated `LOFT_LINK_WIDEN`). A bind
-            // the tiers above leave as a copy is realized as a shared-store link when it is provably
-            // SAFE (source outlives the local, no escape) AND UNOBSERVABLE (neither side's store is
-            // mutated after the bind, ALIAS-AWARE) — the two oracles proven report-only in steps 2/3.
-            // The observable result is unchanged (copy ≡ link here); it just realizes more links. The
-            // `ElidePlan` production below runs unchanged, incl. its own borrower-safety gate. Dead
-            // when the flag is off ⇒ byte-identical.
-            (
-                Verdict::Borrow,
-                "widen: safe + unobservable link (LOFT_LINK_WIDEN)",
-                CopyClass::Eliminated,
-            )
-        } else if src.is_none() {
-            (
-                Verdict::Copy,
-                "source is not a plain var/field (e.g. a literal)",
-                CopyClass::Implicit,
-            )
-        } else if !single_def {
-            (
-                Verdict::Copy,
-                "reassigned (multiple defs)",
-                CopyClass::Forced,
-            )
-        } else if !v_readonly {
-            (Verdict::Copy, "local mutated or escapes", CopyClass::Forced)
-        } else if !src_is_param && !src_local_stable {
-            (
-                Verdict::Copy,
-                "source not a parameter / not provably read-only local",
-                CopyClass::Avoidable,
-            )
-        } else {
-            (Verdict::Copy, "source mutated", CopyClass::Forced)
-        };
+        let (verdict, reason, class) =
+            if single_def && v_is_local && v_readonly && src_is_param && src_unmutated {
+                (
+                    Verdict::Borrow,
+                    "tier0: read-only local, unmutated param source",
+                    CopyClass::Eliminated,
+                )
+            } else if single_def && v_is_local && v_readonly && src_local_stable {
+                (
+                    Verdict::Borrow,
+                    "tier1: read-only local, ordering-proven read-only local source",
+                    CopyClass::Eliminated,
+                )
+            } else if crate::keys::link_widen_enabled()
+                && bind_link_safe(&u, function, v, src)
+                && bind_link_unobservable(&u, function, v, src)
+            {
+                // @PLN102 build step 4 — the transparent-link WIDENING (gated `LOFT_LINK_WIDEN`). A bind
+                // the tiers above leave as a copy is realized as a shared-store link when it is provably
+                // SAFE (source outlives the local, no escape) AND UNOBSERVABLE (neither side's store is
+                // mutated after the bind, ALIAS-AWARE) — the two oracles proven report-only in steps 2/3.
+                // The observable result is unchanged (copy ≡ link here); it just realizes more links. The
+                // `ElidePlan` production below runs unchanged, incl. its own borrower-safety gate. Dead
+                // when the flag is off ⇒ byte-identical.
+                (
+                    Verdict::Borrow,
+                    "widen: safe + unobservable link (LOFT_LINK_WIDEN)",
+                    CopyClass::Eliminated,
+                )
+            } else if src.is_none() {
+                (
+                    Verdict::Copy,
+                    "source is not a plain var/field (e.g. a literal)",
+                    CopyClass::Implicit,
+                )
+            } else if !single_def {
+                (
+                    Verdict::Copy,
+                    "reassigned (multiple defs)",
+                    CopyClass::Forced,
+                )
+            } else if !v_readonly {
+                (Verdict::Copy, "local mutated or escapes", CopyClass::Forced)
+            } else if !src_is_param && !src_local_stable {
+                (
+                    Verdict::Copy,
+                    "source not a parameter / not provably read-only local",
+                    CopyClass::Avoidable,
+                )
+            } else {
+                (Verdict::Copy, "source mutated", CopyClass::Forced)
+            };
 
         if verdict == Verdict::Borrow
             && let Some(vdb) = u.def_vdb.get(&v)

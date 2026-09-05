@@ -92,6 +92,11 @@ locals that get the null and the hoist, and it must peel `Optional`; a literal's
 adopted inside a loop body takes the pairing a call's `__ref_N` already has (`witness_buffer`,
 @P378(a)) so one owner frees once; and the free-source licence of a keyed join reaches every
 `match` arm, not only an `if`'s.  The rule did not change: the code did, at those three homes.
+The VECTOR spelling of a bound value branch has its home where the vector copy has its home —
+the parser's bind selector, not the post-parse lift — and had none until D-own-35: every
+value-branch bind of a vector local aliased the chosen arm, and `x = s.v ?? va` viewed a
+projection `x = s.v` copies.  `Parser::sink_vec_bind_into_arms` writes such a bind out per arm
+and classifies each tail by the same selector; a promoted return buffer keeps the value form.
 
 **`O-Detach` is about ORDER, and it is the one rule here that a correct ownership FACT cannot
 save you from.** Every other rule answers *who owns this store*; this one answers *when may the

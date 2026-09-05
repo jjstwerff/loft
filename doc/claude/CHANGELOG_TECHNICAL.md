@@ -131,6 +131,32 @@ matrix moved on exactly those seven cells and nowhere else; `scripts/introspect_
 the corpus (stderr included) reads `DIFFERENT 16 of 1272` — every one a stderr line and none an emission: the thirteen corpus files that gained a warning (nine nullable indexes after a `find`, three `null` keys, one `null` into a vector field), reviewed one by one, and the three new guards, which differ by construction; the admitting-faces guard is silent on both
 builds with every value pinned.  `(N-Store)` in `formal/types.md` now names its slots and
 its non-stores.  `Fixes #1366`.
+### A vector local bound from a value branch copies at the parser's selector, and a vector parameter rebinds locally (2026-09-05, loft#1370, D-own-35 / D-call-14)
+
+The vector twin of B7v's record fix, closed at the vector copy's own home (QUALITY.md B7w):
+
+- **`Parser::sink_vec_bind_into_arms`** — a vector local bound from a value branch (`if`,
+  `else if`, `match`, `??`) is written out per arm at `classify_vec_bind`, so each arm gets the
+  lowering a single bind of its tail has: a whole variable and an owned projection copy, a `??`
+  hoist is judged by what it was bound from, a call's buffer / a literal / an index read keep the
+  value they have.  A copy inside an arm always mints (`vec_copy_needs_db`: the local carries the
+  join's deps there, so `@FR-O-Proxy` cannot say what it holds); a block that yields its own
+  buffer is bound whole; a first bind through a wrapper block is declared at the statement by a
+  null `Set` the post-parse scan elides on a reassignment; a promoted return buffer
+  (`is_hidden_param`) keeps the value form; and a returned local the rewrite sank stays
+  `Bind` in the return-promotion ladder (`Parser::branch_sunk_vectors` carries the
+  bound-to-a-branch fact the removed `Set(v, If)` used to show).  Both backends; every
+  spelling and element kind.
+- **A vector parameter's first rebind from a variable mints a store of its own**
+  (`@FR-F-ParamRebind`); it refilled the caller's store in place, statement form included.
+- **The Tier-0 elision asks that its destination be a LOCAL** (`v_is_local`,
+  `src/use_analysis.rs`): a parameter is defined at entry, and rewriting its reads onto the
+  source answered the source on a loop's first turn, ahead of the rebind.
+
+Guards: `a-vector-local-bound-from-a-value-branch-copies-the-chosen-arm.loft`,
+`a-vector-parameter-reassigned-from-a-variable-rebinds-locally.loft`, both falsified at
+faa38979.  Corpus IR census: 20 of 1260 files moved, all green on both backends.
+
 ### The owner witness survives the cache, and the caller side of a nullable bind copies (2026-09-05, `@FR-O-Witness` walk, D-own-34)
 
 Four store-lifetime defects, one shape — a nullable heap local not treated as the heap local it

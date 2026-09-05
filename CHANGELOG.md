@@ -72,6 +72,13 @@ place — mutating `s` afterwards no longer shows through `t.0` when `T` is a st
 generic and the non-generic spelling of the same function had been giving different
 answers, which is the one thing a type variable is supposed never to do.  A `T` bound to a
 vector or a keyed collection is still shared rather than copied (loft#1365).
+**A list chosen by an `if`, a `match` or a `??` is your own copy.**  Assigning a vector from a
+branch — `x = if c { a } else { b }`, a `match`, `x = s.items ?? fallback` — now copies the chosen
+branch the way `x = a` does, so writing through `x` no longer changes `a`; that holds on the first
+assignment and on a later one, for a nullable `x`, and inside a loop.  Assigning another vector
+to a vector PARAMETER now rebinds the parameter locally instead of overwriting the caller's
+vector in place, as the language reference already promised.
+
 **A value kept in a `struct?` behaves the same whether it came from a variable, a call, or a
 branch.**  A few store-sharing corners are gone: a nullable local set from a function that hands
 back one of its arguments now gets its own copy (writing through it no longer changes the

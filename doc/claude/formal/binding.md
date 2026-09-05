@@ -146,7 +146,8 @@ rule `C-Ref` in [types.md](types.md): a `&τ` is accepted wherever a `τ` is.)
   (B-View-Base)   a projection off a BORROWED base is a VIEW at EVERY element type — not only
                   a struct-typed one.  `for b in bv { c = b.vecf; … }` aliases exactly as
                   `c = b.strf` does, and so does a tuple element.  Ownership of the BASE is the
-                  axis: off an OWNED base a COLLECTION projection copies (B-Copy, `af = bx.v`)
+                  axis: off an OWNED base a COLLECTION projection copies (B-Copy, `af = bx.v`,
+                  and `af = bx.v ?? d` the same — D-own-35)
                   while a STRUCT projection views (B-View); off a BORROWED base everything
                   views.  `classify_vec_bind`'s `depend().is_empty()` is where the parser asks
                   it, and @PLN25 p379 depends on the write-through (`cells = sc.v;

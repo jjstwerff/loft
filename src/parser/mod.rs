@@ -820,6 +820,15 @@ pub struct Parser {
     /// Accumulates captured variable names and types during lambda body parsing.
     /// Reset at the start of each lambda; read after parsing to synthesize the closure record.
     pub(crate) captured_names: Vec<(String, Type)>,
+    /// The vector locals whose value-branch bind was written out per arm
+    /// (`sink_vec_bind_into_arms`), by defining function and name.  The return-promotion
+    /// ladder reads "bound to a branch" off the body's `Set(v, If)`, a shape the rewrite
+    /// removes, and this carries the fact instead: such a local keeps its own store and is
+    /// copied into the return buffer at the return (`Bind`), exactly as the value form was.
+    /// Renamed onto the buffer it would be filled by neither pass — the rewrite declines a
+    /// hidden parameter, and the value form assigns the arms' temps into the buffer var.
+    /// Keyed by name because a pass rebuilds the variable table; recorded on both passes.
+    pub(crate) branch_sunk_vectors: std::collections::HashSet<(u32, String)>,
     /// Variable number of the __closure parameter inside a lambda body (second pass).
     /// `u16::MAX` when not inside a capturing lambda.
     pub(crate) closure_param: u16,
@@ -1352,6 +1361,7 @@ impl Parser {
             capture_owner: std::collections::HashMap::new(),
             rebound_captures: std::collections::HashMap::new(),
             captured_names: Vec::new(),
+            branch_sunk_vectors: std::collections::HashSet::new(),
             fn_lambdas: std::collections::HashMap::new(),
             closure_param: u16::MAX,
             cur_type_var: u32::MAX,

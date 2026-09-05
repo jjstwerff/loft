@@ -6,7 +6,7 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — D-own-33 OPENED AND CLOSED 2026-09-05 (the per-path fact was short of four homes, every one a nullable local not treated as the heap local it is: a literal buffer adopted inside a loop, the branch pre-init, the loop hoist, a keyed `match` bind, below; a fifth face is loft#1367, owned by @PLN153); D-own-32 OPENED AND CLOSED 2026-09-05 (the oracle called a minted variable Owned regardless of its other definitions, and its shadow re-derived the base translation, below); D-own-31 OPENED AND CLOSED 2026-09-05 (the never-free contract named one spelling of five and forbade a release the language ships, below); D-own-30 OPENED AND CLOSED 2026-09-05 (a nullable local holding a projection VIEW freed the store it displaced, below), after D-own-29 2026-09-04 (loft#1346, below) and D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
+OPEN: **0** — D-own-35 OPENED AND CLOSED 2026-09-05 (loft#1370: the per-path fact had no home for a VECTOR local — every value-branch bind aliased the chosen arm — closed at the parser's selector, below); D-own-34 OPENED AND CLOSED 2026-09-05 (the owner witness did not survive the cache, and a nullable bind from a borrow-returning call aliased); D-own-33 OPENED AND CLOSED 2026-09-05 (the per-path fact was short of four homes, every one a nullable local not treated as the heap local it is: a literal buffer adopted inside a loop, the branch pre-init, the loop hoist, a keyed `match` bind, below; a fifth face is loft#1367, owned by @PLN153); D-own-32 OPENED AND CLOSED 2026-09-05 (the oracle called a minted variable Owned regardless of its other definitions, and its shadow re-derived the base translation, below); D-own-31 OPENED AND CLOSED 2026-09-05 (the never-free contract named one spelling of five and forbade a release the language ships, below); D-own-30 OPENED AND CLOSED 2026-09-05 (a nullable local holding a projection VIEW freed the store it displaced, below), after D-own-29 2026-09-04 (loft#1346, below) and D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
 single cell, its Face B CLOSED the same day, that cell's one known SYMPTOM closed 2026-08-26
 with the FACT still wrong, loft#1098, and the fact itself closed by giving every path of a
 value branch its own binding — below).  D-own-26 CLOSED 2026-09-03: its gate existed all
@@ -38,6 +38,30 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-35 — OPENED AND CLOSED (2026-09-05, loft#1370): the per-path fact had no home for a VECTOR local, and the parameter rebind read the proxy's carve-out as ownership
+
+`(O-Complete)` asks that every path of a bound value branch be its own binding, and `(B-Copy)`
+that a plain whole-value bind copy.  B7v gave the RECORD spelling its home (D-own-34, the
+statement-form sink in `scopes.rs`); the vector spelling had none, because the vector copy is
+the PARSER's (`classify_vec_bind` and its copy arm), and a value-branch RHS never reached that
+selector.  Measured (QUALITY.md B7w, 33 cells, both backends): every value-branch bind of a
+vector local handed it the chosen arm's STORE — `if`, `else if`, `match`, `??`; dense, nullable
+and null-initialised; every element kind; projection, mixed and parameter-source arms; inside a
+loop; and the first bind through a `match` or `??` wrapper.  Beside it, `x = s.v ?? va` viewed
+an owned projection that `x = s.v` copies.  The keyed twin copies (`OpReplaceKeyed`) and is the
+control.
+
+**Closed** at the selector: `Parser::sink_vec_bind_into_arms` writes the bind out per arm and
+classifies each tail by the same selector, a copy inside an arm always mints (the join's deps
+make the ownership proxy unreadable there), a `??` hoist is judged by its source, a
+buffer-yielding block is bound whole, a wrapper-block first bind is declared at the statement,
+a promoted return buffer keeps the value form (F-Ret's adopt-or-materialise), and a returned
+local the rewrite sank keeps its own store at the return (`Bind`, carried by
+`branch_sunk_vectors` since the `Set(v, If)` the ladder read it from is gone).  Guard
+`a-vector-local-bound-from-a-value-branch-copies-the-chosen-arm.loft`, falsified at faa38979.
+The parameter half is calls-history D-call-14.  Corpus census: 20 of 1260 files moved, all
+green both backends under strict stores, poison and the native leak check.
 
 ### D-own-34 — OPENED AND CLOSED (2026-09-05): the per-path fact was short of three more homes, and the fact the emitters read did not survive the cache
 

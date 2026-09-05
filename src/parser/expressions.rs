@@ -1662,6 +1662,361 @@ use a separate collection or add after the loop"
         VecBind::NotABind
     }
 
+    /// Does the copy refill a FRESH store of the local's own, rather than the one the local
+    /// holds?  `@FR-O-Proxy` answers by ownership (`vector_needs_db`: a local with no deps owns
+    /// the store it holds, so that store is cleared and refilled), and two places cannot ask
+    /// the proxy:
+    ///
+    ///   * an ARM of a value branch, where the local carries the branch's JOIN deps and so
+    ///     reads as a borrower of a store it may not hold at all — a nullable local's
+    ///     sentinel, or the other arm's source — so refilling it in place cleared through a
+    ///     null or into a variable the other arm names;
+    ///   * a PARAMETER's first rebind (calls.md `@FR-F-ParamRebind`): the store it holds is
+    ///     the CALLER's, and a whole-value reassignment rebinds locally rather than writing
+    ///     back — the carve-out that keeps a parameter from allocating a store exists to
+    ///     avoid an allocation, not to let a refill reach the caller.  Once rebound the
+    ///     local names its own `__vdb_N` and the proxy answers again.  A promoted return
+    ///     buffer is the one argument that IS filled in place (F-Ret hands the value up
+    ///     through it), and keeps the carve-out.
+    fn vec_copy_needs_db(&self, var_nr: u16, elm_tp: &Type, in_arm: bool) -> bool {
+        in_arm
+            || self.vector_needs_db(var_nr, elm_tp, true)
+            // @FR-O-Proxy asks alloc — a parameter with no deps still holds the caller's
+            // store; the empty list here decides that its first rebind ALLOCATES, never
+            // that anything is released.
+            || (self.vars.is_argument(var_nr)
+                && !self.is_hidden_param(var_nr)
+                && !matches!(self.vars.tp(var_nr), Type::RefVar(_))
+                && self.vars.tp(var_nr).depend().is_empty())
+    }
+
+    /// The lowering a whole-value vector bind's verdict asks for, applied in place to
+    /// `code`, the source, for the local `to` (`var_nr`): nothing for the identity, else the
+    /// local's own store — allocated when it owns none, cleared when it does — refilled with
+    /// a deep copy of the source's elements.  Fires on BOTH passes (`change_var` types the
+    /// local each pass and the field-read strip advances the `_elm_N` counter on the first,
+    /// so the `__vdb_N` dep is created identically); the ops are emitted on the second.
+    #[allow(clippy::too_many_arguments)] // the copy arm's own inputs, plus where it sits
+    fn lower_vec_copy_bind(
+        &mut self,
+        code: &mut Value,
+        vec_bind: &VecBind,
+        to: &Value,
+        var_nr: u16,
+        s_type: &Type,
+        lhs_parent_tp: &Type,
+        in_arm: bool,
+    ) {
+        let Type::Vector(elm_tp, _) = s_type.base() else {
+            return;
+        };
+
+        // `v = v` self-assign — emit nothing rather than clear+reappend
+        // off the same storage.
+        if matches!(vec_bind, VecBind::SelfAssign) {
+            *code = Value::Insert(Vec::new());
+            return;
+        }
+        let elm_tp_clone = (**elm_tp).clone();
+        let dense = Type::Vector(Box::new(elm_tp_clone.clone()), Deps::none());
+        // The COPY is what the selector decided; whether the value may be ABSENT is the
+        // source's own fact and survives it.  Dropping the marker here would make the
+        // destination non-null and lose the null arm.
+        let vec_tp = if matches!(s_type, Type::Optional(_)) {
+            Type::Optional(Box::new(dense))
+        } else {
+            dense
+        };
+        self.change_var(to, &vec_tp);
+        let field_read = matches!(vec_bind, VecBind::CopyOwnedField);
+        // #426 — a struct vector-FIELD read (`af = bx.v`, `field_read`) must
+        // strip `af`'s inherited base dep on BOTH passes, then consume one
+        // `elm`-name slot on both.  `Function::unique`'s per-prefix counter has
+        // to advance IDENTICALLY across passes: a family created on only one
+        // pass shifts every other family's numbering, so a later `_elm_N`
+        // re-resolves to a pass-1 var backed by a different store — silent
+        // corruption (a nested vector literal `[[…]]` after `af = bx.v` built
+        // its inner element into an orphaned store, reading back len 0).  The
+        // field-read used to take the whole pass-2-only branch below, so on
+        // pass 1 its dep stayed non-empty (`vector_needs_db` false → no `elm`)
+        // while pass 2 stripped it (`vector_needs_db` true → one `elm`): a
+        // one-slot drift.  Stripping + advancing the counter on pass 1 too
+        // removes the drift.  The var-copy case (`b = a`) is untouched here —
+        // its strip stays pass-2-only (line below), since it never had the
+        // pass-1 dep-mismatch (the RHS var already owns an independent store).
+        if field_read && self.first_pass {
+            let inherited = self.vars.tp(var_nr).depend();
+            for d in inherited {
+                self.vars.make_independent(var_nr, d);
+            }
+            if self.vec_copy_needs_db(var_nr, &elm_tp_clone, in_arm) {
+                self.unique_elm_var(lhs_parent_tp, &elm_tp_clone, var_nr);
+            }
+            return;
+        }
+        if !self.first_pass {
+            // Break the alias.  The standard type-inference copied the RHS
+            // var's store dep onto v (making v *borrow* rhs's storage — the
+            // dangling-on-scope-exit @P292 hazard, and the no-own-store @P394
+            // crash on first assignment).  Strip rhs's deps from v so v gets
+            // its OWN store.  This is a no-op when v already owns an
+            // independent store (`v = [9]; v = a` reassignment), so that case
+            // still takes the clear+refill path below.  (Mirrors the @P295
+            // Var-to-var deep-copy dep-strip.)
+            if let Value::Var(rhs_var) = code.unspan() {
+                self.vars.make_independent(var_nr, *rhs_var);
+                for d in self.vars.tp(*rhs_var).depend() {
+                    self.vars.make_independent(var_nr, d);
+                }
+            } else {
+                // #415 — field-read RHS (`af = bx.v`): there is no rhs_var,
+                // but `af` inherited the base's dep ({bx}) during type
+                // resolution.  Strip af's own inherited deps so
+                // `vector_needs_db` below sees an empty dep and allocates af
+                // its OWN store; otherwise it takes the reassignment/clear arm,
+                // af never owns a store, and the alias to bx's field persists.
+                // The OpAppendVector then deep-copies the field's elements in.
+                let inherited = self.vars.tp(var_nr).depend();
+                for d in inherited {
+                    self.vars.make_independent(var_nr, d);
+                }
+            }
+            // @P314 — narrow-aware element type (see `append_elem_tp`).
+            let rec_tp = Value::Int(self.append_elem_tp(&elm_tp_clone));
+            let mut stmts = Vec::new();
+            if self.vec_copy_needs_db(var_nr, &elm_tp_clone, in_arm) {
+                // First assignment: v owns no store yet — allocate one.
+                let elm_var = self.unique_elm_var(lhs_parent_tp, &elm_tp_clone, var_nr);
+                let db = self.insert_new(var_nr, elm_var, &elm_tp_clone, &mut stmts);
+                self.vars.depend(var_nr, db);
+            } else {
+                // Reassignment: v already owns a store — clear, then refill.
+                stmts.push(self.cl("OpClearVector", std::slice::from_ref(to)));
+            }
+            // A NULLABLE destination takes the whole-value REPLACE rather than the
+            // append, for the one thing the append cannot express: an ABSENT source
+            // must leave the destination absent, not holding the empty store the alloc
+            // above just gave it.  `Stores::vector_replace` carries that rule, the same
+            // one `replace_keyed` carries for the keyed kinds — which is why the keyed
+            // sibling of this bind has been answering `b == null` correctly all along.
+            // A dense destination cannot be absent, so it keeps the append and its IR is
+            // unchanged.
+            let op = if matches!(self.vars.tp(var_nr), Type::Optional(_)) {
+                "OpReplaceVector"
+            } else {
+                "OpAppendVector"
+            };
+            stmts.push(self.cl(op, &[to.clone(), code.clone(), rec_tp]));
+            *code = Value::Insert(stmts);
+        }
+    }
+
+    /// `@FR-O-Complete` — a vector local bound from a value branch: write the bind out per
+    /// arm, so every path binds the local the way a single bind of that arm's tail would.
+    /// `true` when the rewrite happened; `false` where the branch has no arm a plain bind
+    /// would copy (every arm keeps the value it has, and the value form is that already) or
+    /// an arm cannot be written out as a bind at all.
+    fn sink_vec_bind_into_arms(
+        &mut self,
+        code: &mut Value,
+        to: &Value,
+        var_nr: u16,
+        f_type: &Type,
+        s_type: &Type,
+        lhs_parent_tp: &Type,
+    ) -> bool {
+        let mut hoists = Vec::new();
+        if !matches!(
+            code.unspan(),
+            Value::If(_, _, _) | Value::Block(_) | Value::Insert(_)
+        ) || self.vec_arm_copies(code, var_nr, f_type, s_type, &mut hoists) != Some(true)
+        {
+            return false;
+        }
+        let mut hoists = Vec::new();
+        self.sink_vec_arms(code, to, var_nr, f_type, s_type, lhs_parent_tp, &mut hoists);
+        self.branch_sunk_vectors
+            .insert((self.context, self.vars.name(var_nr).to_string()));
+        // A wrapper BLOCK opens a scope — a `??` hoist's, a `match` subject's — and a local
+        // whose first `Set` now sits inside it would be homed there, out of reach of the
+        // statement's own scope where its next use is.  The bind is made at the statement:
+        // a null `Set` ahead of the block declares the local here, which is the pre-init
+        // the post-parse scan writes for a local first assigned in sibling arms, and which
+        // that scan elides on a local already in scope (a reassignment).  A parameter is
+        // never first-bound here and holds the caller's value on a self arm.
+        if matches!(code.unspan(), Value::Block(_)) && !self.vars.is_argument(var_nr) {
+            let sunk = std::mem::replace(code, Value::Null);
+            *code = Value::Insert(vec![Value::Set(var_nr, Box::new(Value::Null)), sunk]);
+        }
+        true
+    }
+
+    /// The compiler temps the operators AHEAD of a branch bind, with what each was bound
+    /// from — a `??` hoist (`__ncc_N = s.v`) is the one this serves.  Pushed onto `hoists`,
+    /// which the arm verdict reads.
+    fn note_hoists(&self, ops: &[Value], hoists: &mut Vec<(u16, Value)>) {
+        for op in ops {
+            if let Value::Set(t, src) = op.unspan()
+                && self.vars.is_compiler_generated(*t)
+                // A collection's own buffer is bound from the store it minted
+                // (`_vec_N = OpGetField(__vdb_N, 0, …)`, a comprehension's result the same):
+                // a read rooted at a compiler temp is nothing the author wrote, and nothing
+                // the selector copies.
+                && !self
+                    .field_place(src)
+                    .is_some_and(|(root, _)| self.vars.is_compiler_generated(root))
+            {
+                hoists.push((*t, (**src).clone()));
+            }
+        }
+    }
+
+    /// Does any arm of this value branch end in a tail a plain bind would COPY?  `Some(true)`
+    /// if one does, `Some(false)` where every arm keeps the value it has, `None` where an arm
+    /// cannot be written out as a bind: a bare `null` (which the post-parse scan elides on a
+    /// local already in scope), a block that yields nothing (a diverging arm), an empty one.
+    /// A value branch is seen through its wrappers — a `Span`, a value block (a plain arm, or a
+    /// `match` behind its subject binding), an `Insert` — each yielding its LAST operator.
+    fn vec_arm_copies(
+        &self,
+        node: &Value,
+        var_nr: u16,
+        f_type: &Type,
+        s_type: &Type,
+        hoists: &mut Vec<(u16, Value)>,
+    ) -> Option<bool> {
+        match node.unspan() {
+            Value::If(_, t, f) => {
+                let then_copies = self.vec_arm_copies(t, var_nr, f_type, s_type, hoists)?;
+                let else_copies = self.vec_arm_copies(f, var_nr, f_type, s_type, hoists)?;
+                Some(then_copies || else_copies)
+            }
+            Value::Block(bl) => {
+                if matches!(bl.result, Type::Void | Type::Null) {
+                    return None;
+                }
+                let (last, ahead) = bl.operators.split_last()?;
+                self.note_hoists(ahead, hoists);
+                self.vec_arm_copies(last, var_nr, f_type, s_type, hoists)
+            }
+            Value::Insert(ops) => {
+                let (last, ahead) = ops.split_last()?;
+                self.note_hoists(ahead, hoists);
+                self.vec_arm_copies(last, var_nr, f_type, s_type, hoists)
+            }
+            Value::Null => None,
+            tail => Some(matches!(
+                self.vec_arm_verdict(tail, var_nr, f_type, s_type, hoists),
+                VecBind::CopyVar | VecBind::CopyOwnedField
+            )),
+        }
+    }
+
+    /// The selector's verdict for one arm tail.  A compiler temp is judged by what it was
+    /// bound FROM: a `??` hoist of a projection (`__ncc_N = s.v`) stands for that read, so
+    /// the arm copies from the temp exactly where `x = s.v` copies (`@FR-B-Copy`: off an
+    /// owned base a collection projection copies) and views where it views; a temp bound
+    /// from nothing the selector copies — a literal's `_vec_N`, the arm's own buffer — keeps
+    /// the value it has.
+    fn vec_arm_verdict(
+        &self,
+        tail: &Value,
+        var_nr: u16,
+        f_type: &Type,
+        s_type: &Type,
+        hoists: &[(u16, Value)],
+    ) -> VecBind {
+        let tail = tail.unspan();
+        if let Value::Var(x) = tail
+            && self.vars.is_compiler_generated(*x)
+        {
+            let copies_source = hoists.iter().any(|(t, src)| {
+                *t == *x
+                    && matches!(
+                        self.classify_vec_bind(src.unspan(), "=", var_nr, f_type, s_type),
+                        VecBind::CopyVar | VecBind::CopyOwnedField
+                    )
+            });
+            return if copies_source {
+                VecBind::CopyVar
+            } else {
+                VecBind::NotABind
+            };
+        }
+        self.classify_vec_bind(tail, "=", var_nr, f_type, s_type)
+    }
+
+    /// The statement form of a vector local's value-branch bind: every arm tail becomes the
+    /// bind of that tail — the copy lowering where the selector says copy, a plain `Set`
+    /// otherwise — and the arms stop yielding a value.
+    #[allow(clippy::too_many_arguments)] // the bind's inputs, threaded to every arm
+    fn sink_vec_arms(
+        &mut self,
+        node: &mut Value,
+        to: &Value,
+        var_nr: u16,
+        f_type: &Type,
+        s_type: &Type,
+        lhs_parent_tp: &Type,
+        hoists: &mut Vec<(u16, Value)>,
+    ) {
+        match node {
+            Value::Span(b) => {
+                self.sink_vec_arms(&mut b.1, to, var_nr, f_type, s_type, lhs_parent_tp, hoists);
+            }
+            Value::If(_, t, f) => {
+                self.sink_vec_arms(t, to, var_nr, f_type, s_type, lhs_parent_tp, hoists);
+                self.sink_vec_arms(f, to, var_nr, f_type, s_type, lhs_parent_tp, hoists);
+            }
+            // A block that yields its OWN buffer — a literal's `_vec_N`, a comprehension's
+            // result — is the arm's value as it stands: bound whole, so the buffer stays
+            // homed with the binding (a void block would take it, and free it at the
+            // block's end while the local still names it).
+            Value::Block(bl)
+                if bl.operators.last().is_some_and(|last| {
+                    matches!(last.unspan(), Value::Var(x) if self.vars.is_compiler_generated(*x))
+                        && matches!(
+                            self.vec_arm_verdict(last, var_nr, f_type, s_type, hoists),
+                            VecBind::NotABind
+                        )
+                }) =>
+            {
+                let t = std::mem::replace(node, Value::Null);
+                *node = Value::Set(var_nr, Box::new(t));
+            }
+            Value::Block(bl) => {
+                if let Some((last, ahead)) = bl.operators.split_last_mut() {
+                    self.note_hoists(ahead, hoists);
+                    self.sink_vec_arms(last, to, var_nr, f_type, s_type, lhs_parent_tp, hoists);
+                }
+                bl.result = Type::Void;
+            }
+            Value::Insert(ops) => {
+                if let Some((last, ahead)) = ops.split_last_mut() {
+                    self.note_hoists(ahead, hoists);
+                    self.sink_vec_arms(last, to, var_nr, f_type, s_type, lhs_parent_tp, hoists);
+                }
+            }
+            tail => {
+                let verdict = self.vec_arm_verdict(tail, var_nr, f_type, s_type, hoists);
+                if matches!(verdict, VecBind::NotABind) {
+                    let t = std::mem::replace(tail, Value::Null);
+                    *tail = Value::Set(var_nr, Box::new(t));
+                } else {
+                    self.lower_vec_copy_bind(
+                        tail,
+                        &verdict,
+                        to,
+                        var_nr,
+                        s_type,
+                        lhs_parent_tp,
+                        true,
+                    );
+                }
+            }
+        }
+    }
+
     /// Is the next thing in the source the struct literal `<name> { … }`, without
     /// consuming it?  Used to decide, BEFORE the right-hand side is parsed, that it is a
     /// fresh construction and can therefore be built directly into its destination
@@ -4332,112 +4687,36 @@ use a separate collection or add after the loop"
         // A `& vector` bind opts into aliasing (B-Ref-Write): SKIP the C86 deep-copy so
         // the plain-assign path shares the source's DbRef and marks `d` non-owning (its
         // dep names the source).  Plain `d = v` (no `&`) still classifies + copies.
+        // `@FR-B-Copy` / `@FR-O-Complete` — a vector local bound from a VALUE BRANCH
+        // (`x = if c { a } else { b }`, a `match`, a `??`) is written out per arm, so each
+        // arm's tail gets the lowering a single bind of that tail has: a whole variable and
+        // an owned field read are COPIED through the selector below, and every other arm
+        // keeps the value it has (a literal's or a call's own buffer, an index read's view).
+        // Bound as one value, the branch handed the local the chosen arm's STORE — a write
+        // through `x` reached `a` — on every spelling, whether or not `x` held a value
+        // before.  The vector copy has its one home in this routine, which is why the
+        // rewrite happens here and not in the post-parse per-arm lift that serves records.
+        if !amp_vector_bind
+            && op == "="
+            && var_nr != u16::MAX
+            && matches!(to.unspan(), Value::Var(v) if *v == var_nr)
+            && matches!(f_type.base(), Type::Unknown(_) | Type::Vector(_, _))
+            && matches!(s_type.base(), Type::Vector(_, _))
+            // Not a promoted return buffer (calls.md F-Ret): the caller receives the value
+            // THROUGH it, so every arm fills it in place and the return adopts or
+            // materialises the join — the value form is that mechanism.
+            && !self.is_hidden_param(var_nr)
+            && self.sink_vec_bind_into_arms(code, to, var_nr, f_type, &s_type, &lhs_parent_tp)
+        {
+            return Type::Void;
+        }
         let vec_bind = if amp_vector_bind {
             VecBind::NotABind
         } else {
             self.classify_vec_bind(code, op, var_nr, f_type, &s_type)
         };
-        if !matches!(vec_bind, VecBind::NotABind)
-            && let Type::Vector(elm_tp, _) = s_type.base()
-        {
-            // `v = v` self-assign — emit nothing rather than clear+reappend
-            // off the same storage.
-            if matches!(vec_bind, VecBind::SelfAssign) {
-                *code = Value::Insert(Vec::new());
-                return Type::Void;
-            }
-            let elm_tp_clone = (**elm_tp).clone();
-            let dense = Type::Vector(Box::new(elm_tp_clone.clone()), Deps::none());
-            // The COPY is what the selector decided; whether the value may be ABSENT is the
-            // source's own fact and survives it.  Dropping the marker here would make the
-            // destination non-null and lose the null arm.
-            let vec_tp = if matches!(s_type, Type::Optional(_)) {
-                Type::Optional(Box::new(dense))
-            } else {
-                dense
-            };
-            self.change_var(to, &vec_tp);
-            let field_read = matches!(vec_bind, VecBind::CopyOwnedField);
-            // #426 — a struct vector-FIELD read (`af = bx.v`, `field_read`) must
-            // strip `af`'s inherited base dep on BOTH passes, then consume one
-            // `elm`-name slot on both.  `Function::unique`'s per-prefix counter has
-            // to advance IDENTICALLY across passes: a family created on only one
-            // pass shifts every other family's numbering, so a later `_elm_N`
-            // re-resolves to a pass-1 var backed by a different store — silent
-            // corruption (a nested vector literal `[[…]]` after `af = bx.v` built
-            // its inner element into an orphaned store, reading back len 0).  The
-            // field-read used to take the whole pass-2-only branch below, so on
-            // pass 1 its dep stayed non-empty (`vector_needs_db` false → no `elm`)
-            // while pass 2 stripped it (`vector_needs_db` true → one `elm`): a
-            // one-slot drift.  Stripping + advancing the counter on pass 1 too
-            // removes the drift.  The var-copy case (`b = a`) is untouched here —
-            // its strip stays pass-2-only (line below), since it never had the
-            // pass-1 dep-mismatch (the RHS var already owns an independent store).
-            if field_read && self.first_pass {
-                let inherited = self.vars.tp(var_nr).depend();
-                for d in inherited {
-                    self.vars.make_independent(var_nr, d);
-                }
-                if self.vector_needs_db(var_nr, &elm_tp_clone, true) {
-                    self.unique_elm_var(&lhs_parent_tp, &elm_tp_clone, var_nr);
-                }
-                return Type::Void;
-            }
-            if !self.first_pass {
-                // Break the alias.  The standard type-inference copied the RHS
-                // var's store dep onto v (making v *borrow* rhs's storage — the
-                // dangling-on-scope-exit @P292 hazard, and the no-own-store @P394
-                // crash on first assignment).  Strip rhs's deps from v so v gets
-                // its OWN store.  This is a no-op when v already owns an
-                // independent store (`v = [9]; v = a` reassignment), so that case
-                // still takes the clear+refill path below.  (Mirrors the @P295
-                // Var-to-var deep-copy dep-strip.)
-                if let Value::Var(rhs_var) = code.unspan() {
-                    self.vars.make_independent(var_nr, *rhs_var);
-                    for d in self.vars.tp(*rhs_var).depend() {
-                        self.vars.make_independent(var_nr, d);
-                    }
-                } else {
-                    // #415 — field-read RHS (`af = bx.v`): there is no rhs_var,
-                    // but `af` inherited the base's dep ({bx}) during type
-                    // resolution.  Strip af's own inherited deps so
-                    // `vector_needs_db` below sees an empty dep and allocates af
-                    // its OWN store; otherwise it takes the reassignment/clear arm,
-                    // af never owns a store, and the alias to bx's field persists.
-                    // The OpAppendVector then deep-copies the field's elements in.
-                    let inherited = self.vars.tp(var_nr).depend();
-                    for d in inherited {
-                        self.vars.make_independent(var_nr, d);
-                    }
-                }
-                // @P314 — narrow-aware element type (see `append_elem_tp`).
-                let rec_tp = Value::Int(self.append_elem_tp(&elm_tp_clone));
-                let mut stmts = Vec::new();
-                if self.vector_needs_db(var_nr, &elm_tp_clone, true) {
-                    // First assignment: v owns no store yet — allocate one.
-                    let elm_var = self.unique_elm_var(&lhs_parent_tp, &elm_tp_clone, var_nr);
-                    let db = self.insert_new(var_nr, elm_var, &elm_tp_clone, &mut stmts);
-                    self.vars.depend(var_nr, db);
-                } else {
-                    // Reassignment: v already owns a store — clear, then refill.
-                    stmts.push(self.cl("OpClearVector", std::slice::from_ref(to)));
-                }
-                // A NULLABLE destination takes the whole-value REPLACE rather than the
-                // append, for the one thing the append cannot express: an ABSENT source
-                // must leave the destination absent, not holding the empty store the alloc
-                // above just gave it.  `Stores::vector_replace` carries that rule, the same
-                // one `replace_keyed` carries for the keyed kinds — which is why the keyed
-                // sibling of this bind has been answering `b == null` correctly all along.
-                // A dense destination cannot be absent, so it keeps the append and its IR is
-                // unchanged.
-                let op = if matches!(self.vars.tp(var_nr), Type::Optional(_)) {
-                    "OpReplaceVector"
-                } else {
-                    "OpAppendVector"
-                };
-                stmts.push(self.cl(op, &[to.clone(), code.clone(), rec_tp]));
-                *code = Value::Insert(stmts);
-            }
+        if !matches!(vec_bind, VecBind::NotABind) && matches!(s_type.base(), Type::Vector(_, _)) {
+            self.lower_vec_copy_bind(code, &vec_bind, to, var_nr, &s_type, &lhs_parent_tp, false);
             return Type::Void;
         }
         // @P295 — `local_s = keyed_expr` where the LHS is a KEYED-collection

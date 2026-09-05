@@ -6,11 +6,34 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — `D-call-13` opened and closed 2026-09-05 (a generic's instance returned the argument it was handed, below); `D-call-12` opened and closed 2026-09-04 (loft#1357, the residue of
+OPEN: **0** — `D-call-14` opened and closed 2026-09-05 (a vector parameter reassigned from a variable refilled the caller's store, below); `D-call-13` opened and closed 2026-09-05 (a generic's instance returned the argument it was handed, below); `D-call-12` opened and closed 2026-09-04 (loft#1357, the residue of
 `D-call-9` under the release valgrind sweep), the same day as `D-call-10` and `D-call-11`
 (loft#1345, loft#1347), `D-call-9` (loft#1338) and `D-call-8` (loft#1337); before them
 `D-call-7` closed 2026-09-02 and `D-call-6` was opened and closed the same day by the
 reference review of chapter 31.
+
+### D-call-14 — OPENED AND CLOSED (2026-09-05): a vector parameter reassigned from a variable refilled the caller's store
+
+`(F-ParamRebind)` names two spellings — `p = [..]`, `p = other` — and says both rebind LOCALLY.
+Its oracle (`1290-a-heap-parameter-rebind-is-local-in-every-spelling`) crosses {struct,
+struct-enum} × {literal, call, another local}, and the keyed row (`1294`) carries the vector kind
+only as a literal control; the vector × `other local` cell was in neither.  Measured (QUALITY.md
+B7w): `fn f(x: vector<integer>) { va = [1, 2]; x = va; x[0] = 7 }` wrote `7` into the CALLER's
+vector on both backends — alone, through a value branch, when the rebound value was returned,
+and on every turn of a loop.  The copy lowering asks `(O-Proxy)` whether the local owns the
+store it holds; a parameter's carve-out (no `__vdb_N` of its own, to avoid an allocation) read
+as "owns", and the refill cleared the caller's store and appended into it.
+
+**Closed** in the same lowering: a parameter's first rebind mints a store of its own
+(`vec_copy_needs_db`); once rebound the local names it and the proxy answers again.  A PROMOTED
+return buffer keeps the carve-out — the caller receives the value through it.  Closing it moved
+one more thing: the Tier-0 elision then rewrote the parameter's reads onto the source, the
+loop's first-turn read ahead of the rebind included (`885-vector-hoist` answered 24 for 27);
+its "read-only local" verdict now asks that the destination be a local, since a parameter is
+defined at entry.  Guard `a-vector-parameter-reassigned-from-a-variable-rebinds-locally.loft`
+— single, returned, through a branch, twice, in a loop, and read-then-rebind — with the
+mutate-through, a self arm and a `&` parameter as the controls; falsified at faa38979 on both
+backends.  Found-via: the loft#1370 walk (D-own-35).
 
 ### D-call-13 — OPENED AND CLOSED (2026-09-05): a generic's instance returned the argument it was handed, and the tuple return leg wrote three members wrong
 

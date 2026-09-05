@@ -2465,7 +2465,7 @@ The `@FR-O-Complete` walk (B7u) moved one function from opaque to seeing-through
 hoist out of a loop body, now asks its shape question through `base()` — the nullable
 spellings were the whole finding.  loft#1362 moved one FUNCTION-half site: `scopes::scan_set`'s latest-assignment memo (`owned_refs`) reads the local's type through `base()` now, so a nullable record local has an entry for the reassignment release to read.  The projection-view marking added one on the seeing-through side (`scopes::nullable_view_locals`, which reads `function.tp(v).base()`), taking it to `702 | 345`.  Joining the `@FR-O-Complete` walk (B7u) onto @PLN153 phase 2 re-measures both rows on the tree that holds both streams: optional `713 | 356 | 5 | 352`, unspan `399 | 375 | 24` — neither branch's number, as every join so far.  @PLN153 phase 3a re-measures once more: `714 | 357 | 5 | 352` — `nstore_unwrap_report` and `convert`'s store faces read the wrapper through `Type::Optional` arms and `is_dbref`, the seeing-through side; unspan `399 | 375 | 24`.
 
-The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.  It happened again on the 2026-09-03 join — one side carried `684 | 330 | 5 | 349` and the other `687 | 331 | 5 | 351`, and the tree that holds both measures `689 | 332 | 5 | 352`; the 2026-09-03 evening join (D-bind-11 onto the #1318 tree) measured `692 | 333 | 5 | 354`, loft#1327's opaque-fn-ref clause moved one function off the opaque column, and the D-own-8 closure moved two more onto the peeled one — one arm peeled (`gen_set_first_at_tos`'s null-init) beside two new scope-pass predicates.  The tree that holds BOTH measures `694 | 337 | 5 | 352`, which is neither side's number: two branches each adding predicates cannot have their counts added, because the audit classifies FUNCTIONS and a merged body is one function however many branches touched it.  loft#1333 then moved it to `695 | 338 | 5 | 352` with `scopes::mixed_ownership_locals`, the pre-scan that asks whether a binding is assigned a VIEW on one path and a delivered collection on another; it reads `function.tp(v).base()`, so it peels the wrapper and lands on the seeing-through side, leaving the opaque column where it was.  loft#1335 moved one function the other way, from opaque to seeing-through — `697 | 341 | 5 | 351` — because `fnref_result_type` stopped listing the shapes it bridges and asks `Type::base()` / `borrow_deps` instead, which is the cure that closed it.  loft#1349 added one opaque function, `Parser::boxed_tuple_return` — `698 | 341 | 5 | 352` — which matches `Type::Tuple` bare on purpose: a nullable tuple is not a shape it boxes, so peeling there would be a wrong answer rather than a wider one.  loft#1357 added two on the seeing-through side — `700 | 343 | 5 | 352` — `Parser::lambda_text_buffer_var` and `scopes::any_text_return_buffer`, both asking which hidden attribute is a `RefVar(Text)` buffer, the one home the text-return deliveries read.  The `@FR-O-Witness` walk (B7v) added one on the opaque side — `709 | 352 | 5 | 352` — a value-branch shape guard that matches a bare heap `Type` variant to decide whether a reassignment is sunk per arm (records only; a nullable is peeled off first).
+The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.  It happened again on the 2026-09-03 join — one side carried `684 | 330 | 5 | 349` and the other `687 | 331 | 5 | 351`, and the tree that holds both measures `689 | 332 | 5 | 352`; the 2026-09-03 evening join (D-bind-11 onto the #1318 tree) measured `692 | 333 | 5 | 354`, loft#1327's opaque-fn-ref clause moved one function off the opaque column, and the D-own-8 closure moved two more onto the peeled one — one arm peeled (`gen_set_first_at_tos`'s null-init) beside two new scope-pass predicates.  The tree that holds BOTH measures `694 | 337 | 5 | 352`, which is neither side's number: two branches each adding predicates cannot have their counts added, because the audit classifies FUNCTIONS and a merged body is one function however many branches touched it.  loft#1333 then moved it to `695 | 338 | 5 | 352` with `scopes::mixed_ownership_locals`, the pre-scan that asks whether a binding is assigned a VIEW on one path and a delivered collection on another; it reads `function.tp(v).base()`, so it peels the wrapper and lands on the seeing-through side, leaving the opaque column where it was.  loft#1335 moved one function the other way, from opaque to seeing-through — `697 | 341 | 5 | 351` — because `fnref_result_type` stopped listing the shapes it bridges and asks `Type::base()` / `borrow_deps` instead, which is the cure that closed it.  loft#1349 added one opaque function, `Parser::boxed_tuple_return` — `698 | 341 | 5 | 352` — which matches `Type::Tuple` bare on purpose: a nullable tuple is not a shape it boxes, so peeling there would be a wrong answer rather than a wider one.  loft#1357 added two on the seeing-through side — `700 | 343 | 5 | 352` — `Parser::lambda_text_buffer_var` and `scopes::any_text_return_buffer`, both asking which hidden attribute is a `RefVar(Text)` buffer, the one home the text-return deliveries read.  The `@FR-O-Witness` walk (B7v) added one on the opaque side — `712 | 353 | 5 | 354` — a value-branch shape guard that matches a bare heap `Type` variant to decide whether a reassignment is sunk per arm (records only; a nullable is peeled off first).
 
 The most recent movement is loft#1327's, and it goes the right way for the ordinary reason: the
 new clause asks `is_dbref(ret_type.base())` of a fn-ref call's return, so the function it sits in
@@ -5536,6 +5536,84 @@ has no buffer, so the same body delivered its value fresh in one spelling and ra
 `agreement is not correctness` in reverse, one backend's two spellings disagreeing with each
 other.  Held FIXED and filed apart: the two-source nullable return (loft#1368) and the
 vector/keyed value-branch reassign (loft#1370).
+
+#### B7w — loft#1370 closed, and the parameter rebind the calls oracle never crossed: a vector local bound from a value branch copies what a single bind copies (2026-09-05)
+
+Picked as this branch's own deferred work: B7v fixed the RECORD reassigned from a value branch
+and filed the vector/keyed twin apart (loft#1370, `silent-wrong`), and an open issue is fixed
+before the PR by its filer.  Matrix: 33 `probe-matrix` cells and one wrong-on-purpose control,
+`--interpret` first, then both backends — {`if`, `else if`, `match`, `??`} × {dense, nullable,
+null-initialised local} × {integer, text, record elements} × {whole-variable, owned-projection,
+call, literal, mixed, index-read, block-tail, parameter-source arms} × {reassignment, first
+bind} × {straight line, loop}, the keyed twin, a parameter as the TARGET, and a forward-declared
+callee in one arm beside a nested literal (the pass-drift shape).
+
+**Findings.**
+
+- **The filed scope was half right.**  EVERY value-branch bind of a vector local aliased the
+  chosen arm, both backends: every spelling, every element kind, the nullable and the
+  null-initialised local, projection and mixed arms, parameter sources, inside a loop — and the
+  FIRST bind too whenever a wrapper block carried it (a `match`, a `??`), where a plain `if`'s
+  first bind copied through the post-parse lift.  The KEYED twin does not reproduce:
+  `OpReplaceKeyed` copies whatever the arm, and always did — the guard keeps it as the control.
+- **`x = s.v ?? va` viewed `s.v`**, first bind and reassignment alike, where `x = s.v` copies
+  (`@FR-B-Copy`: off an owned base a collection projection copies).  The `??` hoists the
+  projection into a `__ncc_N` the arm hands back as a compiler temp.
+- **A vector PARAMETER reassigned from a variable refilled the CALLER's store in place** —
+  statement form, both backends, on the old binary too.  `@FR-F-ParamRebind` names the `p =
+  other` spelling in its own text; its oracle (`1290-…`) crosses {struct, struct-enum} × {literal,
+  call, local} and carries the vector kind only as the literal spelling, so `OPEN: 0` was exactly
+  as strong as that.  The copy lowering asks `@FR-O-Proxy` whether the local owns the store it
+  holds, and a parameter's carve-out (no `__vdb_N` of its own) read as "owns".
+- **One the fix surfaced:** once the parameter rebind became a var-copy bind, the Tier-0 elision
+  rewrote every read of the parameter onto the source — the loop's first-turn read AHEAD of the
+  rebind included (`885`'s `rebind_while_reading` answered 24 for 27, both backends).  Its verdict
+  says "read-only local" and never asked that the destination be a local; a parameter is defined
+  at entry, a definition the def count does not see.
+
+**The one home.**  The vector copy lives in the parser's assignment lowering — the selector
+`classify_vec_bind` and the arm that mints or clears and appends — where the record copy lives
+in codegen, which is why B7v's record sink sits in `scopes.rs` and this one sits at the
+selector: `Parser::sink_vec_bind_into_arms` writes a value-branch bind out per arm and classifies
+every tail by the same selector, so an arm gets exactly the lowering a single bind of its tail
+has.  What that took: a copy INSIDE an arm always mints (the local carries the join's deps
+there, so the proxy cannot say what it holds — a null-initialised local was cleared through its
+sentinel); a parameter's first rebind mints (`vec_copy_needs_db`); a `??` hoist is judged by
+what it was bound from, and a temp rooted at a compiler variable (a literal's or a
+comprehension's own buffer) is not; a block that yields its own buffer is bound WHOLE, so the
+buffer stays homed with the binding; a first bind through a wrapper block is declared at the
+statement by a null `Set` the post-parse scan elides on a reassignment; a PROMOTED RETURN
+BUFFER (`is_hidden_param`) is left to the value form, because the caller receives the value
+through it and F-Ret's adopt-or-materialise is its mechanism; and the fact the return-promotion
+ladder read off the body — *bound to a branch*, `Set(v, If)`, which keeps a returned local its
+own store (`Bind`) instead of renaming it onto the buffer — is carried explicitly for a local
+the rewrite sank (`branch_sunk_vectors`), since the shape it was read from is gone.  The
+elision now asks `v_is_local`.
+
+**Verified.**  Guards `a-vector-local-bound-from-a-value-branch-copies-the-chosen-arm` (7 test
+fns, 33 cells' shapes) and `a-vector-parameter-reassigned-from-a-variable-rebinds-locally`
+(with mutate-through, a self arm and a `&` parameter as the controls), each `make falsify`'d at
+faa38979 on both backends.  Corpus IR census: 20 of 1260 files moved, two of them the new
+guards; every one green on both backends under `LOFT_STRICT_STORES=1 LOFT_POISON=1` and
+`LOFT_NATIVE_LEAK_CHECK=1`.
+
+**Method.**  The census earned its place three times over in one walk, each a class the 33 cells
+could not see: (1) `is_argument` is also the local PROMOTED to the caller's return buffer, so
+"a parameter mints" and "an arm mints" both stole the buffer the caller was to receive (`1081`,
+`1321`, `85-*`, `905`, `link-*` — a freed-store read and a leak); (2) sinking a literal arm as
+`Set(x, _vec_N)` inside a void block homed the literal's store in that block, freed at its end
+while `x` still named it; (3) the elision above; (4) the one the `make ci` wrap suite found
+after the census read green — its leak gate runs the corpus with the program-exit accounting
+my verification did not: the return-promotion ladder reads *bound to a branch* off pass-1 IR,
+the rewrite had removed that shape, so a returned join was RENAMED onto the return buffer on
+pass 1, and on pass 2 the rewrite declined the now-hidden parameter and assigned the lift's
+temps into the buffer var, which nobody freed (`1081`).  Two passes, two answers: the fact is
+now carried by name across them.  Eight files red on the first census, three classes named by
+the second, zero on the third, one more from the gate — a differ list from an intermediate
+binary is stale the moment the code moves, and a census verified under one leak gate has not
+been verified under the other.  The issue's keyed claim did not reproduce: the
+first cell of any walk is the filed reproducer, run, not read.  Held FIXED and named: a promoted
+return buffer reassigned from a value branch keeps the value form.
 
 #### B2 — open, and the owner's call
 
