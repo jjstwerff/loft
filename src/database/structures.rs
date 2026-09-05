@@ -228,6 +228,35 @@ impl Stores {
                     if fields.get(field as usize).is_some_and(|f| !f.other_indexes.is_empty())
             );
         self.insert_record(&d, rec, tp, shares_records);
+        self.link_siblings(data, rec, parent_tp, field);
+    }
+
+    /// Put a record ONE member of a linked group already holds into every OTHER member —
+    /// the sibling half of [`Self::record_finish`] on its own (`@FR-Col-Group`: a record
+    /// entering through any member is in every member).
+    ///
+    /// An element-level write through the vector member — `w.es[i] = e`, or the `Some`
+    /// half of `w.es[i] = e` on a `vector<E?>` — keeps the record's IDENTITY and changes
+    /// its contents, so the keyed views that index it by key are unlinked before the write
+    /// and handed the record again after it.  The primary already holds it, and a
+    /// `record_finish` here would append the record to the vector a second time.
+    /// `OpLinkRecord` is the op that reaches this, emitted by the parser beside the write.
+    pub fn link_record_siblings(&mut self, data: &DbRef, rec: &DbRef, parent_tp: u16, field: u16) {
+        // A record that is not there links nowhere: the element place of an out-of-range
+        // index reads null, and the write before this was already dropped on it.  Tested
+        // BEFORE any store is resolved — an absent read answers `DbRef::NULL`, whose store
+        // number names no store.
+        if rec.rec == 0 || data.rec == 0 {
+            return;
+        }
+        let (parent_tp, data_owned) = self.nullable_field_parent(data, parent_tp, field);
+        self.link_siblings(&data_owned, rec, parent_tp, field);
+    }
+
+    /// The sibling walk itself, over a parent already redirected through
+    /// [`Self::nullable_field_parent`]: every field named by `other_indexes` is handed
+    /// the record as a SECONDARY insert (index-only, never freeing what it displaces).
+    fn link_siblings(&mut self, data: &DbRef, rec: &DbRef, parent_tp: u16, field: u16) {
         if field != u16::MAX
             && let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
                 self.types[parent_tp as usize].parts.clone()

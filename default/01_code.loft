@@ -1452,6 +1452,14 @@ fn OpClearKeyed(dest: reference, tp: const u16);
 // per-RECORD loop lives here, where the records exist.
 fn OpIndexGroup(primary: reference, view: reference, tp: const u16);
 #rust"s.database.index_group_records(&@primary, &@view, @tp);"
+// A record that field `fld` of the struct at `data` ALREADY holds is put into every OTHER
+// member of that field's linked group — the sibling half of `Stores::record_finish` on its
+// own.  An element-level write through the vector member (`w.es[i] = e`) keeps the record's
+// identity and changes its contents, so the parser unlinks it from the keyed views before the
+// write and emits this after it; `OpFinishRecord` would append it to the vector a second time.
+fn OpLinkRecord(data: reference, rec: reference, parent_tp: const u16, fld: const u16);
+#rust"s.database.link_record_siblings(&@data, &@rec, @parent_tp, @fld);"
+#impure(parent_write)
 // loft#1159 — fill the keyed collection `dest` with a deep COPY of every record the plain
 // vector `src` holds, each placed by its own key.  A vector LITERAL in a keyed position is
 // parsed into per-element inserts; a vector VALUE (`h.a = rows()`, `h.a += rows()`) is one

@@ -248,10 +248,14 @@ tests/scripts/48b-spatial-slice.loft (the asserted box/open/cap slices). CAVEATS
 ```
   (Col-Group)   two or more collections over ONE element type in ONE struct are several ROUTES
                 to a single record set, provided at least one of them is keyed.  A record
-                entering through any member is in every member, by any write route.  Membership
-                is a fact about the PAIR — not about declaration order, not about which member
-                is written first, and not about whether a MEMBER itself is nullable
-                (hash<E[k]>? is a collection over E in that struct, so it is a member).
+                entering through any member is in every member, and a record LEAVING through
+                any member leaves every member, by any write route — the element-level writes
+                through the vector member included (v[i] = e, v[i] = null, v.remove(i),
+                e#remove), where a replaced record keeps its identity and is indexed again
+                under the key it now carries.  Membership is a fact about the PAIR — not about
+                declaration order, not about which member is written first, and not about
+                whether a MEMBER itself is nullable (hash<E[k]>? is a collection over E in
+                that struct, so it is a member).
                 The members must share one element LAYOUT, though: a nullable element is the
                 tagged __nullable<E> (a discriminant plus the payload) and a dense one is E
                 itself, so a dense vector<E> and a vector<E?> cannot both be routes to one
@@ -263,6 +267,11 @@ tests/scripts/48b-spatial-slice.loft (the asserted box/open/cap slices). CAVEATS
                 set and b and h are one record set, a record entering through a is in h, and a
                 record in h is in b.  Two members neither of which is keyed are INDEPENDENT
                 exactly when the struct has NO keyed collection over their element type.
+  (Col-Group-Dup) a key already held by a keyed member, entering AGAIN through ANY member,
+                displaces the OLDER record from every keyed member and leaves it in the
+                vector, which has no key to refuse on: es += [E{k:7}]; es += [E{k:7,n:"dup"}]
+                reads len(es) = 2, len(by_k) = 1, by_k[7].n = "dup", and the same through
+                by_k — the group's dedup is unlink-only, never a free (loft#1226).
 ```
 
 Seven fixes are all instances of this one rule, which is why it is written here rather than left
@@ -319,11 +328,32 @@ so it reaches the group exactly as the direct spelling does (loft#1160, and loft
 the one route still outside it, and not by omission — it picks its origin from the runtime tag,
 so there is no one field to resolve it to.
 
+**The element-level writes through the vector member were the routes that reached no
+chokepoint** (2026-09-05, the `@FR-Col-Group` walk).  Every route that ADDS a record reaches
+`record_finish`; a keyed removal and `e#remove` emit the unlinks (loft#900, loft#903).  But
+`w.es[0] = E{k:11}` copied INTO the record in place, so the views kept it under the hash of
+the OLD key — `by_k[11]` null, `by_k[7]` null, `len(by_k)` still 2; `w.es[0] = null` on a
+`vector<E?>` left the view one entry long; `w.es.remove(0)` left the removed key findable and
+a re-add of it counted twice.  Silent, both backends, one nesting level down too.  Now one
+parser home, `Parser::group_elem_write`, binds the element once, emits
+`Parser::group_sibling_unlinks` (the loop the two removal spellings already carried, now
+shared), the write, and — for a replace — `OpLinkRecord`, which is `Stores::record_finish`'s
+sibling half on its own (`link_record_siblings`).  The temporary is typed as the element PLACE
+resolves, deps included: without them the native emitter reads the bind as owning and copies.
+
 *Anchors:* `Stores::field` (`src/database/types.rs`, the pairing test + `other_indexes`);
+`Parser::collection_groups` (`src/parser/objects.rs`, the parser's derivation of the same
+question — measured agreeing with `Stores::field` on nine shapes: a forward-declared element,
+an alias, a variant, a nullable member, a nullable element, three members, two groups in one
+struct, a nullable vector member, two plain vectors);
 `Parser::link_shared_nullable_views` (`src/parser/definitions.rs`, the nullable-element
 rewrite); `Stores::record_finish` (`src/database/structures.rs`, the per-record sibling
-insert); `Stores::insert_keyed_copy` (`src/database/search.rs`, the one keyed insert both the
+insert) and `Stores::link_record_siblings` (its sibling half alone, `OpLinkRecord`);
+`Parser::group_sibling_unlinks` / `Parser::group_elem_write` (`src/parser/collections.rs`, a
+record leaving, and the element-level writes through the vector member);
+`Stores::insert_keyed_copy` (`src/database/search.rs`, the one keyed insert both the
 point write and the bulk fill take); DATABASE.md § Clearing one member of a linked group;
+tests/scripts/a-group-element-written-through-the-vector-member-reaches-every-member.loft;
 tests/scripts/a-keyed-view-joins-a-nullable-element-vector.loft;
 tests/scripts/a-collection-group-does-not-depend-on-declaration-order.loft;
 tests/scripts/1158-a-group-forms-whichever-member-is-declared-first.loft;

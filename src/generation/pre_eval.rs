@@ -500,6 +500,7 @@ impl Output<'_> {
             name,
             "OpNewRecord"
                 | "OpFinishRecord"
+                | "OpLinkRecord"
                 | "OpGetRecord"
                 | "OpIterate"
                 | "OpDatabase"

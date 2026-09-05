@@ -179,6 +179,14 @@ assignment and on a later one, for a nullable `x`, and inside a loop.  Assigning
 to a vector PARAMETER now rebinds the parameter locally instead of overwriting the caller's
 vector in place, as the language reference already promised.
 
+**Replacing, nulling or removing one element of a list keeps its lookups in step.**  A struct
+with a `vector<E>` and a `hash<E[k]>` over the same records is one record set with two routes,
+and `w.es += [e]` has kept `w.by_k` current for a long time.  `w.es[0] = E { k: 11 }`,
+`w.es[0] = null` and `w.es.remove(0)` did not: the lookup went on answering for the old key,
+`len(w.by_k)` counted a record that was gone, and re-adding a removed key counted it twice —
+on both backends, and one struct deeper (`w.rooms[0].items[0] = …`).  Each of those now
+updates every keyed sibling, and `v.remove(i)` answers `true` or `false` as documented.
+
 **A value kept in a `struct?` behaves the same whether it came from a variable, a call, or a
 branch.**  A few store-sharing corners are gone: a nullable local set from a function that hands
 back one of its arguments now gets its own copy (writing through it no longer changes the

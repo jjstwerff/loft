@@ -5617,6 +5617,92 @@ been verified under the other.  The issue's keyed claim did not reproduce: the
 first cell of any walk is the filed reproducer, run, not read.  Held FIXED and named: a promoted
 return buffer reassigned from a value branch keeps the value form.
 
+#### B7x — `@FR-Col-Group` walked: the three element-level writes through the vector member that reached no chokepoint, and a shape the rule reads one way and the pairing test another (2026-09-05)
+
+Picked over `@FR-O-Move` (16 sites) because every one of those sites lives in the return-delivery
+code the sibling's @PLN153 branch is rewriting (+539 in `control.rs`, +834 in `scopes.rs`), while
+the group rule's nine sites sit in four files that branch barely touches.  Split into three
+questions: **which fields form a group** (`Stores::field`, `Parser::collection_groups`,
+`link_shared_nullable_views` — three derivations), **which write routes maintain every member**
+(`Stores::record_finish` for adding; the unlink loop `keyed_group_remove` and `loop_group_remove`
+each carried for leaving), and **which removal routes free once**.  Matrix: 31 `probe-matrix`
+cells and one wrong-on-purpose control, `--interpret` first, then native — a forward-declared
+element in both orders, index write (replace / null / replace into a null slot, dense and
+`vector<E?>` holders), `remove(i)` (first, last, out of range, in a loop, through a parameter),
+three and four members, two groups in one struct, nested under `vector<R>` and `vector<R?>`, a
+struct returned from a callee, a struct copy, a nullable vector member, a type alias, a whole
+value from a local, a variant-typed holder, a struct-enum element, a JSON round trip, two locals,
+a duplicate key through either route, a local record mutated after entry, a struct literal, and
+the two-vectors-plus-hash shape; plus nine lint shapes read against the db's answer.
+
+**Findings.**
+
+- **Every element-level write through the VECTOR member left the keyed views stale**, both
+  backends, pre-existing (A/B'd against the main-based build): `w.es[0] = E{k:11}` copied INTO
+  the record in place, so `by_k` held it under the hash of the OLD key — `by_k[11]` null,
+  `by_k[7]` null, `len(by_k)` still 2; `w.es[0] = null` on a `vector<E?>` left the view one
+  entry long; `w.es.remove(0)` left the removed key findable and a re-add of it counted twice
+  (`len` 3 over 2 records); the same one nesting level down.  Silent every time — a `len` that
+  disagrees with its own lookups is a legal reading of a group that happens to hold that many.
+  `e#remove` (loft#903) and the keyed removal (loft#900) were the only LEAVING routes covered.
+- **The two derivations of group formation agree.**  Nine declaration shapes — forward-declared
+  element, alias, variant, `hash<E[k]>?`, `vector<E?>`, three members, two groups interleaved,
+  `vector<E>?`, two plain vectors — and `linked-group-apart` fired exactly where the db linked.
+  A negative result, now measured.
+- **The rule reads a shape one way and the pairing test another** (loft#1375, `D-col-1` OPEN):
+  `{ a: vector<E>, b: vector<E>, h: hash<E[k]> }` — each vector links to `h` and never to the
+  other, so `h` holds the union and each vector only its own entries (`via a: a=2 b=0 h=2`).
+  Contrived, `wa:clean`; which vector HOLDS is a design call, filed for the sibling and left out
+  of the guard so its green is not read as covering it.
+- **A key write through the vector member is refused with a clear message** (`Cannot write to
+  key field E.id — create a record instead`), through `&` too; the same shape the language
+  reference documents for the keyed spelling.  A struct-enum element cannot be keyed at all,
+  refused at the declaration naming the variants.  Both SEE/SAY-clean.
+- **`v.remove(i)` typed `void`** while STDLIB.md and the op both said `boolean`: `ok =
+  v.remove(2)` failed with *Cannot format type void*.  Additive; now `boolean`.
+- **DATABASE.md carried two paragraphs contradicting their own neighbours** — loft#1152 "still
+  open" beside the section describing its fix, and "group formation is still order-dependent"
+  beside loft#1158's guard.  Both rewritten.
+
+**The one home.**  `Parser::group_elem_write` (`src/parser/collections.rs`): the element is
+bound ONCE to a temporary (`hoist_index_arg` keeps the index single-evaluation), every keyed
+sibling unlinks it through `Parser::group_sibling_unlinks` — the loop both removal spellings
+carried by hand, now shared — the write runs against the temporary, and a replace ends with
+`OpLinkRecord` → `Stores::link_record_siblings`, `record_finish`'s sibling half factored out
+(the primary already holds the record; `record_finish` would append it a second time).  Reached
+from the three `towards_set` arms (null write, nullable convert, `copy_ref`) and from
+`vector_operations` for `remove`.  The temporary is typed as the element PLACE resolves, deps
+included — typed from the vector's element alone the native emitter read `found = v[i]` as an
+owning bind and deep-copied the record, the unlinks ran on the copy, and the run died in
+`store.rs` with a corrupt reference (`@FR-B-Copy` / `@FR-O-NoDiverge`, the interpreter had
+passed).  `holder_type` reads the field type an `OpGetField` carries as its third operand and
+resolves a vector-element base, so a nested group (and one under `vector<R?>`) is found.
+`link_record_siblings` tests `rec.rec == 0` before resolving any store (an out-of-range place
+reads null; the sibling's absent-read change makes a store resolved first a panic).  Rule text
+extended with the LEAVING clause and `(Col-Group-Dup)` — a duplicate key through ANY member
+displaces the older record from the keyed members and leaves it in the vector (measured through
+both routes).
+
+**Verified.**  Guard `a-group-element-written-through-the-vector-member-reaches-every-member`
+(19 rows, every row its own element type), `make falsify`'d at 2b992851 on both backends.
+Targeted suites `store` 262, `parser` 1514, `codegen` 257, `runtime` 181, `scopes` 619 — all
+green; fmt, clippy, `cargo check --no-default-features` clean; `index/target_surface.json`
+regenerated (97 builtins) and `surface-check` in sync.  Corpus IR census, 1270 files against
+the falsify control of 2b992851: 12 structural moves after normalising the stdlib line numbers
+the new declaration shifted, 11 of them exactly the `remove` retyping (`drop OpRemoveVector` +
+`FreeStack(discard)`) and the twelfth the new guard; all 44 files whose text moved at all green
+on both backends under `LOFT_STRICT_STORES=1 LOFT_POISON=1` / `LOFT_NATIVE_LEAK_CHECK=1`.
+
+**Method.**  The first cell of every route was its filed spelling, RUN: the keyed-dup clause was
+written only after the keyed route was measured, not inferred from the vector route.  A census
+baseline built from a control needs the control's OWN `default/` — the work tree's stdlib
+declares an op the old table does not have, and a positional op table would have dispatched
+every later op one slot off; and a census that compares source-path comments reports the whole
+corpus moved.  Held FIXED and named: `Parser::field_site` (expressions.rs) and
+`Parser::keyed_field_site` + `holder_type` (collections.rs) are still two derivations of *which
+struct field does this collection expression name*; a merge threads the assign's `parent_tp`
+into the removal sites and has no defect behind it today.
+
 #### B2 — open, and the owner's call
 
 | decision | evidence | why it is not mine to take |

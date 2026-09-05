@@ -850,14 +850,7 @@ impl Parser {
         // freed once; this is the flag that makes that true.
         self.vars.set_skip_free(found);
         let mut ops = vec![Value::Set(found, Box::new(get_rec.clone()))];
-        for (off, coll_tp, _) in &members {
-            if *off == byte_off {
-                continue;
-            }
-            let field = Self::keyed_field_at(coll, *off);
-            let tp = i32::from(coll_tp | crate::database::CLEAR_KEYED_VIEW);
-            ops.push(self.cl("OpHashRemove", &[field, Value::Var(found), Value::Int(tp)]));
-        }
+        ops.extend(self.group_sibling_unlinks(coll, byte_off, &members, &Value::Var(found)));
         ops.push(self.cl(
             "OpHashRemove",
             &[coll.clone(), Value::Var(found), Value::Int(db_tp)],
@@ -890,20 +883,124 @@ impl Parser {
         if members.len() < 2 {
             return remove;
         }
-        let mut ops = Vec::new();
-        for (off, coll_tp, _) in &members {
+        let mut ops = self.group_sibling_unlinks(coll, byte_off, &members, &Value::Var(elem_var));
+        ops.push(remove);
+        Value::Insert(ops)
+    }
+
+    /// The unlinks that let a record LEAVE every other member of its linked group — one
+    /// `OpHashRemove` with the [`crate::database::CLEAR_KEYED_VIEW`] bit per sibling, which
+    /// unlinks and never frees, because the member the operation is spelled through (or the
+    /// write that follows) owns what happens to the record.
+    ///
+    /// The one home for that loop (`@FR-Col-Group`: a record leaving through any member
+    /// leaves every member).  Every removal spelling and every element-level write through
+    /// the vector member emits it: `coll[key] = null`, `e#remove`, `v.remove(i)`, `v[i] = e`
+    /// and `v[i] = null`.  Each unlink reads the record's KEY out of the record, so the caller
+    /// runs these before anything changes or frees it.
+    fn group_sibling_unlinks(
+        &mut self,
+        coll: &Value,
+        byte_off: u16,
+        members: &[(u16, u16, bool)],
+        rec: &Value,
+    ) -> Vec<Value> {
+        let mut ops = Vec::with_capacity(members.len());
+        for (off, coll_tp, _) in members {
             if *off == byte_off {
                 continue;
             }
             let field = Self::keyed_field_at(coll, *off);
             let tp = i32::from(coll_tp | crate::database::CLEAR_KEYED_VIEW);
+            ops.push(self.cl("OpHashRemove", &[field, rec.clone(), Value::Int(tp)]));
+        }
+        ops
+    }
+
+    /// An element place of a linked group's VECTOR member — `w.es[i]` as the
+    /// `OpVectorRef(OpGetField(base, off), i)` it resolved to — with the facts every
+    /// element-level write through it needs.  `None` when the vector is not a group member.
+    fn vector_group_elem_site(&self, to: &Value) -> Option<GroupElemSite> {
+        let Value::Call(nr, args) = to.unspan() else {
+            return None;
+        };
+        if !matches!(
+            self.data.def(*nr).name(),
+            "OpVectorRef" | "OpVectorRefNullable"
+        ) {
+            return None;
+        }
+        let coll = args.first()?.unspan().clone();
+        let (struct_tp, byte_off) = self.keyed_field_site(&coll)?;
+        let members = self.database.keyed_group_members(struct_tp, byte_off);
+        if members.len() < 2 {
+            return None;
+        }
+        let Value::Call(_, gf_args) = &coll else {
+            return None;
+        };
+        let base = gf_args.first()?.clone();
+        Some(GroupElemSite {
+            coll,
+            base,
+            struct_tp,
+            byte_off,
+            members,
+        })
+    }
+
+    /// An element-level write through the vector member of a linked group, made to act on
+    /// the group: the element is bound ONCE (its index evaluated once), unlinked from every
+    /// keyed sibling, written by `build`, and — when `relink` — handed back to the siblings
+    /// through `OpLinkRecord`, which indexes it under the key it now carries.
+    ///
+    /// `@FR-Col-Group` says a record entering through any member is in every member and a
+    /// record leaving through any member leaves every member, by any write route.  The
+    /// per-record chokepoint `Stores::record_finish` covers every route that ADDS a record;
+    /// a write that replaces, nulls or removes an element the vector already holds reached
+    /// no such point, so the views kept an entry under the old key: `w.es[0] = E{id:11}`
+    /// left `by_id[11]` null and `by_id[7]` null with `len(by_id)` still 2, and
+    /// `w.es.remove(0)` left the removed key findable and a re-add counted twice — silent,
+    /// both backends, the same for a `vector<E?>` holder and one nesting level down.
+    ///
+    /// `build` receives the bound element (a `Var`) and the element place with its index
+    /// hoisted, for a write that needs the index rather than the element (`remove`).
+    /// `None` when `to` is not a group member's element, so the caller keeps its own form.
+    pub(crate) fn group_elem_write(
+        &mut self,
+        to: &Value,
+        elem_tp: &Type,
+        relink: bool,
+        build: impl FnOnce(&mut Self, Value, &Value) -> Value,
+    ) -> Option<Vec<Value>> {
+        let site = self.vector_group_elem_site(to)?;
+        let (to, mut ops) = self.hoist_index_arg(to.clone());
+        // The element is a BORROW of the vector, exactly as `keyed_group_remove`'s temporary
+        // is a borrow of the collection: it must not be freed at scope exit.
+        let found = self.vars.work_refs(elem_tp, &mut self.lexer);
+        self.change_var_type(found, elem_tp);
+        self.vars.mark_inline_ref(found);
+        self.vars.set_skip_free(found);
+        ops.push(Value::Set(found, Box::new(to.clone())));
+        ops.extend(self.group_sibling_unlinks(
+            &site.coll,
+            site.byte_off,
+            &site.members,
+            &Value::Var(found),
+        ));
+        ops.push(build(self, Value::Var(found), &to));
+        if relink && let Some(fld) = self.database.field_index_at(site.struct_tp, site.byte_off) {
             ops.push(self.cl(
-                "OpHashRemove",
-                &[field, Value::Var(elem_var), Value::Int(tp)],
+                "OpLinkRecord",
+                &[
+                    site.base.clone(),
+                    Value::Var(found),
+                    Value::Int(i32::from(site.struct_tp)),
+                    Value::Int(i32::from(fld)),
+                ],
             ));
         }
-        ops.push(remove);
-        Value::Insert(ops)
+        Some(ops)
     }
 
     /// The `(struct type, byte offset)` of the struct FIELD a collection expression
@@ -942,11 +1039,57 @@ impl Parser {
                 (tp != u16::MAX).then_some(tp)
             }
             Value::Call(nr, args) if self.data.def(*nr).name() == "OpGetField" => {
+                // The read carries the field's own type id as its third operand, which names
+                // what a NESTED base evaluates to without re-walking the schema — and without
+                // mis-walking it: a field inside a `vector<S?>` element is reached through the
+                // `Some` payload, two reads the schema does not list as fields of `S`.
+                if let Some(Value::Int(tp)) = args.get(2).map(Value::unspan)
+                    && *tp >= 0
+                    && (*tp as u16) != u16::MAX
+                {
+                    return Some(*tp as u16);
+                }
                 let outer = self.holder_type(args.first()?)?;
                 let Value::Int(off) = args.get(1)?.unspan() else {
                     return None;
                 };
                 self.database.field_content_at(outer, *off as u16)
+            }
+            // An ELEMENT of a vector — `rooms[0].items` — is a record of the vector's element
+            // type; a `vector<S?>` element is the dense `S` its payload holds.
+            Value::Call(nr, args)
+                if matches!(
+                    self.data.def(*nr).name(),
+                    "OpVectorRef" | "OpVectorRefNullable" | "OpGetVector" | "OpGetVectorNullable"
+                ) =>
+            {
+                let elem = self.vector_element_type(args.first()?)?;
+                Some(self.database.key_owner(elem))
+            }
+            _ => None,
+        }
+    }
+
+    /// The database type of the ELEMENT of a vector expression — a local, or a struct field
+    /// reached through [`Self::holder_type`].
+    fn vector_element_type(&self, vec: &Value) -> Option<u16> {
+        match vec.unspan() {
+            Value::Var(v) => {
+                let Type::Vector(inner, _) = self.vars.tp(*v).base() else {
+                    return None;
+                };
+                let d = self.data.type_def_nr(inner.base());
+                if d == u32::MAX {
+                    return None;
+                }
+                let tp = self.data.def(d).known_type();
+                (tp != u16::MAX).then_some(tp)
+            }
+            Value::Call(nr, args) if self.data.def(*nr).name() == "OpGetField" => {
+                let vec_tp = self.holder_type(vec)?;
+                let _ = (nr, args);
+                let elem = self.database.content(vec_tp);
+                (elem != u16::MAX).then_some(elem)
             }
             _ => None,
         }
@@ -1175,6 +1318,11 @@ impl Parser {
             && !matches!(to, Value::Var(_))
         {
             let syn = *syn;
+            if let Some(ops) = self.group_elem_write(to, f_type, false, |p, t, _| {
+                p.build_nullable_set_null(syn, t)
+            }) {
+                return Value::Insert(ops);
+            }
             return self.build_nullable_set_null(syn, to.clone());
         }
         // loft#1071 — the same for a USER struct-enum inline slot (`b.s = null` where
@@ -1212,6 +1360,12 @@ impl Parser {
             && self.needs_nullable_wrap(*syn, src_tp)
         {
             let syn = *syn;
+            if let Some(ops) = self.group_elem_write(to, f_type.base(), true, |p, t, _| {
+                let write = p.emit_nullable_slot_write(syn, &t, val.clone());
+                v_block(write, Type::Void, "nullable_elem_convert")
+            }) {
+                return Value::Insert(ops);
+            }
             let write = self.emit_nullable_slot_write(syn, to, val.clone());
             return v_block(write, Type::Void, "nullable_elem_convert");
         }
@@ -1252,6 +1406,11 @@ impl Parser {
         {
             if std::env::var("LOFT_PROBE_TS").is_ok() {
                 eprintln!("TS   -> copy_ref branch TAKEN");
+            }
+            if let Some(ops) = self.group_elem_write(to, f_type.base(), true, |p, t, _| {
+                p.copy_ref(&t, val, f_type.base())
+            }) {
+                return Value::Insert(ops);
             }
             return self.copy_ref(to, val, f_type.base());
         }
@@ -6493,4 +6652,15 @@ fn replace_var_in_ir(val: &mut Value, target: u16, replacement: &Value) {
         // synthetic value; the parser walker never produces or sees it.
         Value::RawExpr(_) => {}
     }
+}
+
+/// One element place of a linked group's VECTOR member, as [`Parser::group_elem_write`]
+/// needs it: the member (`coll`, an `OpGetField` read), the struct it is read from (`base`),
+/// that struct's type and the member's byte offset, and the whole group.
+struct GroupElemSite {
+    coll: Value,
+    base: Value,
+    struct_tp: u16,
+    byte_off: u16,
+    members: Vec<(u16, u16, bool)>,
 }

@@ -10,6 +10,31 @@ All notable changes to the loft language and interpreter.
 ## [Unreleased]
 
 ### A linked group's members must share one element layout (2026-09-06, loft#1385, D-col-2, C117)
+
+A struct holding BOTH a dense `vector<E>` and a `vector<E?>` beside a keyed member split into
+two groups — the dense member fell out of its own group, silently, `len` of the member that
+never received the record being a legal `0`.
+
+It is a conflict between two rules, not a gap in one.  `(Col-Group)` said membership is "not
+about whether the element is dense or nullable"; `(N-Dense)` says a `vector<E>`'s elements are
+non-null unless the author wrote `vector<E?>`.  One record set that may hold absence cannot be
+read through a non-null element type, and the records are not the same shape — a nullable
+element is the tagged `__nullable<E>`, a dense one is `E`.
+
+Both silent answers were measured.  The obvious fix — comparing the element through
+`Stores::key_owner`, so the rewritten keyed member and the dense vector compare equal — DOES
+form the group both ways; the dense member then receives a record and MISREADS it (`a[0].n`
+answered 7, `a[0].k` answered 2, the `Some` discriminant), which is loft#1134's misread and
+worse than the zero it replaces.  So the declaration is declined where the group would form
+(`Parser::refuse_mixed_nullability_group`, in the parser before either membership derivation
+runs, leaving the B7x agreement census untouched), with a message naming both cures.
+`(Col-Group)` now states the layout condition, and the declined alternative — the group
+adopting the tagged layout with tag-aware dense reads — is C117 in DESIGN_DECISIONS.md.
+
+Fires in all four declaration orders.  Guards: the `@EXPECT_ERROR` cell and a controls twin
+whose four shapes each differ from the refused one by exactly one thing — no keyed member (so
+no group forms), all-nullable, all-dense, and a member's own `?`.  `Fixes #1385`.
+
 ### loft#1386: a value-position `match` needs a value from every arm (2026-09-06)
 
 `@FR-F-Block` discards a block's value *"only where the BLOCK itself is a statement — a
@@ -145,32 +170,6 @@ an inferred local `vector<u8>` on pass 1 and `vector<integer>` on pass 2.  Guard
 `@falsified-at: 964bab93`.
 
 
-### loft#1378: a generic at a struct in a reference cycle no longer kills the process (2026-09-06)
-
-A struct holding BOTH a dense `vector<E>` and a `vector<E?>` beside a keyed member split into
-two groups — the dense member fell out of its own group, silently, `len` of the member that
-never received the record being a legal `0`.
-
-It is a conflict between two rules, not a gap in one.  `(Col-Group)` said membership is "not
-about whether the element is dense or nullable"; `(N-Dense)` says a `vector<E>`'s elements are
-non-null unless the author wrote `vector<E?>`.  One record set that may hold absence cannot be
-read through a non-null element type, and the records are not the same shape — a nullable
-element is the tagged `__nullable<E>`, a dense one is `E`.
-
-Both silent answers were measured.  The obvious fix — comparing the element through
-`Stores::key_owner`, so the rewritten keyed member and the dense vector compare equal — DOES
-form the group both ways; the dense member then receives a record and MISREADS it (`a[0].n`
-answered 7, `a[0].k` answered 2, the `Some` discriminant), which is loft#1134's misread and
-worse than the zero it replaces.  So the declaration is declined where the group would form
-(`Parser::refuse_mixed_nullability_group`, in the parser before either membership derivation
-runs, leaving the B7x agreement census untouched), with a message naming both cures.
-`(Col-Group)` now states the layout condition, and the declined alternative — the group
-adopting the tagged layout with tag-aware dense reads — is C117 in DESIGN_DECISIONS.md.
-
-Fires in all four declaration orders.  Guards: the `@EXPECT_ERROR` cell and a controls twin
-whose four shapes each differ from the refused one by exactly one thing — no keyed member (so
-no group forms), all-nullable, all-dense, and a member's own `?`.  `Fixes #1385`.
-
 ### A struct field is a container of its own: (B-Disturb) asks which field grew (2026-09-06, loft#1384)
 
 loft#1373 could not tell `w.a` from `w.b` and gave the case up rather than get it wrong:
@@ -269,44 +268,6 @@ is outside it — so a four-file diff, five green subject suites and a green fal
 clean while a library was broken.  Control added to the guard:
 `a_sibling_fields_growth_does_not_disturb_this_view`.  `Refs #1384`.
 
-### loft#1382: a statement `if` discards EITHER arm's value (2026-09-06)
-
-`@FR-F-Block` discards a block's value *"only where the BLOCK itself is a statement — a
-`;`-terminated one"*, and `@FR-F-Drop` adds that the work still runs.  Neither says which SIDE
-of an `if` the discarded value sits on, so both orders are statements.  Only one compiled: a
-void THEN arm makes the expected type `void`, which accepts any else arm, while a void ELSE
-arm reached the arm-agreement gate as `void ⤳ integer`, licensed by nothing.
-
-Position is knowable only by the caller — `parse_block`'s statement loop is what sees the `;`
-— so it is handed down: a one-token peek marks a statement that BEGINS with `if`/`match`,
-`parse_if` takes and clears it (an `else if` chain recurses through `parse_if_expecting` and
-keeps it; a value-`if` nested in a statement one does not inherit it), and the gate reads it.
-
-Three things constrain it, each found by the suite rather than by reasoning:
-
-* A leading `if` does not prove statement position — a function TAIL begins its statement too,
-  and there the arms must still agree (`parse_errors::wrong_if`).  Looking AHEAD for the `;`
-  is the obvious answer and is wrong: scanning to the end of the construct re-lexes it, and
-  reverting left the parser mis-positioned on 250 tests.  So the gate RECORDS the mismatch and
-  the statement loop reports it unless a `;` followed.  Recording TYPES rather than a rendered
-  message keeps `validate_convert`'s two-defs-one-name case (loft#1094) intact.
-* Only a VOID arm.  The corpus pins `if c { 2 } else { "a" };` as a refusal — two VALUES of
-  different types is a mistake wherever it sits.
-* Position AND a void arm together.  Keying on the arm type ALONE breaks twenty tests:
-  `Type::Void` on an arm is also what a block reports when its value travels through a BUFFER.
-
-The arm keeps its OWN type in statement position, which the native side needs: loft#1381's
-discard gate fires on exactly one arm being void, and handing it the then arm's type made both
-read non-void.  `arm_result` also learned to type a nested chain-`if` — `infer_type` does not
-answer for one, so the outer gate declined while the inner had already discarded, leaving a
-value arm beside a `()` one.
-
-Nine cells on both backends.  It also restores the statement `else if` chain that
-loft#1379/#1380's arm conversion had narrowed.
-
-
-### loft#1368: a return that may borrow one of two sources is FRESH (2026-09-06)
-### A value-`if` is not a coalesce, and an `else if` chain converts at its arms (2026-09-06, `@FR-E-Uncomp-NN` walk, loft#1379 / loft#1380)
 ### A statement `if` discards what its arms yield, on `--native` too (2026-09-06, loft#1381)
 
 `(F-Block)` says a block's value is discarded "where the BLOCK itself is a statement — a
@@ -673,6 +634,29 @@ matrix moved on exactly those seven cells and nowhere else; `scripts/introspect_
 the corpus (stderr included) reads `DIFFERENT 16 of 1272` — every one a stderr line and none an emission: the thirteen corpus files that gained a warning (nine nullable indexes after a `find`, three `null` keys, one `null` into a vector field), reviewed one by one, and the three new guards, which differ by construction; the admitting-faces guard is silent on both
 builds with every value pinned.  `(N-Store)` in `formal/types.md` now names its slots and
 its non-stores.  `Fixes #1366`.
+
+
+### An element-level write through a group's vector member acts on the group (2026-09-05, `@FR-Col-Group` walk, D-col-1 opened)
+
+`w.es[i] = e` copied into the element record IN PLACE, `w.es[i] = null` cleared its payload,
+`w.es.remove(i)` unlinked the vector slot — none reached `Stores::record_finish` (which only
+adds) or the unlink loop the keyed removal carries, so every keyed sibling kept the record
+under its old key: `by_k[11]` null with `len(by_k)` still 2, a nulled record counted, a
+removed key findable and re-added twice.  Silent, both backends, nested too.  Now
+`Parser::group_elem_write` (`src/parser/collections.rs`) binds the element once
+(`hoist_index_arg` keeps the index single-evaluation), emits `Parser::group_sibling_unlinks`
+— the loop `keyed_group_remove` and `loop_group_remove` each spelled, now the one home — then
+the write, then for a replace `OpLinkRecord` → `Stores::link_record_siblings`, the sibling
+half of `record_finish` factored out (the primary already holds the record).  The temporary
+is typed as the element place resolves, deps included: without them the native emitter reads
+the bind as owning and deep-copies (`@FR-B-Copy` / `@FR-O-NoDiverge`).  `holder_type` reads
+the `OpGetField` type annotation and resolves a vector-element base, so a nested group
+(`w.rooms[0].items`, and under `vector<R?>`) is found.  `v.remove(i)` now types `boolean`
+(its op always did).  Rule text extended with the LEAVING clause and `(Col-Group-Dup)`;
+`(D-col-1)` opened for a group with two plain vectors (loft#1375).  Guard:
+`a-group-element-written-through-the-vector-member-reaches-every-member.loft`, falsified at
+2b992851 on both backends.  `index/target_surface.json` regenerated (one builtin more).
+
 ### Scratch hygiene: a native compile sweeps dead-process artefacts, and the scratch families each have a pruning rule (2026-09-05)
 
 One box held 434 GB of loft scratch under `~/.cache/tmp` (16,326 `loft_native_bin_<pid>`

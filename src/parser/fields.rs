@@ -132,8 +132,8 @@ impl Parser {
             self.read_through_tag(code, &mut t);
         }
         let dnr = self.data.type_def_nr(&t);
-        if matches!(t, Type::Vector(_, _)) && self.vector_operations(code, &field, e_tp) {
-            return Type::Void;
+        if matches!(t, Type::Vector(_, _)) && self.vector_operations(code, &field, e_tp, &t) {
+            return Type::Boolean;
         }
         let fnr = self.data.attr(dnr, &field);
         // @PLN86 P6.4 (F4) — record a sandboxed READ of a host field that carries a
@@ -927,7 +927,16 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
         None
     }
 
-    pub(crate) fn vector_operations(&mut self, code: &mut Value, field: &str, e_tp: i32) -> bool {
+    /// `v.remove(i)` — answers whether `i` named an element.  On the vector member of a
+    /// linked group the element leaves every keyed sibling first (`group_elem_write`), so the
+    /// removal means the same thing whichever member it is spelled through.
+    pub(crate) fn vector_operations(
+        &mut self,
+        code: &mut Value,
+        field: &str,
+        e_tp: i32,
+        vec_tp: &Type,
+    ) -> bool {
         if field == "remove" {
             self.lexer.token("(");
             let (tps, ls) = self.parse_parameters();
@@ -936,7 +945,27 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
             if tps.len() != 1 || !self.convert(&mut cd, &tps[0], &I32) {
                 diagnostic!(self.lexer, Level::Error, "Invalid index in remove");
             }
-            *code = self.cl("OpRemoveVector", &[code.clone(), Value::Int(e_tp), cd]);
+            let elem = self.cl("OpVectorRef", &[code.clone(), cd.clone()]);
+            // Typed as the element PLACE resolves — deps included — so the temporary that
+            // binds it is a borrow of the vector on both backends; without the deps the
+            // native emitter reads the bind as owning and deep-copies the record, and the
+            // unlinks then run on the copy (@FR-B-Copy, @FR-O-NoDiverge).
+            let mut elem_tp = self.index_type(vec_tp);
+            for on in vec_tp.depend() {
+                elem_tp = elem_tp.depending(on);
+            }
+            let coll = code.clone();
+            if let Some(ops) = self.group_elem_write(&elem, &elem_tp, false, |p, _, place| {
+                let idx = match place.unspan() {
+                    Value::Call(_, a) => a.last().cloned().unwrap_or(Value::Null),
+                    _ => Value::Null,
+                };
+                p.cl("OpRemoveVector", &[coll.clone(), Value::Int(e_tp), idx])
+            }) {
+                *code = v_block(ops, Type::Boolean, "group_elem_remove");
+            } else {
+                *code = self.cl("OpRemoveVector", &[code.clone(), Value::Int(e_tp), cd]);
+            }
             true
         } else {
             false

@@ -161,6 +161,26 @@ Checklist #4 (`is_collection`) resolves in the same breath: its home exists and 
 detector flagged them as a candidate drift pair; reading them shows a deliberate pair. That is
 the detector working as intended — it proposes, the reading disposes.
 
+### The linked GROUP, walked (`@FR-Col-Group`, 2026-09-05)
+
+Nine sites, three questions.  **Which fields form a group** has two derivations that were
+measured agreeing rather than merged — `Stores::field` (the db, by content id) and
+`Parser::collection_groups` (the two advices, by parser type) answer from different tables at
+different times, and nine shapes (forward-declared element, alias, variant, nullable member,
+nullable element, three members, two groups, nullable vector member, two plain vectors)
+agree.  **Which keyed kinds are views** is `link_shared_nullable_views`'s five arms, the same
+set `is_keyed` names.  **Which write routes maintain every member** had one home for ADDING
+(`Stores::record_finish`) and two hand-carried copies of the loop for LEAVING (`coll[key] =
+null`, `e#remove`) — now `Parser::group_sibling_unlinks`, and the three element-level writes
+through the vector member that had neither (`v[i] = e`, `v[i] = null`, `v.remove(i)`) go
+through `Parser::group_elem_write`, with `Stores::link_record_siblings` (`OpLinkRecord`) as
+`record_finish`'s sibling half for the re-link.  **Residual, named:** *"which struct field
+does this collection expression name"* still has two derivations — `Parser::field_site`
+(`expressions.rs`, from the assign's `parent_tp`, variant-aware) and `Parser::keyed_field_site`
++ `holder_type` (`collections.rs`, from the expression; now reads the `OpGetField` type
+annotation and resolves a vector-element base).  A merge wants the assign's `parent_tp`
+threaded into the removal sites, which is a refactor with no defect behind it today.
+
 ## The DbRef set — a list that drifts SHORT, and the bug it produced (checklist #2, 2026-08-24)
 
 `Reference | Vector | Enum(_, true, _)` appears at **43 sites**. It looks like "the heap

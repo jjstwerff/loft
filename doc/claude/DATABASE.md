@@ -1029,9 +1029,14 @@ did not refuse the pairing but built a second, silent collection:
   variant like a struct.
 * **a vector VALUE** — `data = rows()` and `data += rows()` move records in bulk through
   `vector_add` / `vector_replace`, which never reach `record_finish`, the per-record
-  chokepoint that maintains the other members. Still open — **loft#1152**; add the records
-  element by element until it is closed. A member written through an `is` / `match` BINDING
-  is the same shape and is recorded there too.
+  chokepoint that maintains the other members. Closed (loft#1152, loft#1159): the parser
+  emits the re-index per view beside the write — § Filling one member with a whole VECTOR
+  VALUE below. A member written through an `is` / `match` BINDING is the same shape and is
+  recorded there too.
+* **an element-level write through the vector member** — `v[i] = e`, `v[i] = null`,
+  `v.remove(i)` reached no chokepoint at all, so the keyed views kept the record under its
+  OLD key. Closed 2026-09-05 — § Replacing, nulling or removing one element through the
+  vector member below.
 
 #### Two collections over one element type that must stay APART
 
@@ -1145,10 +1150,47 @@ of the discriminant in the guard the field read is already wrapped in.
 record and the sibling is right to be empty. Reading `len(a)` after it shows `2` and looks
 like a landed write; reading `h.a` back is what settles it.
 
-⚠ **Group FORMATION is still order-dependent** and deliberately so for now: the test is
-*"is the field being ADDED a keyed kind"*, so `vector` then `sorted` links while `sorted`
-then `vector` links nothing. `901-linked-group-fill.loft` c1 pins that, so widening it is a
-decision rather than a fix (loft#1152's second half, filed separately).
+Group FORMATION no longer depends on declaration order: the pairing test asks the question
+of the PAIR (loft#1158), so `sorted` then `vector` links exactly as `vector` then `sorted`
+does — `1158-a-group-forms-whichever-member-is-declared-first.loft` pins all five keyed kinds
+in both orders.
+
+### Replacing, nulling or removing one element through the vector member (2026-09-05)
+
+The rule's second clause — *a record LEAVING through any member leaves every member* — had
+three routes outside it, all through the VECTOR member and all silent on both backends:
+
+| write | what the views held afterwards |
+|---|---|
+| `w.es[0] = E { k: 11 }` | the same record, under the hash of the OLD key: `by_k[11]` null, `by_k[7]` null, `len(by_k)` still 2 |
+| `w.es[0] = null` on a `vector<E?>` | the nulled record: `len(by_k)` one too long |
+| `w.es.remove(0)` | the removed record: its key still findable, and a re-add of that key counted twice |
+
+An index write copies INTO the element record in place (`OpCopyRecord`), a null write clears
+its payload, and `remove` unlinks the vector's slot — none of them a route through
+`record_finish`, which only ever ADDS. `Parser::group_elem_write` (`src/parser/collections.rs`)
+now wraps each of them: the element is bound ONCE to a temporary (its index evaluated once,
+`hoist_index_arg`), every keyed sibling unlinks it (`Parser::group_sibling_unlinks` — the loop
+`coll[key] = null` and `e#remove` already carried, now the one home), the write runs against
+the temporary, and a replace ends with `OpLinkRecord`, which is `record_finish`'s sibling
+half on its own (`Stores::link_record_siblings`): the primary already holds the record, and
+`record_finish` would append it a second time. `v.remove(i)` now answers the boolean its op
+always had. The temporary is typed as the element PLACE resolves, deps included — typed
+without them, the native emitter reads `found = v[i]` as an owning bind and deep-copies the
+record, and the unlinks then run on the copy. Nested shapes (`w.rooms[0].items[0] = …`, and
+under a `vector<R?>`) resolve through `holder_type`, which reads the field type an
+`OpGetField` carries as its third operand rather than re-walking the schema.
+
+**Which vector holds, when a group has TWO plain vectors** (`{ a: vector<E>, b: vector<E>,
+h: hash<E[k]> }`) is open — loft#1375: each vector links to the hash and never to the other,
+so `h` holds the union and each vector only its own entries.
+
+Guard: `a-group-element-written-through-the-vector-member-reaches-every-member.loft` (19
+rows: replace by literal / by local / by a sibling element, null write, a record into a null
+slot, `remove` at the first and last index and out of range, in a loop, through a parameter,
+one nesting level down and under a `vector<R?>`, a variant holder, four keyed members
+re-linked together, the same key replaced, an index expression evaluated once, an
+out-of-range index, and the ungrouped and `e#remove` controls).
 
 ### Removing one entry of a linked group (loft#900)
 
