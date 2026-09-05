@@ -9,6 +9,56 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### @PLN153 phase 3b: the declared local takes `(N-Store)`'s severity, and the inferred one widens (2026-09-05)
+
+One question — what is a LOCAL's type after a `τ?` is written to it — with two answers in
+the rules and one refusal in the code.  `(N-Decl)`: a declared `x: τ` keeps τ and the write is
+`(N-Store)`'s, a WARNING at full width with the store proceeding, an ERROR at a narrow width.
+`(N-Join)`: an inferred local widens to `τ?`, silently.  `change_var_type` refused both with
+"cannot change type from `τ` to `τ?`" — the twelfth home of the refusal and the only one that
+erred where the eleven others warned (Stage A's `local` row read ERROR for every full-width
+kind while `element`, `argument` and `return` read WARN), and the inferred half hid behind a
+vacuous guard: the phase-1 hold cell indexed with a CONSTANT, which @PLN102 D1 trusts by
+contract and types non-null, so its assert read the in-band sentinel and nothing was ever
+widened; with a variable index the program was refused.
+
+Each half now has its home.  A declared local — a parameter too, and a write-back `&τ`
+parameter, which is the caller's slot one link away and was never asked (the `RefVar` peel
+in `change_var_type` carried the null in silence) — is asked through the one store face
+(`convert_store`, "the local `x`" / "the parameter `x`") BEFORE the retype, at the assignment
+seam and at the tuple-destructure site; the retype then sees the peeled type.  An inferred
+local takes a `(N-Join)` arm beside DN6's null-start arm (which now reads its source through
+`base()`, so `a = null; a = v[i]` joins too): widen to `Optional(the wider width)` — `u8 ⊔
+integer? = integer?` — and say nothing.  The split reads one predicate,
+`Function::is_declared` (`argument || annotated`, what `retype_would_be_refused` already
+read), refined at the parser by `author_declared`: a local the compiler PROMOTES to a hidden
+out-parameter (the `text_return` buffer hoist) carries `argument` under the author's name,
+and without the refinement five corpus files warned spuriously — `got = maybe(i); return got
+?? "<none>"` read as a parameter store.  Read off the definition's `hidden` attribute, not
+declared per hoist site.
+
+Measured: Stage A moved the five full-width `local` cells ERROR → WARN and nothing else
+(66 silent / 32 warn / 4 error); a 25-cell list written before the first edit, every value
+hand-computed, both backends under strict stores and poison; `scripts/introspect_diff.sh`
+over the corpus differs only on the re-pinned guards and loft#859's file, which now compiles
+(its inferred `g` widens and the return warns).  `D-Decl-Sev` opened and closed in
+`types-history.md`; the worked table under the rules corrected.  Found on the way and filed:
+loft#1369, a nullable struct local rebound from a non-null parameter to a nullable one leaks
+one record on `--native` (pre-existing on the declared spelling; a neighbour of loft#1367).
+A documented refusal became a warning — `Contract: strained`.
+
+Three Rust tests had used that refusal as their measurement channel and were re-pinned to the
+rule's warning: `untrusted_arith_index_stays_nullable` (an untrusted index into a declared
+accumulator), the two `qq_null_typing` cells (a nullable `??` fallback into a declared local,
+with `LOFT_NO_QQ_NULL` restoring the pre-fix silence rather than the pre-fix accept), and
+`pln102_stdlib_reachable_null_returns_are_typed_nullable`.  The fix VERIFIER (`loft fix`,
+`fix_apply::verify_fix`) had read "nothing new may appear" as "no new ERROR": `x: integer =
+"5" as integer` was offered `as integer?`, which now compiles into that slot with `(N-Store)`'s
+warning and stores a null on a bad parse — the rewrite changed the program's meaning and the
+verifier would have written it.  It now counts a new WARNING as `Breaks` too (advice stays
+below the line), which is the two-tier doctrine applied to a rewrite: a warning is the tier
+where ignoring it can produce a wrong result.
+
 ### @PLN153 phase 3a: `(N-Store)` is asked at the one arm every `τ? ⤳ τ` peel passes, and eight silent stores now report (2026-09-05)
 
 `Parser::convert`'s Optional-SOURCE arm is where every nullable value is peeled to its base,

@@ -1833,7 +1833,7 @@ impl Function {
         let Some(v) = self.variables.get(var_nr as usize) else {
             return false;
         };
-        if v.argument || self.annotated.contains(&var_nr) {
+        if self.is_declared(var_nr) {
             // An explicitly ANNOTATED local's type is a contract the author wrote down, and
             // a parameter's belongs to the signature.  Neither is a candidate for a silent
             // rebind, whatever the loop structure says.
@@ -1943,6 +1943,21 @@ impl Function {
     #[must_use]
     pub fn is_annotated(&self, var_nr: u16) -> bool {
         self.annotated.contains(&var_nr)
+    }
+
+    /// Is this binding's type a COMMITMENT the author wrote down — an explicit `: τ`
+    /// annotation, or a parameter, whose type belongs to the signature?
+    ///
+    /// The one home for the declared / inferred split the storage rules turn on: a declared
+    /// slot keeps its type and a wider write is `@FR-N-Decl`'s (and `@FR-N-Store`'s)
+    /// question, where an inferred one widens to the join of its writes (`@FR-N-Join`,
+    /// `(I-Join)`).  Every site that asks "may this binding's type move?" reads this rather
+    /// than spelling `argument || annotated` for itself.
+    #[must_use]
+    pub fn is_declared(&self, var_nr: u16) -> bool {
+        self.variables
+            .get(var_nr as usize)
+            .is_some_and(|v| v.argument || self.annotated.contains(&var_nr))
     }
 
     /// Widen an INFERRED integer variable's type directly to `type_def` (the `(I-Join)`
@@ -2320,14 +2335,16 @@ impl Function {
         // underflow / native E0308).  A text null-start must annotate `s: text? = null` so the
         // slot is heap from the start; `s = null; s = "hi"` falls through to the case-1
         // nullable-mix error, which already says "declare it `text?`".
+        // The source may itself be nullable — `a = null; a = v[i]` — and the join is the
+        // same `τ?` over the same inline slot, so the arm reads the source through `base()`.
         if crate::keys::pln25_dn1_enabled()
             && matches!(var_tp, Type::Null)
             && matches!(
-                type_def,
+                type_def.base(),
                 Type::Integer(_) | Type::Boolean | Type::Float | Type::Single | Type::Character
             )
         {
-            let widened = Type::optional(type_def.clone());
+            let widened = Type::optional(type_def.base().clone());
             self.trace_type_change(var_nr, &widened, "change_var_type(N-Join)");
             self.variables[var_nr as usize].type_def = widened;
             self.depend_all(var_nr, type_def);
@@ -2349,6 +2366,36 @@ impl Function {
         if data.same_nullable_struct(var_tp, type_def).is_some() {
             self.trace_type_change(var_nr, type_def, "change_var_type(nullable-synth)");
             self.variables[var_nr as usize].type_def = type_def.clone();
+            self.depend_all(var_nr, type_def);
+            return self.is_new(var_nr);
+        }
+        // @FR-N-Join — the nullable half of the join: an INFERRED local whose next write may
+        // be null widens to `τ?` — `a = 2; a = v[i]` makes `a` an `integer?` — exactly as
+        // `(I-Join)` widens an inferred narrow integer.  A DECLARED binding never takes this
+        // arm: its type is a commitment (`@FR-N-Decl`), so the nullable write is
+        // `@FR-N-Store`'s question and the assignment seam asks it through the store face
+        // BEFORE the retype ever reaches here (`parse_assign_op_inner`).
+        //
+        // Sound for the same reason `(N-Decl)`'s arm above is: `Optional(τ)` shares `τ`'s
+        // slot, so the binding's frame layout is unchanged and only the type record moves.
+        // The join of two integer widths is the WIDER one, so `a = 2 as u8; a = v[i]` widens
+        // to `integer?`, not `u8?` — a narrower slot would spend a value on the null.  A
+        // `RefVar` binding is a link to another place and keeps its own peel below.
+        if !self.is_declared(var_nr)
+            && !matches!(var_tp, Type::Optional(_) | Type::Null | Type::RefVar(_))
+            && let Type::Optional(inner) = type_def
+            && inner.is_equal(var_tp)
+        {
+            let wider_source = matches!((var_tp, &**inner), (Type::Integer(cur), Type::Integer(new))
+                if new.byte_width(true) > cur.byte_width(true));
+            let base = if wider_source {
+                (**inner).clone()
+            } else {
+                var_tp.clone()
+            };
+            let widened = Type::optional(base);
+            self.trace_type_change(var_nr, &widened, "change_var_type(N-Join nullable)");
+            self.variables[var_nr as usize].type_def = widened;
             self.depend_all(var_nr, type_def);
             return self.is_new(var_nr);
         }

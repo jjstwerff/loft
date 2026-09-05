@@ -2892,6 +2892,16 @@ the store was freed by nobody.  It surfaced only because the probe printed the r
 beside the values.  A guard over a lowering that can be undone asserts value AND leak, or it is
 measuring one half of the change.
 
+**A CONSTANT index is trusted by contract, so a nullability cell built on it never
+produces the `τ?` it means to test.**  `(N-Index)` types `v[i]` as `τ?`, but `v[9]`, `v[k]`
+under `for k in …`, `v[i]` behind `if i < len(v)` and arithmetic over those are trusted
+(@PLN102 D1) and read NON-NULL — the overrun faults to null at run time, in band.  The
+phase-1 `(N-Join)` hold cell wrote `j = 2; j = dv[9]; assert(j == null)` and passed on every
+build: `dv[9]` was an `integer`, nothing was widened, and the assert read the sentinel the
+runtime left in the slot.  With a plain variable index the same program was REFUSED (the
+widen did not exist).  A cell that needs a `τ?` from an index reads it through a variable
+the compiler cannot prove in range — and the receipt is the cell compiling at all.
+
 **The HARNESS does not run the program the way a user does, so a `tests/scripts/*.loft`
 guard can be vacuous for a whole CLASS of defect.** `loft --tests` discovers and calls the
 `test_*` functions; it is not `loft prog.loft`, and two things a plain run does are simply

@@ -7,8 +7,11 @@
 // refusal, not a comment: `rule_tags.py check` counts the citation, this file is what
 // makes it honest.  Its expectation is the diagnostic's own text, pinned as a substring.
 //
-// @falsified-at: none — pins a refusal the compiler already makes; the negation cell of a
-//   rule that holds, not a fix, so no earlier build is a control for it.
-// @EXPECT_ERROR: cannot change type from float to float?
+// @falsified-at: 8498fdf1 → here (hand-measured, a warning-only channel): the parent build
+//   refuses the program outright (`cannot change type from float to float?`).
+// @EXPECT_WARNING: a nullable `float?` is stored into the local `z` of the non-null type `float`
 fn f(y: float) -> float { z: float = sqrt(y); return z; }
-fn main() { println("{f(4.0)}"); }
+fn main() {
+  assert(f(4.0) == 2.0 && f(-1.0) == null, "the root, or null out of the domain: {f(4.0)} {f(-1.0)}");
+  println("domain reported");
+}

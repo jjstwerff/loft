@@ -26,6 +26,16 @@ warned.  All of them now warn, with the discharge to write (`?? d`, `?`, `match`
 that compiled yesterday still compiles.  The check moved to the one place every such value
 passes, so a position nobody had listed cannot be silent again.
 
+**A declared local takes a nullable value with a warning, like every other slot.**
+`x: integer = v[i]` used to stop compilation with *cannot change type from integer to
+integer?* — the one slot the compiler refused where a field, an element, an argument or a
+return warned.  It now warns like they do, names the local, and the program runs with the
+null in the slot (a narrow `u8` local still refuses: it has no bit pattern left for null).
+An inferred local written a nullable value widens to `integer?` instead of being refused —
+`a = 2; a = v[i]` — as the reference always said, and the next non-null slot it reaches is
+where the warning lands.  A write-back `&integer` parameter, which used to take the null in
+silence, warns with the rest.
+
 **`loft introspect` shows the program as it is parsed.**  When a program had already run
 once, the startup cache answered the next `introspect` from its bundle, and the dump then
 named every variable `65535` with a `-` where its slot number and span belong — two runs of

@@ -4534,6 +4534,32 @@ impl Parser {
         accepted
     }
 
+    /// Is this binding's type a commitment the AUTHOR wrote — an explicit `: τ` annotation,
+    /// or a parameter of the signature?  The declared / inferred split the storage rules
+    /// turn on (`@FR-N-Decl` keeps a declared slot's type and asks `@FR-N-Store`;
+    /// `@FR-N-Join` widens an inferred one), refined past the variable table's own
+    /// [`Function::is_declared`](crate::variables::Function::is_declared): a local the
+    /// compiler PROMOTED to a hidden out-parameter — the text return buffer `text_return`
+    /// hoists, `__work_ret` — carries `argument` too, but its type is the compiler's, not
+    /// the author's, so for every rule that reads this split it is still the inferred local
+    /// the author wrote.  Read off the definition (the attribute is `hidden`) rather than
+    /// declared per hoist site, so a new promotion is covered by existing.
+    pub(crate) fn author_declared(&self, var_nr: u16) -> bool {
+        if !self.vars.is_declared(var_nr) {
+            return false;
+        }
+        if !self.vars.is_argument(var_nr) {
+            return true;
+        }
+        let name = self.vars.name(var_nr);
+        !self
+            .data
+            .def(self.context)
+            .attributes()
+            .iter()
+            .any(|a| a.hidden && a.name == name)
+    }
+
     /// The slot the current store names, for @FR-N-Store's wording: the top of the context
     /// stack, or the generic spelling when a bare `convert` stores (lenient, so a seam nobody
     /// has classified yet can only warn).

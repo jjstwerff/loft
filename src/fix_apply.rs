@@ -29,7 +29,8 @@ pub enum Verdict {
     Clears,
     /// Applied, but the diagnostic is still there — the rewrite does not answer it.
     Remains,
-    /// Applied, and the result is worse: an error the original source did not have.
+    /// Applied, and the result is worse: an error or a warning the original source did not
+    /// have.
     Breaks,
     /// Nothing to check — the fix spells no edit, so there is nothing to apply.
     Unspellable,
@@ -46,7 +47,7 @@ impl Verdict {
         match self {
             Verdict::Clears => "verified",
             Verdict::Remains => "UNVERIFIED (the diagnostic remains)",
-            Verdict::Breaks => "REJECTED (the rewrite introduces an error)",
+            Verdict::Breaks => "REJECTED (the rewrite introduces an error or a warning)",
             Verdict::Unspellable => "not applicable (no edit)",
             Verdict::NeedsYou => "verified — yours to accept (see the condition)",
         }
@@ -116,12 +117,17 @@ fn spelled(diags: &Diagnostics) -> Vec<(&DiagEntry, &Fix)> {
         .collect()
 }
 
-/// The error-level messages of `d`, as a set-ish sorted list for before/after comparison.
-fn errors_of(d: &Diagnostics) -> Vec<String> {
+/// The messages of `d` that GATE — errors and warnings, the tier where ignoring one can
+/// produce a wrong result — as a set-ish sorted list for before/after comparison.  Advice
+/// is below the line: a rewrite that earns a deprecation note or a cost note has not made
+/// the program wrong.  A rewrite that earns a WARNING has: `x: integer = "5" as integer?`
+/// compiles where `as integer` did not, and stores a null into `x` on a bad parse, which
+/// `(N-Store)` reports as exactly the warning this list now carries.
+fn reported_of(d: &Diagnostics) -> Vec<String> {
     let mut v: Vec<String> = d
         .entries()
         .iter()
-        .filter(|e| e.level >= crate::diagnostics::Level::Error)
+        .filter(|e| e.level >= crate::diagnostics::Level::Warning)
         .map(|e| format!("{}:{}:{}", e.code.unwrap_or(""), e.line, e.message))
         .collect();
     v.sort();
@@ -131,9 +137,9 @@ fn errors_of(d: &Diagnostics) -> Vec<String> {
 /// @PLN131 step 3 — check one fix by APPLYING it and re-running the analysis.
 ///
 /// Returns [`Verdict::Clears`] only when the coded diagnostic this fix hangs off is gone
-/// from the re-analysis AND no error appeared that the original did not have. Both halves
-/// are needed: a rewrite that silences one error by causing another is not a fix, and that
-/// is exactly the failure a pattern-matched suggestion makes.
+/// from the re-analysis AND no error or warning appeared that the original did not have.
+/// Both halves are needed: a rewrite that silences one error by causing another is not a
+/// fix, and that is exactly the failure a pattern-matched suggestion makes.
 ///
 /// `code` is matched rather than the message, because prose is free to change and the code
 /// is the frozen identity — the reason @PLN131 built the code index first.
@@ -158,7 +164,7 @@ pub fn verify_fix(
     let (before_rerun, before_reached) = crate::lsp::diagnose_reach(source, name, stdlib_dir);
     let (after, after_reached) = crate::lsp::diagnose_reach(&rewritten, name, stdlib_dir);
 
-    // A new error only counts against the fix when the two parses are COMPARABLE.
+    // A new error or warning only counts against the fix when the two parses are COMPARABLE.
     //
     // `parse_source` returns early when pass 1 errors, so a truncated parse reports no
     // pass-2 diagnostic at all — casts, shifts, most semantic lints. Fixing the pass-1
@@ -172,8 +178,8 @@ pub fn verify_fix(
     // blocker, and what the deeper pass then finds was always there. That is also what a
     // person does — fix the syntax error, then read the type errors.
     if before_reached || !after_reached {
-        let was = errors_of(before);
-        for e in errors_of(&after) {
+        let was = reported_of(before);
+        for e in reported_of(&after) {
             if !was.contains(&e) {
                 return Verdict::Breaks;
             }

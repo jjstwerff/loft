@@ -9,7 +9,7 @@ Tracker: [@PLN153](https://github.com/loft-lang/plans/issues/153).
 
 ## Status
 
-**Active — phases 0, 1, 2 and 3a done (2026-09-05); 3b (the declared local's severity) and 3c (loft#1367) next.**  The null MODEL is decided and not reopened here: @PLN102's
+**Active — phases 0, 1, 2, 3a and 3b done (2026-09-05); 3c (loft#1367) next.**  The null MODEL is decided and not reopened here: @PLN102's
 [keystone](../102-stability-contract/keystone-null-model.md) chose **B** (an in-band sentinel
 for scalars, out-of-band absence for references and for a struct stored inline), frozen in
 [DESIGN_DECISIONS.md § C90](../../DESIGN_DECISIONS.md), with @PLN25 (the dense element
@@ -84,7 +84,7 @@ the axes it reports unreached are the cells still to build, not a note.
 | **0** | **Probe first.**  Is `τ??` constructible today (`N-Idem` — `Type::optional` in `data.rs` is the candidate home), and is `N-Intro` the only null-direction conversion in `⤳`?  A corpus census with an env-gated report, since `[profile.dev.package.loft]` compiles a `debug_assert` OUT of the library. | The report over the 1247-file corpus reads 0 for `τ??` — and a probe that constructs one by hand makes it read 1, so the zero is not vacuous. | **Done** 2026-09-05 — § Phase 0 result |
 | **1** | **Census: one home per N rule.**  For each of the 18, the predicate or emitter that decides it today.  Candidates: `N-Coal` → `parser/operators.rs::build_null_coalesce_default`; `N-Default` → the `x?` lowering + `Data::has_default`; `N-Store`/`N-Decl` → the `(N-Store)` teeth (`keys.rs`: the DN3 gate, the call-arg gate, the heap gate); `N-Prop` → `nullflow_enabled()`; `N-Join` → the inferred-assignment join; `N-Match` → the null arm; `N-Div`/`N-Arith`/`N-Cast`/`N-Cast?` → operator typing ([float-null-domain-typing.md](../102-stability-contract/float-null-domain-typing.md)); `N-Dense` → element storage; `N-Parse` → folded into `N-Cast`; `N-Index`, `N-Reserve`, `N-Store` already cited. | Per rule, ONE probe pair on both backends — a program where the rule must hold and one where its negation must be refused — green BEFORE the `@FR-` citation is added.  `rule_tags.py check` then reports 18/18 cited; a rule whose only evidence is the citation is the B6u failure and does not count. | **Done** 2026-09-05 — § Phase 1 census |
 | **2** | **`N-Prop` has 10 `nullflow_enabled()` sites in 4 files.**  Which question does each ask — propagate, gate, or warn?  Fold the fact-reading half onto one predicate; the per-site residue stays where it is per-site. | `introspect` output (IR, bytecode, Rust) byte-identical over the 1247-file corpus against the committed compiler (the B7r/B7s method), under the default AND under `LOFT_NO_NULLFLOW=1`. | **Done** 2026-09-05 — § Phase 2 fold |
-| **3** | **The `N-Store` refusal at ONE point.**  Today the teeth sit at the local slot, the field, the return, the index, the call argument and the heap half as separate gates, each a spelling; a nullable reaching a non-null slot through a position none of them covers is answered wrong in silence.  One check where every store passes — the `⇐` lowering, whose ten push sites and six admission lists B6t already measured — is the chokepoint. | The Stage A matrix, position × type kind × discharge, with an `@EXPECT_WARNING` / `@EXPECT_ERROR` cell wherever a nullable meets a non-null slot undischarged and a silent cell wherever it is discharged; `make falsify` against the current build names the cells that pass silently today. | Open — the one design call |
+| **3** | **The `N-Store` refusal at ONE point.**  Today the teeth sit at the local slot, the field, the return, the index, the call argument and the heap half as separate gates, each a spelling; a nullable reaching a non-null slot through a position none of them covers is answered wrong in silence.  One check where every store passes — the `⇐` lowering, whose ten push sites and six admission lists B6t already measured — is the chokepoint. | The Stage A matrix, position × type kind × discharge, with an `@EXPECT_WARNING` / `@EXPECT_ERROR` cell wherever a nullable meets a non-null slot undischarged and a silent cell wherever it is discharged; `make falsify` against the current build names the cells that pass silently today. | 3a + 3b **done** 2026-09-05 (§ Phase 3a, § Phase 3b); 3c (loft#1367) open |
 | **4** | **The `optional` screen, ranked.**  The 352 opaque functions ordered by *can an undischarged value reach here*: declaration reads (a field's, a local's, a return's declared type) and lvalue places first, use-path sites last.  Each function in the top tier either peels through `base()` or is shown unreachable by a probe cell. | The gated `optional` audit row in QUALITY.md moves DOWN and every moved function has a cell; a peel added with no cell is the B6u receipt and is not counted. | Open |
 | **5** | **`@FR-L-Null`'s 45 citations converged.**  The two questions B6u split — *what value means absent in this storage?* (the per-type sentinel table frozen in C90, `Stores::is_null`) and *is this the same storage?* (`base()`) — each have a home; every citation either reads it or is removed as a redundant spelling. | The site count goes DOWN, and where a change is a fold the emission is byte-identical over the corpus; where it is a fix, a probe cell. | Open |
 | **6** | **Re-measure.**  `make bug-review` on the null/sentinel class after the plan's watermark against the window before it. | The class falls, or the residual names a mechanism this plan did not touch and a follow-on plan is filed for it. | Open |
@@ -315,9 +315,69 @@ now names its slots — the index among them — and its non-stores.  Every seam
 warns at every width (loft#1232's doctrine), so `tuple__narrow__none` warns where
 `arg__narrow__none` errors; raising it is COMPATIBILITY.md's process.
 
-**Left for 3b and 3c.**  The declared local (`change_var_type`) still ERRORS where the split
-warns (open question 3 and `types.md:159`); loft#1367's bind of a tagged projection into a
-pointer-spelled local.
+**Left for 3c.**  loft#1367's bind of a tagged projection into a pointer-spelled local
+(3b took the declared local's severity below).
+
+## Phase 3b — the declared local takes the rule's severity, and the inferred one widens (2026-09-05)
+
+**Two halves of one question — what is a LOCAL's type after a `τ?` is written to it — and the
+rules answer each.**  `(N-Decl)`: a declared `x: τ` keeps τ and the write is `(N-Store)`'s, a
+WARNING at full width with the store proceeding, an ERROR at a narrow one.  `(N-Join)`: an
+inferred local widens to `τ?`, silently.  The code refused BOTH with `change_var_type`'s
+"cannot change type from `τ` to `τ?`" — the twelfth home of the refusal, the only one erring
+where the eleven others warned (Stage A's `local` row), and the inferred half was hidden by a
+vacuous guard: the phase-1 hold cell wrote `j = 2; j = dv[9]` with a CONSTANT index, which
+@PLN102 D1 trusts by contract and types non-null, so nothing was widened and the assert read
+the in-band sentinel.  With a variable index the same program was refused.
+
+**Where each half lives.**  A declared local — a parameter too (its type is the signature's),
+and a write-back `&τ` parameter, which is the caller's slot one link away and had never been
+asked at all (the `RefVar` peel carried the null in silence) — is asked through the ONE store
+face (`convert_store`, worded "the local `x`" / "the parameter `x`") BEFORE the retype, at the
+assignment seam and at the tuple-destructure site, so the arm reports with the rule's split
+and the retype then sees the peeled type.  An inferred local takes the `(N-Join)` arm added
+to `change_var_type` beside DN6's null-start arm (which now reads its source through
+`base()`, so `a = null; a = v[i]` joins too): widen to `Optional(the wider width)` — `u8 ⊔
+integer? = integer?` — and say nothing; the widen is PROVEN by the next declared slot it
+reaches, which warns.  The declared / inferred split has one home, `Function::is_declared`
+(`argument || annotated`, what `retype_would_be_refused` already read), refined at the parser
+by `author_declared`: a local the compiler PROMOTED to a hidden out-parameter — the text
+return buffer `text_return` hoists — carries `argument` too, but its type is the compiler's.
+Without that refinement five corpus files warned spuriously (`got = maybe(i); return got ??
+"<none>"` in `449`, `918`, `806`, `pln133-*`: "a `text?` is stored into the parameter `got`"),
+which is the corpus showing an admitting face missed, exactly as 3a's design said it would.
+
+**Measured.**  Stage A: the five full-width `local` cells moved ERROR → WARN, the narrow one
+stayed ERROR, no other cell moved (`stageA_3b.txt` vs `stageA_p3a.txt`: 66 silent / 32 warn
+/ 4 error).  The 3b cell list (`stage3b/CELLS.md`, 25 cells written before the first edit,
+every value hand-computed): every declared cell reports once and holds the null, every
+inferred cell is silent and widens, the controls (`?? d`, `x?`, `j: integer?`) stay silent.
+`scripts/introspect_diff.sh` over the corpus: `DIFFERENT 13 of 1278` — the twelve re-pinned
+or new guards, which differ by construction, and loft#859's file, which now COMPILES (its
+inferred `g` widens and the return warns) — no other emission or diagnostic moved.  Both backends on every runnable guard under strict stores and poison.
+Guards: `153-n-store-a-declared-local-warns-at-every-full-width-kind` (twelve slot shapes,
+one report each), `153-n-join-an-inferred-local-widens-to-nullable` (eleven joins, the widen
+proven by a later declared store), `153-n-store-refused-into-a-narrow-local` (every narrow
+slot the local family reaches, four cells), `1103c` (the narrow branch-arm cell, split out
+of `1103b` so its five full-width cells RUN), the seven phase-1 pair files re-pinned to the
+rule's text, `153-n-rules-hold`'s `(N-Join)` cell indexing by a variable (refused on the
+parent build — its compiling is the receipt), `859-nullable-retype-advice` covering both
+spellings, and `pln102_stdlib_reachable_null_returns_are_typed_nullable` in `tests/issues.rs`.
+`matrix_axes.py` on the two matrix guards: element type reaches integer, float, text,
+struct, nested container, boolean, character, enum (narrow in its own file); container kind
+beyond vector and tuple (a keyed collection as a local from a nullable source) is unreached,
+because a keyed collection is not a vector element and no cell of this row can produce one.
+
+**Found on the way.**  loft#1369: a nullable struct local rebound from a non-null parameter to
+a nullable one leaks one record on `--native` (`x: S? = z; x = y`) — pre-existing, the
+declared spelling leaks on 8498fdf1 — a neighbour of loft#1367 (a local assigned from two
+sources) for 3c to read beside it.  The `join_ref` cell stays in the guard: its values pass
+on both backends and the native suite does not arm the leak check.
+
+**Contract.**  `D-Decl-Sev` in `types-history.md`, opened and closed; the worked table under
+the rules corrected (`a: integer = 2; a = v[i]` → warning, `a` stays `integer`).  A documented
+refusal became a warning: `Contract: strained`.  Open question 3 (whether the warning becomes
+an error at the freeze) is unchanged and stays COMPATIBILITY.md's.
 
 ## Phase ordering
 

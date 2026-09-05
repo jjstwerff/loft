@@ -209,7 +209,7 @@ measurement.
 $ loft fix prog.loft
 prog.loft
   prog.loft:2  double the brace        [verified]
-  prog.loft:7  make the cast checked   [REJECTED (the rewrite introduces an error)]
+  prog.loft:7  make the cast checked   [REJECTED (the rewrite introduces an error or a warning)]
 
 $ loft fix --apply prog.loft
 prog.loft

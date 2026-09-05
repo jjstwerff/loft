@@ -3778,6 +3778,48 @@ use a separate collection or add after the loop"
                 (false, None) => {}
             }
         }
+        // @FR-N-Decl / @FR-N-Store — a DECLARED local (or a parameter) written a nullable
+        // value keeps its type and the store is asked, here, through the one store face: a
+        // WARNING at full width (the store proceeds and the slot holds the null sentinel),
+        // an ERROR at a narrow one.  Converted BEFORE `change_var` for the reason the tuple
+        // coercion above gives — a retype decided first would refuse the program outright,
+        // and "cannot change type from integer to integer?" was a third spelling of the rule
+        // that erred where the rule warns.  Both passes, so pass 1's retype never sees the
+        // `τ?` either.  An INFERRED local takes the other arm: `change_var_type` widens it to
+        // the join (`@FR-N-Join`), and nothing is asked until that `τ?` reaches a non-null slot.
+        // A write-back `&τ` parameter is the same slot one link away — `x = v[i]` through
+        // `x: &integer` lands in the caller's non-null `integer` — so it is asked against the
+        // type it links to.
+        let slot_tp: &Type = match f_type {
+            Type::RefVar(inner) => inner,
+            other => other,
+        };
+        let declared_nullable_write = op == "="
+            && var_nr != u16::MAX
+            && matches!(to.unspan(), Value::Var(vn) if *vn == var_nr)
+            && self.author_declared(var_nr)
+            && matches!(s_type, Type::Optional(_))
+            && !matches!(slot_tp, Type::Optional(_) | Type::RefVar(_))
+            && !slot_tp.is_unknown()
+            && slot_tp.is_equal(s_type.base());
+        let s_type = if declared_nullable_write {
+            let what = format!(
+                "{} `{}`",
+                if self.vars.is_argument(var_nr) {
+                    "the parameter"
+                } else {
+                    "the local"
+                },
+                self.vars.name(var_nr)
+            );
+            if self.convert_store(code, &s_type, slot_tp, &what, None) {
+                slot_tp.clone()
+            } else {
+                s_type
+            }
+        } else {
+            s_type
+        };
         self.change_var(to, &s_type);
         // @PLN110 3a — track `n = len(s)` so `for i in 0..n` keeps the strict-index
         // bound.  Any OTHER assignment to `n` drops the entry: a miss is the right
@@ -5615,12 +5657,51 @@ use a separate collection or add after the loop"
                     if i >= rhs_elems.len() {
                         break;
                     }
+                    // @FR-N-Decl / @FR-N-Store — a DECLARED name in the pattern keeps its
+                    // type, and a member that may be null is asked through the store face on
+                    // the member's read, exactly as the assignment seam asks for a plain
+                    // local (`parse_assign_op_inner`): a WARNING at full width, an ERROR at a
+                    // narrow one.  The retype below sees the peeled type, so it never refuses
+                    // what the rule only warns about; an inferred name widens to the join.
+                    let declared_nullable_member = self.vars.exists(v_nr)
+                        && self.author_declared(v_nr)
+                        && matches!(rhs_elems[i], Type::Optional(_))
+                        && !matches!(self.vars.tp(v_nr), Type::Optional(_) | Type::RefVar(_))
+                        && !self.vars.tp(v_nr).is_unknown()
+                        && self.vars.tp(v_nr).is_equal(rhs_elems[i].base());
+                    let member_tp = if declared_nullable_member {
+                        rhs_elems[i].base().clone()
+                    } else {
+                        rhs_elems[i].clone()
+                    };
+                    let member_what = if declared_nullable_member {
+                        format!(
+                            "{} `{}`",
+                            if self.vars.is_argument(v_nr) {
+                                "the parameter"
+                            } else {
+                                "the local"
+                            },
+                            self.vars.name(v_nr)
+                        )
+                    } else {
+                        String::new()
+                    };
                     if self.vars.exists(v_nr) {
                         self.vars.defined(v_nr);
-                        self.change_var_type(v_nr, &rhs_elems[i]);
+                        self.change_var_type(v_nr, &member_tp);
                     }
                     let step = if ref_def_nr == u32::MAX {
                         let mut read = Value::TupleGet(tmp, i as u16);
+                        if declared_nullable_member {
+                            self.convert_store(
+                                &mut read,
+                                &rhs_elems[i],
+                                &member_tp,
+                                &member_what,
+                                None,
+                            );
+                        }
                         if owned_base
                             && Self::is_collection_type(rhs_elems[i].base())
                             && let Some(owned) =
@@ -5648,13 +5729,22 @@ use a separate collection or add after the loop"
                         // answers a DbRef sharing tmp's store_nr and rec.  That view
                         // must not become the binding, because tmp belongs to the CALL
                         // SITE, not to the binding — see `materialize_tuple_element`.
-                        let view = self.get_val(
+                        let mut view = self.get_val(
                             &rhs_elems[i],
                             false,
                             elem_offset,
                             Value::Var(tmp),
                             u32::MAX,
                         );
+                        if declared_nullable_member {
+                            self.convert_store(
+                                &mut view,
+                                &rhs_elems[i],
+                                &member_tp,
+                                &member_what,
+                                None,
+                            );
+                        }
                         self.materialize_tuple_element(v_nr, tmp, &rhs_elems[i], view)
                     };
                     steps.push(step);

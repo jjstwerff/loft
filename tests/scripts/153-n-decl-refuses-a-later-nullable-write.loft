@@ -7,8 +7,17 @@
 // refusal, not a comment: `rule_tags.py check` counts the citation, this file is what
 // makes it honest.  Its expectation is the diagnostic's own text, pinned as a substring.
 //
-// @falsified-at: none — pins a refusal the compiler already makes; the negation cell of a
-//   rule that holds, not a fix, so no earlier build is a control for it.
-// @EXPECT_ERROR: cannot change type from integer to integer?
+// "Forbids" with `(N-Store)`'s severity: the declaration is a commitment, so `a` stays an
+// `integer` (it does NOT widen the way the inferred twin in `153-n-rules-hold` does) and the
+// write is reported as the store it is — a WARNING at full width, the store proceeding.
+//
+// @falsified-at: 8498fdf1 → here (hand-measured, a warning-only channel): the parent build
+//   REFUSES this program (`cannot change type from integer to integer?`), so the warning
+//   below is unmatched and the file fails there.
+// @EXPECT_WARNING: a nullable `integer?` is stored into the local `a` of the non-null type `integer`
 fn f(v: vector<integer>, i: integer) -> integer { a: integer = 2; a = v[i]; return a; }
-fn main() { println("{f([1, 2], 5)}"); }
+fn main() {
+  assert(f([1, 2], 5) == null, "the slot holds the null: {f([1, 2], 5)}");
+  assert(f([1, 2], 0) == 1, "an in-range read is the value: {f([1, 2], 0)}");
+  println("declared local keeps its type");
+}

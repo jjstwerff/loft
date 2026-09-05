@@ -59,8 +59,13 @@ fn main() {
   // N-Intro — τ into τ? is silent.
   assert(intro(4) == 4, "N-Intro");
 
-  // N-Join — an inferred local widens to optional across assignments.
-  j = 2; j = dv[9];
+  // N-Join — an inferred local widens to optional across assignments.  The index is a
+  // plain local, not a constant: a constant index is trusted by contract (@PLN102 D1) and
+  // reads non-null, so `j = dv[9]` never widened anything and the assert below passed on
+  // the in-band sentinel alone.  With `ix` the write is a `τ?`, which a DECLARED `integer`
+  // reports and an inferred one absorbs — so this line compiling at all is the receipt.
+  ix = 9;
+  j = 2; j = dv[ix];
   assert(j == null, "N-Join: inferred local widened to integer?");
 
   // N-Domain — sqrt of a negative is null, of a square is its root.

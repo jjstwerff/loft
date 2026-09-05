@@ -54,7 +54,11 @@ const MATRIX_INDEX: &str = "fn main(){ v=[10,20,30,40]; sum=0;\n\
 
 // The negative control: the index arithmetic touches `w[0]`, a plain (untrusted) value, so the
 // element stays `τ?` and N-Prop refuses the non-null accumulator under NULLFLOW.
-const UNTRUSTED_INDEX: &str = "fn main(){ v=[10,20,30,40]; w=[1,1]; sum=0;\n\
+// `sum` is DECLARED non-null so the store is the channel: an untrusted index reads `integer?`,
+// the sum is `integer?` (N-Prop), and storing it into `sum: integer` is (N-Store)'s warning.
+// An INFERRED `sum` would widen to `integer?` in silence (N-Join) and could not tell the
+// over-reach from the rule.
+const UNTRUSTED_INDEX: &str = "fn main(){ v=[10,20,30,40]; w=[1,1]; sum: integer = 0;\n\
      for a in 0..2 { sum = sum + v[a * 2 + w[0]]; }\n\
      print(\"r={sum}\\n\"); }\n";
 
@@ -94,15 +98,19 @@ fn matrix_index_unchanged_off() {
 #[test]
 fn untrusted_arith_index_stays_nullable() {
     // The trust must NOT reach a plain var: under NULLFLOW the untrusted index is `τ?`, so the
-    // non-null accumulator is rejected (N-Prop). This is the over-reach guard.
-    let (ok, _o, err) = run(UNTRUSTED_INDEX, "--interpret", true, "ui_i");
+    // sum is `τ?` (N-Prop) and its store into the DECLARED non-null accumulator is reported —
+    // (N-Store)'s WARNING at full width, the program running (@PLN153 phase 3b: it used to be
+    // a hard error).  This is the over-reach guard: a trusted index would read non-null and
+    // the store would be silent.
+    let (ok, out, err) = run(UNTRUSTED_INDEX, "--interpret", true, "ui_i");
     assert!(
-        !ok,
-        "ON: an arithmetic index over an untrusted var must stay nullable"
+        ok,
+        "ON: the reported store proceeds and the program runs; stderr: {err}"
     );
+    assert!(out.contains("r=60"), "value: {out}");
     assert!(
-        err.contains("cannot change type"),
-        "expected the N-Prop non-null-accumulator error: {err}"
+        err.contains("a nullable `integer?` is stored into the local `sum`"),
+        "expected the (N-Store) report on the non-null accumulator: {err}"
     );
 }
 

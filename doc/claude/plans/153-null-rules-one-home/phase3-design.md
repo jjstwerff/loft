@@ -250,3 +250,16 @@ bind of a tagged projection into a pointer-spelled local (`Fixes #1367`).
 - Guards written: 1366-tuple-member, 1366-vector-field, 153-nullable-index (0 warnings on
   806a8d84, 6/1/2 on 3a), 153-n-store-admitting-faces-hold.
 - types.md (N-Store) names its slots (index included) and its non-stores.
+
+## Phase 3b built and measured (2026-09-05, in `~/workspace/loft-1361` on 8498fdf1)
+- The cell list is `~/workspace/pln153-scratch/stage3b/CELLS.md` (25 cells, written first);
+  `run.sh <loft>` runs them.  Every declared cell reports ONCE and holds the null; every
+  inferred cell widens silently; `?? d` / `x?` / `j: integer?` stay silent.
+- Two more sites than the design named: the tuple-DESTRUCTURE store (`(a, b) = (v[i], 1)`
+  with `a` declared) and the write-back `&τ` PARAMETER (silent before — the `RefVar` peel).
+- The hidden-buffer refinement (`Parser::author_declared`): the text-return hoist promotes a
+  local to a hidden `&text` argument under the author's name; `argument || annotated` alone
+  called five corpus files' `got = maybe(i)` a parameter store.  Read off the definition's
+  `hidden` attribute, not declared per hoist site.
+- Stage A: 5 cells moved (local × integer/float/text/ref/vector, none: error → warn).
+- loft#1369 filed (native leak, pre-existing on the declared spelling).

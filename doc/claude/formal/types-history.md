@@ -6,12 +6,54 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — `D-Narrow-Res`, `D-Narrow-Asgn` and `D-Null-Elem` were all opened and closed 2026-08-31 (below); `D-Chk-Yield` was opened and closed 2026-08-28 (below); `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
+OPEN: **0** — `D-Decl-Sev` was opened and closed 2026-09-05 (below); `D-Narrow-Res`, `D-Narrow-Asgn` and `D-Null-Elem` were all opened and closed 2026-08-31 (below); `D-Chk-Yield` was opened and closed 2026-08-28 (below); `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
 fix/reconciliation.  The **@PLN102 DN3-Float extension** (below) is also CLOSED — SHIPPED
 default-on 2026-07-11 (#559): float `/`/`%` and the domain-partial float functions type `τ?`
 exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, retained as the
 record.  Per-situation mitigation catalogue:
 [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
+
+### D-Decl-Sev — OPENED AND CLOSED (2026-09-05, @PLN153 phase 3b): the declared LOCAL was refused at every width where `(N-Store)` warns, and the inferred one was refused where `(N-Join)` widens
+
+`(N-Store)` gives one severity for a `τ?` reaching a non-null slot undischarged — *"a WARNING for
+most τ … a hard ERROR only for narrow widths"* — and `(N-Decl)` says a declared `x: τ` makes such
+a write `(N-Store)`-illegal, which is that severity, not a stricter one.  The worked table under
+the rules said otherwise (`a: integer = 2; a = v[i]` → *"type error"*), the pre-cutover reading
+that was never updated when @PLN102 shipped the split, and the code did what the table said: a
+DECLARED local was refused by `change_var_type`'s "cannot change type from `τ` to `τ?`" at every
+width — the twelfth home of the refusal, and the only one that erred where the eleven others
+warned.  The Stage A matrix made it exact: of the 102 cells the `local` row was the one row that
+read ERROR for every full-width kind while `element`, `argument` and `return` read WARN.
+
+The second half was hidden by a vacuous guard.  `(N-Join)` says an INFERRED `a = 2; a = v[i]`
+widens `a` to `integer?`; the phase-1 hold cell wrote exactly that and passed — with a CONSTANT
+index, which @PLN102 D1 trusts by contract and types non-null, so nothing was ever widened and the
+assert read the in-band sentinel.  With a variable index the same program was REFUSED with the
+declared local's message: the inferred local had no arm at all.
+
+```loft
+fn d(v: vector<integer>, i: integer) -> integer { x: integer = v[i]; return x; }   // was ERROR; the rule: WARNING, x holds null
+fn j(v: vector<integer>, i: integer) -> integer { a = 2; a = v[i]; return a; }     // was ERROR; the rule: a: integer?, the RETURN warns
+```
+
+Closed by giving each half its home.  A declared local (a parameter too — its type is the
+signature's — and a write-back `&τ` parameter, which is the caller's slot one link away) is asked
+through the one store face (`convert_store`, "the local `x`" / "the parameter `x`") BEFORE the
+retype, at the assignment seam and at the tuple-destructure site, so the arm reports with the
+rule's split and the retype sees the peeled type; an inferred local takes `change_var_type`'s
+`(N-Join)` arm, which widens to `Optional(the wider width)` and stays silent — the widen is proven
+by the next declared slot it reaches, which warns.  `retype_would_be_refused`, the loft#1145 gate
+that predicts the verdict, already read the two through one predicate (`decl_accepts`) and agreed.
+Stage A: the five full-width `local` cells moved ERROR → WARN, the narrow one stayed ERROR, no
+other cell moved.  Guards: `153-n-store-a-declared-local-warns-at-every-full-width-kind` (nine
+slot shapes, one report each), `153-n-join-an-inferred-local-widens-to-nullable` (seven joins, the
+widen proven by a later declared store), `153-n-store-refused-into-a-narrow-local` (every narrow
+slot the local family reaches, four cells), and the seven phase-1 pair files re-pinned to the
+rule's text; `153-n-rules-hold`'s `(N-Join)` cell now indexes by a variable, which the parent
+build refuses, so its compiling is the receipt.  The `&τ` parameter had never been asked at all
+(the `RefVar` peel carried the null in silence) and reports with the rest.  A documented refusal
+became a warning — `Contract: strained`; a program that compiled yesterday still compiles, and
+`x: integer = find(…)` now runs with a warning where it used to stop.
 
 ### D-Null-Heap — OPENED AND CLOSED (2026-09-03, loft#1313): `(N-Store)` was enforced for the SCALARS only
 
