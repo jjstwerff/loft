@@ -12,12 +12,15 @@
 // message that named neither the link nor the cure.  loft#1372 is the record of the feature
 // still owed.
 //
-// Every cell below is one spelling of the same link; each is expected to carry the decline.
+// Every cell below is one spelling of the same link; each carries the decline, and the
+// harness consumes one expectation per report, so the three `integer?` cells have three.
 //
 // @falsified-at: 44be76fb → here (hand-measured): on the parent build the scalar local bind
 //   compiles and prints `x=5` (the silent copy), the annotated bind and the parameter are
 //   refused with `cannot change type from &integer? to integer`, and the field link binds a
 //   view of the tagged slot; none of them carries this message.
+// @EXPECT_ERROR: a `&` reference cannot link a nullable `integer?` yet
+// @EXPECT_ERROR: a `&` reference cannot link a nullable `integer?` yet
 // @EXPECT_ERROR: a `&` reference cannot link a nullable `integer?` yet
 // @EXPECT_ERROR: a `&` reference cannot link a nullable `S?` yet
 // @EXPECT_ERROR: a `&` reference cannot link a nullable `text?` yet

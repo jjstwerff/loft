@@ -485,6 +485,26 @@ shown unreached by a nullable-typed var on today's lowering — a nullable local
 minted into a work-ref it then adopts (`__ref_p2_1`), never into the local itself — and are
 peeled alongside so a lowering that mints into the local directly is covered by existing.
 
+**Batch 3 — the return-delivery and materialise families (2026-09-05).**  One matrix for the
+`control.rs` / `scopes.rs` tier-0 group (`stage4/cells3/ret.loft`): a `-> S?` and a
+`-> vector<integer>?` delivering a parameter, a nullable parameter, a parameter's dense and
+tagged field, an element, a local, a nullable local, a tail call and a value branch — eleven
+cells right on both backends under strict stores, and one wrong: an ABSENT element handed back
+as `S?` reads present at the handle's null test, garbage after the bind (**loft#1374**: the
+out-of-range read answers the SLOT spelling of absence, a zero record with a live store
+number, and the handle test reads the store number alone — one absence, two null tests; the
+local's `== null` sees it, the parameter's `!= null` does not).  That is `@FR-L-Null`'s
+converge-the-citations question and opens phase 5.  The materialise site
+(`dispatch.rs::materialises_element`, the scopes twin) was walked with a dense control first
+and the CONTROL was the finding: a view of a vector element taken before the vector grows past
+its allocation is stale on both backends, the materialise walk listing no view for a `+=`
+after the bind (**loft#1373**, not an `Optional` defect; its nullable twin waits on it).
+Shown unreached by a wrong answer, with a positive cell each: a tuple with a nullable vector
+member (the tuple-set dispatch), a nullable scalar hoisted out of a branch (the native
+prologue's `is_scalar`), an absent element bound to a local.  Refusals met on the way, each
+honest and recorded: a `par` worker cannot answer `S?` (*not supported*, the concurrency
+chapter silent on it), a generator cannot spell `iterator<S?>` (refused at the type).
+
 ## Phase ordering
 
 0 before 1 (a probe that kills the census cheaply).  1 before 2 and 3 (the homes have to be
