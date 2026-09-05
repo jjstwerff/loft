@@ -39,6 +39,56 @@ of the same join.  Face B is also this register's clearest case of a leak MASKIN
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
 
+### D-own-34 — OPENED AND CLOSED (2026-09-05): the per-path fact was short of three more homes, and the fact the emitters read did not survive the cache
+
+The `@FR-O-Witness` walk (QUALITY.md B7v) built the caller-side and cache matrices B7u's had
+not, and each red was a nullable local not treated as the heap local it is — none the mixed-path
+join the matrix was drawn for:
+
+- **The owner witness did not survive the startup cache.**  `owner_witness` was maintained in
+  the IR and restored by no snapshot field, so a WARM program-cache run served the pre-witness
+  copy arm: `s: S? = a; s = a.next; s = a` wrote the second copy INTO the record `s` was
+  viewing, `b == 7` on both backends where a cold run read `b == 2`.  A fact the emitters read
+  must survive the snapshot exactly as `skip_free` does — `__own_<name>` is now the tenth stored
+  `Variable` field (`VAR_OWNER_WITNESS`), through the JSON codec, the store codec and the schema
+  source, and `CACHE_FORMAT_VERSION` is bumped to 5 so a stale bundle is not read.  Guard:
+  `tests/arc_e_program_cache.rs::a_warm_run_keeps_the_owner_witness`, cold vs warm, both backends.
+
+- **A nullable local bound from a call that answers a BORROW of its argument aliased it.**
+  `x: S? = keep(a); x.value = 9` wrote through to `a` on both backends while the dense twin
+  copied; a witnessed local first-bound that way pointed its owner witness at the CALLER's store
+  and released it at the first view.  The heap first-bind dispatch asks its shape against the
+  bare type, and its one nullable arm (loft#1106's join guard) admitted only a `Join` verdict —
+  a callee that ALWAYS hands its argument back is a pure `Borrowed`, so it stayed a plain alias.
+  `nullable_join_first_bind` now admits a `Borrowed` whose witness is the ONE argument the return
+  deps name (a two-source return keeps the plain adopt — loft#1368 — because one witness would
+  adopt the other), and the reassignment strip and the var-copy strip peel `base()` so the copy
+  is emitted for the nullable spelling too.  Guard:
+  `a-nullable-local-bound-from-a-borrow-returning-call-copies-it.loft` (5 fns, both backends).
+
+- **A `-> S?` callee freed a PARAMETER on its null path.**  A record source of a return with a
+  reachable null arm is paired with the hoisted return value (`OpFreeRefIfDistinct(src,
+  __ret_N)`), which is right for a LOCAL but freed the CALLER's argument on every `null` answer,
+  both backends.  A parameter is no longer a null-arm source (its store is the caller's,
+  F-ParamHeap; a REBOUND parameter keeps its own release by identity against its entry stash).
+  Guard: `a-null-answer-does-not-free-the-argument-the-other-arm-hands-up.loft` (3 fns).
+
+- **A heap-record local reassigned from a value branch handed up the chosen arm's STORE.**
+  `x = if c { a } else { b }` on an owned `x` aliased `a` and then freed it as its own at scope
+  exit; a witnessed local the same.  The FIRST bind already lifts each arm into a temp the
+  binding borrows, but a binding assigned elsewhere cannot borrow those (`@FR-O-Latest`), so the
+  REASSIGNMENT is now lowered to the statement form `if c { x = a } else { x = b }` — each arm's
+  `Set` gets the copy a single bind of its tail would.  Records only; the vector/keyed twin is
+  loft#1370.  Guard: `a-record-reassigned-from-a-value-branch-copies-the-chosen-arm.loft` (6 fns).
+
+Every guard `make falsify`'d at e575a33f; the corpus IR census moved 7 of 1241 files, every one
+green on both backends under strict stores and poison.  A trap the walk caught in its own work:
+peeling the var-copy strip through `base()` widened it onto a CAPTURED nullable local, whose
+closure holds the store — freeing it read `null` through the capture; the strip now excludes a
+captured or never-free local (`@FR-L-CapHeap`), and `1181`/`1202` are the controls.  Held FIXED
+and filed apart: the two-source nullable return (loft#1368) and the vector value-branch reassign
+(loft#1370).
+
 ### D-own-33 — OPENED AND CLOSED (2026-09-05): the per-path fact was short of four homes, every one a nullable local not treated as the heap local it is
 
 `(O-Complete)` requires the fact PER BINDING and PER PATH — every binding, every arm.  Measured on

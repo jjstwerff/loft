@@ -56,6 +56,14 @@ place — mutating `s` afterwards no longer shows through `t.0` when `T` is a st
 generic and the non-generic spelling of the same function had been giving different
 answers, which is the one thing a type variable is supposed never to do.  A `T` bound to a
 vector or a keyed collection is still shared rather than copied (loft#1365).
+**A value kept in a `struct?` behaves the same whether it came from a variable, a call, or a
+branch.**  A few store-sharing corners are gone: a nullable local set from a function that hands
+back one of its arguments now gets its own copy (writing through it no longer changes the
+caller's value); a function returning `struct?` no longer disturbs an argument on the path where
+it answers `null`; and reassigning a record local from an `if`/`match` that yields a value copies
+the chosen branch, as a first assignment already did.  A separate, invisible fix: a program run a
+second time from the same directory (served from loft's on-disk cache) now behaves exactly like
+its first run for these cases.
 
 **A struct-enum value binds like a struct.**  `c = e` on an enum-with-fields value now gives
 `c` its own copy on the interpreter, as it already did on `--native` — at a first bind, a

@@ -483,7 +483,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 The `@FR-O-Complete` walk (B7u) added one peeling site — `scopes::adopted_work_refs` reads a
 right-hand side's `If` arms, `Block` and `Insert` tails through their `Span` to find the
-construction work-refs a binding adopts.  loft#1356 added two peeling sites (the eager factory's tail scan reads a `Return` and a `Set` through their `Span`), loft#1362 two (`scopes::in_place_rebuild` reads the statement-level `OpDatabase` through its `Span`, and `copy_hands_off` walks a nested destination place through each level's), loft#1357 one, and the projection-view marking one (`scopes::nullable_view_locals` reads each `Set`'s source through its `Span` to match a `Value::TupleGet` or a projection `Value::Call`) — the statement scan in `scopes::convert` takes a `Span` off an `if` whose condition consumes a `??` temp, so it can put the evaluated condition back under the same position.  `scripts/ir_walker_audit.py unspan` re-measures it, and
+construction work-refs a binding adopts.  loft#1356 added two peeling sites (the eager factory's tail scan reads a `Return` and a `Set` through their `Span`), loft#1362 two (`scopes::in_place_rebuild` reads the statement-level `OpDatabase` through its `Span`, and `copy_hands_off` walks a nested destination place through each level's), loft#1357 one, and the projection-view marking one (`scopes::nullable_view_locals` reads each `Set`'s source through its `Span` to match a `Value::TupleGet` or a projection `Value::Call`) — the statement scan in `scopes::convert` takes a `Span` off an `if` whose condition consumes a `??` temp, so it can put the evaluated condition back under the same position.  The `@FR-O-Witness` walk (B7v) added two peeling sites — `scopes::sink_set_into_arms` reads an `if`/`match`'s arms, `Block` and `Insert` tails through their `Span` to lower a value-branch reassignment to the statement form.  `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
 It moved from 384 · 360 to 385 · 361 with loft#1354's `arm_moves_a_live_tuple_local`, which
 discriminates on `Value::Var` and `Value::Block` to find the local an `if` arm hands over — it
@@ -2458,14 +2458,14 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 714 | 357 | 5 | **352** |
+| 709 | 352 | 5 | **352** |
 
 The `@FR-O-Complete` walk (B7u) moved one function from opaque to seeing-through:
 `scopes::needs_pre_init`, which names the locals that get a null before a branch and the
 hoist out of a loop body, now asks its shape question through `base()` — the nullable
 spellings were the whole finding.  loft#1362 moved one FUNCTION-half site: `scopes::scan_set`'s latest-assignment memo (`owned_refs`) reads the local's type through `base()` now, so a nullable record local has an entry for the reassignment release to read.  The projection-view marking added one on the seeing-through side (`scopes::nullable_view_locals`, which reads `function.tp(v).base()`), taking it to `702 | 345`.  Joining the `@FR-O-Complete` walk (B7u) onto @PLN153 phase 2 re-measures both rows on the tree that holds both streams: optional `713 | 356 | 5 | 352`, unspan `399 | 375 | 24` — neither branch's number, as every join so far.  @PLN153 phase 3a re-measures once more: `714 | 357 | 5 | 352` — `nstore_unwrap_report` and `convert`'s store faces read the wrapper through `Type::Optional` arms and `is_dbref`, the seeing-through side; unspan `399 | 375 | 24`.
 
-The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.  It happened again on the 2026-09-03 join — one side carried `684 | 330 | 5 | 349` and the other `687 | 331 | 5 | 351`, and the tree that holds both measures `689 | 332 | 5 | 352`; the 2026-09-03 evening join (D-bind-11 onto the #1318 tree) measured `692 | 333 | 5 | 354`, loft#1327's opaque-fn-ref clause moved one function off the opaque column, and the D-own-8 closure moved two more onto the peeled one — one arm peeled (`gen_set_first_at_tos`'s null-init) beside two new scope-pass predicates.  The tree that holds BOTH measures `694 | 337 | 5 | 352`, which is neither side's number: two branches each adding predicates cannot have their counts added, because the audit classifies FUNCTIONS and a merged body is one function however many branches touched it.  loft#1333 then moved it to `695 | 338 | 5 | 352` with `scopes::mixed_ownership_locals`, the pre-scan that asks whether a binding is assigned a VIEW on one path and a delivered collection on another; it reads `function.tp(v).base()`, so it peels the wrapper and lands on the seeing-through side, leaving the opaque column where it was.  loft#1335 moved one function the other way, from opaque to seeing-through — `697 | 341 | 5 | 351` — because `fnref_result_type` stopped listing the shapes it bridges and asks `Type::base()` / `borrow_deps` instead, which is the cure that closed it.  loft#1349 added one opaque function, `Parser::boxed_tuple_return` — `698 | 341 | 5 | 352` — which matches `Type::Tuple` bare on purpose: a nullable tuple is not a shape it boxes, so peeling there would be a wrong answer rather than a wider one.  loft#1357 added two on the seeing-through side — `700 | 343 | 5 | 352` — `Parser::lambda_text_buffer_var` and `scopes::any_text_return_buffer`, both asking which hidden attribute is a `RefVar(Text)` buffer, the one home the text-return deliveries read.
+The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.  It happened again on the 2026-09-03 join — one side carried `684 | 330 | 5 | 349` and the other `687 | 331 | 5 | 351`, and the tree that holds both measures `689 | 332 | 5 | 352`; the 2026-09-03 evening join (D-bind-11 onto the #1318 tree) measured `692 | 333 | 5 | 354`, loft#1327's opaque-fn-ref clause moved one function off the opaque column, and the D-own-8 closure moved two more onto the peeled one — one arm peeled (`gen_set_first_at_tos`'s null-init) beside two new scope-pass predicates.  The tree that holds BOTH measures `694 | 337 | 5 | 352`, which is neither side's number: two branches each adding predicates cannot have their counts added, because the audit classifies FUNCTIONS and a merged body is one function however many branches touched it.  loft#1333 then moved it to `695 | 338 | 5 | 352` with `scopes::mixed_ownership_locals`, the pre-scan that asks whether a binding is assigned a VIEW on one path and a delivered collection on another; it reads `function.tp(v).base()`, so it peels the wrapper and lands on the seeing-through side, leaving the opaque column where it was.  loft#1335 moved one function the other way, from opaque to seeing-through — `697 | 341 | 5 | 351` — because `fnref_result_type` stopped listing the shapes it bridges and asks `Type::base()` / `borrow_deps` instead, which is the cure that closed it.  loft#1349 added one opaque function, `Parser::boxed_tuple_return` — `698 | 341 | 5 | 352` — which matches `Type::Tuple` bare on purpose: a nullable tuple is not a shape it boxes, so peeling there would be a wrong answer rather than a wider one.  loft#1357 added two on the seeing-through side — `700 | 343 | 5 | 352` — `Parser::lambda_text_buffer_var` and `scopes::any_text_return_buffer`, both asking which hidden attribute is a `RefVar(Text)` buffer, the one home the text-return deliveries read.  The `@FR-O-Witness` walk (B7v) added one on the opaque side — `709 | 352 | 5 | 352` — a value-branch shape guard that matches a bare heap `Type` variant to decide whether a reassignment is sunk per arm (records only; a nullable is peeled off first).
 
 The most recent movement is loft#1327's, and it goes the right way for the ordinary reason: the
 new clause asks `is_dbref(ret_type.base())` of a fn-ref call's return, so the function it sits in
@@ -5484,6 +5484,58 @@ about the block, not the collection — but only `hash` is measured), A3 `tuple-
 `coalesce-result`, A7 `float` / `boolean` / `narrow-int`, and A4 `coalesce-subject` and
 `block`.  The axes the previous guards held fixed and this walk moved are the nullable
 spelling and the scope of the binding against its buffer's (loop body against function).
+
+#### B7v — `@FR-O-Witness` walked: the caller-side matrix B7u never built, and the fact the emitters read that did not survive the cache (2026-09-05)
+
+Picked by `rule_tags.py dups`: 13 sites.  B7u walked the rule from the DECLARATION side (a local
+whose OWN assignments mix ownership).  Its thirteen sites also ask a caller-side question — *"is
+a nullable local bound from a call that borrows its argument treated as the heap local it is?"* —
+and a cache question — *"does the fact the two emitters read survive the startup cache?"*.  Two
+matrices B7u's had not crossed: (1) a nullable local first-bound / reassigned from a callee that
+answers its argument, its argument's element, its argument's field, on the plain / early-return /
+if-valued / null spellings, dense twin beside each; (2) the same program run COLD then WARM
+through the program cache, on both backends, scored on value and strict stores and poison.
+
+**Four defects, one shape** — a nullable local not treated as the heap local it is, none the
+mixed-path join the matrix was drawn for:
+
+- **The owner witness did not survive the cache.**  `owner_witness` lived in the IR and in no
+  snapshot field, so a warm run served the pre-witness copy arm: the sharp cell of loft#1336
+  (`s = a; s = a.next; s = a`) wrote a copy INTO the record `s` viewed and read `b == 7` warm,
+  `b == 2` cold, both backends.  `__own_<name>` is now the tenth stored `Variable` field, through
+  every codec, and `CACHE_FORMAT_VERSION` is bumped to 5.  A fact the emitters read must survive
+  the snapshot exactly as `skip_free` does — that is the one-home statement.
+
+- **A nullable local bound from a borrow-returning call aliased its argument.**  The dispatch
+  asks its shape against the bare type; its one nullable arm admitted only a `Join`, so a pure
+  `Borrowed` (a callee that ALWAYS hands its argument back) stayed a plain alias, `x: S? =
+  keep(a); x.value = 9` reaching `a` while the dense twin copied.  `nullable_join_first_bind`
+  now admits a single-witness `Borrowed`; the strips peel `base()`.
+
+- **A `-> S?` callee freed a PARAMETER on its null path** (the caller's store, F-ParamHeap): a
+  parameter is no longer a null-arm return source.
+
+- **A record reassigned from a value branch handed up the chosen arm's STORE**: the reassignment
+  is lowered to the statement form so each arm's `Set` copies, as the first bind's per-arm lift
+  already did.
+
+**Verified.**  Three new guards (`a-nullable-local-bound-from-a-borrow-returning-call-copies-it`,
+`a-null-answer-does-not-free-the-argument-the-other-arm-hands-up`,
+`a-record-reassigned-from-a-value-branch-copies-the-chosen-arm`) plus the cache guard
+`a_warm_run_keeps_the_owner_witness`; each `make falsify`'d at e575a33f.  Neighbours green both
+backends under strict stores and poison (`1336`, `1181`, `1202`, `1106`, `1337`).  Corpus IR
+census moved 7 of 1241 files, every one green on both backends.
+
+**Method.**  A trap the walk caught in its own work: peeling the var-copy strip through `base()`
+to reach the nullable spelling widened it onto a CAPTURED nullable local, whose closure holds the
+store at capture — freeing it read `null` through the capture (`c23`).  The strip now excludes a
+captured or never-free local (`@FR-L-CapHeap`); `1181`/`1202` are the standing controls, and the
+scratch cell `c23` is the one that named the regression before the census would have.  The
+disagreement the walk turned on: a `-> S` return copies through its buffer and a `-> S?` return
+has no buffer, so the same body delivered its value fresh in one spelling and raw in the other —
+`agreement is not correctness` in reverse, one backend's two spellings disagreeing with each
+other.  Held FIXED and filed apart: the two-source nullable return (loft#1368) and the
+vector/keyed value-branch reassign (loft#1370).
 
 #### B2 — open, and the owner's call
 

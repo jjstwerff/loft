@@ -260,17 +260,18 @@ pub(crate) const POS_POS: u32 = 8;
 pub(crate) const POS_FILE: u32 = 16;
 
 /// `Variable` record (element of `Function.variables` = `vector<Variable>`) —
-/// the nine codegen-read fields the snapshot seam exposes.
-pub(crate) const VARIABLE_STRIDE: u32 = 29;
-pub(crate) const VAR_NAME: u32 = 16;
-pub(crate) const VAR_TYPE_DEF: u32 = 20; // vector<TypeT> (box-of-one)
+/// the ten codegen-read fields the snapshot seam exposes.
+pub(crate) const VARIABLE_STRIDE: u32 = 37;
+pub(crate) const VAR_NAME: u32 = 24;
+pub(crate) const VAR_TYPE_DEF: u32 = 28; // vector<TypeT> (box-of-one)
 pub(crate) const VAR_STACK_POS: u32 = 0;
 pub(crate) const VAR_USES: u32 = 8;
-pub(crate) const VAR_ARGUMENT: u32 = 24;
-pub(crate) const VAR_STACK_ALLOCATED: u32 = 25;
-pub(crate) const VAR_SKIP_FREE: u32 = 26;
-pub(crate) const VAR_CAPTURED: u32 = 27;
-pub(crate) const VAR_CALLER_HIDDEN_BUF: u32 = 28;
+pub(crate) const VAR_OWNER_WITNESS: u32 = 16;
+pub(crate) const VAR_ARGUMENT: u32 = 32;
+pub(crate) const VAR_STACK_ALLOCATED: u32 = 33;
+pub(crate) const VAR_SKIP_FREE: u32 = 34;
+pub(crate) const VAR_CAPTURED: u32 = 35;
+pub(crate) const VAR_CALLER_HIDDEN_BUF: u32 = 36;
 
 /// `Function` field offsets, relative to a `Function` base (it is inlined in
 /// `Definition`, never stored in a vector).
@@ -1432,6 +1433,7 @@ mod tests {
             pos(ids.variable, "caller_hidden_buf"),
             VAR_CALLER_HIDDEN_BUF
         );
+        assert_eq!(pos(ids.variable, "owner_witness"), VAR_OWNER_WITNESS);
 
         // Function record.
         assert_eq!(pos(ids.function, "name"), FN_NAME);

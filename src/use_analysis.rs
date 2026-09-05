@@ -3085,9 +3085,16 @@ pub fn call_return_frees_source(data: &Data, d_nr: u32, call: &Value) -> bool {
 /// this differently would either free a store the caller still names, or strip the
 /// deps off a bind that stays a plain alias.
 ///
-/// Narrow on purpose: only a JOIN with a nameable witness.  Every other nullable bind
-/// keeps today's plain adopt — which is what a call that borrows nothing, or one whose
-/// witness the bracket cannot name, already correctly does.
+/// A JOIN or a pure BORROW with a nameable witness — `(F-Ret)` says the value a call
+/// answers is FRESH whichever arm produced it, so a callee that always hands its argument
+/// back (`fn keep(s: Node) -> Node { s }`, an element view `v[0]` through `-> T?`, a
+/// generic instance of either) is bound through the same guard: the store aliases the
+/// witness on every run and is copied on every run, and a `null` answer has no store to
+/// alias and stays null.  Asked for a JOIN alone, a nullable local bound from a
+/// borrow-returning callee stayed a plain alias — a write through it reached the caller's
+/// argument on both backends, and a witnessed local's witness then named the CALLER's
+/// store and released it (`@FR-O-Witness`, QUALITY.md B7v).  A call that borrows
+/// nothing, or one whose witness the bracket cannot name, keeps today's plain adopt.
 #[must_use]
 pub fn nullable_join_first_bind(
     data: &Data,
@@ -3111,8 +3118,34 @@ pub fn nullable_join_first_bind(
     if !callee.is_loft_defined() || !callee.returns_borrowed_view() {
         return None;
     }
-    let Own::Join { base } = ownership_of(data, d_nr, value) else {
-        return None;
+    let base = match ownership_of(data, d_nr, value) {
+        Own::Join { base } => base,
+        // A pure BORROW is guarded only where the witness is the one argument the return
+        // deps name: a return that may borrow EITHER of two arguments has two bases and one
+        // witness would adopt the other, and a base the oracle resolved to an argument the
+        // deps do not name is a translation the deps contradict (`(O-Oracle)`: never upgrade
+        // on a base that cannot be trusted) — both keep today's plain adopt.
+        Own::Borrowed { base } => {
+            let attrs = callee.attributes();
+            let visible: Vec<u16> = callee
+                .returned()
+                .depend()
+                .iter()
+                .copied()
+                .filter(|&d| attrs.get(d as usize).is_some_and(|a| !a.hidden))
+                .collect();
+            let [dep] = visible[..] else {
+                return None;
+            };
+            let Value::Call(_, args) = value.unspan() else {
+                return None;
+            };
+            match args.get(dep as usize).map(Value::unspan) {
+                Some(Value::Var(arg)) if *arg == base => base,
+                _ => return None,
+            }
+        }
+        Own::Owned => return None,
     };
     if base == u16::MAX {
         return None;

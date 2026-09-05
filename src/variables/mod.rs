@@ -134,6 +134,8 @@ pub(crate) struct VarSnapshot<'a> {
     pub skip_free: bool,
     pub captured: bool,
     pub caller_hidden_buf: bool,
+    /// The owner witness of a mixed-ownership local (`@FR-O-Witness`), `u16::MAX` for none.
+    pub owner_witness: u16,
 }
 
 /// @PLAN28 C4 — owned codegen-read fields of one `Variable`, consumed by
@@ -149,6 +151,7 @@ pub(crate) struct RestoredVar {
     pub skip_free: bool,
     pub captured: bool,
     pub caller_hidden_buf: bool,
+    pub owner_witness: u16,
 }
 
 // This is created for every variable instance, even if those are of the same name.
@@ -543,7 +546,10 @@ impl Function {
         self.variables.len()
     }
 
-    /// The nine codegen-read fields of variable `i`, for the snapshot encoder.
+    /// The ten codegen-read fields of variable `i`, for the snapshot encoder.  A fact the
+    /// EMITTERS read belongs here whatever map carries it at parse time: `owner_witness`
+    /// was maintained in the IR and restored nowhere, so a warm program-cache run copied
+    /// into the record a witnessed local was viewing (`@FR-O-Witness`).
     #[must_use]
     pub(crate) fn snapshot_var(&self, i: usize) -> VarSnapshot<'_> {
         let v = &self.variables[i];
@@ -557,6 +563,7 @@ impl Function {
             skip_free: v.skip_free,
             captured: v.captured,
             caller_hidden_buf: v.caller_hidden_buf,
+            owner_witness: self.owner_witness(i as u16).unwrap_or(u16::MAX),
         }
     }
 
@@ -597,6 +604,11 @@ impl Function {
         inline_refs: Vec<u16>,
     ) -> Function {
         let mut f = Function::new(name, file);
+        for (i, r) in vars.iter().enumerate() {
+            if r.owner_witness != u16::MAX {
+                f.owner_witness.insert(i as u16, r.owner_witness);
+            }
+        }
         f.variables = vars
             .into_iter()
             .map(|r| Variable {

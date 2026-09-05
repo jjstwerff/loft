@@ -225,7 +225,12 @@ loops* it happened.  And where even that is not enough — a local that OWNS aft
 assignment and VIEWS after another, in a loop that runs both — the ownership is a per-RUN
 fact, and `O-Witness` carries it in a slot beside the local: the walker `cur: Node? = a;
 while cur != null { cur = cur.next }` frees the copy it started from at the first rebind
-and nothing at the last, whichever iteration that is (loft#1336).
+and nothing at the last, whichever iteration that is (loft#1336).  Because it is a fact the
+EMITTERS read, it must survive the startup cache like `skip_free` does: it was maintained in
+the IR and restored by no snapshot field, so a WARM program-cache run emitted the pre-witness
+copy arm and wrote a copy INTO the record the local was viewing.  `__own_<name>` is now the
+tenth stored variable field, and the cache format version is bumped so a stale bundle is not
+read (loft#1336 follow-up, QUALITY.md B7v).
 
 ⚠ **`(O-Oracle)`'s interprocedural half has a failure mode of its own: it can lose the
 callee's answer on the way back to the caller.** The summary is stated in the CALLEE's

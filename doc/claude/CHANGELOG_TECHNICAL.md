@@ -87,6 +87,31 @@ matrix moved on exactly those seven cells and nowhere else; `scripts/introspect_
 the corpus (stderr included) reads `DIFFERENT 16 of 1272` — every one a stderr line and none an emission: the thirteen corpus files that gained a warning (nine nullable indexes after a `find`, three `null` keys, one `null` into a vector field), reviewed one by one, and the three new guards, which differ by construction; the admitting-faces guard is silent on both
 builds with every value pinned.  `(N-Store)` in `formal/types.md` now names its slots and
 its non-stores.  `Fixes #1366`.
+### The owner witness survives the cache, and the caller side of a nullable bind copies (2026-09-05, `@FR-O-Witness` walk, D-own-34)
+
+Four store-lifetime defects, one shape — a nullable heap local not treated as the heap local it
+is — found by the caller-side and startup-cache matrices of QUALITY.md B7v, both backends:
+
+- **`owner_witness` now survives the startup cache.**  It was maintained in the IR and restored
+  by no snapshot field, so a warm program-cache run served the pre-witness copy arm and wrote a
+  copy into the record a witnessed local was viewing (loft#1336's sharp cell read `b == 7` warm,
+  `b == 2` cold).  `__own_<name>` is the tenth stored `Variable` field (`VAR_OWNER_WITNESS`),
+  written and read through the JSON codec, the store codec, the schema source `ir.loft` and the
+  baked layout constants; `CACHE_FORMAT_VERSION` → 5 so a v4 bundle is not read.
+- **A nullable local bound from a call that answers a BORROW of its argument copies it**, like
+  its dense twin.  `nullable_join_first_bind` admits a single-witness `Borrowed` (not only a
+  `Join`); the reassignment strip and the var-copy strip read `base()`.  A two-source return
+  keeps the plain adopt (loft#1368).
+- **A `-> S?` callee no longer frees a PARAMETER on its null path** (F-ParamHeap: the caller owns
+  it; a rebound parameter keeps its entry-stash release).
+- **A record reassigned from a value branch is lowered to the statement form** (`if c { x = a }
+  else { x = b }`) so each arm copies; the vector/keyed twin is loft#1370.
+
+Guards: `a-nullable-local-bound-from-a-borrow-returning-call-copies-it.loft`,
+`a-null-answer-does-not-free-the-argument-the-other-arm-hands-up.loft`,
+`a-record-reassigned-from-a-value-branch-copies-the-chosen-arm.loft`,
+`tests/arc_e_program_cache.rs::a_warm_run_keeps_the_owner_witness`.
+
 
 ### The per-path fact reaches the nullable spellings (2026-09-05, `@FR-O-Complete` walk, D-own-33)
 

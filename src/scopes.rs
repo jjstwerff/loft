@@ -5300,6 +5300,31 @@ impl Scopes<'_> {
             function.set_owner_witness(v, w);
             self.owner_witness.insert(v, w);
         }
+        // `@FR-O-Complete` / `@FR-B-Copy` — a REASSIGNMENT of a heap local from a value
+        // branch is lowered to the statement form, `if c { x = a } else { x = b }`, so each
+        // arm's `Set` gets the lowering a single bind of that tail has: a whole variable is
+        // COPIED, a projection views, a call is copied or adopted by its own arm.  Bound as
+        // one value, the branch handed the local the chosen arm's STORE: `x = if c { a }
+        // else { b }` on an owned `x` aliased `a` (a write through `x` reached it) and then
+        // freed it as its own at scope exit.  The FIRST bind keeps its per-arm lift
+        // (`lift_join_arm_tails`), whose temps the binding borrows — a binding assigned
+        // elsewhere cannot borrow them (`@FR-O-Latest`), which is exactly why the
+        // reassignment is written out per arm instead.  Arms that hand back a compiler temp
+        // (a `??` hoist, a literal's work-ref) keep the value form: the join they express is a
+        // runtime fact (`Own::Join`), not a copy.  RECORDS only: a sunk vector `Set` keeps
+        // the join deps the parser typed the binding with and still aliases (the vector twin
+        // is filed, not fixed here).
+        if self.var_scope.contains_key(&v)
+            && Self::is_value_branch(value)
+            && !matches!(function.tp(v), Type::RefVar(_))
+            && matches!(
+                function.tp(v).base(),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            )
+            && let Some(sunk) = Self::sink_set_into_arms(v, ov, value, function)
+        {
+            return self.scan(&sunk, function, data);
+        }
         // #316 — capture BEFORE put_scope below: an ownership-transition free
         // only applies to a REassignment.
         let was_in_scope = self.var_scope.contains_key(&v);
@@ -5599,6 +5624,14 @@ impl Scopes<'_> {
         //   scope-exit `OpFreeRef(__ref_N)` freed the record the caller went
         //   on reading and writing through.
         let publishes_through_ref = matches!(function.tp(v), Type::RefVar(_));
+        // Asked BARE on purpose, not through `base()`: the two strips below make `v` an
+        // OWNER, which is right only where a copy is emitted, and a `-> S?` callee's
+        // delivery does not yet materialise what a `-> S` one does — a capture, a parameter's
+        // element, a witnessed local's view are handed up raw (loft#1337's selector copies
+        // only what this frame frees).  Peeled, a nullable local bound from such a call
+        // became an owner of a store it only viewed and freed it (the loft#1181 capture).  The
+        // nullable spelling copies through the join guard instead (`nullable_join_first_bind`,
+        // whose own strip sits below), which copies exactly the borrow it can witness.
         let mut record_target = function.tp(v);
         while let Type::RefVar(inner) = record_target {
             record_target = inner.base();
@@ -5966,10 +5999,27 @@ impl Scopes<'_> {
         // path is hit by the I13 iterator protocol's hidden
         // `__iter_obj_N = c` setup (parser/collections.rs:209).
         // Strip v's declared deps so get_free_vars emits OpFreeRef.
+        //
+        // Through `base()` on both sides: `S?` is the same storage behind a nullability
+        // marker (@FR-L-Null), and both emitters copy the nullable spelling of this bind
+        // exactly as the dense one (`gen_set_first_ref_var_copy` reads `base()`).  Asked
+        // bare, a nullable local reassigned from a value branch kept the join deps the parser
+        // typed it with once the branch was written out per arm, and the per-arm copies
+        // then read as borrows: an alias on both backends, where the dense twin copied.
         if let Value::Var(src) = unspanned_value
-            && let Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) = function.tp(v).clone()
-            && let Type::Reference(src_d, _) | Type::Enum(src_d, true, _) = function.tp(*src)
+            && let Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) =
+                function.tp(v).base().clone()
+            && let Type::Reference(src_d, _) | Type::Enum(src_d, true, _) =
+                function.tp(*src).base()
             && d_nr == *src_d
+            // Not a CAPTURED or never-free local (@FR-L-CapHeap): the peel above widened this
+            // strip to the nullable spelling, and a captured heap value is SHARED — the
+            // closure holds the store at capture time — so making it an owner frees a store
+            // the closure still reads (`x: S? = a; f = fn(){ x }; x = x.next` then `f()` read
+            // null).  The dense spelling never reached this because a captured local is bound
+            // by literal, not var-copy; the nullable one did.
+            && !function.is_captured(v)
+            && !function.is_skip_free(v)
         {
             // @PLN130 F1 — this strip is LOAD-BEARING FOR NATIVE, which is why the obvious
             // narrowing does not work.  Skipping it when both sides are borrows fixes the
@@ -6947,11 +6997,19 @@ impl Scopes<'_> {
                 // SUPPRESSED here and record it; the return leg below hoists
                 // the value to `__ret_N` and emits
                 // `OpFreeRefIfDistinct(src, __ret_N)` — the runtime decides.
+                //
+                // Not a PARAMETER: its store is the caller's (calls.md F-ParamHeap), so
+                // the null arm of `if c { s } else { null }` has nothing of this frame's
+                // to release for it — paired with the return it freed the caller's
+                // record on every `null` answer, both backends.  A parameter REBOUND in
+                // this body may hold a store of its own; that one is released by
+                // identity against its entry stash at scope exit (`rebind_orig`).
                 for &v in &sources {
                     if matches!(
                         function.tp(v),
                         Type::Reference(_, _) | Type::Enum(_, true, _)
-                    ) {
+                    ) && !function.is_argument(v)
+                    {
                         null_arm_record_sources.push(v);
                     }
                 }
@@ -9310,6 +9368,62 @@ impl Scopes<'_> {
     /// Is this RHS a BRANCH — an `if` expression, or a `match` lowered to a value block whose
     /// tail is the `if` chain?  Only a branch is rewritten: a bare call is the bound spelling
     /// already, and rewriting it into a bound temp would scan the same shape forever.
+    /// The statement form of `Set(v, <value branch>)`: every arm tail `t` becomes `Set(ov, t)`
+    /// and the arms stop yielding a value — or `None` where an arm tail is not one a plain
+    /// bind can take as it is: the binding itself, a compiler temp (a `??` hoist, a lift, a
+    /// literal's work-ref), or a shape this cannot read.  `ov` is the ORIGINAL id, so each
+    /// sunk `Set` takes the same scope mapping the value form would have.
+    fn sink_set_into_arms(v: u16, ov: u16, value: &Value, function: &Function) -> Option<Value> {
+        fn sinkable(tail: &Value, v: u16, ov: u16, function: &Function) -> bool {
+            match tail.unspan() {
+                Value::Var(x) => {
+                    *x != v
+                        && *x != ov
+                        && (*x as usize) < function.count() as usize
+                        && !function.is_compiler_generated(*x)
+                }
+                Value::Null | Value::Call(_, _) | Value::CallRef(_, _) => true,
+                Value::If(_, t, f) => sinkable(t, v, ov, function) && sinkable(f, v, ov, function),
+                Value::Block(bl) if !matches!(bl.result, Type::Void | Type::Null) => bl
+                    .operators
+                    .last()
+                    .is_some_and(|l| sinkable(l, v, ov, function)),
+                Value::Insert(ops) => ops.last().is_some_and(|l| sinkable(l, v, ov, function)),
+                _ => false,
+            }
+        }
+        fn sink(node: &mut Value, ov: u16) {
+            match node {
+                Value::Span(b) => sink(&mut b.1, ov),
+                Value::If(_, t, f) => {
+                    sink(t, ov);
+                    sink(f, ov);
+                }
+                Value::Block(bl) => {
+                    if let Some(last) = bl.operators.last_mut() {
+                        sink(last, ov);
+                    }
+                    bl.result = Type::Void;
+                }
+                Value::Insert(ops) => {
+                    if let Some(last) = ops.last_mut() {
+                        sink(last, ov);
+                    }
+                }
+                tail => {
+                    let t = std::mem::replace(tail, Value::Null);
+                    *tail = Value::Set(ov, Box::new(t));
+                }
+            }
+        }
+        if !sinkable(value, v, ov, function) {
+            return None;
+        }
+        let mut out = value.clone();
+        sink(&mut out, ov);
+        Some(out)
+    }
+
     fn is_value_branch(node: &Value) -> bool {
         match node.unspan() {
             Value::If(_, _, _) => true,
