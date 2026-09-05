@@ -3199,10 +3199,22 @@ mod dep_faces_agree {
         assert!(stub.is_unknown() && stub.has_unknown());
         let wrapped = Type::optional(stub.clone());
         assert!(!wrapped.is_unknown(), "a written wrapper is settled");
-        assert!(wrapped.has_unknown(), "…but a stub under it is not decidable");
-        let deep = Type::Tuple(vec![Type::Boolean, Type::Vector(Box::new(wrapped), Deps::none())]);
-        assert!(deep.has_unknown(), "found at any depth through the keystone");
-        assert!(!Type::optional(Type::Boolean).has_unknown(), "and absent when there is none");
+        assert!(
+            wrapped.has_unknown(),
+            "…but a stub under it is not decidable"
+        );
+        let deep = Type::Tuple(vec![
+            Type::Boolean,
+            Type::Vector(Box::new(wrapped), Deps::none()),
+        ]);
+        assert!(
+            deep.has_unknown(),
+            "found at any depth through the keystone"
+        );
+        assert!(
+            !Type::optional(Type::Boolean).has_unknown(),
+            "and absent when there is none"
+        );
     }
 
     #[test]
