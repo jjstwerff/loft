@@ -5703,6 +5703,76 @@ corpus moved.  Held FIXED and named: `Parser::field_site` (expressions.rs) and
 struct field does this collection expression name*; a merge threads the assign's `parent_tp`
 into the removal sites and has no defect behind it today.
 
+#### B7y — `@FR-E-Uncomp-NN` walked: the non-nullable matrix loft#1246 never built, a value-`if` every narrow store mistook for a `??`, and an `else if` chain never held to its own type (2026-09-06)
+
+Picked because its deviations closed five days earlier (D-op-7/8) and its eight sites sit in
+`data.rs`, `generation/mod.rs` and `expressions.rs`, outside the sibling's @PLN153 churn.  Split
+into three questions: **what is `default(τ)`** (`IntegerSpec::default_value`, one home since
+loft#1254, asked by `to_default`, `uninitialised_native_value` and the parser's range guard);
+**null or default** (`uncomputable_default`, one home since D-op-8, asked by both range paths);
+and **where does an uncomputable result LAND** — the question whose siblings the fixes' guards
+never enumerated.  1246 scored the NULLABLE slot in every position and the NON-nullable one only
+on the compound path (`n += 10`); 1030 added a `u8`/`u32` field and a `u32` element.  So the
+matrix was the non-nullable slot × {plain assignment, reassignment, struct literal, field write,
+element write, argument, return} × {`+`, `*`, `-`, `/ 0`, `% 0`, unary `-`} × {`u8`, `i8`,
+`i16`, `u16`, `u32`, `i32`, `limit(10,20)`}, hand-computed, both backends — 32 cells, then 60
+more once the first defect named the axis it lived on (the SPELLING of the stored expression).
+
+**The compound path is right everywhere** — every `+= -= *= /= %=` cell answers the rule's
+default (`0`, or `10` for `limit(10,20)`) on a local, a field, an element, a struct in a vector
+and a return, and `i32` answers `null` as C85 decided.  The plain-assignment cells are right by
+REFUSAL: `c: u8 = a + b` — `a` and `b` themselves `u8` — is *"cannot implicitly narrow integer
+to u8"*, because C85 types the sum `integer`; so are the `match`, the block, the argument, the
+return and the literal field.  Two spellings were not refused, and both answered wrong:
+
+- **A value-`if` was a `??` to every narrow store (loft#1379, `sev:high`, `silent-wrong`; in
+  2e6a04ba, so on `main` and in 2026.9.0).**  `c: u8 = if t { a + b } else { a }` read `null`
+  in a `u8`; `q: integer limit(10,20) = if t { o + p } else { o }` read `null` where `q = o + p`
+  answers `10`; and `c: u8 = if k == 1000 { a } else { b }` answered **10** for a TRUE
+  condition.  `range_guard_inside_discharge` (@PLN152) recognised the bare-variable `??` —
+  which lowers to a plain `if coalesce_not_null(v) { v } else { d }` with no marker — by the
+  node alone, so every author's `if` matched: it wrapped the then arm in a checked cast (null in
+  a slot with no code for one; the `limit` default lost), range-cast the FIRST OPERAND OF THE
+  CONDITION (`(k as u8?) == 1000`), and told the seam the store was discharged, so the refusal
+  never fired.  The classifier now asks the BUILDER: `Parser::bare_variable_discharge` accepts
+  an `if` only when its then arm is a plain read of `v` and its condition is exactly
+  `coalesce_not_null(v)` for `v`'s type.  An author's `if x != null { x } else { 5 }` is not one
+  (`!= null` spells `OpNeInt`, the builder `OpConvBoolFromInt`) and is judged as the narrowing it
+  is.  `null_discharge_subject`'s looser `If` arm stays, documented as sound on a LEFT-hand side
+  only, where no author's `if` can stand.  Baselined: b1ccf0e9 refuses all three.
+- **An `else if` chain was typed by its first arm and never converted to it (loft#1380,
+  `sev:high`, `silent-wrong`; pre-existing on b1ccf0e9).**  `x: integer = if a { 1 } else if b
+  { 2.5 } else { 3 }` printed the float's bits (`4612811918334230528`), `f: float = … else if b
+  { 2 } …` the integer's, and 260 reached a `u8` local, argument and return — a field or element
+  read `0` because the STORE's width check (984) caught what the parser let through.  `parse_if`
+  parsed the chain through a recursive `parse_if` expecting nothing, and kept its type out of the
+  join (loft#936/#978: only what it borrows).  Now `parse_if_expecting` threads the enclosing
+  then arm's type into the chain's then block, so `parse_block`'s tail conversion covers it as it
+  covers the plain else — the literal-fit exemption (`else if k == 2 { 7 }` into a `u8` is
+  accepted, as `match` and the plain `else` accept it; an after-the-fact `convert` of the whole
+  chain refused it and was discarded for that), the sibling-variant carve-out and the loft#1350
+  tuple boxing (both keyed on `arm_of_sibling`, "handed a sibling expression's type", rather than
+  on the `else` keyword) and the honest deps.  A `Void` then arm expects nothing of its chain, as
+  before.  Baselined: b1ccf0e9 prints the same bits.
+
+**Filed, not fixed:** loft#1381 — a statement `if` whose else arm yields a value it discards
+(`else { 5 }`) fails rustc natively (E0308) while the interpreter runs it; loud, pre-existing,
+`area:native`, `wa:clean` (`else { 5; }`).
+
+**Measured negatives:** the bare-variable `??` cells into a `u8` (`integer?`, an `i16?` and a
+`u8?` nulled by overflow, the `ncc` expression subject) keep the author's fallback; a `u8?`
+target through an `if` stays `null`; agreeing chains of `u8`, text, vector, enum-variant, tuple
+and nullable arms answer the taken arm; the 152 / 1211 / 1212 / 1214 / 1205 / 1246 / 1249 /
+1030 / 984 / 1009 / 1254 / 936 / 978 / 1117 / 1103 / 1019 guards are green on both backends.
+Guards: `1379` + `1379b` (6 value functions over 6 positions, 10 refusal cells), `1380` +
+`1380b` (7 value functions, 7 refusal cells), falsified at 2b992851 on both backends.  Audit
+row: `optional` 713→714 / 354→355 (the `tp.base()` in the new predicate).
+
+**A register note.**  `types.md` read `OPEN: 0` over both — `(N-Decl)` and `(I-Narrow)` were
+complete and settled the answer; what nobody had re-measured was the code against them for the
+`if` and `else if` SPELLINGS of a store.  The third time (types-history.md), and the doc's own
+warning applied to itself: complete rules, a register at zero, two live silent-wrongs.
+
 #### B2 — open, and the owner's call
 
 | decision | evidence | why it is not mine to take |

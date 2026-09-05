@@ -713,7 +713,7 @@ The rules doc used to carry these beside its `OPEN` line — closure summaries, 
 the times the count read 0 over a live entry.  They are timeline, so they moved here
 unchanged; [types.md](types.md) now states only what is open.
 
-### the two times this register read OPEN: 0 over live entries
+### the times this register read OPEN: 0 over live entries
 
 ⚠ **This line read `OPEN: 0` while D-Narrow-Asgn and D-Narrow-Res were both live, and the
 oracle under it could not have moved either** — `(I-Narrow)` had only two clauses, so a
@@ -730,7 +730,48 @@ if it were the model.  So a register can also be wrong when its rules are comple
 re-measures the code against them — the second failure mode, and the one a reading of this doc
 alone cannot catch.
 
+⚠ **And a third time, over two entries closed the day they were named (2026-09-06, D-If-Coal and
+D-If-Chain below).**  The rules were complete — `(N-Decl)`, `(I-Narrow)` and `(N-Store)` settle
+that a value-`if` and an `else if` chain stored into a declared slot are checked like every other
+spelling — and the enforcement existed for every spelling but those two.  Nothing re-measured the
+code against the rules for the SPELLING axis of a store, so a register at zero sat over a `u8`
+that held `null`, a condition that was silently rewritten, and a float whose bits printed as an
+integer.  The second failure mode again, on the axis the fixes' own guards had held fixed.
+
 ### the status line formal/README.md's area table carried until 2026-09-04
 
 **0 open** — D-Null-Join (loft#1103) opened and closed 2026-08-26: at a branch JOIN a nullable in a LATER arm stored into a non-null slot in silence, whichever arm and however spelled.  @PLN25 value/null model landed (DN1–DN6 + D2 closed); the @PLN102 null-flow generalisation (N-Prop/N-Domain/N-Cast/N-Store incl. call-arg + DN3-Float) SHIPPED default-on and verified both backends — for the DIRECT store, which is the bound on that verification
 
+## Closed after the 2026-09-04 move
+
+### D-If-Coal — CLOSED (2026-09-06, loft#1379): a value-`if` stored into a narrow slot was claimed as a `??` coalesce
+- Was: `Parser::range_guard_inside_discharge` (@PLN152) recognised the bare-variable `??`
+  lowering — a plain `if coalesce_not_null(v) { v } else { d }`, unmarked — by the node alone,
+  so every author's value-`if` stored into a `u8`, `i16`, `u32` or `limit(…)` slot was treated
+  as a discharge: its then arm became a checked cast (`c: u8 = if t { a + b } else { a }` read
+  `null` in a slot with no code for one, and a `limit(10,20)` slot lost `(E-Uncomp-NN)`'s
+  default), the first operand of the author's CONDITION was range-cast (`c: u8 = if k == 1000
+  { a } else { b }` compared `(k as u8?) == 1000` and took the else arm), and the `(N-Decl)` /
+  `(I-Narrow)` refusal every other spelling gets never fired.  Both backends; in 2e6a04ba, so
+  released in 2026.9.0.
+- Rules: `(N-Decl)`, `(I-Narrow)`, `(N-Store)` — settled; no rule moved.
+- Fixed at one home: `Parser::bare_variable_discharge` asks the BUILDER (`coalesce_not_null`)
+  whether the condition is the not-null test of the then arm's variable; an author's `if`, and
+  an author's hand-written `if x != null { x } else { d }`, are not.  Guards
+  `tests/scripts/1379-a-value-if-into-a-narrow-slot-is-not-a-coalesce.loft` and `1379b-…`,
+  falsified at 2b992851 on both backends.
+
+### D-If-Chain — CLOSED (2026-09-06, loft#1380): an `else if` chain was never held to the then arm's type
+- Was: `parse_if` parsed an `else if` chain through a recursive `parse_if` that expected
+  nothing of the chain's then arm and kept the chain's type out of the join (loft#936/#978),
+  so the if-expression reported the then arm's type while an arm of another type sat behind
+  it, never converted or refused: `x: integer = if a { 1 } else if b { 2.5 } else { 3 }`
+  printed the float's bits, `f: float = … else if b { 2 } …` the integer's, and 260 reached a
+  `u8` local, argument and return.  Both backends; pre-existing on b1ccf0e9.
+- Rules: `(N-Decl)`, `(I-Narrow)`, `(C-Var)` — settled; no rule moved.
+- Fixed at one home: `parse_if_expecting` threads the enclosing then arm's type into the chain's
+  then block, so `parse_block`'s tail conversion — the one the plain `else` already takes —
+  covers it; its three `else`-only carve-outs (the loft#1350 tuple boxing, the sibling-variant
+  carve-out, the loft#978/#1103 honest deps) read `arm_of_sibling`.  Guards
+  `tests/scripts/1380-an-else-if-chain-answers-in-its-first-arms-type.loft` and `1380b-…`,
+  falsified at 2b992851 on both backends.

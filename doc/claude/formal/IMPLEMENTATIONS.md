@@ -181,6 +181,21 @@ does this collection expression name"* still has two derivations — `Parser::fi
 annotation and resolves a vector-element base).  A merge wants the assign's `parent_tp`
 threaded into the removal sites, which is a refactor with no defect behind it today.
 
+### The uncomputable default, walked (`@FR-E-Uncomp-NN`, 2026-09-06)
+
+Eight sites, three questions, two of them already one home each: **what is `default(τ)`** is
+`IntegerSpec::default_value` (asked by `to_default`, `uninitialised_native_value` and the
+parser's range guard), and **null or default** is `uncomputable_default` (asked by both range
+paths).  The third — **where does an uncomputable result land** — had one home per spelling and
+two spellings with none: a value-`if` reached a classifier that claimed it as a `??`
+(`range_guard_inside_discharge` matched the bare-variable lowering by node; it now asks the
+builder, `bare_variable_discharge`), and an `else if` chain reached no conversion at all
+(`parse_if_expecting` threads the then arm's type into the chain's then block, and
+`parse_block`'s three `else`-only carve-outs read `arm_of_sibling`).  The de-duplication is the
+first: `range_guard_inside_discharge` carried its own discharge matcher beside
+`null_discharge_subject`, the declared home, and the two disagreed on exactly the shape an
+author writes.  QUALITY.md B7y; loft#1379, loft#1380.
+
 ## The DbRef set — a list that drifts SHORT, and the bug it produced (checklist #2, 2026-08-24)
 
 `Reference | Vector | Enum(_, true, _)` appears at **43 sites**. It looks like "the heap
