@@ -4103,6 +4103,8 @@ pub fn check(data: &mut Data, database: &mut crate::database::Stores) {
     // @PLN94 — the CFG/dataflow completeness oracle, an OBSERVER reached only via
     // LOFT_OWN_ORACLE (SI-1: shipped codegen byte-identical; a no-op when unset).
     crate::ownership_cfg::oracle(data);
+    // @PLN153 phase 0 — the `τ??` census, an OBSERVER gated on LOFT_NULL_CENSUS.
+    crate::null_census::report(data);
     // Behaviour-neutral USE-analysis dump (LOFT_MATERIALIZE_DUMP) — the
     // copy-vs-borrow verdict per binding, before any codegen consumes it.
     crate::use_analysis::dump_all(data);

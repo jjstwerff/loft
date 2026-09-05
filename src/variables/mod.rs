@@ -1251,9 +1251,8 @@ impl Function {
             Type::Rewritten(inner) => {
                 Self::rewrite_unknown(inner, stub, target).map(|new| Type::Rewritten(Box::new(new)))
             }
-            Type::Optional(inner) => {
-                Self::rewrite_unknown(inner, stub, target).map(|new| Type::Optional(Box::new(new)))
-            }
+            // The idempotent former, for the reason `Data::rewrite_type_opt` gives (@FR-N-Idem).
+            Type::Optional(inner) => Self::rewrite_unknown(inner, stub, target).map(Type::optional),
             Type::Tuple(elems) => {
                 let mut changed = false;
                 let new_elems: Vec<Type> = elems
@@ -2138,6 +2137,22 @@ impl Function {
         if !var_tp.is_unknown()
             && !crate::data::Data::type_has_unresolved(var_tp)
             && crate::data::Data::type_has_unresolved(type_def)
+        {
+            self.depend_all(var_nr, type_def);
+            return self.is_new(var_nr);
+        }
+        // The mirror once more, now for the DECLARED side (@PLN153 phase 0): a declared type
+        // still carrying a stub under a wrapper — `x: Maybe? = 5` with `type Maybe = integer?`
+        // declared below — is a placeholder pass 1 has not resolved, not a baseline the
+        // assignment's type may overwrite.  Overwriting it dropped the annotation's `?`: the
+        // slot read `integer`, `resolve_unknown_stub` found no stub left to fill, and pass 2's
+        // `integer?` was refused as a type change.  Kept instead; the stub rewrite fills it
+        // once the declaration adopts the stub, and pass 2 re-derives the value's type.
+        // A BARE `Unknown` declaration is not this case — `is_unknown()` — and keeps the
+        // pass-1 inference it always had.
+        if !var_tp.is_unknown()
+            && crate::data::Data::type_has_unresolved(var_tp)
+            && !crate::data::Data::type_has_unresolved(type_def)
         {
             self.depend_all(var_nr, type_def);
             return self.is_new(var_nr);

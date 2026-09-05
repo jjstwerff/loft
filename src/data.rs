@@ -2191,6 +2191,24 @@ impl Type {
         matches!(self, Type::Unknown(_)) || matches!(self, Type::Reference(0, _))
     }
 
+    /// Does an unresolved stub sit ANYWHERE in this type — under an `Optional`, a `RefVar`, a
+    /// tuple member, a function's parameter?  [`Self::is_unknown`] answers only for the top and
+    /// for a vector's element, which is the right question at a settledness guard (a wrapper
+    /// over a stub is a type that has been WRITTEN, and must not be overwritten by a guess);
+    /// this is the right question wherever a stub anywhere means "not yet decidable" — the
+    /// pass-1 operator deferral, which used to read `Optional(Unknown)` as settled, resolve the
+    /// operator against `unknown?`, and report *"No matching operator"* for a forward-declared
+    /// alias that pass 2 would have resolved (@PLN153 phase 0).  Walks the keystone, so a new
+    /// `Type` variant is covered here by construction.
+    pub fn has_unknown(&self) -> bool {
+        if self.is_unknown() {
+            return true;
+        }
+        let mut found = false;
+        self.for_each_child(&mut |c| found |= c.has_unknown());
+        found
+    }
+
     /// The same type with every dep list emptied — an OWNED reading of the shape.
     ///
     /// For a type used as a HINT (what shape is expected here?) rather than as a
@@ -3168,6 +3186,23 @@ mod dep_faces_agree {
                 "{name}: the CLEAR face did not remove what it reached"
             );
         }
+    }
+
+    /// The two questions are different and both are needed: `is_unknown` is the
+    /// settledness test (a wrapper over a stub is a WRITTEN type), `has_unknown` the
+    /// decidability test (a stub anywhere means "not yet").  Reading `Optional(Unknown)`
+    /// with the first where the second was meant is what refused a forward alias behind a
+    /// `?` on pass 1 (@PLN153 phase 0).
+    #[test]
+    fn a_stub_under_a_wrapper_is_settled_but_not_decidable() {
+        let stub = Type::Unknown(7);
+        assert!(stub.is_unknown() && stub.has_unknown());
+        let wrapped = Type::optional(stub.clone());
+        assert!(!wrapped.is_unknown(), "a written wrapper is settled");
+        assert!(wrapped.has_unknown(), "…but a stub under it is not decidable");
+        let deep = Type::Tuple(vec![Type::Boolean, Type::Vector(Box::new(wrapped), Deps::none())]);
+        assert!(deep.has_unknown(), "found at any depth through the keystone");
+        assert!(!Type::optional(Type::Boolean).has_unknown(), "and absent when there is none");
     }
 
     #[test]
@@ -8635,8 +8670,12 @@ impl Data {
             // `Optional(Unknown(stub))` in place after every other spelling resolved, so a
             // `Roofs?` field failed with the internal type name (`optional(unknown(700))`)
             // where a plain `Roofs` field succeeded (loft#797).
-            Type::Optional(inner) => Self::rewrite_type_opt(inner, stub, target)
-                .map(|new_inner| Type::Optional(Box::new(new_inner))),
+            // Through the idempotent former: the target a stub resolves to can itself be
+            // nullable (`type Maybe = integer?` behind a `Maybe?` field), and a bare re-wrap built
+            // `integer??`, which `@FR-N-Idem` says cannot exist (@PLN153 phase 0).
+            Type::Optional(inner) => {
+                Self::rewrite_type_opt(inner, stub, target).map(Type::optional)
+            }
             Type::Iterator(step, internal) => {
                 let new_step = Self::rewrite_type_opt(step, stub, target);
                 let new_internal = Self::rewrite_type_opt(internal, stub, target);

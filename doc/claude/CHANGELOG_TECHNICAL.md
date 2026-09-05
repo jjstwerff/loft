@@ -94,6 +94,47 @@ the `@FR-O-Latest` rule-led walk (QUALITY.md B7p, `formal/ownership-history.md` 
 guarded by `tests/scripts/a-nullable-view-local-does-not-free-what-it-displaces.loft`,
 falsified at `51646648` on both backends.
 
+### @PLN153 phase 0: `τ??` is not constructible, and a forward alias behind a `?` resolves (2026-09-05)
+
+`types.md (N-Idem)` says `τ?? ≡ τ?`.  `Type::optional` is the idempotent former, the type
+parser builds every `?` through it, and the plan's first question was whether any of the
+thirteen direct `Type::Optional(Box::new(…))` constructions could nest one anyway.  Answered by
+measuring rather than reading: **three could**, and they are one shape — a rewrite that
+substitutes a resolved target under a wrapper and re-wraps with a bare `Optional`
+(`typedef.rs::set_attr_type_keeping_optional`, `Data::rewrite_type_opt`,
+`Function::rewrite_unknown`).  With `type Maybe = integer?` declared AFTER `struct S { f:
+Maybe? }`, the field was `integer??` and its first write was refused with that spelling in the
+message.  All three re-wrap through the former now, each cited `@FR-N-Idem`.
+
+The instrument is `src/null_census.rs` — an observer beside `ownership_cfg::oracle` in
+`scopes::check`, gated on `LOFT_NULL_CENSUS` because `[profile.dev.package.loft]` compiles a
+`debug_assert` OUT of the library — and `scripts/null_census_sweep.sh` over the corpus:
+`TOTAL nested=0 files=1258 failed=0`, with a hand-built `Optional(Optional)` reading 1 in the
+module's own tests so the zero is a measurement.  ⚠ A refused program prints the STDLIB's census
+lines and nothing of its own; the sweep counts it as `failed`, never as a 0, and the per-probe
+reads that "passed" before the fix were exactly that vacuity.
+
+The guard that pinned the route then found three resolution defects on it, each one fact held
+in two places.  `Type::is_unknown` sees through `Vector` and nothing else, so pass 1's operator
+deferral judged `Optional(Unknown(alias))` settled and refused *"No matching operator '==' on
+'unknown?'"* for a program pass 2 resolves — cured with `Type::has_unknown`, a walker over the
+`Type` keystone, at the deferral only (`is_unknown` has 91 callers and keeps its settledness
+meaning).  An annotated local `x: Maybe? = 5` lost its `?` when the assignment overwrote the
+`Optional(Unknown)` placeholder (`LOFT_LOG=type_timeline:x` showed the three writes) — cured
+with the mirror of `change_var_type`'s loft#1073 arm: a declared type carrying a stub is not a
+baseline.  And a forward nullable-REFERENCE alias field lints `redundant-null-check` while its
+storage and values are right, because the lint reads the stored spelling where the
+declared-before case carries the source one — the `(L-Null-Which)` two-spelling question, so it
+is phase 5's first cell, not a spot fix.  Guard
+`tests/scripts/153-a-forward-alias-field-keeps-one-optional.loft` (c1–c4, both backends).
+
+Phase 0's second question — is `(N-Intro)` the only null-direction edge in the code's `⤳`? —
+is answered by `Parser::convert` itself: it carries BOTH edges, and the implicit `τ? ⤳ τ`
+unwrap the rules say does not exist stands because `convert` services comparisons too, so the
+`(N-Store)` teeth live at the store sites instead.  That is the scattered shape phase 3 folds,
+stated by the compiler; recorded in the plan README with `implicit_checked_narrow`'s
+null-producing `Integer ⤳ u8?` beside it as a cell of its own.
+
 ### A tuple member typed by a generic's type variable is copied for the type each instantiation bound (2026-09-05)
 
 loft#1365 / D-tup-9.  `(T-Cons)` copies a heap member into a tuple literal and leaves a scalar

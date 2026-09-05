@@ -11398,7 +11398,10 @@ impl Parser {
         // and found nothing, so there is no resolution left to steer — only a message to
         // hold back.  A genuinely unresolvable operand reaches this same site on pass 2,
         // where the reject fires with the type it really has.
-        if self.first_pass && types.iter().any(Type::is_unknown) {
+        // `has_unknown`, not `is_unknown`: a stub under a wrapper (`Optional(Unknown)` — a
+        // forward alias behind a `?`) is just as undecidable, and reading it as settled emitted
+        // *"No matching operator on 'unknown?'"* on pass 1 for a program pass 2 resolves.
+        if self.first_pass && types.iter().any(Type::has_unknown) {
             return Type::Unknown(0);
         }
         // generic-specific error message for operators on T.

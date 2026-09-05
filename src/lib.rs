@@ -282,6 +282,7 @@ mod lexer;
 pub mod lsp;
 pub mod native;
 pub mod net_profile;
+pub mod null_census;
 // `net::fetch_bytes` (behind `store_load_url*`) exists exactly where `load_url`
 // does: a native `registry` build, or the browser (`--html`) target.
 pub mod host;

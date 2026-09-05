@@ -9,7 +9,7 @@ Tracker: [@PLN153](https://github.com/loft-lang/plans/issues/153).
 
 ## Status
 
-**Open — census not yet run.**  The null MODEL is decided and not reopened here: @PLN102's
+**Active — phase 0 done (2026-09-05), phase 1 in progress.**  The null MODEL is decided and not reopened here: @PLN102's
 [keystone](../102-stability-contract/keystone-null-model.md) chose **B** (an in-band sentinel
 for scalars, out-of-band absence for references and for a struct stored inline), frozen in
 [DESIGN_DECISIONS.md § C90](../../DESIGN_DECISIONS.md), with @PLN25 (the dense element
@@ -81,13 +81,106 @@ the axes it reports unreached are the cells still to build, not a note.
 
 | # | Item | Verify | Status |
 |---|---|---|---|
-| **0** | **Probe first.**  Is `τ??` constructible today (`N-Idem` — `Type::optional` in `data.rs` is the candidate home), and is `N-Intro` the only null-direction conversion in `⤳`?  A corpus census with an env-gated report, since `[profile.dev.package.loft]` compiles a `debug_assert` OUT of the library. | The report over the 1247-file corpus reads 0 for `τ??` — and a probe that constructs one by hand makes it read 1, so the zero is not vacuous. | Open |
+| **0** | **Probe first.**  Is `τ??` constructible today (`N-Idem` — `Type::optional` in `data.rs` is the candidate home), and is `N-Intro` the only null-direction conversion in `⤳`?  A corpus census with an env-gated report, since `[profile.dev.package.loft]` compiles a `debug_assert` OUT of the library. | The report over the 1247-file corpus reads 0 for `τ??` — and a probe that constructs one by hand makes it read 1, so the zero is not vacuous. | **Done** 2026-09-05 — § Phase 0 result |
 | **1** | **Census: one home per N rule.**  For each of the 18, the predicate or emitter that decides it today.  Candidates: `N-Coal` → `parser/operators.rs::build_null_coalesce_default`; `N-Default` → the `x?` lowering + `Data::has_default`; `N-Store`/`N-Decl` → the `(N-Store)` teeth (`keys.rs`: the DN3 gate, the call-arg gate, the heap gate); `N-Prop` → `nullflow_enabled()`; `N-Join` → the inferred-assignment join; `N-Match` → the null arm; `N-Div`/`N-Arith`/`N-Cast`/`N-Cast?` → operator typing ([float-null-domain-typing.md](../102-stability-contract/float-null-domain-typing.md)); `N-Dense` → element storage; `N-Parse` → folded into `N-Cast`; `N-Index`, `N-Reserve`, `N-Store` already cited. | Per rule, ONE probe pair on both backends — a program where the rule must hold and one where its negation must be refused — green BEFORE the `@FR-` citation is added.  `rule_tags.py check` then reports 18/18 cited; a rule whose only evidence is the citation is the B6u failure and does not count. | Open |
 | **2** | **`N-Prop` has 10 `nullflow_enabled()` sites in 4 files.**  Which question does each ask — propagate, gate, or warn?  Fold the fact-reading half onto one predicate; the per-site residue stays where it is per-site. | `introspect` output (IR, bytecode, Rust) byte-identical over the 1247-file corpus against the committed compiler (the B7r/B7s method), under the default AND under `LOFT_NO_NULLFLOW=1`. | Open |
 | **3** | **The `N-Store` refusal at ONE point.**  Today the teeth sit at the local slot, the field, the return, the index, the call argument and the heap half as separate gates, each a spelling; a nullable reaching a non-null slot through a position none of them covers is answered wrong in silence.  One check where every store passes — the `⇐` lowering, whose ten push sites and six admission lists B6t already measured — is the chokepoint. | The Stage A matrix, position × type kind × discharge, with an `@EXPECT_WARNING` / `@EXPECT_ERROR` cell wherever a nullable meets a non-null slot undischarged and a silent cell wherever it is discharged; `make falsify` against the current build names the cells that pass silently today. | Open — the one design call |
 | **4** | **The `optional` screen, ranked.**  The 352 opaque functions ordered by *can an undischarged value reach here*: declaration reads (a field's, a local's, a return's declared type) and lvalue places first, use-path sites last.  Each function in the top tier either peels through `base()` or is shown unreachable by a probe cell. | The gated `optional` audit row in QUALITY.md moves DOWN and every moved function has a cell; a peel added with no cell is the B6u receipt and is not counted. | Open |
 | **5** | **`@FR-L-Null`'s 45 citations converged.**  The two questions B6u split — *what value means absent in this storage?* (the per-type sentinel table frozen in C90, `Stores::is_null`) and *is this the same storage?* (`base()`) — each have a home; every citation either reads it or is removed as a redundant spelling. | The site count goes DOWN, and where a change is a fold the emission is byte-identical over the corpus; where it is a fix, a probe cell. | Open |
 | **6** | **Re-measure.**  `make bug-review` on the null/sentinel class after the plan's watermark against the window before it. | The class falls, or the residual names a mechanism this plan did not touch and a follow-on plan is filed for it. | Open |
+
+## Phase 0 — result (2026-09-05)
+
+**`τ??` is not constructible from a loft program, and the corpus reads 0 with an instrument that can read 1.**
+
+*The former.*  `Type::optional` (data.rs:1781) is `(N-Idem)`'s home: `Optional(Optional(τ))
+→ Optional(τ)`, and `Optional(Never | Null)` stays what it was.  The type parser's postfix `?`
+(definitions.rs:2606) builds through it, and `pln25_optional_enabled()` is default-ON, so the
+spelling `integer??` cannot nest by syntax.
+
+*The routes around it.*  Thirteen sites construct `Type::Optional(Box::new(…))` directly
+(`grep -rn "Type::Optional(Box::new" src/`).  Eleven are structure-preserving rewrites
+(`rewrite_type_opt`, `rewrite_unknown`, the IR deserialiser, two tests) or wrap a provably bare
+inner — a fresh `Text`, a fresh `Vector`, a `.base()`, a `Reference` just built.  ONE can nest:
+`typedef.rs:184–191` peels a field's `?` off an `Unknown` forward reference, resolves the stub
+to the alias's `returned`, and re-wraps (`set_attr_type_keeping_optional`, :233).  If the alias
+resolves to `τ?` the field becomes `τ??`.  The hand-built probe for that route is
+`struct S { f: Maybe? }` with `type Maybe = integer?` declared AFTER it, measured:
+**it built one.**  The first write to the field was refused with the type spelled out — *"Cannot
+assign to field 'f' of type integer??"* — and the same through a chain of two forward aliases.
+Fixed on the spot: the re-wrap now goes through `Type::optional`, so the route is idempotent
+like every other (`typedef.rs:233`, cited `@FR-N-Idem`).  Guard
+`tests/scripts/153-a-forward-alias-field-keeps-one-optional.loft` (two route cells, one
+declared-before control).  The per-probe census had read 0 for this program before the fix —
+VACUOUSLY, because the program was refused before `scopes::check` ran and the three census
+lines it printed were the stdlib loads'; running the probe for its own output is what showed
+the type.  The sweep counts a refused file as `failed`, never as a 0, for exactly this reason.
+
+*The census.*  `src/null_census.rs` — an observer beside `ownership_cfg::oracle` in
+`scopes::check`, gated on `LOFT_NULL_CENSUS`, walking every declared return, attribute and
+variable type through `Type::for_each_child` and counting an `Optional` directly under another.
+Env-gated rather than a `debug_assert` because `[profile.dev.package.loft]` compiles those OUT.
+`scripts/null_census_sweep.sh` runs it over the corpus: **`TOTAL nested=0 files=1258 failed=0` — every file reached `scopes::check`, none carried a `τ??`**.
+Non-vacuity: `null_census::tests::a_hand_built_nested_optional_reads_one` — a hand-built
+`Optional(Optional(Integer))` reads 1, at depth through a `Vector` still 1, a triple reads 2.
+
+**Three resolution defects on the same route, found by the guard, not by the census.**  Each
+is one fact held in two places, which is the plan's thesis met on its first afternoon:
+
+- **F1 — a pass-1 operator error on a wrapped stub, never retracted.**  Pass 1 defers an
+  operator whose operand is unresolved (`parser/mod.rs::…`, *"a genuinely unresolvable operand
+  reaches this same site on pass 2"*), but the test was `Type::is_unknown`, which sees through
+  `Vector` and nothing else, so `Optional(Unknown(alias))` — a forward alias behind a `?` —
+  was judged settled, resolved against `unknown?`, and refused with *"No matching operator
+  '==' on 'unknown?' and 'integer'"* for a program pass 2 resolves.  Fixed with
+  `Type::has_unknown`, a walker over the `Type` keystone (exhaustive by construction), used at
+  the deferral; `is_unknown` keeps its meaning at the settledness guards, where a wrapper over
+  a stub IS a written type that must not be overwritten (91 callers, none touched).
+  Measured: the nullable-reference alias `f: MP?` under `!=` was the same defect.
+- **F2 — an annotated local's `?` overwritten by its first assignment.**  `x: Maybe? = 5` with
+  `Maybe` declared below: the declaration is `Optional(Unknown)`, the assignment's
+  `change_var_type` found no arm for a declared type carrying a stub and fell through to the
+  unconditional write, the slot read `integer`, `resolve_unknown_stub` found no stub left to
+  fill, and pass 2's `integer?` was refused as *"cannot change type from integer to
+  integer?"*.  `LOFT_LOG=type_timeline:x` showed all three writes.  Fixed with the mirror of
+  the existing loft#1073 arm: a declared type with an unresolved component is a placeholder,
+  not a baseline, and is kept for the stub rewrite to fill.
+- **F3 — a forward nullable-reference alias field lints as 'not null'.**  `struct S { f: MP }`
+  with `type MP = P?` below: storage is the tagged `__nullable<P>` and `S { f: null }` reads
+  null back correctly, so the VALUE is right — but `redundant-null-check` fires on `s.f != null`
+  because it reads `matches!(ctp, Optional)` on the field-read type, and for the forward case
+  that type is the STORED spelling (`__nullable<P>`), not the source spelling
+  (`Optional(Reference(P))`) the declared-before case carries.  A wrong diagnostic, not a wrong
+  value; it is the stored-vs-source spelling question `(L-Null-Which)` names, so it is phase 5's
+  first cell rather than a spot fix here (probes `f3`, `f7`).
+
+Guard: `153-a-forward-alias-field-keeps-one-optional.loft` — c1/c2 (the `τ??` route and a
+chain), c3 (declared-before control), c4 (the annotated local, F2); F1 is what lets c1/c2 use
+`==` at all.  ⚠ The first cut of c2 "passed" through interpolation — `"{s.f}"` formats an
+`unknown?` value at runtime without type-checking it — and only `==` exposed the stub; a cell
+that reads a value must read it through an operator the type checker owns.
+
+**`(N-Intro)` is NOT the only null-direction edge in the code's `⤳`, and that is phase 3's
+premise stated by the compiler.**  `Parser::convert` (parser/mod.rs:4389) has both directions:
+- `should = Optional(inner)` recurses on the base — `τ ⤳ τ?`, `(N-Intro)`.  ✓
+- `is_type = Optional(inner)` ALSO recurses — `return self.convert(code, inner, should)` — the
+  implicit `τ? ⤳ τ` UNWRAP the rules say does not exist (`types.md`: *"there is NO implicit
+  `S? ⤳ S`"*).  Its own comment says why: `convert` services comparisons (`x == null`) too, so
+  the `(N-Store)` teeth *"must live at the STORE / decl / index sites"*.  So the rule is
+  enforced by the ABSENCE of a refusal at every site that is not a store — the scattered-teeth
+  shape phase 3 exists to replace, and the reason a position no gate covers answers wrong in
+  silence.
+- `implicit_checked_narrow` admits `Integer[s] ⤳ τ?` for a NARROW nullable target as a
+  NULL-PRODUCING conversion (the value becomes null when it does not fit) — `(N-Cast?)` made
+  implicit, not `(N-Intro)`.  It gets a cell of its own in phase 3's matrix.
+- The `__nullable<S> ⤳ S?` arm is a representation change under `(L-Null-Tag)`, null-preserving
+  in both directions; not a null-direction edge.
+
+**What this settles for the phases after it.**  Phase 1's `N-Idem`/`N-Opt` home is
+`Type::optional`, with this census as their evidence — citing them there is honest because the
+zero was measured.  Phase 3 starts from `convert`'s unwrap arm, not from the store sites: the
+question is which sites may keep the unwrap (comparison, `match`, `??`'s subject) and which
+must refuse it, and the answer is a list, not a per-site flag.
 
 ## Phase ordering
 
