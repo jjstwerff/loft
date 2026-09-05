@@ -7,55 +7,97 @@ use super::{
 };
 use crate::data::Deps;
 
+/// The narrow-integer element KIND of a vector element type, with the `min` its ops take —
+/// `None` for a wide (8-byte) element and for anything that is not an integer.
+///
+/// loft#1036 — the width comes from `byte_width` (through `vector_narrow_width`), the ONE
+/// range→width home, exactly as the index READ (`get_val`) derives it.  Keying on
+/// `forced_size` alone made an element declared `integer limit(10, 255)` answer `None`, so
+/// its write fell back to a wide `OpSetInt` that never applied the `- min` ENCODE the 1-byte
+/// `OpGetByte` read decodes with — every element read back exactly `lo` too high.
+///
+/// `narrow_vec` stays keyed on `forced_size`: it does not pick the WIDTH, it picks the
+/// raw-vs-full ENCODING for a 2-byte element (`ShortRaw` for a `u16`-style alias,
+/// `ShortFull` for a range that merely fits), and the storage side
+/// (`Data::narrow_vector_content`) registers the matching Part.
+fn narrow_elm_kind(elm_tp: &Type) -> Option<(crate::data::NarrowIntKind, i32)> {
+    // A nullable narrow element (`vector<u8?>`) reserves a sentinel, so it needs the
+    // nullable store op — a raw `OpSetByte` would write null's low byte `0`,
+    // indistinguishable from the value 0.
+    let (spec, nullable) = match elm_tp {
+        Type::Integer(spec) => (*spec, false),
+        Type::Optional(inner) => match &**inner {
+            Type::Integer(spec) => (*spec, true),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let narrow_vec = spec.forced_size.is_some() && spec.vector_narrow_width(nullable).is_some();
+    let n = spec.vector_narrow_width(nullable)?;
+    let kind = crate::data::NarrowIntKind::of(n, nullable, narrow_vec, spec.unsigned_wide());
+    Some((kind, spec.usable_min(kind.reserves_sentinel())))
+}
+
+/// The store op that writes one NARROW-integer vector element — a `vector<u8>`, `<u16>`, or a
+/// 4-byte `integer` subtype, nullable or not.  `None` for any other element type, leaving the
+/// caller on its wide `set_field` / `OpSetInt` path.
+///
+/// Every site that BUILDS a vector routes its element write through here — the concrete
+/// literal, append and slice through [`Parser::narrow_elm_set`], and a GENERIC body's
+/// `out += [v]` through the monomorph rewrite (`primitive_setter_call`) — so the store op is
+/// the exact twin of the index READ for each width and nullability: `OpSetByte` /
+/// `OpSetShortRaw` / `OpSetInt4` for raw elements, `OpSetByteNullable` / `OpSetShort` for
+/// nullable ones.  A site that misses it emits the wide 8-byte `OpSetInt` into a 1-byte
+/// slot, so one write covers eight element slots — the slice half of #624, and the monomorph
+/// half of loft#1378, whose setter keyed on the ALIAS def's `forced_size` and so wrote every
+/// narrow element of a generic `vector<T>` eight bytes wide (`200 0` for two `u8`s).
+pub(crate) fn narrow_elm_write(
+    elm_tp: &Type,
+    elm: Value,
+    val: &Value,
+    data: &crate::data::Data,
+) -> Option<Value> {
+    let (kind, min) = narrow_elm_kind(elm_tp)?;
+    let d = data.def_nr(kind.set_op());
+    if d == u32::MAX {
+        return None;
+    }
+    let pos = Value::Int(0);
+    Some(if kind.takes_min() {
+        Value::Call(d, vec![elm, pos, Value::Int(min), val.clone()])
+    } else {
+        Value::Call(d, vec![elm, pos, val.clone()])
+    })
+}
+
+/// The read twin of [`narrow_elm_write`]: the element slot `code` unpacked at the width and
+/// encoding its type stores, for a GENERIC body's `v[i]` (`wrap_vector_get_val`).  `None` for
+/// a wide element, which reads through `OpGetInt`.
+pub(crate) fn narrow_elm_read(
+    elm_tp: &Type,
+    code: Value,
+    data: &crate::data::Data,
+) -> Option<Value> {
+    let (kind, min) = narrow_elm_kind(elm_tp)?;
+    let d = data.def_nr(kind.get_op());
+    if d == u32::MAX {
+        return None;
+    }
+    let pos = Value::Int(0);
+    Some(if kind.takes_min() {
+        Value::Call(d, vec![code, pos, Value::Int(min)])
+    } else {
+        Value::Call(d, vec![code, pos])
+    })
+}
+
 // Lambda and vector expression parsing.
 
 impl Parser {
-    /// The store op that writes one NARROW-integer vector element — a `vector<u8>`,
-    /// `<u16>`, or a 4-byte `integer` subtype, nullable or not.  Returns `None` for
-    /// any other element type, leaving the caller on its wide `set_field` path.
-    ///
-    /// Every site that BUILDS a vector routes its element write through here, so the
-    /// store op is the exact twin of the index READ (`get_val`) for each width and
-    /// nullability: `OpSetByte` / `OpSetShortRaw` / `OpSetInt4` for raw elements,
-    /// `OpSetByteNullable` / `OpSetShort` for nullable ones.  A site that misses it
-    /// emits the wide 8-byte `OpSetInt` into a 1-byte slot, so one write covers eight
-    /// element slots — the slice half of #624, where `v[a..b]` on a `vector<u8>` kept
-    /// only the first element and zero-filled the rest.
+    /// The store op that writes one NARROW-integer vector element the concrete build sites
+    /// emit — [`narrow_elm_write`] with the element in a local; see its doc for the contract.
     pub(crate) fn narrow_elm_set(&mut self, elm_tp: &Type, elm: u16, val: &Value) -> Option<Value> {
-        // A nullable narrow element (`vector<u8?>`) reserves a sentinel, so it needs
-        // the nullable store op — a raw `OpSetByte` would write null's low byte `0`,
-        // indistinguishable from the value 0.
-        let (spec, nullable) = match elm_tp {
-            Type::Integer(spec) => (*spec, false),
-            Type::Optional(inner) => match &**inner {
-                Type::Integer(spec) => (*spec, true),
-                _ => return None,
-            },
-            _ => return None,
-        };
-        // loft#1036 — the width comes from `byte_width`, the ONE range→width home,
-        // exactly as the READ (`get_val`) derives it.  This site asked
-        // `vector_narrow_width`, which was keyed on `forced_size` alone, so an
-        // element declared `integer limit(10, 255)` answered `None` here and the
-        // caller fell back to a wide `OpSetInt` that never applied the `- min`
-        // ENCODE the 1-byte `OpGetByte` read decodes with — every element read back
-        // exactly `lo` too high (12 stored, 22 returned), and the error vanished at
-        // `lo == 0`, which is why the common spellings looked fine.
-        //
-        // `narrow_vec` stays keyed on `forced_size`: it does not pick the WIDTH, it
-        // picks the raw-vs-full ENCODING for a 2-byte element (`ShortRaw` for a
-        // `u16`-style alias, `ShortFull` for a range that merely fits), and the
-        // storage side (`Data::narrow_vector_content`) registers the matching Part.
-        let narrow_vec = spec.forced_size.is_some() && spec.vector_narrow_width(nullable).is_some();
-        let n = spec.vector_narrow_width(nullable)?;
-        let kind = crate::data::NarrowIntKind::of(n, nullable, narrow_vec, spec.unsigned_wide());
-        let pos = Value::Int(0);
-        Some(if kind.takes_min() {
-            let m = Value::Int(spec.usable_min(kind.reserves_sentinel()));
-            self.cl(kind.set_op(), &[Value::Var(elm), pos, m, val.clone()])
-        } else {
-            self.cl(kind.set_op(), &[Value::Var(elm), pos, val.clone()])
-        })
+        narrow_elm_write(elm_tp, Value::Var(elm), val, &self.data)
     }
 
     /// Refuse a vector concatenation whose two sides store their INTEGER elements

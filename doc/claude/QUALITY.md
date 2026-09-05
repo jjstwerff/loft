@@ -5773,6 +5773,54 @@ complete and settled the answer; what nobody had re-measured was the code agains
 `if` and `else if` SPELLINGS of a store.  The third time (types-history.md), and the doc's own
 warning applied to itself: complete rules, a register at zero, two live silent-wrongs.
 
+#### B7z — loft#1378 closed: the generic path's own vector-element stride, and the self-reference it could not size (2026-09-06)
+
+Taken from the sibling's filing because it is parser work.  `rewrite_vector_write_triplets`
+computed the element stride of a `vector<T>` write for EVERY monomorph body — before it had
+found a write to rewrite — through `type_element_size`, a type-alone re-derivation of the
+struct's byte size that summed the fields and recursed into `next: reference<Node>?`, so `fn
+id<T>(v: T) -> T? { v }` at a self-referential struct was a bare SIGSEGV on both backends and
+under `introspect` (confirmed as unbounded: an unlimited stack turns it into a hang).  The
+concrete `+=` append already asks the one home for the element's storage type
+(`Data::vector_element_type`, loft#624's "every writer AND reader routes here") and the store for
+its stride (`database.size(known)`); the generic path now asks the same two and
+`type_element_size` is gone.  Guard `1378` moves the return (nullable, dense, a `vector<T>`
+that writes), the self-reference (direct, mutual) and the element type the rewritten write is
+sized for (`Node`, plain and nested struct, `i32`, `u8`, `i16`, `text`, `float`, two elements
+each, both read back), falsified by hand on ffae9ce6 (SIGSEGV → 0, both backends; the crash
+predates every cached falsify ref).  **The cell that read `200 0`.**  The stride was one of
+THREE disagreeing derivations in the generic path, and fixing it alone turned a wrong read into
+an eight-byte write into a two-byte slot: `primitive_setter_call` keyed the element WRITE's
+width on the alias def's `forced_size` — `type_elm(concrete)` resolves every integer to the one
+`integer` def, which has none — and `wrap_vector_get_val` read every integer through `OpGetInt`.
+`Parser::narrow_elm_set` (the concrete literal / append / slice write, loft#1036's home) already
+derived the op from `NarrowIntKind`; it is now a wrapper over the free `vectors::narrow_elm_write`,
+which the monomorph rewrite calls too, and `narrow_elm_read` is its read twin for a generic
+body's `v[i]`.  Measured cell for cell at `u8`, `i16`, `i32`, both backends.  **Filed:**
+loft#1383 — a generic instantiated at two integer widths in one program collides into one
+monomorph (`is_equal` ignores the width), so the guard carries one generic per width.
+**Named residual:** the vector-element STRIDE still has three derivations — `Stores::size` via
+`vector_element_type`, `par_elem_size` (collections.rs, the `par` worker) and
+`data::element_stack_size` — a walk of its own (`@FR-L-Narrow` is the rule it would start from).
+
+**The flake the gate reported, run down (B7x's r4, `sev:high` had it shipped).**  `make ci`
+on ffae9ce6 passed with one flaky: `a-group-element-written-through-the-vector-member-…` r4
+(a record into a NULL slot of a `vector<E?>` group member) read `len(by_k) == 1`, reproduced
+at 2 seeds in 40 (`LOFT_HASH_SEED=0x0044fd4163d6edde`), deterministic per seed, both backends.
+Matrix over the keyed KIND split it: `hash` lost a live sibling under some seeds, `index`
+panicked `tree.rs: Item not found` on every seed, `trie` was clean; three live keys lost
+exactly ONE, which one changing with the seed; a plain `h[missing] = null` was clean.  Root:
+B7x's unlink loop hands the OLD element to `Stores::remove` even when the slot is null — a
+record whose key reads as zero and that no view holds — and `hash::hash_rec_pos`, probing for a
+record the table does not hold, wrapped to the home bucket and answered it, which `remove`
+zeroed.  Two homes: `Stores::absent_nullable_record` is the one null test both halves of
+`@FR-Col-Group` now ask (`link_siblings` on ENTER already skipped a non-`Some`; `Stores::remove`
+on LEAVE did not), and `hash_rec_pos` answers `Option`, stopping at the first empty slot, so a
+remove of an absent record is a no-op.  Guard `a-null-element-of-a-linked-group-leaves-nothing`:
+0 failures in 60 seeds, both known seeds pass, falsified by hand on ffae9ce6 (exit 101 → 0,
+both backends).  A lesson for the guard convention: a hash-seed-dependent cell needs a
+deterministic sibling (the `index` cell) to be falsifiable in one run.
+
 #### B2 — open, and the owner's call
 
 | decision | evidence | why it is not mine to take |

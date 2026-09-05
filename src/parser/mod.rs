@@ -9080,30 +9080,24 @@ impl Parser {
         let pos = Value::Int(0);
         // Resolve op def_nrs.  Each branch resolves only the ones it needs.
         let op = match concrete {
-            Type::Integer(spec) => {
-                // narrow-int dispatch mirrors `vectors.rs:1576-1586`.
-                // size(N) on an integer alias selects a narrower setter.
-                let alias_nr = data.type_elm(concrete);
-                let forced = data.forced_size(alias_nr);
-                match forced {
-                    Some(1) => {
-                        let m = Value::Int(spec.min);
-                        let d = data.def_nr("OpSetByte");
-                        Value::Call(d, vec![elm, pos, m, src_value])
-                    }
-                    Some(2) => {
-                        let m = Value::Int(spec.min);
-                        let d = data.def_nr("OpSetShortRaw");
-                        Value::Call(d, vec![elm, pos, m, src_value])
-                    }
-                    Some(4) => {
-                        let d = data.def_nr("OpSetInt4");
-                        Value::Call(d, vec![elm, pos, src_value])
-                    }
-                    _ => {
-                        let d = data.def_nr("OpSetInt");
-                        Value::Call(d, vec![elm, pos, src_value])
-                    }
+            Type::Integer(_) => {
+                // The narrow widths through the one home every vector build shares —
+                // `vectors::narrow_elm_write`, the twin of the index read; only the wide
+                // 8-byte element stays on `OpSetInt`.  This arm used to key on the ALIAS
+                // def's `forced_size` (`type_elm(concrete)` resolves every integer to the
+                // one `integer` def, which has none), so it wrote every narrow element of a
+                // generic `vector<T>` eight bytes wide into a one- or two-byte slot
+                // (loft#1378: `200 0` for two `u8`s, `29768 32767` for `-3000, 3000` as i16).
+                if let Some(call) = crate::parser::vectors::narrow_elm_write(
+                    concrete,
+                    elm.clone(),
+                    &src_value,
+                    data,
+                ) {
+                    call
+                } else {
+                    let d = data.def_nr("OpSetInt");
+                    Value::Call(d, vec![elm, pos, src_value])
                 }
             }
             Type::Float => {
@@ -9277,9 +9271,9 @@ impl Parser {
     /// ```
     ///
     /// Where:
-    /// - `elem_size = type_element_size(concrete, data)`
-    /// - `t_concrete_vec = database.vector(database.db_type(concrete, data))`
-    ///   (mirrors the parse-time concrete path at `vectors.rs:1532-1535`).
+    /// - `t_concrete_vec = database.vector(e)` and `elem_size = database.size(e)`, where `e`
+    ///   is `Data::vector_element_type(concrete)` — the one home the concrete `+=` append
+    ///   asks (loft#1378).
     ///
     /// Slice 2 ships only the `Type::Integer` arm.  Slice 3 extends to
     /// Text / Float / Single / Boolean / Character / Enum / Function +
@@ -9324,9 +9318,21 @@ impl Parser {
         // Mirrors `vectors.rs:1532-1535` — `database.vector(content_db_type)`
         // returns the synthetic vector<concrete> type id (registers
         // it on first use; idempotent on subsequent calls).
-        let content_db_type = database.db_type(concrete, data);
+        // The element's STORAGE type from the one home every writer and reader of a vector
+        // element routes through — `Data::vector_element_type`, which the concrete `+=`
+        // append asks too (a narrow integer keeps its width, a struct is its record) — and
+        // the stride from the store that owns the layout, exactly as the concrete path sizes
+        // its `OpPreAllocVector` (`vectors.rs`: `database.size(known)`).  This used to
+        // re-derive the stride from the Type alone (`type_element_size`), summing a struct's
+        // fields and descending into a field of the struct's own type without end, and it
+        // was computed before any triplet was looked for — so EVERY generic instantiated at
+        // a self-referential struct died in the parser with a bare SIGSEGV, `fn id<T>(v: T)
+        // -> T? { v }` at `struct Node { …, next: reference<Node>? }` included (loft#1378).
+        let content_db_type = data
+            .vector_element_type(concrete, database)
+            .unwrap_or_else(|| database.db_type(concrete, data));
         let concrete_vec_tp = i32::from(database.vector(content_db_type));
-        let elem_size = Self::type_element_size(concrete, data);
+        let elem_size = i32::from(database.size(content_db_type));
         // Walk operators looking for the triplet.  Build a new vec
         // with rewrites applied; copy unchanged ops verbatim.
         // Drain `ops` into a deque-like cursor so we can take owned
@@ -9597,49 +9603,6 @@ impl Parser {
         }
     }
 
-    /// I9-vec: compute element store size from the Type alone (no database needed).
-    fn type_element_size(tp: &Type, data: &Data) -> i32 {
-        // @PLN25: `Optional(τ)` stores at its base's width (sentinel storage); peel so a
-        // nullable narrow-int / scalar element gets its real stride, not the `_ => 12` DbRef.
-        let tp = tp.base();
-        // Post-2c: honor size(N) on integer aliases.
-        if matches!(tp, Type::Integer(_)) {
-            let alias_nr = data.type_elm(tp);
-            if let Some(n) = data.forced_size(alias_nr) {
-                return i32::from(n);
-            }
-        }
-        match tp {
-            Type::Single
-            | Type::Boolean
-            | Type::Character
-            | Type::Text(_)
-            | Type::Enum(_, false, _) => 4,
-            Type::Integer(_) | Type::Float => 8,
-            // for Reference(struct_nr), compute the struct's inline field
-            // size from its attributes rather than assuming 12 (DbRef size).
-            // Vector elements of struct type are stored inline, not as pointers.
-            Type::Reference(d_nr, _) => {
-                if (*d_nr as usize) < data.definitions.len()
-                    && data.def(*d_nr).def_type() == DefType::Struct
-                {
-                    let mut total = 0i32;
-                    for attr in data.def(*d_nr).attributes() {
-                        if attr.constant {
-                            continue;
-                        }
-                        total += Self::type_element_size(&attr.typedef, data);
-                    }
-                    if total > 0 {
-                        return total;
-                    }
-                }
-                12 // non-struct reference: DbRef = 12 bytes
-            }
-            _ => 12,
-        }
-    }
-
     /// One `OpConvBoolFrom<X>` call over `args`, or `None` when the op is not registered.
     ///
     /// A helper only so the exhaustive map above reads as a table of decisions rather
@@ -9671,6 +9634,15 @@ impl Parser {
         // @PLN25: peel `Optional(τ)` — a nullable scalar element needs the SAME value-
         // extraction op as its base; without this it fell through with no OpGet
         // and the raw slot was read as a DbRef.
+        // A NARROW integer element is unpacked at the width and encoding its type stores,
+        // through the read twin of the op every vector build writes it with
+        // (`vectors::narrow_elm_read`); only the wide 8-byte element takes `OpGetInt` below.
+        // Reading every integer through `OpGetInt` took eight bytes out of a one- or two-byte
+        // slot, so a generic body's `v[i]` on a `vector<u8>` or `vector<i16>` answered its
+        // neighbours' bytes (loft#1378's in-body read cells).
+        if let Some(read) = crate::parser::vectors::narrow_elm_read(tp, code.clone(), data) {
+            return read;
+        }
         let op_name = match tp.base() {
             Type::Integer(_) => "OpGetInt",
             Type::Float => "OpGetFloat",
