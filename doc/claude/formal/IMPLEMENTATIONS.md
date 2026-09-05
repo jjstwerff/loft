@@ -497,7 +497,7 @@ reframes the rest:
 
 | rule | fact | implemented at |
 |---|---|---|
-| `@FR-O-Oracle` | the own-vs-borrow derivation, from the IR | `use_analysis::ownership_of` |
+| `@FR-O-Oracle` | the own-vs-borrow derivation, from the IR; the callee→caller base translation has one home | `use_analysis::ownership_of`; `use_analysis::structural_arg_base` (read by the oracle and by the `ownership_cfg` shadow alike); cross-checked by Check A under `LOFT_OWN_ORACLE=check`, whose injected true positive is `LOFT_OWN_INJECT_FACT_OWNED` |
 | `@FR-O-Proxy` | empty `deps` as a stand-in for "owner" — unsound alone | `Type::depend().is_empty()`, 24 sites |
 | `@FR-O-Override` | the never-free veto that makes the proxy safe at a free — over the free NOTION (`OpSets::frees`, five spellings), with the one admissible free named | `Function::is_skip_free`; the downstream intercepts `state/codegen.rs::generate_call` and `generation/ops/ref_ops.rs`; `Function::is_staged_text_temp` (the admissible release); gated by `ownership_cfg`'s Check D under `LOFT_OWN_ORACLE=check` |
 | `@FR-O-Latest` | latest assignment's ownership + the LOOP DEPTH it was taken at | `Scopes::owned_refs` |

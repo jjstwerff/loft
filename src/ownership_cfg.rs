@@ -503,36 +503,44 @@ impl OFact {
 
 type OState = BTreeMap<u16, OFact>;
 
+/// TEST-ONLY: the var name whose shadow fact `ownership_dataflow` forces to `Owned` — Check A's
+/// injected true positive (`LOFT_OWN_INJECT_FACT_OWNED`).  One env read per process; never set
+/// outside tests.
+fn inject_fact_owned() -> Option<&'static str> {
+    use std::sync::OnceLock;
+    static V: OnceLock<Option<String>> = OnceLock::new();
+    V.get_or_init(|| std::env::var("LOFT_OWN_INJECT_FACT_OWNED").ok())
+        .as_deref()
+}
+
 /// @PLN94 (3.3) — consume a callee's return-ownership SUMMARY at a call site, INDEPENDENTLY of
 /// the shipped classifier (so the oracle can eventually disagree with it on calls): `Owned` →
 /// the result is owned; a borrowed/join-of-param return maps back to the caller's argument var.
 /// Mirrors `use_analysis::call_ownership` so it agrees where the shipped fact is right.
-fn call_own(data: &Data, callee_d: u32, args: &[Value]) -> OFact {
+fn call_own(data: &Data, d_nr: u32, callee_d: u32, args: &[Value]) -> OFact {
     match return_ownership(data, callee_d) {
         Own::Owned => OFact::Owned,
-        Own::Borrowed { base } => OFact::Borrowed(caller_arg_base(data, callee_d, base, args)),
-        Own::Join { base } => OFact::Join(caller_arg_base(data, callee_d, base, args)),
+        Own::Borrowed { base } => {
+            OFact::Borrowed(caller_arg_base(data, d_nr, callee_d, base, args))
+        }
+        Own::Join { base } => OFact::Join(caller_arg_base(data, d_nr, callee_d, base, args)),
     }
 }
 
-/// Map the callee's borrowed VISIBLE parameter (`callee_base`, an attribute index) to the
-/// caller's argument var at the same visible-parameter position; `u16::MAX` when it is hidden,
-/// out of range, or the matching arg is not a var. Mirrors `use_analysis::caller_arg_base`.
-fn caller_arg_base(data: &Data, callee_d: u32, callee_base: u16, args: &[Value]) -> u16 {
-    let attrs = data.def(callee_d).attributes();
-    if callee_base == u16::MAX
-        || (callee_base as usize) >= attrs.len()
-        || attrs[callee_base as usize].hidden
-    {
-        return u16::MAX;
-    }
-    let arg_index = attrs[..callee_base as usize]
-        .iter()
-        .filter(|a| !a.hidden)
-        .count();
-    match args.get(arg_index).map(Value::unspan) {
-        Some(Value::Var(cv)) => *cv,
-        _ => u16::MAX,
+/// Map the callee's borrowed parameter (`callee_base`, an attribute index) to the caller's
+/// variable it arrives in — through the ONE translation the oracle reads
+/// (`use_analysis::structural_arg_base`), so the shadow cannot drift from it on the shapes
+/// loft#1318 fixed (a hidden delivery buffer is nameable; a projection roots at its container).
+/// A call-shaped argument is what only the oracle can root, and the shadow asks it for that
+/// one value exactly as the oracle asks itself — the independence this file keeps is in the
+/// FLOW, not in the translation.
+fn caller_arg_base(data: &Data, d_nr: u32, callee_d: u32, callee_base: u16, args: &[Value]) -> u16 {
+    match crate::use_analysis::structural_arg_base(data, callee_d, callee_base, args) {
+        Ok(base) => base,
+        Err(arg) => match ownership_of(data, d_nr, arg) {
+            Own::Borrowed { base } | Own::Join { base } => base,
+            Own::Owned => u16::MAX,
+        },
     }
 }
 
@@ -611,7 +619,7 @@ fn ownership_dataflow(data: &Data, d_nr: u32, cfg: &Cfg) -> (Vec<OState>, usize)
                             && data.def(*callee_d).native().is_empty()
                             && !classifies_structurally(data, *callee_d) =>
                     {
-                        call_own(data, *callee_d, args)
+                        call_own(data, d_nr, *callee_d, args)
                     }
                     _ => OFact::from_own(ownership_of(data, d_nr, rhs)),
                 };
@@ -623,6 +631,17 @@ fn ownership_dataflow(data: &Data, d_nr: u32, cfg: &Cfg) -> (Vec<OState>, usize)
                 // return work-ref — `OpDatabase`'d for its Cell then returned as a borrowing view —
                 // to `Owned`, matching B's wrong-under-`LOFT_NO_A1B` fact and LOSING the catch.)
                 let f = if f == OFact::Borrowed(*var) {
+                    OFact::Owned
+                } else {
+                    f
+                };
+                // TEST-ONLY positive control for Check A: force the shadow's fact for the named
+                // var to `Owned` so it disagrees with the oracle where the oracle says a borrow.
+                // Check A's natural true positive was the A1b plan, and that disagreement was the
+                // shadow's own weaker base translation, not a fact defect (QUALITY.md B7r); with
+                // one translation shared by both derivations, a disagreement has to be injected
+                // to prove the reporting path fires.  Cached like the other injections.
+                let f = if inject_fact_owned() == Some(data.def(d_nr).variables.name(*var)) {
                     OFact::Owned
                 } else {
                     f
@@ -905,7 +924,21 @@ pub fn oracle(data: &Data) {
                 total_reds += run_check(name, &body, &cfg, data, d_nr, &free_ops);
                 checked += 1;
             }
-            _ => dump_own(name, &cfg, data, d_nr),
+            _ => {
+                dump_own(name, &cfg, data, d_nr);
+                // The two summaries of a callee's RETURN — the deps proxy the emitters read
+                // (`return_adopts_fresh_store`) and the oracle's IR-derived class — side by
+                // side, one line per heap-returning function, so a disagreement between them
+                // is a grep rather than a theory (@FR-O-Oracle walk, QUALITY.md B7r).
+                let def = data.def(d_nr);
+                if def.returned().heap_dep().is_some() {
+                    eprintln!(
+                        "RETSUM {name} adopts={} oracle={:?}",
+                        def.return_adopts_fresh_store(),
+                        return_ownership(data, d_nr)
+                    );
+                }
+            }
         }
     }
     if matches!(mode.as_str(), "check" | "check-dev") {

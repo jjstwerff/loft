@@ -5180,6 +5180,76 @@ names); `a_witnessed_local_carries_no_dead_displacement_free` pins the one-mecha
 the 1200 guard.  Guards 1200, 1336, B7p, 1357, 156, 622 and 1186 green on both backends.
 `LOFT_SKIPFREE_TRACE=*` (new wildcard) is the writer census instrument.
 
+#### B7r — `@FR-O-Oracle` walked: two derivations of one question, fourteen disagreements, and both sides had one defect (2026-09-05)
+
+Picked by `rule_tags.py dups`: at 17 sites `@FR-O-Oracle` is the most scattered rule not yet
+walked.  The rule says there is ONE own-vs-borrow derivation (`use_analysis::ownership_of`),
+that it reads the IR and not `deps`, and that a chokepoint reads it rather than re-deriving.
+Its sites ask three questions — *what does this VALUE own or borrow* (the oracle's readers),
+*is this a second derivation of the same question* (the re-derivations the rule forbids), and
+*how does a callee's answer travel back to the caller* (the interprocedural half, whose
+failure mode loft#1318 named).  The walk did not need a new matrix: the corpus census the
+previous walk ran under `LOFT_OWN_ORACLE=check` had already recorded **14 `fact-disagree`
+lines** — the @PLN94 flow-sensitive shadow (`ownership_cfg`) and the oracle answering the same
+variable differently — and Check A's own doc says each such line is *"a real defect in one
+implementation"*.  Its zero was measured on nine files; over 1247 it read fourteen, in four
+files and three shapes.
+
+**Two shapes were the oracle's defect.**  `classify`'s first arm read *"a var `OpDatabase`
+minted a fresh store into is Owned regardless of any other def"* — the retbuf a
+`materialized_view_return` fills, generalised to every minted variable.  `c: M = M { x: 5 };
+c = cond(c, 3)`, where `cond` mints on one arm and returns its argument on the other, is a
+`Join` of the mint with that call; the shortcut said `Owned`, the verdict that licenses a
+free.  A keyed literal built inside a closure into a captured collection (`__kvb_1`: minted,
+then repointed at the capture's store, which `OpDatabase` clears IN PLACE) is a view of the
+capture; the shortcut said `Owned` there too.  Both were masked at run time — the
+distinctness guard `OpFreeRefIfDistinct(old, new)` on the first, loft#1331's detach on the
+second — which is the shape @FR-O-Oracle's caveat names: the wrong answer in the over-free
+direction, held right by something downstream.  The arm now JOINS the mint with the variable's
+other definitions, in which a bare-`Var` right-hand side is a copy (@FR-B-Copy, and the mint is
+the copy's own store) and so `Owned`, while a call or a projection is whatever the oracle
+says of it; a minted variable with no `Set` at all (the retbuf) stays `Owned`.
+
+**One shape was the shadow's.**  `for wrd in wlist`, where `wlist = file(…).lines()`: the
+oracle roots the iteration temp at the caller's own delivery buffer (`Borrowed(__ref_2)`,
+loft#1318's *"a hidden buffer is nameable"*), the shadow said `Join(MAX)` — because its
+private copy of the callee-to-caller base translation, written to *"mirror"* the oracle's,
+had none of loft#1318's three fixes.  The translation now has ONE home,
+`use_analysis::structural_arg_base` (the hidden-parameter rule, the delivery-buffer
+exception, the projection-root walk), read by the oracle and the shadow alike; the shadow asks
+the oracle for the one thing a structural walk cannot root, a call-shaped argument, exactly
+as the oracle asks itself.  The independence @PLN94 keeps is in the FLOW, not in the
+translation.
+
+**Verified.**  Check A: 14 → **0** disagreements over the 1247-file corpus, 1017b/1326/1331
+added to `oracle_clean_on_correct_corpus`.  Emission: the pre-change compiler (the release
+binary the morning's gate built) and the new one produce BYTE-IDENTICAL `introspect` output —
+IR, bytecode and emitted Rust — on every one of the 1247 files, so the refinement changed
+facts the checks compare and nothing the backends emit.  The A1b true-positive gate
+(`oracle_flags_the_a1b_wrong_plan`) lost its disagreement in the process, and it had to: the
+disagreement it asserted WAS the two defects above meeting on one fixture (`Borrowed(MAX)`
+against `Owned`), and the known-wrong plan fails its own fixture at run time (`len: 0`, on the
+old binary too), so the doc's *"the class the runtime gates structurally miss"* was already
+stale.  The gate now asserts the runtime failure, the correct plan's pass, and Check A CLEAN on
+both plans; Check A's true positive is injected (`LOFT_OWN_INJECT_FACT_OWNED=<var>`, forcing
+the shadow's `Owned` where the oracle reads a plain borrow), like the leak and over-free
+controls before it.
+
+**The second derivation of a callee's RETURN, measured.**  `Definition::return_adopts_fresh_store`
+(the deps proxy the emitters' buffer logic reads) and `return_ownership` (the oracle's
+IR-derived class) were compared over every heap-returning function in the corpus (`RETSUM`
+lines under `LOFT_OWN_ORACLE=own`): 1244 functions, 277 where the two differ.  245 are
+`adopts=false, oracle=Owned` — the `r = Rec {…}; r` style whose renamed-buffer dep the
+proxy's own doc explains and deliberately keeps.  **32 are the risky direction**,
+`adopts=true` with the oracle reading a borrow of a visible parameter — 30 generic MONOMORPHS
+(`t_5S1066_*`, `t_4Cell_same`, `t_6GwNode_gw_walk`, …) whose instantiation carries an EMPTY
+return dep where the template's return borrows its argument, plus two closures.  Not a live
+defect: every free decider that reads the proxy (`displaces_owned_through_fresh_callee`,
+`delivers_into_buffer`, the codegen adopt) keys on the callee's hidden delivery BUFFER, which
+a borrow-returning function has none of, and the copy-vs-adopt of the value itself reads the
+oracle (loft#1346).  Recorded as a `@FR-G-Mono` observation: the monomorph's declared return
+dep is a proxy that reads "fresh" for a borrowed return, and only the oracle knows better.
+
 #### B2 — open, and the owner's call
 
 | decision | evidence | why it is not mine to take |

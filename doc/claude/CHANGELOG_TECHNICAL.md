@@ -9,6 +9,27 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The ownership oracle joins a minted variable's other definitions, and its shadow reads the one base translation (2026-09-05)
+
+`@FR-O-Oracle`'s two derivations — `use_analysis::ownership_of` and the @PLN94 flow-sensitive
+shadow in `ownership_cfg` — disagreed in 14 places over the 1247-file corpus (Check A's zero
+had been measured on nine files).  Two shapes were the oracle's: its first arm called any
+`OpDatabase`-minted variable `Owned` regardless of its other definitions, so a local minted once
+and rebound by a call that may return its argument, or by a capture read inside a closure, got
+the verdict that licenses a free (masked at run time by the distinctness guard and by the
+loft#1331 detach).  The arm now joins the mint with the variable's definitions — a bare-`Var`
+right-hand side is a copy and so `Owned`, a call or projection is what the oracle says — and a
+minted variable with no `Set` (the retbuf) stays `Owned`.  One shape was the shadow's: its
+private copy of the callee-to-caller base translation lacked loft#1318's fixes.  The
+translation now has one home, `use_analysis::structural_arg_base`, read by both.  Check A
+14 → 0; `introspect` output (IR, bytecode, Rust) byte-identical on all 1247 files.  The A1b
+gate asserts the runtime failure of the known-wrong plan and Check A clean on both plans;
+`LOFT_OWN_INJECT_FACT_OWNED=<var>` is Check A's injected true positive.  `LOFT_OWN_ORACLE=own`
+prints a `RETSUM` line per heap-returning function comparing `return_adopts_fresh_store` with
+the oracle's return class: 277 of 1244 differ, 32 in the risky direction, all generic
+monomorphs or closures whose declared return dep reads "fresh" for a borrowed return — no
+free decider reads that proxy without a delivery buffer, so recorded, not fixed.
+
 ### The never-free veto is stated over the free NOTION, and its one admissible free is named (2026-09-05)
 
 `@FR-O-Override`'s contract read *"no `OpFreeRef` is ever emitted for this binding"* — one

@@ -2185,9 +2185,6 @@ impl<'a> Ownership<'a> {
     /// vars to their defining RHS). The recursive core of the analysis.
     fn classify(&mut self, node: &Value, func: &Function, defs: &Defs) -> Own {
         match node.unspan() {
-            // A var `OpDatabase` minted a fresh store into is Owned regardless of
-            // any other def (the retbuf a `materialized_view_return` fills).
-            Value::Var(v) if defs.db_vars.contains(v) => Own::Owned,
             Value::Var(v) if !self.visiting_vars.insert(*v) => {
                 // Recursion back-edge: this var appears in its OWN definition, as in
                 // `c = t[k] ?? c`.  Mirrors the function-level guard below — return
@@ -2199,11 +2196,30 @@ impl<'a> Ownership<'a> {
                 Own::Borrowed { base: u16::MAX }
             }
             Value::Var(v) => {
+                // A var `OpDatabase` MINTED a store into owns that store — and it owns
+                // exactly that.  Where a `Set` also defines it, the var's class is the JOIN
+                // of the mint with those definitions, in which a bare-`Var` right-hand side
+                // is a COPY into the minted store (@FR-B-Copy: a whole-value bind is
+                // independent of its source, and the mint IS the copy's store) and so
+                // Owned, while a call or a projection is whatever the oracle says of it.
+                // Reading the mint ALONE — "Owned regardless of any other def" — called a
+                // local minted once and then rebound to a call that may hand back its own
+                // argument (`c = M {…}; c = cond(c, 3)`) or to a capture read `Owned`, the
+                // one verdict that licenses a free, where the flow-sensitive shadow read
+                // `Join`/`Borrowed`; Check A's fact-disagree on 1017b/1326/1331 was that
+                // shortcut, not the shadow (@FR-O-Oracle, QUALITY.md B7r).
+                let minted = defs.db_vars.contains(v);
                 let class = match defs.rhs.get(v) {
                     Some(rhss) if !rhss.is_empty() => {
                         let bound = rhss
                             .iter()
-                            .map(|r| self.classify(r, func, defs))
+                            .map(|r| {
+                                if minted && matches!(r.unspan(), Value::Var(_)) {
+                                    Own::Owned
+                                } else {
+                                    self.classify(r, func, defs)
+                                }
+                            })
                             .reduce(Own::join)
                             .unwrap_or(Own::Owned);
                         // loft#704 — a branch that FILLS `v` in place rather than
@@ -2218,16 +2234,21 @@ impl<'a> Ownership<'a> {
                         // above deliberately calls `Borrowed`: it is really owned, but
                         // saying so would tell a callee it may free the CALLER's
                         // buffer.  This adds an alternative; it never replaces that.
-                        if defs.filled.contains(v) {
+                        if defs.filled.contains(v) || minted {
                             bound.join(Own::Owned)
                         } else {
                             bound
                         }
                     }
-                    // No local def: a parameter (the caller owns it ⇒ Borrowed of
-                    // itself) or an uninitialised local (Owned — nothing to mis-free).
+                    // No local def: a store the function minted in place with no `Set` at
+                    // all (the retbuf a `materialized_view_return` fills — a parameter, but
+                    // this function's own store), else a parameter (the caller owns it ⇒
+                    // Borrowed of itself) or an uninitialised local (Owned — nothing to
+                    // mis-free).
                     _ => {
-                        if func.is_argument(*v) {
+                        if minted {
+                            Own::Owned
+                        } else if func.is_argument(*v) {
                             Own::Borrowed { base: *v }
                         } else {
                             Own::Owned
@@ -2397,43 +2418,8 @@ impl<'a> Ownership<'a> {
         func: &Function,
         defs: &Defs,
     ) -> u16 {
-        let attrs = self.data.def(callee_d).attributes();
-        if callee_base == u16::MAX || (callee_base as usize) >= attrs.len() {
-            return u16::MAX;
-        }
-        // A hidden parameter is a return MECHANISM rather than something the author
-        // wrote, and most of them name nothing on the caller's side.  The delivery
-        // BUFFER is the exception: the caller allocates its own `__ref_N` and passes it
-        // at that position like any other argument, so a callee handing back its
-        // `__retbuf` is handing back a store the caller already holds — nameable, and
-        // the one answer that stops the caller adopting its own buffer (loft#1318).
-        // `__closure` stays refused here: nothing is passed at its position, and
-        // `closure_capture_base` reads the capture out of the closure build instead.
-        if attrs[callee_base as usize].hidden && !is_synth_buffer(&attrs[callee_base as usize].name)
-        {
-            return u16::MAX;
-        }
-        // The caller's args align with the callee's VISIBLE params, in order.
-        let arg_index = attrs[..callee_base as usize]
-            .iter()
-            .filter(|a| !a.hidden)
-            .count();
-        let Some(arg) = caller_args.get(arg_index) else {
-            return u16::MAX;
-        };
-        // A PROJECTION argument is witnessed by its ROOT: `pick(v[0], …)`, `pick(w.s, …)`
-        // and `pick(h[k], …)` all answer a `DbRef` living in the root container's store, so
-        // comparing the returned store against the root decides borrow-vs-mint exactly as a
-        // bare `Var` does.  One walk, shared with the @P290 bracket, so the base the guard
-        // witnesses against and the slot the bracket protects cannot disagree.
-        //
-        // A walk reaching MORE than one root — a join whose arms name different containers —
-        // has no single store to compare against, and the caller keeps the conservative
-        // never-free answer rather than guessing one of them.
-        match view_root_slots(self.data, arg).as_deref() {
-            Some([root]) => *root,
-            // A walk reaching MORE than one root has no single store to compare against.
-            Some(_) => u16::MAX,
+        match structural_arg_base(self.data, callee_d, callee_base, caller_args) {
+            Ok(base) => base,
             // A structural walk names a variable and what projects out of one; an argument
             // that is itself a CALL is not one of those shapes, and the oracle is what
             // answers for a call (@FR-O-Oracle).  Ask it: a callee handing back a view of
@@ -2441,13 +2427,12 @@ impl<'a> Ownership<'a> {
             // projection does, one frame further out.  `Owned` — the callee minted the
             // store — leaves the base unnameable, which is the right answer there, because
             // then no caller variable holds it.
-            None => match self.classify(arg, func, defs) {
+            Err(arg) => match self.classify(arg, func, defs) {
                 Own::Borrowed { base } | Own::Join { base } => base,
                 Own::Owned => u16::MAX,
             },
         }
     }
-
     /// loft#1248 — the caller variable a return that borrows the closure may be handing back.
     ///
     /// `caller_arg_base` maps a callee's borrowed VISIBLE parameter to the argument at the
@@ -2682,6 +2667,52 @@ impl<'a> Ownership<'a> {
             }
         }
         sites
+    }
+}
+
+/// The STRUCTURAL half of the callee→caller base translation, read by the oracle
+/// ([`Ownership::caller_arg_base`]) and by its flow-sensitive shadow (`ownership_cfg`) alike, so
+/// the two cannot drift on it: the shadow's private copy carried none of loft#1318's three fixes
+/// and reported the oracle's CORRECT answers as disagreements — `Borrowed(MAX)` for a call
+/// delivering through a hidden buffer, and no root for a projection argument (QUALITY.md B7r).
+///
+/// `Ok(base)` names the caller variable the callee's borrowed parameter `callee_base` arrives
+/// in, `u16::MAX` where nothing does: a hidden parameter that is not a delivery buffer (a
+/// return MECHANISM, naming nothing on the caller's side — `__closure` is resolved from the
+/// closure build instead), a missing argument, or a projection reaching two roots (a join whose
+/// arms name different containers has no single store to compare against).  The delivery
+/// BUFFER is the hidden parameter that IS nameable: the caller allocates its own `__ref_N` and
+/// passes it at that position, so a callee handing back its `__retbuf` hands back a store the
+/// caller already holds — the answer that stops the caller adopting its own buffer.  A
+/// projection argument is witnessed by its ROOT (`view_root_slots`): `pick(v[0], …)`,
+/// `pick(w.s, …)` and `pick(h[k], …)` all answer a `DbRef` living in the root container's
+/// store.  `Err(arg)` hands back an argument that is itself a CALL, which a structural walk
+/// cannot root and only the oracle can (@FR-O-Oracle).
+pub(crate) fn structural_arg_base<'a>(
+    data: &Data,
+    callee_d: u32,
+    callee_base: u16,
+    caller_args: &'a [Value],
+) -> Result<u16, &'a Value> {
+    let attrs = data.def(callee_d).attributes();
+    if callee_base == u16::MAX || (callee_base as usize) >= attrs.len() {
+        return Ok(u16::MAX);
+    }
+    if attrs[callee_base as usize].hidden && !is_synth_buffer(&attrs[callee_base as usize].name) {
+        return Ok(u16::MAX);
+    }
+    // The caller's args align with the callee's VISIBLE params, in order.
+    let arg_index = attrs[..callee_base as usize]
+        .iter()
+        .filter(|a| !a.hidden)
+        .count();
+    let Some(arg) = caller_args.get(arg_index) else {
+        return Ok(u16::MAX);
+    };
+    match view_root_slots(data, arg).as_deref() {
+        Some([root]) => Ok(*root),
+        Some(_) => Ok(u16::MAX),
+        None => Err(arg),
     }
 }
 

@@ -6,7 +6,7 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — D-own-31 OPENED AND CLOSED 2026-09-05 (the never-free contract named one spelling of five and forbade a release the language ships, below); D-own-30 OPENED AND CLOSED 2026-09-05 (a nullable local holding a projection VIEW freed the store it displaced, below), after D-own-29 2026-09-04 (loft#1346, below) and D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
+OPEN: **0** — D-own-32 OPENED AND CLOSED 2026-09-05 (the oracle called a minted variable Owned regardless of its other definitions, and its shadow re-derived the base translation, below); D-own-31 OPENED AND CLOSED 2026-09-05 (the never-free contract named one spelling of five and forbade a release the language ships, below); D-own-30 OPENED AND CLOSED 2026-09-05 (a nullable local holding a projection VIEW freed the store it displaced, below), after D-own-29 2026-09-04 (loft#1346, below) and D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
 single cell, its Face B CLOSED the same day, that cell's one known SYMPTOM closed 2026-08-26
 with the FACT still wrong, loft#1098, and the fact itself closed by giving every path of a
 value branch its own binding — below).  D-own-26 CLOSED 2026-09-03: its gate existed all
@@ -38,6 +38,32 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-32 — OPENED AND CLOSED (2026-09-05): the oracle called a minted variable Owned regardless of its other definitions, and its shadow re-derived the base translation
+
+`(O-Oracle)` says the answer is a function of the VALUE, computed by one derivation, and that a
+translation which cannot name a base must not upgrade the verdict.  Two things fell short of it,
+found because the @PLN94 shadow derivation (Check A) disagreed with the oracle in 14 places over
+the 1247-file corpus (QUALITY.md B7r).  First, `classify` read *"a var `OpDatabase` minted a
+fresh store into is Owned regardless of any other def"* — right for the retbuf a
+`materialized_view_return` fills, and an UPGRADE for a local minted once and then rebound by a
+call that may hand back its own argument (`c = M {…}; c = cond(c, 3)`, 1017b) or by a capture
+read (`__kvb_1` inside a closure, 1326/1331): `Owned`, the verdict that licenses a free, where
+the value is a `Join` or a view.  Masked at run time by the distinctness guard and by
+loft#1331's detach, which is the caveat's exact shape.  Second, the shadow's private copy of the
+callee-to-caller base translation, written to *"mirror"* the oracle's, carried none of
+loft#1318's three fixes, so a call delivering through a hidden buffer read `Join(MAX)` there
+and `Borrowed(buffer)` in the oracle (37-stress).
+
+Closed on both sides.  The mint arm now JOINS the mint with the variable's other definitions
+(a bare-`Var` right-hand side is a copy per `(B-Copy)` and so Owned; a call or projection is
+what the oracle says of it; a minted variable with no `Set` stays Owned), and the translation
+has ONE home, `use_analysis::structural_arg_base`, read by the oracle and by the shadow — the
+shadow's independence is in the flow, not in the translation.  Check A reads 0 over the corpus;
+the emitted IR, bytecode and Rust are byte-identical across all 1247 files, so the change is in
+the facts and not in the programs.  The A1b gate, whose asserted disagreement was these two
+defects meeting on one fixture, now asserts the runtime failure of the wrong plan and Check A
+clean on both plans, with an injected true positive (`LOFT_OWN_INJECT_FACT_OWNED`).
 
 ### D-own-31 — OPENED AND CLOSED (2026-09-05): the never-free contract named one spelling of five, and forbade a release the language ships
 

@@ -82,6 +82,13 @@ const CLEAN_CORPUS: &[&str] = &[
     "doc/claude/plans/94-cfg-ownership-dataflow/probes/06-capture.loft",
     "tests/scripts/505-collection-capture.loft",
     "tests/scripts/85-struct-copy-return-owned.loft",
+    // The three shapes the two derivations disagreed on over the 1247-file corpus until the
+    // `@FR-O-Oracle` walk (QUALITY.md B7r): a local minted once and rebound by a call that may
+    // hand back its argument, a keyed literal repointed at a captured collection inside a
+    // closure, and a call delivering through a hidden buffer.  Zero disagreements is the claim.
+    "tests/scripts/1017b-a-conditional-borrow-into-its-own-binding.loft",
+    "tests/scripts/1326-a-captured-keyed-collection-rebind-replaces.loft",
+    "tests/scripts/1331-a-repointed-literal-accumulator-is-detached.loft",
 ];
 
 const A1B_UAF: &str = "tests/scripts/85-temp-subject-borrow-return-uaf.loft";
@@ -99,9 +106,9 @@ fn oracle_clean_on_correct_corpus() {
     }
 }
 
-/// 4.3 — the true-positive gate: the known-wrong plan is flagged, the correct default is not.
-/// This is the class the runtime gates (exit / leak / interp-vs-native) structurally MISS — see the
-/// strictness table in PHASE4_DESIGN.md.
+/// 4.3 — the known-wrong A1b plan (the promotion collapse: a temp subject built INTO the return
+/// buffer, then a borrowed view of it returned) fails its own fixture at run time, and the correct
+/// default does not — the runtime channel this class is caught on.
 ///
 /// It takes ALL THREE opt-outs to reach that plan now. `LOFT_NO_A1B` restores the promotion
 /// collapse, but loft#872's work-ref/argument step-over then keeps the roles apart anyway — pass 2's
@@ -111,28 +118,83 @@ fn oracle_clean_on_correct_corpus() {
 /// handed the promoted buffer whatever the other two do. Any ONE of the three makes this fixture
 /// right, which is worth knowing: they are independent guards on the same collapse, and the gate has
 /// to disable all of them to have a defect to catch.
+///
+/// This gate used to ask Check A to FLAG the wrong plan, and it did — but the disagreement it
+/// reported was the shadow's own weaker callee-to-caller base translation (`Borrowed(MAX)` for an
+/// argument built in place) against the oracle's mint shortcut (`Owned` for any `OpDatabase` var),
+/// two derivation defects that happened to differ on this shape.  With the mint shortcut refined and
+/// one translation shared by both (`use_analysis::structural_arg_base`), the two derivations agree on
+/// the wrong plan as on the right one, and Check A stays CLEAN on both — that is asserted here too,
+/// so a future divergence on this fixture is a finding.  Check A's own true positive is the injected
+/// one below.
 #[test]
-fn oracle_flags_the_a1b_wrong_plan() {
-    let wrong = check_reds(
-        A1B_UAF,
-        &[
-            ("LOFT_NO_A1B", "1"),
-            ("LOFT_NO_WORKREF_STEPOVER", "1"),
-            ("LOFT_NO_P2_OBJECT_WORKREF", "1"),
-        ],
-    );
+fn the_a1b_wrong_plan_fails_at_run_time_and_the_oracles_agree_on_it() {
+    let wrong_env: &[(&str, &str)] = &[
+        ("LOFT_NO_A1B", "1"),
+        ("LOFT_NO_WORKREF_STEPOVER", "1"),
+        ("LOFT_NO_P2_OBJECT_WORKREF", "1"),
+    ];
+    let run = |env: &[(&str, &str)]| -> (bool, String) {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg("--interpret")
+            .arg(root().join(A1B_UAF))
+            .env("LOFT_NO_CACHE", "1");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().expect("run loft");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let (wrong_ok, wrong_err) = run(wrong_env);
     assert!(
-        wrong
+        !wrong_ok && wrong_err.contains("assertion failed"),
+        "the known-wrong A1b plan must fail its fixture at run time; got ok={wrong_ok}:\n{wrong_err}"
+    );
+    let (right_ok, right_err) = run(&[]);
+    assert!(
+        right_ok,
+        "the correct default plan must pass its fixture:\n{right_err}"
+    );
+    for env in [wrong_env, &[][..]] {
+        let reds = check_reds(A1B_UAF, env);
+        let disagree: Vec<&String> = reds
             .iter()
-            .any(|r| r.contains("n_h") && r.contains("fact-disagree")),
-        "the oracle did NOT flag the known-wrong LOFT_NO_A1B plan (n_h):\n{}",
-        wrong.iter().cloned().collect::<Vec<_>>().join("\n")
-    );
-    let correct = check_reds(A1B_UAF, &[]);
+            .filter(|r| r.contains("fact-disagree"))
+            .collect();
+        assert!(
+            disagree.is_empty(),
+            "the two ownership derivations disagreed on the A1b fixture under {env:?}: {disagree:?}"
+        );
+    }
+}
+
+/// Check A's TRUE-POSITIVE gate, injected: `LOFT_OWN_INJECT_FACT_OWNED=inner` forces the shadow's
+/// fact for `inner` — a vector header viewing its own `__vdb_` backing, `Borrowed` to the oracle and
+/// never filled, so no `Join` softens the comparison — to `Owned`, and Check A must report the
+/// `fact-disagree`; the un-injected run must be clean.  Symmetric to the leak-scan and over-free
+/// injections — a report whose zero cannot be made non-zero proves nothing.
+#[test]
+fn oracle_fact_check_flags_an_injected_owned_fact() {
+    let disagree = |env: &[(&str, &str)]| -> Vec<String> {
+        check_reds(A1B_UAF, env)
+            .into_iter()
+            .filter(|r| r.contains("fact-disagree") && r.contains("inner"))
+            .collect()
+    };
     assert!(
-        correct.is_empty(),
-        "the oracle cried wolf on the CORRECT A1b plan:\n{}",
-        correct.iter().cloned().collect::<Vec<_>>().join("\n")
+        disagree(&[]).is_empty(),
+        "Check A cried wolf on the un-injected fixture: {:?}",
+        disagree(&[])
+    );
+    let injected = disagree(&[("LOFT_OWN_INJECT_FACT_OWNED", "inner")]);
+    assert!(
+        injected
+            .iter()
+            .any(|r| r.contains("mine=Owned") && r.contains("B=Borrowed")),
+        "Check A FAILED to flag the injected Owned fact for inner (vacuous?): {injected:?}"
     );
 }
 

@@ -222,6 +222,18 @@ what `(O-Oracle)`'s run-time test compares against, so a named one keeps the min
 as well — but between an unnameable base and `Owned` there is no trade: `Owned` is the
 over-free direction, and a leak is recoverable where a premature free is not.
 
+**And the translation itself has ONE home.**  `use_analysis::structural_arg_base` carries the
+hidden-parameter rule, the delivery-buffer exception and the projection-root walk, and both
+derivations of the fact read it — the oracle, and the @PLN94 flow-sensitive shadow that
+cross-checks it (Check A).  The shadow's own copy, written to *mirror* the oracle's, carried
+none of loft#1318's three fixes and reported the oracle's CORRECT answers as disagreements;
+what the shadow keeps independent is the FLOW, never the translation.  The oracle's answer for
+a VARIABLE is likewise the join of ALL its definitions — a store `OpDatabase` minted into it
+makes it Owned only where nothing else defines it (the retbuf a `materialized_view_return`
+fills), and a variable minted once and then rebound by a call that may hand back its argument
+is a `Join`, not `Owned`; reading the mint alone was the upgrade this paragraph forbids, held
+right at run time by the distinctness guard (D-own-32, QUALITY.md B7r).
+
 ⚠ **The reason to write this down is that the choice is currently invisible.** 38 functions
 test `depend().is_empty()`; some legitimately want the proxy (they are asking "is this a
 view?", not "may I free it?"), some memo the oracle, and some free. Nothing in the source
