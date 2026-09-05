@@ -9520,7 +9520,25 @@ impl Parser {
     }
 
     /// I9-vec: compute element store size from the Type alone (no database needed).
+    ///
+    /// A struct's fields are summed because a struct-typed vector element is stored INLINE.
+    /// A field whose type reaches BACK to a struct already on the path cannot be inline —
+    /// nothing can contain itself — so it is a stored reference and measures as a `DbRef`.
+    /// Without that stop the walk followed `Node { next: reference<Node>? }` around its own
+    /// cycle until the stack ran out, and the process died with no diagnostic at all
+    /// (loft#1378: SIGSEGV on both backends, for a DIRECT self-reference and for a mutual
+    /// `A -> B -> A` alike).
     fn type_element_size(tp: &Type, data: &Data) -> i32 {
+        Self::type_element_size_on_path(tp, data, &mut Vec::new())
+    }
+
+    /// [`Self::type_element_size`] with the structs currently being measured.
+    ///
+    /// `path` is a stack, not a visited-set: a struct is popped when its own fields are
+    /// done, so the SAME struct appearing twice as SIBLINGS (`Out { p: In, q: In }`) still
+    /// measures both — only a genuine cycle stops.  A visited-set would silently under-count
+    /// the second sibling, which is a wrong SIZE rather than a crash and therefore worse.
+    fn type_element_size_on_path(tp: &Type, data: &Data, path: &mut Vec<u32>) -> i32 {
         // @PLN25: `Optional(τ)` stores at its base's width (sentinel storage); peel so a
         // nullable narrow-int / scalar element gets its real stride, not the `_ => 12` DbRef.
         let tp = tp.base();
@@ -9544,14 +9562,19 @@ impl Parser {
             Type::Reference(d_nr, _) => {
                 if (*d_nr as usize) < data.definitions.len()
                     && data.def(*d_nr).def_type() == DefType::Struct
+                    // The cycle stop: this struct is already being measured further up, so
+                    // the field naming it is a stored reference and falls to the `12` below.
+                    && !path.contains(d_nr)
                 {
+                    path.push(*d_nr);
                     let mut total = 0i32;
                     for attr in data.def(*d_nr).attributes() {
                         if attr.constant {
                             continue;
                         }
-                        total += Self::type_element_size(&attr.typedef, data);
+                        total += Self::type_element_size_on_path(&attr.typedef, data, path);
                     }
+                    path.pop();
                     if total > 0 {
                         return total;
                     }

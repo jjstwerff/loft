@@ -9,6 +9,30 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### loft#1378: a generic at a struct in a reference cycle no longer kills the process (2026-09-06)
+
+`Parser::type_element_size` sums a struct's fields because a struct-typed vector element is
+stored INLINE.  A field whose type reaches BACK to a struct already being measured cannot be
+inline — nothing contains itself — so it is a stored reference and measures as a `DbRef`.
+Without that stop the walk followed `Node { next: reference<Node>? }` around its own cycle
+until the stack ran out: SIGSEGV, exit 139, no diagnostic, no partial output, both backends.
+
+The filed scope was narrower than the defect, and the matrix is what showed it.  The issue's
+variant table recorded the DENSE `-> T` generic return as working; it crashes identically, so
+the return's nullability was never an axis.  Nor is the DIRECTNESS of the self-reference: a
+mutual `A -> B -> A` crashes the same way.  What is required is the GENERIC — the non-generic
+twin never reaches this walk — and a cycle of any length through it.
+
+The stop is a PATH, not a visited-set: a struct is popped when its own fields are done, so the
+same struct twice as SIBLINGS (`Out { p: In, q: In }`) still measures both.  A visited-set
+would silently under-count the second sibling, which is a wrong SIZE rather than a crash and
+therefore the worse failure — the guard reads every field of both siblings so it would show.
+
+Eight cells on both backends.  Guard:
+`tests/scripts/1378-a-generic-at-a-struct-in-a-reference-cycle.loft`, `@falsified-at:
+964bab93` (interpret exit 139 -> 0, native exit 139 -> 0).
+
+
 ### loft#1372: a `&` reference links a nullable slot — D-bind-17 CLOSED (2026-09-06)
 
 `@FR-B-Ref-Intro` admits `&τ` for EVERY τ, `@FR-B-Ref-Uniform` makes a `&τ` variable a τ

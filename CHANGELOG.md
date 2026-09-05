@@ -20,6 +20,12 @@ record alive when `maybe` turned out to be nothing — once per time it happened
 programs only.  A long-running loop that reassigned such a variable grew for as long as it
 ran.
 
+**A linked list or a tree no longer crashes the compiler when a generic touches it.**
+`struct Node { value: integer, next: reference<Node>? }` passed to any generic function killed
+the process outright — no error message, no output. The compiler was walking the struct's own
+`next` edge round and round while measuring it. It now recognises that a field pointing back
+at its own struct is a link rather than something stored inside it.
+
 **A `&` reference can link a value that may be absent.**  `fn bump(p: &integer?)` and
 `q = &x` where `x: integer?` were refused outright — you had to link the non-null value and
 carry the absence beside it.  Both now work, read and write, on both backends: reading gives
