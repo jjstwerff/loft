@@ -548,6 +548,15 @@ read through its tag).  Records: `formal/layout-history.md` D-layout-5 and D-lay
 of one of the two homes or removes it as a redundant spelling is the long tail, batch by
 batch, each with a cell.
 
+**Batch 2 — the issues the walks filed, closed with the rules as arbiter (2026-09-06).**
+loft#1373 (a view stale once its container grows) is the first: `(B-Disturb)` listed three
+place-ending events and an append is a fourth, so the fix extends the rule rather than working
+around it — and the sentence that looked like it settled the question, `(B-View-Depth)`'s *"the
+view survives a source realloc"*, rested on a guard cell that appends to the INNER vector of a
+nested one and never measured the realloc of the container the view names.  Recorded as
+D-bind-18; the collection-typed twin is loft#1377, filed rather than bundled because admitting
+its type makes the advice fire over a copy the materialise arm does not make.
+
 ## Phase ordering
 
 0 before 1 (a probe that kills the census cheaply).  1 before 2 and 3 (the homes have to be

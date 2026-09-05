@@ -72,6 +72,13 @@ place — mutating `s` afterwards no longer shows through `t.0` when `T` is a st
 generic and the non-generic spelling of the same function had been giving different
 answers, which is the one thing a type variable is supposed never to do.  A `T` bound to a
 vector or a keyed collection is still shared rather than copied (loft#1365).
+**A value you read out of a list stays yours when the list grows.**  `d = v[0]` followed by
+appends used to read whatever was at the old address once the list outgrew its allocation —
+right for a few appends, garbage for many, with nothing said either way.  Now the value is
+copied for you at the point you bound it, and a note tells you the copy happened and that
+writes through it no longer reach the list.  Taking a `&` reference INTO a list that then
+grows is refused instead of quietly breaking; a `&` to the list itself is unaffected.
+
 **A lookup that finds nothing is `null` everywhere it goes.**  `v[i]` past the end, `h[k]` for
 a key that is not there, and the same read on a `sorted` or an `index`, used to answer a value
 that only some null tests could see: bound to a `S?` local it read as present, passed to a

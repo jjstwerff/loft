@@ -642,6 +642,45 @@ linked tuple LOCAL is built as that record, and the rule is written down as `(T-
 [tuples.md](tuples.md).  A nullable, fn-ref or nested-tuple element stays refused and the
 refusal names it.
 
+- **D-bind-18 — a view was stale once its container GREW, and the rule said it survived**
+  (2026-09-06, loft#1373).  `(B-Disturb)` listed three place-ending events and an append was
+  not among them, so the materialise walk never fired: `d: S = v[0]` followed by two hundred
+  appends read `4294967296` on both backends with strict stores silent — while the SAME code
+  with two appends read `1`, because nothing had reallocated yet.  One shape, two answers,
+  decided by an allocator fact the author cannot see.
+
+  **What made it look settled, and was the finding.**  `(B-View-Depth)` said in as many words
+  that a view *"survives a source realloc"* and named
+  `85-store-lifetime-reference-default-views.loft` for it.  Measured: that guard's cell A
+  appends to the INNER vector of a `vector<vector<integer>>`, so its view — which names the
+  OUTER element SLOT — reads the repointed handle and survives.  The realloc of the container
+  the view NAMES was never measured, and at that level the guard's own shape answers
+  `len(b) == 0`.  A rule sentence resting on a cell that measures one level in is the
+  `(N-Idem)` "OPEN: 0" shape again: the claim was re-measurable and had not been re-measured.
+
+  **Status — CLOSED.**  `(B-Disturb)` gains GROWING as its fourth event; the existing answer
+  applies unchanged (the view MATERIALISES and the author is told, `(B-View)`), and
+  `(B-Ref-Reshape)` refuses a `&` INTO a container that grows while the link is live.  ANY
+  growth disturbs rather than only one that provably crosses the capacity, because the
+  alternative gives one program two meanings.  `scopes.rs::grown_containers` is the fourth
+  event's home, apart from `reshaped_containers` only so the ADVICE can name the right
+  statement — a reader told "removing an element renumbers the others" goes looking for a
+  `remove` that is not in the function.  The five growth spellings all name their container
+  at arg 0 and are read through one shared walk (`containers_named_by`).
+
+  The in-versus-to distinction `(B-Ref-Alias)` needs was already in one place and needed no
+  new test: `base_container_var` answers `None` unless the right-hand side is a PROJECTION, so
+  `pe = &e; e += [4]` and `pv = &o.v; pv += [3]` keep compiling while `c = &v[0]; v += [x]`
+  is refused.  Measured against the sibling checkout's `&` cells and `503-vector-reference-alias`.
+  Guard: `tests/scripts/1373-growing-a-container-ends-the-places-inside-it.loft`, eight cells
+  on both backends with four controls (the inner-realloc shape 85 measures, a nested field
+  read, a view dead at the growth, and a view with no disturbance at all — the last is the
+  boundary a fix that materialised everything would cross).  Residual, filed rather than
+  bundled: a COLLECTION-typed element view is still stale (loft#1377) — the walk records it
+  once the type gate admits it and the advice fires, but the materialise arm is record-shaped,
+  so the author would be told about a copy they did not get.  `Contract: strained` — the rule
+  gained an event.
+
 ### the status line formal/README.md's area table carried until 2026-09-04
 
 **0 open** — D-bind-11 CLOSED 2026-09-03 (a `&(τ, …)` with a heap element is a reference to the `__tuple<…>` record; it had read: `&(τ, …)` admits only SCALAR elements, against B-Ref-Alias/B-Ref-Uniform) and D-bind-16 CLOSED the same day (a join binds every arm a plain bind would copy through its own temp, loft#1321); (the D-bind-11 entry read: — the two backends represent a reference tuple differently and `text` is the first element where that shows; loft#1006) — **B-Ref-AnnotationOnly is now total** (D-bind-10, 2026-08-09): a `&` that was the LAST operand of an expression (`b = 1 + &a`, `b += &a`, a block-final `1 + &a`, `S { x: &a }`) used to compile, because the guard peeked only the token AFTER the operand; `B-Ref-StoredRef` records the one legal non-binding position, a `reference<τ>` field. **B-Ref-Reshape** landed (@PLN130 F9, loft#779): disturbing a container while a `&` reference into it is LIVE is a compile error, for all three of `B-Disturb`'s events (removal, re-key, container reassignment). It is the first application of C79's 2026-08-05 *decline-what-we-cannot-implement-safely* revisit, whose reason is forward compatibility: an error can be dropped later, a silently different semantics cannot. Also closed: `&` is a TYPE ANNOTATION (`&τ` = `Type::RefVar`), @PLN87 ladder L1–L6 + D-bind-7 closed; the @PLN40 two-level `const` model (Const-Bind/Value/…) shipped, and D-const-1 (enum-variant const) closed via @PLN102 K1 — enforced identically to struct fields, both backends

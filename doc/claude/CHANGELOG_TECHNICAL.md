@@ -9,6 +9,32 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Growing a container ends the places inside it — (B-Disturb)'s fourth event (2026-09-06, loft#1373, D-bind-18)
+
+`(B-Disturb)` listed three place-ending events and an append was not among them, so the
+materialise walk never fired for one: `d: S = v[0]` then two hundred appends read
+`4294967296` on both backends with strict stores silent, while the same code with TWO appends
+read `1` — `Store::resize` had not yet had to move the record.  `(B-View-Depth)` appeared to
+settle it (*"the view survives a source realloc"*), and the guard it named appends to the
+INNER vector of a `vector<vector<integer>>`, whose view names the OUTER slot and reads the
+repointed handle; the realloc of the container the view NAMES was never measured, and at that
+level the same shape answers `len == 0`.
+
+`scopes.rs::grown_containers` is the fourth event's home — apart from `reshaped_containers`
+only so the advice names the right statement, and sharing one argument walk
+(`containers_named_by`) so the two op lists cannot drift in how they read a container.  Five
+spellings, each naming its container at arg 0: `OpNewRecord`, `OpPreAllocVector`,
+`OpAppendVector`, `OpInsertVector`, `OpHashAdd`.  The existing answer applies unchanged — the
+view materialises and the author is told (`ViewCause::Grown` with its own advice) — and
+`(B-Ref-Reshape)` refuses a `&` INTO a container grown while the link is live.  A `&` naming
+the container itself is untouched, and needed no new test: `base_container_var` answers `None`
+unless the right-hand side is a projection.  The two view gates now read the local's type
+through `base()`, so a nullable `S?` view materialises like its dense twin.  Guard:
+`1373-growing-a-container-ends-the-places-inside-it.loft`, eight cells, four of them controls.
+Residual filed apart: a COLLECTION-typed element view is still stale (loft#1377) — admitting
+the type makes the walk record it and the advice fire, but the materialise arm is
+record-shaped, so the author would be told about a copy they did not get.  `Fixes #1373`.
+
 ### @PLN153 phase 5, batch 1: a read that names no record answers `nullref` (2026-09-06, loft#1374, D-layout-5 / D-layout-6)
 
 `(L-Null)` gives a reference that has left its slot ONE spelling of absence, `nullref`; an

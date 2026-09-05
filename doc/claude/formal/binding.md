@@ -156,17 +156,28 @@ rule `C-Ref` in [types.md](types.md): a `&τ` is accepted wherever a `τ` is.)
                   (`c = o.inner.v`) are VIEWS whatever the element type — #426's RESOLUTION,
                   whose FILED premise (*"these must COPY"*) was recorded as the wrong read:
                   under the reference-default model a binding to a heap value aliases the
-                  source, in-place mutation writes through, and the view survives a source
-                  realloc.  Guarded by `85-store-lifetime-reference-default-views.loft` and
-                  `294-vector-element-view-semantics.loft`.
-  (B-Disturb)     three events END the place a reference names, and they are the same
-                  three for every rule below: REMOVING from the container (`v.remove(i)`
+                  source and in-place mutation writes through.  A view survives the realloc
+                  of a container it does NOT name — `a = vv[0]; vv[0] += [9]` grows the INNER
+                  vector and `a`, which names the outer element SLOT, reads the repointed
+                  handle (`85-store-lifetime-reference-default-views.loft` cell A, and this
+                  is the only realloc it measures).  The realloc of the container the view
+                  DOES name ends the place instead, and is B-Disturb's fourth event.
+                  Also guarded by `294-vector-element-view-semantics.loft`.
+  (B-Disturb)     four events END the place a reference names, and they are the same
+                  four for every rule below: REMOVING from the container (`v.remove(i)`
                   renumbers every later position — collections.md Col-Remove),
-                  RE-KEYING an element (writing a key field: the record moves, or
-                  becomes reachable by no key), and REASSIGNING the container itself
-                  (`bx = T{…}` leaves the place with nothing to point at).  Overwriting
-                  a place is NOT disturbing it: `o.inner = Box{…}` writes INTO the place
-                  `o.inner` already occupies, so a view of it survives.
+                  GROWING it (an append, an insert or a keyed add: a container that
+                  outgrows its allocation is copied into a larger record and every
+                  element moves), RE-KEYING an element (writing a key field: the record
+                  moves, or becomes reachable by no key), and REASSIGNING the container
+                  itself (`bx = T{…}` leaves the place with nothing to point at).
+                  Overwriting a place is NOT disturbing it: `o.inner = Box{…}` writes
+                  INTO the place `o.inner` already occupies, so a view of it survives.
+                  ANY growth disturbs, not only one that provably crosses the capacity:
+                  whether it reallocates is an allocator fact the author cannot see, and
+                  a rule that answered differently on either side of it would give one
+                  program two meanings (measured — `d: S = v[0]` read `1` after two
+                  appends and `4294967296` after two hundred, loft#1373).
   (B-Ref-Reshape) DISTURBING a container while a `&` reference into it is still LIVE is
                   a COMPILE-TIME ERROR.  These are the shapes where B-Ref-Alias could
                   not hold, and declining them is what makes B-Ref-Alias unconditional
@@ -203,7 +214,7 @@ COLLECTION projection off an OWNED base — which is exactly `OWNERSHIP_MODEL §
 on both backends.  Ask it rather than re-deriving: the cells existed before, scattered across four
 files, and no single one said what the rule was.
 
-Both kinds of alias last exactly as long as the place they name, and the three things
+Both kinds of alias last exactly as long as the place they name, and the four things
 that end a place are the same for both (B-Disturb). What differs is the answer. A plain
 view gets a **copy** and is told so: it already meant value semantics, so losing
 write-through is consistent. A `&` gets an **error**, because it did not — the author

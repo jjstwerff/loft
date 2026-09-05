@@ -312,16 +312,36 @@ fn lift_view_deps(arg: &Value, data: &Data) -> Option<Vec<u16>> {
     }
 }
 
-/// Every container variable `code` REMOVES from.
+/// Every container variable `code` RESHAPES — removes from, or grows.
 ///
-/// Detects one of @FR-B-Disturb's three place-ending events — REMOVING from a container.
-/// (The other two are RE-KEYING an element and REASSIGNING the container itself; note that
-/// OVERWRITING a place does not disturb it, since the write lands in the place the view
-/// already points at.)
+/// Detects two of @FR-B-Disturb's four place-ending events: REMOVING from a container and
+/// GROWING one.  (The other two are RE-KEYING an element and REASSIGNING the container
+/// itself, which [`established_stores`] answers.  OVERWRITING a place does not disturb it —
+/// the write lands in the place the view already points at, and `v[i] = x` lowers to
+/// `OpCopyRecord`, which is named nowhere here.)
 ///
-/// `v.remove(i)` lowers to `OpRemoveVector(v, size, index)` (container = arg 0) and the
-/// in-loop `e#remove` to `OpRemove(index, container, …)` (container = arg 1). Both renumber
-/// the positions inside the container's store, which is what invalidates an element view.
+/// `v.remove(i)` lowers to `OpRemoveVector(v, size, index)` and the in-loop `e#remove` to
+/// `OpRemove(index, container, …)` — the one op naming its container at arg 1, where every
+/// other names it at arg 0.  Both renumber the positions inside the container's store, which
+/// is what invalidates an element view.
+///
+/// GROWING is the fourth event, and the one this list was short by (loft#1373).  A vector
+/// that outgrows its allocation is copied into a larger record — `Store::resize` answers a
+/// NEW record number when it cannot absorb the free block beside it, `vector_append` repoints
+/// the container's handle at it, and the old record is freed — so every element moves and a
+/// view bound before the growth names an address the elements have left.  Measured: `d: S =
+/// v[0]` followed by two hundred appends read `4294967296` on both backends with strict
+/// stores silent, while the same code with TWO appends read `1`, because nothing had
+/// reallocated yet.  One shape, two answers, decided by an allocation the author cannot see —
+/// which is why ANY growth disturbs rather than only one that provably crosses the capacity.
+///
+/// The five growth spellings, each naming its container at arg 0: `OpNewRecord` (a
+/// single-element append and a keyed add — it calls `vector_append`), `OpPreAllocVector` (the
+/// capacity request a literal and a sized append make), `OpAppendVector` (`v += w`),
+/// `OpInsertVector` (an insert, which also shifts every later element) and `OpHashAdd` (which
+/// can rehash and move records).  A container's own CONSTRUCTION uses these too and needs no
+/// separate test: the walk runs in ORDER and only shakes views that are already open, so an
+/// op running before any view of that container exists reaches nothing.
 ///
 /// Only a container named by a plain `Var` is collected; a reshape reached through some
 /// other expression is not recognised, so the answer is a lower bound and a missed case
@@ -337,15 +357,54 @@ fn lift_view_deps(arg: &Value, data: &Data) -> Option<Vec<u16>> {
 /// than fixing a bug. Filed as [loft#779](https://github.com/loft-lang/loft/issues/779); the
 /// decided answer is to REFUSE that program, not to copy behind the author's back.
 fn reshaped_containers(code: &Value, data: &Data) -> HashSet<u16> {
+    containers_named_by(code, data, &|name| match name {
+        "OpRemove" => Some(1),
+        "OpRemoveVector" => Some(0),
+        _ => None,
+    })
+}
+
+/// Every container variable `code` GROWS — @FR-B-Disturb's fourth place-ending event.
+///
+/// Apart from [`reshaped_containers`] because the ADVICE differs, and only because of that:
+/// a removal renumbers the elements after the one removed, while a growth can move ALL of
+/// them to a larger record, so a reader told the wrong one goes looking for a `remove` that
+/// is not there.  Both shake the same views for the same reason.
+///
+/// The five spellings, each naming its container at arg 0: `OpNewRecord` (a single-element
+/// append and a keyed add — it calls `vector_append`), `OpPreAllocVector` (the capacity
+/// request a literal and a sized append make), `OpAppendVector` (`v += w`), `OpInsertVector`
+/// (an insert, which also shifts every later element) and `OpHashAdd` (which can rehash and
+/// move records).
+fn grown_containers(code: &Value, data: &Data) -> HashSet<u16> {
+    containers_named_by(code, data, &|name| {
+        matches!(
+            name,
+            "OpNewRecord" | "OpPreAllocVector" | "OpAppendVector" | "OpInsertVector" | "OpHashAdd"
+        )
+        .then_some(0)
+    })
+}
+
+/// The container variables `code` names at the argument `which` picks, for the ops it picks.
+///
+/// One walk shared by [`reshaped_containers`] and [`grown_containers`], so the two questions
+/// differ only in their op list and cannot drift in how they read an argument.  Only a
+/// container named by a plain `Var` is collected, which is what makes both answers a lower
+/// bound: a disturbance reached through some other expression keeps today's behaviour rather
+/// than inventing a new one.
+fn containers_named_by(
+    code: &Value,
+    data: &Data,
+    which: &dyn Fn(&str) -> Option<usize>,
+) -> HashSet<u16> {
     let mut out: HashSet<u16> = HashSet::new();
     code.walk(&mut |v| {
         let Value::Call(d, args) = v else { return };
-        let arg = match data.def(*d).name() {
-            "OpRemoveVector" => args.first(),
-            "OpRemove" => args.get(1),
-            _ => return,
+        let Some(at) = which(data.def(*d).name()) else {
+            return;
         };
-        if let Some(Value::Var(c)) = arg.map(Value::unspan) {
+        if let Some(Value::Var(c)) = args.get(at).map(Value::unspan) {
             out.insert(*c);
         }
     });
@@ -538,6 +597,9 @@ fn removed_params_map(data: &Data) -> RemovedParams {
 enum ViewCause {
     /// The container is RESHAPED — `v.remove(i)` / `e#remove` renumbers its positions (F2).
     Reshaped,
+    /// The container GROWS — an append, an insert or a keyed add can move every element to a
+    /// larger record (@FR-B-Disturb's fourth event, loft#1373).
+    Grown,
     /// The container VARIABLE is re-established, so the name stops meaning the store (F8).
     Reassigned,
 }
@@ -789,6 +851,7 @@ impl ViewWalk<'_> {
             ViewCause::Reshaped,
             None,
         );
+        self.shake(&grown_containers(stmt, self.data), ViewCause::Grown, None);
         if let Some(removed) = self.cross_frame {
             for (container, callee) in reshaped_via_call(stmt, self.data, removed) {
                 self.shake(
@@ -818,8 +881,23 @@ impl ViewWalk<'_> {
             for frame in &mut self.open {
                 frame.retain(|(view, _)| view != v);
             }
+            // Through `base()`: a nullable `S?` view is the same storage behind a
+            // nullability marker (@FR-L-Null), so it is at risk exactly as its dense twin is.
+            //
+            // A COLLECTION-typed view is deliberately NOT here, though `(B-View-Depth)` makes
+            // an index read a view "whatever the element type": the walk would record it and
+            // the advice would fire, but the materialise arm this feeds is record-shaped and
+            // no copy happens, so `b = w[0]` on a `vector<vector<integer>>` would be told its
+            // alias was replaced by a copy it did not get.  Measured and backed out
+            // (loft#1377) — a message that lies is worse than the silence it replaces.
+            //
+            // A bare `&` link to a whole container is not recorded either, and that is
+            // `base_container_var`'s doing rather than this list's: it answers `None` unless
+            // the right-hand side is a PROJECTION, so `pe = &e` names no container while
+            // `pw = &w[0]` names `w`.  That is the in-versus-to distinction `(B-Ref-Alias)`
+            // needs, and it lives in one place.
             if matches!(
-                self.function.tp(*v),
+                self.function.tp(*v).base(),
                 Type::Reference(_, _) | Type::Enum(_, true, _)
             ) && let Some(container) = base_container_var(rhs.unspan(), self.data)
             {
@@ -1045,7 +1123,9 @@ fn def_reshape_refusals(data: &Data, d_nr: u32, removed: &RemovedParams) -> Vec<
     let mut out: Vec<ReshapeRefusal> = Vec::new();
     // (1) — a `&` link this frame holds, still live where its container is disturbed. Every
     // cause the walk reports is refused: each one ends the place the reference names, and a
-    // reference that cannot reach its source is not what `&` asked for.
+    // reference that cannot reach its source is not what `&` asked for.  That includes the
+    // GROWTH the walk learned in loft#1373 — `c = &v[0]; v += [x]; c.n` names an element the
+    // growth may have moved, which is the same reason the other three are refused.
     for (view, d) in ViewWalk::run(&def.code, function, data, Some(removed), def.position.line) {
         if !function.is_amp_link(view) {
             continue;
@@ -1060,6 +1140,13 @@ fn def_reshape_refusals(data: &Data, d_nr: u32, removed: &RemovedParams) -> Vec<
                 format!(
                     "a removal renumbers the remaining elements, so a write through \
                      `{view_name}` would no longer reach the element it names"
+                ),
+            ),
+            ViewCause::Grown => (
+                format!("grow `{container}`"),
+                format!(
+                    "a container that outgrows its allocation moves every element, so a \
+                     write through `{view_name}` would no longer reach the element it names"
                 ),
             ),
             ViewCause::Reassigned => (
@@ -5965,7 +6052,7 @@ impl Scopes<'_> {
         // precedes it is not at risk, and materialising it would lose a write that lands
         // today — see `collect_views_to_materialise`.
         if matches!(
-            function.tp(v),
+            function.tp(v).base(),
             Type::Reference(_, _) | Type::Enum(_, true, _)
         ) && let Some(cause) = self.views_to_materialise.get(&v).copied()
             && let Some(container) = base_container_var(unspanned_value, data)
@@ -5981,6 +6068,13 @@ impl Scopes<'_> {
             match cause {
                 ViewCause::Reshaped => {
                     crate::copy_manifest::note_materialised_view(&vname, &cname, &fname);
+                }
+                // loft#1373 — the fourth invalidator: the container GREW, so the elements may
+                // have moved to a larger record. Same materialise, different sentence: a
+                // reader told "removing an element renumbers the others" goes looking for a
+                // `remove` that is not in the function.
+                ViewCause::Grown => {
+                    crate::copy_manifest::note_grown_view(&vname, &cname, &fname);
                 }
                 // @PLN130 F8 — the third invalidator: the container VARIABLE is reassigned,
                 // so the dep still names `bx` while the store it named is gone. Different
