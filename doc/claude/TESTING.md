@@ -2868,6 +2868,21 @@ is checked. `make falsify` catches the commonest case — a guard that never fai
 build it was written to catch — but it only answers for the commit you name. These are the
 shapes that survive it, each one measured here rather than imagined.
 
+**A one-of-a-kind fixture makes a positional read look right.**  Reading a tuple member's
+backing work-ref off the element type's dep list, `deps.first()` passed every cell of a matrix
+whose tuples had ONE droppable member — and the lists are UNIONED across a tuple's heap
+members, so every element carries the same list and `first()` names the FIRST member whatever
+you ask about.  The two-member cell is the only shape that can tell a correct pairing from a
+coincidence: it released one resource twice and the other once.  Whenever an index, an offset
+or a position is being read, one cell has to carry TWO of the thing being indexed.
+
+**Undoing a lowering means undoing its TYPE, and a value-only matrix cannot see the half you
+left.**  A monomorph pass that removed a tuple-member copy unwrapped the VALUE and left the
+element's dep on the backing whose copy was gone; every value cell still answered correctly and
+the store was freed by nobody.  It surfaced only because the probe printed the run's leak line
+beside the values.  A guard over a lowering that can be undone asserts value AND leak, or it is
+measuring one half of the change.
+
 **The HARNESS does not run the program the way a user does, so a `tests/scripts/*.loft`
 guard can be vacuous for a whole CLASS of defect.** `loft --tests` discovers and calls the
 `test_*` functions; it is not `loft prog.loft`, and two things a plain run does are simply

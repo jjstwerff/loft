@@ -1364,6 +1364,23 @@ runtime `out` held the adopted `__ref_N`; the lie surfaced at the free as a use-
 a session of patching the free side (witness-pairing, dep-strip, explicit free, a narrowed
 predicate) only grew complexity. The fix was in the return delivery, so the dep stopped lying.
 
+**After two feature streams JOIN, the defect is in their PRODUCT and in neither factor — so
+probe the seam, because a green gate on the join says nothing about it.** 2026-09-05 joined
+loft#1361 (a whole-tuple bind COPIES its heap member) with loft#1362 (a whole-value copy MOVES
+the drop).  Each branch was green, `make ci` on the join was green, and `t = (s, 5); u = t`
+released one resource TWICE on both backends with nothing said.  Neither guard could see it:
+the tuple guard carried no `OpDrop` and the drop guard carried no tuple, so the broken cell was
+the one cell that needed both.  The cheap instrument is a probe whose cells cross the two
+features deliberately; the expensive alternative is meeting it in a consumer.
+
+**Attribute a joined defect across FOUR builds before deciding whose it is.**  The same
+session: 2026.8.0 released once everywhere, branch A alone was worst (four shapes doubled, one
+tripled), branch B alone was clean — because without A's copy one record wears both names —
+and the join healed three of the four.  Read from the join alone it looked like the pick had
+broken something; the four-build matrix showed it was A's own regression that B's work had
+mostly absorbed.  Building the two parents costs two compiles and settles a question that
+otherwise gets argued.
+
 **A leak on one backend can be a wrong ANSWER on the other, and the leak is the harmless-looking
 half.** loft#1081 was filed from `--interpret` as "a vector-valued `if` leaks a store per
 evaluation". The same program on `--native` — the DEFAULT backend — printed the third call's

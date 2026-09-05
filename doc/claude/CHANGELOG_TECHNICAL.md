@@ -59,8 +59,10 @@ literal, plus four scalar cells as the control, since keeping those green is exa
 declining version bought by making the record cells wrong.  `matrix_axes.py` is what found the
 last two: the loop and `if`-arm cells were wrong too, and the container-kind axis it reported
 missing turned out to be an ICE.  A COLLECTION binding still aliases and D-tup-9 stays open for
-it — the cure needs the collection copy built at monomorph time, and the backing it mints has
-no top-level declaration to be freed by (measured: correct on all four cells, one leaked store).
+it — the cure needs the collection copy built at monomorph time, which was measured answering
+correctly on all four cells and leaking one store: a vector member's copy mints a store holder
+whose free is emitted by the parse-time `synthetic_tuple_return` builder, so one minted after
+that builder has run is in no free list.
 
 ### A copy of a tuple releases a droppable member once, and heap.md opens its first deviation (2026-09-05)
 
