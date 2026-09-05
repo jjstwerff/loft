@@ -4264,7 +4264,7 @@ impl DoubleMove<'_> {
         {
             return;
         }
-        let Some(src) = crate::scopes::drop_bearing_source(&args[0]) else {
+        let Some(src) = crate::scopes::drop_bearing_source(&args[0], self.func) else {
             return;
         };
         self.record_source(src, st);

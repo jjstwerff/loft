@@ -31,6 +31,39 @@ the `@FR-O-Latest` rule-led walk (QUALITY.md B7p, `formal/ownership-history.md` 
 guarded by `tests/scripts/a-nullable-view-local-does-not-free-what-it-displaces.loft`,
 falsified at `51646648` on both backends.
 
+### A copy of a tuple releases a droppable member once, and heap.md opens its first deviation (2026-09-05)
+
+The seam between the two 2026-09-05 streams, found by probing it rather than by either
+side's guards: loft#1361 made a whole-tuple bind COPY its heap member, and loft#1362 made a
+whole-value copy MOVE the drop — but `scopes::drop_bearing_source` had no answer for a copy
+whose SOURCE is a tuple member, so `t = (s, 5); u = t` built two records that each ran the
+author's `OpDrop`.  Silent, both backends, identical values.  Neither guard could see it:
+the tuple guard carries no `OpDrop` and the drop guard carries no tuple.
+
+Measured across four builds rather than reasoned about.  2026.8.0 releases once everywhere;
+`tuxedo-1361-tuple-copy` alone was worst (four shapes doubled, one tripled);
+`tuxedo-quality-2026-09` alone is clean, because without the member copy one record wears
+both names; the JOIN heals three of the four.  So the family is loft#1361's regression that
+the H-Drop work absorbed most of, not something the picked range introduced.
+
+`drop_bearing_source` gained a `Value::TupleGet` arm resolving the member to its backing
+work-ref, and the `__ref` buffer arm of `drop_handoff_node` now reads its source through
+that one home instead of matching a bare `Var`.  Reading the pairing is the part with a
+trap in it: the dep lists are UNIONED across a tuple's heap members, so every heap element
+carries the same list and the k-th dep backs the k-th HEAP member — with one droppable
+member `first()` is right by accident and with two it names the wrong work-ref, which is
+the cell the guard pins.  The helper declines unless the dep count equals the heap-member
+count, and declines outright for a PARAMETER, whose deps are the caller's in another dep
+space; declining costs the hand-off, where guessing would suppress an unrelated local's
+release.
+
+Guard `tests/scripts/a-copy-of-a-tuple-with-a-droppable-member-releases-once.loft` (9 cells
+incl. a two-resource control, falsified at `7aaab369` on both channels).  Three shapes stay
+open as `heap.md` D-heap-1 — a nested tuple, a member declared nullable, and a copy off a
+tuple parameter — each because the element type carries no backing dep to read, or the deps
+are not this frame's; none reproduces on `main`, so they are branch-internal by the bug
+policy.  `heap.md` moves from `OPEN: 0` to `OPEN: 1`, which is what that line is for.
+
 ### A reassignment releases the droppable it displaces, and the hand-off fact follows the assignment (2026-09-05)
 
 loft#1362.  `scopes::displaced_drop` — at a `Set` of an owned droppable-typed local already

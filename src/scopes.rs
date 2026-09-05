@@ -1290,9 +1290,10 @@ fn drop_handoff_node(n: &Value, function: &Function, data: &Data, out: &mut Hash
                 // (or adopted by a caller who runs it), so the source stops dropping.  The
                 // spelling is a parser `OpCopyRecord` rather than a `Set`, which is why the
                 // arm below does not see it.
-                if let (Value::Var(src), Value::Var(dst)) = (args[0].unspan(), args[1].unspan())
+                if let Some(src) = drop_bearing_source(&args[0], function)
+                    && let Value::Var(dst) = args[1].unspan()
                     && function.name(*dst).starts_with("__ref")
-                    && let Some(moved) = copy_moves_drop_from(function, data, *dst, *src, true)
+                    && let Some(moved) = copy_moves_drop_from(function, data, *dst, src, true)
                 {
                     out.insert(moved);
                     return;
@@ -1304,7 +1305,7 @@ fn drop_handoff_node(n: &Value, function: &Function, data: &Data, out: &mut Hash
                 {
                     return;
                 }
-                if let Some(src) = drop_bearing_source(&args[0]) {
+                if let Some(src) = drop_bearing_source(&args[0], function) {
                     out.insert(src);
                 }
             }
@@ -1341,7 +1342,7 @@ fn drop_handoff_node(n: &Value, function: &Function, data: &Data, out: &mut Hash
 fn construction_work_ref(rhs: &Value, function: &Function) -> Option<u16> {
     match rhs.unspan() {
         Value::Block(_) | Value::Insert(_) => {
-            let v = drop_bearing_source(rhs)?;
+            let v = drop_bearing_source(rhs, function)?;
             let n = function.name(v);
             (n.starts_with("__ref_") || n.starts_with("__rref_")).then_some(v)
         }
@@ -1430,13 +1431,70 @@ pub(crate) fn appends_to_element(dest: &Value, function: &Function, data: &Data)
 /// that BUILDS it, whose tail is the work-ref holding the finished record — `Nest { s: S { … } }`
 /// copies such a block into `Nest`'s field, and without peeling it the inner `S` temp kept a
 /// scope-exit drop and released the payload a second time.
-pub(crate) fn drop_bearing_source(src: &Value) -> Option<u16> {
+///
+/// A tuple MEMBER read names a slot too, and it is the third spelling of a copy source rather
+/// than a fourth kind of thing: `layout.md (L-Tuple)` makes a tuple a synthetic struct, and a
+/// heap member's stack word is the handle of a work-ref the tuple's own type names
+/// (`(ref(S)["__ref_1"], integer)`). So `u = t` — lowered onto the per-member copy since
+/// loft#1361 — copies `t`'s member record into `u`'s, and the source it displaces is that
+/// work-ref. Without this arm the copy named no slot, both members kept a scope-exit drop,
+/// and one resource was released TWICE while `(B-Copy)` and `heap.md (H-Drop)` between them
+/// say a copy MOVES the single release to the copy.
+pub(crate) fn drop_bearing_source(src: &Value, function: &Function) -> Option<u16> {
     match src.unspan() {
         Value::Var(v) => Some(*v),
-        Value::Block(bl) => bl.operators.last().and_then(drop_bearing_source),
-        Value::Insert(ops) => ops.last().and_then(drop_bearing_source),
+        Value::TupleGet(base, i) => tuple_member_backing(*base, *i, function),
+        Value::Block(bl) => bl
+            .operators
+            .last()
+            .and_then(|v| drop_bearing_source(v, function)),
+        Value::Insert(ops) => ops.last().and_then(|v| drop_bearing_source(v, function)),
         _ => None,
     }
+}
+
+/// The work-ref backing member `i` of the tuple in `base`, or `None` when that member is not
+/// a heap record — a scalar member is stored inline and has no slot of its own to release.
+///
+/// The tuple's TYPE is where the pairing lives, and reading it takes one step of care: the
+/// dep lists are UNIONED across the tuple's heap members, so every heap element carries the
+/// same list and `(WS, integer, WT)` prints as
+/// `(ref(WS)["__ref_1", "__ref_2"], integer, ref(WT)["__ref_1", "__ref_2"])`. The list is in
+/// member order and a scalar member contributes nothing, so the backing of member `i` is the
+/// dep at the number of HEAP members before it — `__ref_2` for the `WT` above, not the
+/// `__ref_1` that `first()` answers.
+///
+/// The count is what makes that positional read safe rather than a convention this function
+/// hopes for: if the list is not exactly as long as the tuple's heap members, the order it
+/// would be indexed by is not established, so this DECLINES instead of naming a work-ref it
+/// guessed. Declining costs the hand-off (the pre-loft#1361 double release) and never
+/// suppresses the release of a member that is still live.
+fn tuple_member_backing(base: u16, i: u16, function: &Function) -> Option<u16> {
+    // A PARAMETER's members are the CALLER's, and its deps are not frame variables of this
+    // function at all — reading one as a local's number would suppress the release of
+    // whatever local happens to wear that number.  The parameter rule is the one that
+    // applies here anyway: a copy off an argument leaves the caller as the owner
+    // (`copy_moves_drop_from`), which is a decision about the argument, not its member.
+    if function.is_argument(base) {
+        return None;
+    }
+    let Type::Tuple(elems) = function.tp(base).base() else {
+        return None;
+    };
+    let elem = elems.get(i as usize)?;
+    if !crate::data::is_dbref(elem.base()) {
+        return None;
+    }
+    let deps = match elem.base() {
+        Type::Reference(_, deps) | Type::Enum(_, true, deps) => deps,
+        _ => return None,
+    };
+    let heap = |e: &Type| crate::data::is_dbref(e.base());
+    if deps.len() != elems.iter().filter(|e| heap(e)).count() {
+        return None;
+    }
+    let dep = *deps.get(elems.iter().take(i as usize).filter(|e| heap(e)).count())?;
+    (dep != u16::MAX).then_some(dep)
 }
 
 /// Which DEFINITION each fn-ref variable in `code` was assigned, `u32::MAX` where the
