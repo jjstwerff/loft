@@ -6,7 +6,7 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **1** — D-tup-9 (opened 2026-09-05, loft#1365 — below).  (D-tup-8 opened and closed 2026-09-04, loft#1361 — below; D-tup-7 opened and closed 2026-09-04, loft#1350 — below; D-tup-4's KEYED half CLOSED 2026-08-31, loft#1230); D-tup-5 and D-tup-6 opened and closed
+OPEN: **1** — D-tup-9 (opened 2026-09-05, loft#1365 — below; NARROWED the same day to the collection half, the record and scalar bindings closed).  (D-tup-8 opened and closed 2026-09-04, loft#1361 — below; D-tup-7 opened and closed 2026-09-04, loft#1350 — below; D-tup-4's KEYED half CLOSED 2026-08-31, loft#1230); D-tup-5 and D-tup-6 opened and closed
 2026-08-28; D-tup-3 opened and closed 2026-08-26; D-tup-2 closed the day the
 rule it needed was written down.  Bounded by the oracle note below — **and D-tup-3 is what that
 note was warning about**: it was found by giving an element a HEAP type, which this doc's
@@ -14,34 +14,58 @@ all-`(integer, integer)` oracle cannot express, so the zero above never covered 
 D-tup-6 are two more from the same blind spot, one axis further: a NULLABLE element, which the
 all-`(integer, integer)` oracle cannot express either.
 
-### D-tup-9 — OPEN (2026-09-05, loft#1365): a tuple literal member typed by a type variable is not copied
+### D-tup-9 — NARROWED to the collection half (2026-09-05, loft#1365): a tuple literal member typed by a type variable
 
 `(T-Cons)` copies a heap element INTO a tuple literal and `binding.md (B-Copy)` copies a plain
-bind.  D-tup-8 made that hold for a member whose type is KNOWN at the literal; this is the member
-whose type is a generic's type variable.  `Parser::tuple_member_owned_copy` decides at PARSE time
-whether a member is a record to copy, and a type-variable member looks like one — `Type::Reference`
-to the `__typevar_T` placeholder — so the copy allocated a record with the placeholder's row and
-tripped loft#1070's guard on both backends (`template_matrix::u3_b1a_addable_pair_with_hoisted_sum`,
-`u3_b2_addable_ordered_pair`: `pair_sum<T: Addable>(a, b) -> (T, T)` with `T` an integer).  The
-copy is therefore DECLINED for a type-variable member, which is the layout the language shipped
-before D-tup-8: the element slot holds the local's handle.
+bind.  D-tup-8 made that hold for a member whose type is KNOWN at the literal; this is the
+member whose type is a generic's type variable.  Neither rule has a clause for generics, and
+that is the point of the entry: a monomorph is an ordinary program, so `(s, 1)` must behave
+the same whether `s` is written `Ctr` or reached through a `T` bound to `Ctr`.
 
-Measured, both backends: `fn generic<T: Bumpable>(a: T) -> integer { s = a; t = (s, 1);
-s.bump(); t.0.value() }` answers `1` for a `Counter { n: 0 }` where the rules say `0`, and
-mutating through `t.0` changes `s`.  The same body with `Counter` written in place of `T`
-answers `0` since D-tup-8.
+**Closed for a RECORD and for a SCALAR binding (2026-09-05).**  The difficulty is that the
+template has to decide something that does not exist yet: a type variable is spelled
+`Type::Reference` to its placeholder, so it looks exactly like a record, while what the member
+IS — a record to copy, a collection to copy differently, or a scalar with nothing to copy —
+exists only per instantiation.  Both one-sided answers were measured and both are wrong.
+DECLINING the copy in the template (the shape that shipped for a day) left a struct-bound `T`
+aliasing: `s = a; t = (s, 1); s.bump(); t.0.value()` answered `1` for a `Counter { n: 0 }`
+where `Counter` written in place answered `0`.  Emitting it UNCONDITIONALLY allocated a record
+with the type variable's own row — the layout escape loft#1070's guard refuses — an ICE on
+both backends for `pair_sum<T: Addable>(a, b) -> (T, T)` with `T` an integer.
 
-**Why it stays open here rather than closing with D-tup-8.**  What the member IS — a scalar
-with nothing to copy, or a record — exists only per instantiation, after the template is parsed.
-The cure is a monomorph-time step in `retarget_parametric_type_rows`'s pass: collapse the
-`tuple_member_copy` block to its source for a scalar binding, retarget its row for a record
-binding — and the tuple element's placeholder is a separate row (`__typevar_T#2`) from the
-function's own `T`, so the bindings have to cover it first.  That is a change to the monomorph
-path, not to the copy, and it is not made on a branch whose brief is the known-type copy.
+The cure decides per instantiation: the template emits the record copy, and
+`Parser::collapse_parametric_tuple_member_copies` removes it again in each monomorph whose
+bound type it does not fit.  The test is the block's own contents against that type
+(`tuple_member_copy_shape_fits`), never a "this was a type variable" flag — a generic body
+also builds tuples from CONCRETE members, and their copies are correct and must not be
+touched.  Unwrapping the value is only half of undoing the guess: the template also gave the
+tuple ELEMENT the backing's dep, and an element still naming a backing whose copy is gone is
+owned by a variable nothing fills, so the store the member holds is freed by nobody — a leak
+the first version shipped and the guard's absence would not have caught.  The dep therefore
+goes with the copy (`Variables::make_tuple_members_independent`, `make_independent` one level
+down, since a tuple carries no deps of its own and `deps_mut` on a `Type::Tuple` is `None`).
 
-**Closes when** the generic probe above answers `0` on both backends and `matrix_axes.py`
-reads the tuple-member axis at `type variable` for a guard in `tests/scripts/`.  Workaround,
-verified: mutate the local before it enters the literal.
+Guard `tests/scripts/1365-a-tuple-member-typed-by-a-type-variable-is-copied.loft`: nine
+record cells, each against a CONCRETE twin rather than a literal — mutating the local, mutating
+through the tuple, the member at index 1, both members typed by the variable, arity three, the
+tuple as a return value, a two-field record so a wrong row shows in the value, the literal in a
+loop and in an `if` arm — plus four scalar cells as the control, since keeping them green is
+what the declining version bought by making the record cells wrong.
+
+**Still OPEN for a COLLECTION binding.**  With `T` bound to a `vector` or a keyed collection
+the template's record copy does not fit either, so it is removed and the member aliases —
+`fn keep<T>(a: T) -> (T, integer) { s = a; t = (s, 7); return t; }` with a `vector<integer>`
+reads `len` 3 through the returned copy after the source grew, where the concrete twin reads 2.
+That is the pre-loft#1365 behaviour rather than a new fault, and it is where it stops because
+the cure needs the collection copy BUILT at monomorph time: rebuilding it there was measured
+working on all four collection cells, but the backing it mints has no top-level declaration,
+so nothing frees it (one leaked store) — the loft#1175 hoist, on a variable created after
+`scopes::check` has already run.
+
+**Closes when** the vector and keyed cells read their concrete twin's answer on both backends
+with no leaked store, and `matrix_axes.py` reads the container-kind axis at `vector` and `hash`
+for a guard in `tests/scripts/`.  Workaround, verified: copy the member by hand before it
+enters the literal.
 
 ### D-tup-8 — OPENED AND CLOSED (2026-09-04, loft#1361): a tuple with a heap member was shared where the rules say copy
 

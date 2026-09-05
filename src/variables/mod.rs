@@ -1365,6 +1365,38 @@ impl Function {
         }
     }
 
+    /// [`Self::make_independent`] one level down: strip `remove` from the deps of each
+    /// ELEMENT of a tuple-typed variable, and say whether anything moved.
+    ///
+    /// A tuple carries no deps of its own — each element carries its own backing — so
+    /// `make_independent` cannot reach them: `deps_mut` on a `Type::Tuple` is `None`, and
+    /// asking it would quietly do nothing.  The caller is loft#1365's monomorph pass, which
+    /// removes a tuple-member copy the instantiation does not need and has to take the
+    /// element's dep on that copy's backing with it; a dep left naming a backing nothing
+    /// fills makes the element look owned by an empty variable, and the store the member
+    /// really holds is then freed by nobody.
+    pub fn make_tuple_members_independent(&mut self, var_nr: u16, remove: &[u16]) -> bool {
+        let mut tp = self.variables[var_nr as usize].type_def.clone();
+        let crate::data::Type::Tuple(elems) = &mut tp else {
+            return false;
+        };
+        let mut moved = false;
+        for e in elems.iter_mut() {
+            let Some(deps) = e.deps_mut() else { continue };
+            for d in remove {
+                while let Some(pos) = deps.iter().position(|x| x == d) {
+                    deps.remove(pos);
+                    moved = true;
+                }
+            }
+        }
+        if moved {
+            self.trace_type_change(var_nr, &tp, "make_tuple_members_independent");
+            self.variables[var_nr as usize].type_def = tp;
+        }
+        moved
+    }
+
     /// Give `var_nr` EVERY dep the incoming type carries.
     ///
     /// ⚠ Not a loop over [`Self::depend`], and that distinction is the whole point:

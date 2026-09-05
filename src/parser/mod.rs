@@ -6747,6 +6747,10 @@ impl Parser {
         // rewrites types, never the `const u16` schema id an op already carries, so a site
         // that was lowered while the element was still `T` kept pointing at
         // `__typevar_T`'s row.
+        // loft#1365 — and drop the tuple-member copy this instantiation does not need,
+        // BEFORE the rows are retargeted: a scalar binding contributes no row mapping, so
+        // the copy left standing would keep the type variable's own row.
+        self.collapse_parametric_tuple_member_copies(d_nr);
         self.retarget_parametric_type_rows(d_nr, bindings);
         // loft#1040 — and lower any `par` clause the template could not: it needs the
         // types this body now carries, so it runs after every substitution above.
@@ -7647,6 +7651,111 @@ impl Parser {
             }
         });
         self.data.definitions[d_nr as usize].code = code;
+    }
+
+    /// loft#1365 — drop the tuple-member copy this instantiation must not carry.
+    ///
+    /// `tuples.md (T-Cons)` copies a HEAP member into a tuple literal and leaves a scalar one
+    /// alone, and a record, a vector and a keyed collection are each copied by a DIFFERENT
+    /// step.  Which one a `T`-typed member needs does not exist while the template is parsed
+    /// — only per instantiation — and the template has to guess, because a type variable is
+    /// spelled `Type::Reference` to its placeholder and so looks exactly like a record.  So
+    /// the template emits the RECORD copy, the guess that is right whenever `T` binds a
+    /// record, and this pass removes it wherever that guess does not fit what this monomorph
+    /// bound.
+    ///
+    /// The test is the block's own contents against that type
+    /// ([`Self::tuple_member_copy_shape_fits`]), never "was this member a type variable" —
+    /// which matters because a generic body also builds tuples from CONCRETE members, whose
+    /// copies are already right and must not be touched.  A vector member's copy fits a
+    /// `Type::Vector` and is left alone; a record copy sitting on an integer or on a vector
+    /// is the template's guess, and is unwrapped to the source it was built from
+    /// ([`Self::tuple_member_copy_source`], the matcher the return path shares).
+    ///
+    /// Both wrong answers this replaces were measured, and they are opposite errors.
+    /// Declining the copy in the template left a struct-bound `T` ALIASING the local where
+    /// `(T-Cons)` and `binding.md (B-Copy)` both say copy (D-tup-9).  Emitting it
+    /// unconditionally allocated a record with the type variable's own row — the layout
+    /// escape the record-row guard refuses (loft#1070) — for a scalar binding and for a
+    /// collection one alike, an ICE on both backends.
+    ///
+    /// Unwrapping the VALUE is only half of undoing the guess: the template also gave the
+    /// tuple's element type the backing's dep, and a type that still names a backing whose
+    /// copy is gone makes the element look owned by a variable nothing fills — the store the
+    /// member actually holds is then freed by nobody.  So the dep goes with the copy, which
+    /// is what leaves a collapsed member exactly as the pre-guess compiler had it.
+    fn collapse_parametric_tuple_member_copies(&mut self, d_nr: u32) {
+        let mut code = self.data.definitions[d_nr as usize].code.clone();
+        let this = &*self;
+        let mut dropped: Vec<u16> = Vec::new();
+        code.map_nodes(&mut |v| {
+            let Some(src) = this.tuple_member_copy_source(v) else {
+                return;
+            };
+            let Value::Block(b) = v.unspan() else { return };
+            if this.tuple_member_copy_shape_fits(&b.operators, &b.result) {
+                return;
+            }
+            // The block's tail is the backing it filled, and that is the dep the element
+            // type was given.
+            if let Some(backing) = b.operators.last().and_then(|o| match o.unspan() {
+                Value::Var(x) => Some(*x),
+                _ => None,
+            }) {
+                dropped.push(backing);
+            }
+            *v = src;
+        });
+        if dropped.is_empty() {
+            return;
+        }
+        self.data.definitions[d_nr as usize].code = code;
+        let vars = &mut self.data.definitions[d_nr as usize].variables;
+        for v in 0..vars.count() {
+            vars.make_tuple_members_independent(v, &dropped);
+        }
+    }
+
+    /// Does the copy the TEMPLATE emitted already suit `tp`?
+    ///
+    /// Each member kind is copied by its own step, so the step present in the block names the
+    /// kind the copy was built for: `OpCopyRecord` a record, `OpAppendVector` a vector,
+    /// `OpReplaceKeyed` a keyed collection.  Comparing that against the type this monomorph
+    /// bound is what tells a guess that happened to be right from one that has to be redone —
+    /// and it asks the question of the block's own contents rather than of a flag set
+    /// elsewhere, so a template that stops guessing cannot leave this stale.
+    fn tuple_member_copy_shape_fits(&self, ops: &[Value], tp: &Type) -> bool {
+        let mut fits = false;
+        for op in ops {
+            match op.unspan() {
+                Value::Call(d, _) => match self.data.def(*d).name() {
+                    "OpCopyRecord" => {
+                        fits |= matches!(tp.base(), Type::Reference(_, _) | Type::Enum(_, true, _));
+                    }
+                    "OpAppendVector" => fits |= matches!(tp.base(), Type::Vector(_, _)),
+                    "OpReplaceKeyed" => {
+                        fits |= matches!(
+                            tp.base(),
+                            Type::Sorted(_, _, _)
+                                | Type::Index(_, _, _)
+                                | Type::Hash(_, _, _)
+                                | Type::Radix(_, _, _)
+                                | Type::Trie(_, _, _)
+                        );
+                    }
+                    _ => {}
+                },
+                Value::Block(inner) => {
+                    fits |= self.tuple_member_copy_shape_fits(&inner.operators, tp)
+                }
+                Value::If(_, then, els) => {
+                    fits |= self.tuple_member_copy_shape_fits(std::slice::from_ref(then), tp)
+                        || self.tuple_member_copy_shape_fits(std::slice::from_ref(els), tp);
+                }
+                _ => {}
+            }
+        }
+        fits
     }
 
     fn retarget_parametric_vector_format(&mut self, d_nr: u32) {

@@ -138,9 +138,10 @@ or take the tuple by value and return a new one. The refusal message says both.
 
 ## Deviations
 
-**OPEN: 1** — D-tup-9: a tuple literal member typed by a generic's type variable keeps the
-pre-copy layout, so with `T` bound to a struct the local and the tuple member are one record
-(loft#1365).  The non-generic shape is D-tup-8, closed.
+**OPEN: 1** — D-tup-9, now the COLLECTION half only: a tuple literal member typed by a
+generic's type variable is copied when `T` binds a record or is a scalar (loft#1365, closed),
+and still aliases when `T` binds a vector or a keyed collection.  The non-generic shape is
+D-tup-8, closed.
 
 The full register — every entry, open and closed, with its dates and issue numbers — is
 the companion [tuples-history.md](tuples-history.md).

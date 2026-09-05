@@ -18,6 +18,13 @@ The **say-what-you-do** release. Two threads, and they turned out to be one: eve
 the language reference was read against the compiler that ships, and most of what came back
 was not a wrong sentence but a promise nothing was keeping.
 
+**A tuple built inside a generic copies what it holds.**  `t = (s, 1)` inside a
+`fn f<T: …>(…)` now behaves the same as the version with the concrete type written in
+place — mutating `s` afterwards no longer shows through `t.0` when `T` is a struct.  The
+generic and the non-generic spelling of the same function had been giving different
+answers, which is the one thing a type variable is supposed never to do.  A `T` bound to a
+vector or a keyed collection is still shared rather than copied (loft#1365).
+
 **A struct-enum value binds like a struct.**  `c = e` on an enum-with-fields value now gives
 `c` its own copy on the interpreter, as it already did on `--native` — at a first bind, a
 rebind, from a parameter, through a nullable spelling, from a variant into its enum

@@ -5017,9 +5017,6 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
             // So the generic keeps the pre-copy layout, the element slot holding the local's
             // handle: `formal/tuples.md` D-tup-9 (loft#1365) records that a struct-bound `T`
             // therefore still aliases, and names the monomorph-time copy as the cure.
-            if self.data.is_type_var_placeholder(d_nr) {
-                return None;
-            }
             let kt = self.data.def(d_nr).known_type();
             if kt == u16::MAX {
                 return None;

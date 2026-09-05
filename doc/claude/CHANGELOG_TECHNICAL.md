@@ -31,6 +31,37 @@ the `@FR-O-Latest` rule-led walk (QUALITY.md B7p, `formal/ownership-history.md` 
 guarded by `tests/scripts/a-nullable-view-local-does-not-free-what-it-displaces.loft`,
 falsified at `51646648` on both backends.
 
+### A tuple member typed by a generic's type variable is copied for the type each instantiation bound (2026-09-05)
+
+loft#1365 / D-tup-9.  `(T-Cons)` copies a heap member into a tuple literal and leaves a scalar
+one alone, and neither rule has a clause for generics — a monomorph is an ordinary program, so
+`(s, 1)` must behave the same whether `s` is written `Ctr` or reached through a `T` bound to
+`Ctr`.  The template cannot decide it: a type variable is spelled `Type::Reference` to its
+placeholder and so looks exactly like a record, while what the member IS exists only per
+instantiation.  Both one-sided answers were measured and both are wrong — DECLINING the copy
+left a struct-bound `T` aliasing (`s.bump()` then read through `t.0` answered 1 where the
+concrete twin answered 0), and emitting it UNCONDITIONALLY allocated a record with the type
+variable's own row, the layout escape loft#1070's guard refuses, an ICE on both backends.
+
+So the template emits the record copy and `Parser::collapse_parametric_tuple_member_copies`
+removes it again in each monomorph whose bound type it does not fit.  The test is the block's
+own contents against that type (`tuple_member_copy_shape_fits`), never a "this was a type
+variable" flag: a generic body also builds tuples from CONCRETE members, whose copies are
+right and must not be touched.  Unwrapping the value is only half of undoing the guess — the
+template also gave the tuple ELEMENT the backing's dep, and an element naming a backing whose
+copy is gone is owned by a variable nothing fills, so the store the member holds is freed by
+nobody.  The dep goes with the copy, through `Variables::make_tuple_members_independent` —
+`make_independent` one level down, because a tuple carries no deps of its own and `deps_mut`
+on a `Type::Tuple` is `None`, so the existing verb would have quietly done nothing.
+
+Guard `tests/scripts/1365-…` — nine record cells each against a CONCRETE twin rather than a
+literal, plus four scalar cells as the control, since keeping those green is exactly what the
+declining version bought by making the record cells wrong.  `matrix_axes.py` is what found the
+last two: the loop and `if`-arm cells were wrong too, and the container-kind axis it reported
+missing turned out to be an ICE.  A COLLECTION binding still aliases and D-tup-9 stays open for
+it — the cure needs the collection copy built at monomorph time, and the backing it mints has
+no top-level declaration to be freed by (measured: correct on all four cells, one leaked store).
+
 ### A copy of a tuple releases a droppable member once, and heap.md opens its first deviation (2026-09-05)
 
 The seam between the two 2026-09-05 streams, found by probing it rather than by either
