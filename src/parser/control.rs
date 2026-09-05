@@ -461,6 +461,8 @@ struct PatternArm {
 /// 4323 spanned values arrive here over the corpus and peeling changes the answer **0** times,
 /// because a spanned arm is never a null arm — the same structural fact that keeps
 /// `Return`/`Break`/`Continue` unspanned in block-operator position.
+/// The null-arm recogniser of @FR-N-Match: which arm of a `match` on `τ?` is the `null` arm,
+/// so the other arms bind the `τ`.
 fn arm_body_is_null(code: &Value) -> bool {
     match code {
         Value::Null => true,

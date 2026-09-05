@@ -1,0 +1,14 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN153 phase 1 — the REFUSE half of @FR-N-Store's pair: into a NARROW declared local it is an error too — the width has no bit pattern for null.
+//
+// The pair exists so the citation at the rule's home is a receipt for a measured
+// refusal, not a comment: `rule_tags.py check` counts the citation, this file is what
+// makes it honest.  Its expectation is the diagnostic's own text, pinned as a substring.
+//
+// @falsified-at: none — pins a refusal the compiler already makes; the negation cell of a
+//   rule that holds, not a fix, so no earlier build is a control for it.
+// @EXPECT_ERROR: cannot change type from integer(0, 255) to integer(0, 255)?
+fn f(v: vector<u8>, i: integer) -> u8 { x: u8 = v[i]; return x; }
+fn main() { println("{f([1, 2], 5)}"); }

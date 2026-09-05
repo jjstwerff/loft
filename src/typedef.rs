@@ -130,6 +130,8 @@ pub fn complete_definition(_lexer: &mut Lexer, data: &mut Data, d_nr: u32) {
 /// mismatch → corrupted enum-discriminant reads on both backends (loft#417).  Returns
 /// the synth `__nullable<S>` enum def for an eligible element (a non-stdlib,
 /// non-synthetic struct); `None` leaves the element dense.
+/// The storage half of @FR-N-Dense: a `vector<S>` element is stored dense and non-null, and
+/// only `vector<S?>` gets the tagged `__nullable<S>` that can hold absence (@FR-L-Null-Tag).
 pub(crate) fn nullable_vector_elem(
     data: &mut Data,
     lexer: &mut Lexer,

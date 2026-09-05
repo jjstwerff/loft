@@ -4189,6 +4189,8 @@ impl Parser {
             && !self.data.is_nullable_wrapper(target_tp)
         {
             let nm = inner.name(&self.data);
+            // @FR-N-Decl — a DECLARED `x: τ` is a commitment, so a later nullable write is
+            // @FR-N-Store's refusal; this split is where a declared slot's promise is kept.
             // @PLN102 (N-Store) Phase 1 — the warn/error split (types.md § Null-flow, (N-Store)).
             // WARN (a nudge; the store PROCEEDS — `convert` peels the Optional and the slot holds
             // the null sentinel) where τ reserves its null DISTINCTLY even in the non-null form
@@ -4453,6 +4455,11 @@ impl Parser {
         // a bare `null`; a nullable SOURCE still implicitly unwraps to its base (DN2 removes
         // that unwrap later). Both arms converge: `Optional==Optional` is caught by `is_equal`
         // above, and a differing pair peels each side once.
+        // @FR-N-Intro — `τ ⤳ τ?` is the ONE null-direction conversion the rules admit, and
+        // this arm is it: a nullable TARGET accepts the base.  The arm below it (a nullable
+        // SOURCE recursing on its base) is the implicit unwrap the rules say does not exist;
+        // it stands because `convert` also services comparisons, and @FR-N-Store's teeth
+        // refuse it at the store sites instead (the scattered shape @PLN153 phase 3 folds).
         if let Type::Optional(inner) = should {
             if matches!(is_type, Type::Null) {
                 // null into a nullable target: run the base's null→typed-null coercion so

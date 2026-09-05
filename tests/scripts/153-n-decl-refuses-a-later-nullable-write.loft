@@ -1,0 +1,14 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN153 phase 1 — the REFUSE half of @FR-N-Decl's pair: a DECLARED non-null local forbids a later nullable write.
+//
+// The pair exists so the citation at the rule's home is a receipt for a measured
+// refusal, not a comment: `rule_tags.py check` counts the citation, this file is what
+// makes it honest.  Its expectation is the diagnostic's own text, pinned as a substring.
+//
+// @falsified-at: none — pins a refusal the compiler already makes; the negation cell of a
+//   rule that holds, not a fix, so no earlier build is a control for it.
+// @EXPECT_ERROR: cannot change type from integer to integer?
+fn f(v: vector<integer>, i: integer) -> integer { a: integer = 2; a = v[i]; return a; }
+fn main() { println("{f([1, 2], 5)}"); }

@@ -94,6 +94,34 @@ the `@FR-O-Latest` rule-led walk (QUALITY.md B7p, `formal/ownership-history.md` 
 guarded by `tests/scripts/a-nullable-view-local-does-not-free-what-it-displaces.loft`,
 falsified at `51646648` on both backends.
 
+### @PLN153 phase 1: every N rule has one home, and a measured pair behind its citation (2026-09-05)
+
+Eighteen `@FR-N-*` rules in `types.md`, three of them cited when the plan opened (7 sites)
+and fifteen with no code representation at all — a rule with zero sites cannot be walked, only
+located.  This phase located them, and the census is the plan README's § Phase 1 table: one
+predicate or emitter per rule, with the line it lives on.  Four rules turned out to share a
+home with another and are cited there (`N-Idem` with `N-Opt` at `Type::optional`, `N-Parse`
+folded into `N-Cast` at the assertion cast, `N-Domain` beside `N-Div` at the `/`/`%` typing,
+the checked cast beside `N-Cast` at its DN4 lowering).
+
+The order was the plan's: the PAIR first, the citation second.  `153-n-rules-hold.loft` is
+the HOLD half — every rule's own example asserting the value `types.md` promises, green on
+both backends — and ten `153-n-*-refused*.loft` files are the REFUSE halves, each pinning the
+compiler's actual diagnostic as an `@EXPECT_ERROR` / `@EXPECT_WARNING` substring.  Two
+negations were measured rather than assumed: `e ?? d` with a `τ?` default is itself `τ?`
+(exactly `Γ ⊢ d ⇐ τ`), and a `match` on `τ?` with NO null arm is silent — `x` binds `τ?` and
+propagates — so that is a phase-3 matrix cell, not a deviation.  `rule_tags.py check` reads
+18/18 N rules cited.
+
+What the pairs measured for the phases after this: `N-Store`'s refusal already has at least
+five homes and a SITE-DEPENDENT severity — a declared local is an ERROR from
+`change_var_type` (*"cannot change type from integer to integer?"*), an element is a WARNING
+from the `mod.rs` split, a constant index into a literal is silent because it is provably in
+range, and the narrow refusal spells its alias `integer(0, 255)` rather than `u8` — which is
+phase 3's starting census in numbers.  And the "ten `nullflow_enabled()` sites" split by RULE
+(three N-Store, two N-Prop, two N-Domain, one N-Cast, two the min/max/clamp shape), so phase
+2's fold is one predicate per rule, not one for all ten.
+
 ### @PLN153 phase 0: `τ??` is not constructible, and a forward alias behind a `?` resolves (2026-09-05)
 
 `types.md (N-Idem)` says `τ?? ≡ τ?`.  `Type::optional` is the idempotent former, the type

@@ -1778,6 +1778,9 @@ impl Type {
     /// @PLN25 — the idempotent `τ?` former. `Optional(Optional(τ)) → Optional(τ)`
     /// (N-Idem); `Optional(Never|Null) → Never|Null` (no junk optional over a non-value).
     /// Everything else becomes `Optional(Box::new(inner))`.
+    /// The one home of @FR-N-Opt and @FR-N-Idem: every `τ` admits `?`, and the former is
+    /// idempotent — a `τ??` cannot be built here, and the phase-0 census of @PLN153
+    /// measured that no other route builds one over the corpus.
     pub fn optional(inner: Type) -> Type {
         match inner {
             Type::Optional(_) | Type::Never | Type::Null => inner,
@@ -6340,6 +6343,8 @@ impl Data {
     /// Returns `Err(reason)` — a message naming the culprit field/type — when `tp`
     /// has no well-defined default (a bare reference, or a record with a non-null
     /// field whose type has none).
+    /// The side condition of @FR-N-Default: `e?` discharges `τ?` with the type's OWN default,
+    /// and only a type that has one may be discharged that way.
     pub fn has_default(&self, tp: &Type) -> std::result::Result<(), String> {
         match tp {
             Type::Integer(_)

@@ -9,7 +9,7 @@ Tracker: [@PLN153](https://github.com/loft-lang/plans/issues/153).
 
 ## Status
 
-**Active — phase 0 done (2026-09-05), phase 1 in progress.**  The null MODEL is decided and not reopened here: @PLN102's
+**Active — phases 0 and 1 done (2026-09-05), phase 2/3 next.**  The null MODEL is decided and not reopened here: @PLN102's
 [keystone](../102-stability-contract/keystone-null-model.md) chose **B** (an in-band sentinel
 for scalars, out-of-band absence for references and for a struct stored inline), frozen in
 [DESIGN_DECISIONS.md § C90](../../DESIGN_DECISIONS.md), with @PLN25 (the dense element
@@ -82,7 +82,7 @@ the axes it reports unreached are the cells still to build, not a note.
 | # | Item | Verify | Status |
 |---|---|---|---|
 | **0** | **Probe first.**  Is `τ??` constructible today (`N-Idem` — `Type::optional` in `data.rs` is the candidate home), and is `N-Intro` the only null-direction conversion in `⤳`?  A corpus census with an env-gated report, since `[profile.dev.package.loft]` compiles a `debug_assert` OUT of the library. | The report over the 1247-file corpus reads 0 for `τ??` — and a probe that constructs one by hand makes it read 1, so the zero is not vacuous. | **Done** 2026-09-05 — § Phase 0 result |
-| **1** | **Census: one home per N rule.**  For each of the 18, the predicate or emitter that decides it today.  Candidates: `N-Coal` → `parser/operators.rs::build_null_coalesce_default`; `N-Default` → the `x?` lowering + `Data::has_default`; `N-Store`/`N-Decl` → the `(N-Store)` teeth (`keys.rs`: the DN3 gate, the call-arg gate, the heap gate); `N-Prop` → `nullflow_enabled()`; `N-Join` → the inferred-assignment join; `N-Match` → the null arm; `N-Div`/`N-Arith`/`N-Cast`/`N-Cast?` → operator typing ([float-null-domain-typing.md](../102-stability-contract/float-null-domain-typing.md)); `N-Dense` → element storage; `N-Parse` → folded into `N-Cast`; `N-Index`, `N-Reserve`, `N-Store` already cited. | Per rule, ONE probe pair on both backends — a program where the rule must hold and one where its negation must be refused — green BEFORE the `@FR-` citation is added.  `rule_tags.py check` then reports 18/18 cited; a rule whose only evidence is the citation is the B6u failure and does not count. | Open |
+| **1** | **Census: one home per N rule.**  For each of the 18, the predicate or emitter that decides it today.  Candidates: `N-Coal` → `parser/operators.rs::build_null_coalesce_default`; `N-Default` → the `x?` lowering + `Data::has_default`; `N-Store`/`N-Decl` → the `(N-Store)` teeth (`keys.rs`: the DN3 gate, the call-arg gate, the heap gate); `N-Prop` → `nullflow_enabled()`; `N-Join` → the inferred-assignment join; `N-Match` → the null arm; `N-Div`/`N-Arith`/`N-Cast`/`N-Cast?` → operator typing ([float-null-domain-typing.md](../102-stability-contract/float-null-domain-typing.md)); `N-Dense` → element storage; `N-Parse` → folded into `N-Cast`; `N-Index`, `N-Reserve`, `N-Store` already cited. | Per rule, ONE probe pair on both backends — a program where the rule must hold and one where its negation must be refused — green BEFORE the `@FR-` citation is added.  `rule_tags.py check` then reports 18/18 cited; a rule whose only evidence is the citation is the B6u failure and does not count. | **Done** 2026-09-05 — § Phase 1 census |
 | **2** | **`N-Prop` has 10 `nullflow_enabled()` sites in 4 files.**  Which question does each ask — propagate, gate, or warn?  Fold the fact-reading half onto one predicate; the per-site residue stays where it is per-site. | `introspect` output (IR, bytecode, Rust) byte-identical over the 1247-file corpus against the committed compiler (the B7r/B7s method), under the default AND under `LOFT_NO_NULLFLOW=1`. | Open |
 | **3** | **The `N-Store` refusal at ONE point.**  Today the teeth sit at the local slot, the field, the return, the index, the call argument and the heap half as separate gates, each a spelling; a nullable reaching a non-null slot through a position none of them covers is answered wrong in silence.  One check where every store passes — the `⇐` lowering, whose ten push sites and six admission lists B6t already measured — is the chokepoint. | The Stage A matrix, position × type kind × discharge, with an `@EXPECT_WARNING` / `@EXPECT_ERROR` cell wherever a nullable meets a non-null slot undischarged and a silent cell wherever it is discharged; `make falsify` against the current build names the cells that pass silently today. | Open — the one design call |
 | **4** | **The `optional` screen, ranked.**  The 352 opaque functions ordered by *can an undischarged value reach here*: declaration reads (a field's, a local's, a return's declared type) and lvalue places first, use-path sites last.  Each function in the top tier either peels through `base()` or is shown unreachable by a probe cell. | The gated `optional` audit row in QUALITY.md moves DOWN and every moved function has a cell; a peel added with no cell is the B6u receipt and is not counted. | Open |
@@ -181,6 +181,47 @@ premise stated by the compiler.**  `Parser::convert` (parser/mod.rs:4389) has bo
 zero was measured.  Phase 3 starts from `convert`'s unwrap arm, not from the store sites: the
 question is which sites may keep the unwrap (comparison, `match`, `??`'s subject) and which
 must refuse it, and the answer is a list, not a per-site flag.
+
+## Phase 1 — census: one home per N rule (2026-09-05)
+
+`Home` is the predicate or emitter that DECIDES the rule today (line numbers at 3688a90a).
+`Pair` is the probe pair the citation waits for: HOLD = a program where the rule must hold,
+REFUSE = one where its negation must be refused (a diagnostic, or a census that reads 0).
+A rule whose negation is not a compile-time refusal says how its negation is measured instead.
+
+| rule | home (candidate) | already cited | pair |
+|---|---|---|---|
+| N-Opt | `Type::optional` data.rs:1781 | — | HOLD `x: τ? = null` for each type kind · REFUSE none (every τ admits `?`; the value-struct refusal at definitions.rs:2586 is the one exception and is `(L-Null)`'s, not this rule's) |
+| N-Idem | `Type::optional` data.rs:1781 | — | HOLD the phase-0 census reads 0 over the corpus · REFUSE the hand-built `Optional(Optional)` reads 1 (`null_census::tests`) |
+| N-Dense | `typedef.rs::nullable_vector_elem` :133 + `synth_nullable_target` :160 (the `__nullable<S>` synthesis) | — | HOLD `vector<S>` element reads non-null, `vector<S?>` element may be null · REFUSE `v: vector<S> = []; v += [null]` is an N-Store warning |
+| N-Intro | `Parser::convert`, the `should = Optional(inner)` arm mod.rs ~4459 | — | HOLD `x: integer? = 5`, `f(5)` into `p: integer?`, `return 5` from `-> integer?` · REFUSE — the REVERSE edge: `y: integer = x?` warns (that is N-Store's teeth; the citation records that `convert` carries both edges) |
+| N-Index | vector.rs:449, operators.rs:638 | ✓ 2 | (cited; keep) |
+| N-Div | operators.rs:3913–3918 `div_nullable` (+ `divisor_provably_nonzero`) | — | HOLD `a / b` is `integer?`; `x / 2` is `integer` · REFUSE `c: integer = a / b` warns |
+| N-Arith | operators.rs:3890 range-tracking | — | HOLD `a + b` on non-null operands is non-null `integer` · REFUSE — none (the rule is a typing, its negation is N-Prop's) |
+| N-Cast | operators.rs:3455 (`as τ` is an assertion; `text as τ` folded in = N-Parse) | — | HOLD `"12" as integer` is `integer` · REFUSE `"x" as integer` errors (a parse cannot be asserted) |
+| N-Cast? | operators.rs:3116 DN4 `e as τ?` lowering (not a taggable name: cited under N-Cast) | — | HOLD `"x" as integer?` is null; `300 as u8?` is null · REFUSE — none |
+| N-Parse | folded into N-Cast (types.md:149) — same home | — | covered by N-Cast's pair |
+| N-Coal | operators.rs:2234 `coalesce_not_null` + :2435/:2450 `build_null_coalesce_default(_inner)` | — | HOLD `(e ?? d)` is `τ` non-null · REFUSE (measured) `c: integer = a ?? b` with `b: integer?` is refused — a `τ?` default makes the coalesce `τ?`, exactly `Γ ⊢ d ⇐ τ` |
+| N-Default | operators.rs:2908 `x?` lowering + data.rs:6296 `Data::has_default` | — | HOLD `x?` on `integer?` is `integer` · REFUSE `e?` on a bare-enum `E?` (no default) errors (data.rs:6346) |
+| N-Match | control.rs:463 `arm_body_is_null` + :11039 `tail_if_has_null_arm` | — | HOLD `match e { null => …, x => … }` binds `x: τ` · NEGATION (measured) `match n { x => … }` on `integer?` with NO null arm is SILENT: `x` binds `τ?` and `x * 2` propagates null — no refusal exists; the rule presupposes the null arm, so this is a phase-3 matrix cell (a `match` that does not discharge), not a deviation |
+| N-Store | control.rs:1231/1303 ✓ + mod.rs:4192–4270 (warn/error split, two branches) + keys.rs `pln25_dn3_enabled` / callarg / heap gates | ✓ 2 of ≥5 | HOLD `y: integer = x ?? 0` silent · REFUSE `y: integer = x` warns; `u: u8 = x` errors (narrow) — MULTI-HOME → phase 3 |
+| N-Decl | the same store site (mod.rs:4192) via the declared slot's type | — | HOLD `x: integer = 2; x = 3` · REFUSE `x: integer = 2; x = v[i]` warns (types.md:159 row) |
+| N-Join | variables/mod.rs:2197–2224 `change_var_type(N-Join)` (DN6 widen) | — | HOLD `a = 2; a = v[i]` → `a: integer?` · REFUSE — none (a widening) |
+| N-Reserve | expressions.rs:154/163/6369 | ✓ 3 | (cited; keep) |
+| N-Prop | operators.rs:3921–3927 `operand_nullable` + :3975 | — | HOLD `n + 5` on `n: integer?` is `integer?` · REFUSE `m: integer = n + 5` warns |
+| N-Domain | operators.rs:3913 (float `/`,`%`) + definitions.rs:1565 (the stdlib `-> τ?` strip under `LOFT_NO_NULLFLOW`) | — | HOLD `sqrt(y)` is `float?` · REFUSE `z: float = sqrt(y)` warns |
+
+Observations for phases 2 and 3, from locating these:
+- The "10 `nullflow_enabled()` sites" split by RULE, not by "propagate/gate/warn": three are the
+  N-Store warn/error split (mod.rs:4201/4246/4263), two N-Prop (operators.rs:3921/3927), two
+  N-Domain (operators.rs:3918 float div, definitions.rs:1565 stdlib strip), one N-Cast
+  (operators.rs:3465, the text-as-τ assertion), and two the min/max/clamp return shape
+  (mod.rs:5585/5591).  Phase 2's fold is therefore "one predicate per RULE reads the flag",
+  not one predicate for all ten.
+- N-Store already has at least FIVE homes (control.rs ×2, mod.rs two branches, keys.rs three
+  gates), which is phase 3's starting census in numbers.
+
+`rule_tags.py check` after the citations: every one of the 18 N rules cited, each at the home the table names, each with its pair in `tests/scripts/153-n-*.loft`.
 
 ## Phase ordering
 

@@ -2231,6 +2231,8 @@ impl Parser {
     /// this same dispatch once `T` is concrete.  A nested generic — where `concrete` is
     /// still an outer template's variable — re-stamps through that same call and stays
     /// deferred, the way loft#1016 / #1020 / #1028 each do.
+    /// Enforces the test half of @FR-N-Coal — `e ?? d` discharges `τ?` to `τ`, and this is
+    /// the per-representation `is null` that decides whether `d` is taken.
     pub(crate) fn coalesce_not_null(&mut self, src: &Value, tp: &Type) -> Value {
         if self.is_type_var_operand(tp) {
             // Deferred, NOT decided.  The placeholder is an attribute-less struct, so
@@ -3113,6 +3115,8 @@ impl Parser {
         (rhs, rhs_type)
     }
 
+    /// The checked half of @FR-N-Cast (`N-Cast?` in `types.md`): the value if it fits,
+    /// else the type's null — never a fault, never a wrapped value.
     /// @PLN25 DN4 `(N-Cast?)` — lower `e as τ?` (narrowing, not provably-fit) to a
     /// range guard: bind `e` once, yield it if it lies in τ's range, else the
     /// integer null. Pure parse-time desugar over existing ops (`OpLeInt`,
@@ -3452,6 +3456,10 @@ impl Parser {
                 // at runtime (C80, no trap). Two regimes:
                 //  · @PLN25 DN3 (default / OFF): the result auto-TYPES `τ?` (`s as integer` is
                 //    `integer?`; discharge with `?? d` or a `τ?` slot).
+                //  · @FR-N-Cast — a bare `as τ` ASSERTS the value fits; a parse cannot be
+                //    asserted, which is @FR-N-Parse folded in: `text as τ` is refused bare and
+                //    written `as τ?`, the checked form (N-Cast?, lowered by `implicit_checked_narrow`'s
+                //    explicit twin below).
                 //  · @PLN102 Phase 4 (N-Cast, LOFT_NULLFLOW): a cast `as τ` is an ASSERTION, and a
                 //    parse can't be proven, so a BARE `text as τ` is a compile error directing to
                 //    the checked `as τ?` (value or null) or the assert-or-default `as τ ?? d`. A
@@ -3887,6 +3895,9 @@ impl Parser {
                     concept_ref: "@F38",
                 });
             }
+            // @FR-N-Arith — non-null integer operands give a non-null result typed by the
+            // operands' RANGES; only a nullable operand (@FR-N-Prop) or a partial op
+            // (@FR-N-Div) makes the result nullable.
             // @PLN25 (N-Arith) range-tracking — capture the operand bounds BEFORE
             // call_op consumes them, so the result range of `&`/`%` can be narrowed
             // (a masked/modded value becomes provably-fit for a later narrowing
@@ -3913,6 +3924,8 @@ impl Parser {
             // @PLN102 Phase 3 (N-Domain) — float / single `/` and `%` also fault on a zero
             // divisor, so they type `τ?` too (like integer `/`). Gated on LOFT_NULLFLOW; the
             // `divisor_provably_nonzero` elision keeps `x / 2.0` non-null. Integer stays default-on.
+            // @FR-N-Div and its float twin @FR-N-Domain: `/` and `%` type `τ?` because a zero
+            // divisor yields the reserved null; a divisor provably non-zero keeps `τ`.
             let div_nullable = (operator == "/" || operator == "%")
                 && (matches!(ctp.base(), Type::Integer(_))
                     || (crate::keys::nullflow_enabled()
@@ -3924,6 +3937,8 @@ impl Parser {
             // `abs(n)` on a null n all stay null). Gated on LOFT_NULLFLOW; the result is wrapped
             // `τ?` below (beside the div wrap). C85 stays the complement — non-null operands are
             // untouched here, so overflow of two non-null values still types non-null.
+            // @FR-N-Prop: a nullable operand makes the result nullable — null PROPAGATES
+            // through a value-preserving scalar op rather than being laundered by it.
             let operand_nullable = crate::keys::nullflow_enabled()
                 && (matches!(*ctp, Type::Optional(_)) || matches!(second_type, Type::Optional(_)));
             *ctp = self.call_op(

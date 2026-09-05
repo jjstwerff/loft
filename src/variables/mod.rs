@@ -2209,6 +2209,8 @@ impl Function {
             self.depend_all(var_nr, type_def);
             return self.is_new(var_nr);
         }
+        // @FR-N-Join — an inferred local's type is the JOIN of its assignments, made optional
+        // when any of them may be null; a declared one is @FR-N-Decl's and never widens.
         // @PLN25 DN6 (N-Join): an INFERRED local first assigned a bare `null`, then a
         // non-null INLINE scalar `τ`, widens to `Null ⊔ τ = τ?` instead of erroring — the
         // ergonomic escape valve for `a = null; a = 5` (a now `integer?`, so a later
