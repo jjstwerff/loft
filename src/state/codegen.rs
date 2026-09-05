@@ -4485,8 +4485,14 @@ impl State {
         }
         self.code_add(var_pos);
         if let Type::RefVar(tp) = stack.function.tp(variable) {
-            let txt = matches!(**tp, Type::Text(_));
-            match &**tp {
+            // loft#1372 — through `base()`: `Optional(τ)` shares `τ`'s storage exactly, so a
+            // `&τ?` link reads at the same op as its `&τ` twin and the null travels in the
+            // slot's own sentinel.  Asked bare, `Optional` matched no arm and the read fell
+            // through to the panic below, which is why @FR-B-Ref-Intro's `&τ` for every τ
+            // had to be declined (D-bind-17).
+            let tp = tp.base();
+            let txt = matches!(tp, Type::Text(_));
+            match tp {
                 Type::Integer(_) => stack.add_op("OpGetInt", self),
                 Type::Character => stack.add_op("OpGetCharacter", self),
                 Type::Single => stack.add_op("OpGetSingle", self),
@@ -4755,6 +4761,10 @@ impl State {
 
     pub(super) fn set_var(&mut self, stack: &mut Stack, var: u16, value: &Value) {
         if let Type::RefVar(tp) = stack.function.tp(var).clone() {
+            // loft#1372 — the write half of the same peel: `Optional(τ)` stores as `τ`, so
+            // the write op is the slot's, and whether the slot may hold null is
+            // @FR-N-Store's question rather than the op's.
+            let tp = Box::new(tp.base().clone());
             if matches!(*tp, Type::Text(_)) {
                 if value == &Value::Text(String::new()) {
                     // @P346: assigning "" to a RefVar(Text) is NOT a no-op — it

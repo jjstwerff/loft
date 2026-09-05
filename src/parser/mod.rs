@@ -2350,42 +2350,7 @@ impl Parser {
     /// stack for an all-scalar tuple, and a reference to the `__tuple<…>` RECORD — what a `&S`
     /// is — for anything else.  The remaining refusal is for an element the record cannot
     /// spell or lay out as a field.
-    /// `@FR-B-Ref-Intro` admits `&τ` for every τ, and `&τ?` is the one spelling the
-    /// lowerings do not carry: a link's inner type is asked BARE at every read and write
-    /// site (`??` sees `&integer?` and refuses its default, `+` and a copy-out see a
-    /// non-null slot, the write dispatch has no arm, native's parameter type does not
-    /// match), and a `&` of a nullable LOCAL used to fall past the scalar/record arms and
-    /// bind a silent COPY — `p = &x; p = 7` left `x: integer?` unchanged.  Until the link
-    /// carries a nullable slot on both backends, the link is DECLINED where its type is
-    /// built (`@FR-B-Ref-Reshape`: never downgraded).  The one home for both spellings —
-    /// the `&` parameter and the `&` local bind — and the deviation is `D-bind-17`.
-    ///
-    /// `true` when declined; the caller then keeps the PLAIN type, so the refusal is the
-    /// one message and no retype cascades after it.  Reported on pass 1 when the type is
-    /// already resolved (a pass-1 error stops the compile there), else on pass 2 — once
-    /// either way.
-    pub(crate) fn refuse_nullable_link(&mut self, tp: &Type) -> bool {
-        if !matches!(tp, Type::Optional(_)) {
-            return false;
-        }
-        let resolved = !crate::data::Data::type_has_unresolved(tp);
-        if resolved || !self.first_pass {
-            let nm = tp.name(&self.data);
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "a `&` reference cannot link a nullable `{nm}` yet — link the non-null value \
-                 (`x: {}`) and carry the absence beside it, or pass the value and return it",
-                tp.base().name(&self.data)
-            );
-        }
-        true
-    }
-
     pub(crate) fn ref_var_type(&mut self, tp: Type) -> Type {
-        if self.refuse_nullable_link(&tp) {
-            return tp;
-        }
         // A `&(…)` whose elements are not all scalars is a reference to the synthesized
         // `__tuple<…>` RECORD — exactly what a `&S` is — rather than a stack link: a heap
         // element has no stack form the reference ops can address (tuples.md T-Ref).  The
@@ -5034,8 +4999,15 @@ impl Parser {
             }
             return true;
         }
+        // loft#1372 — matched through the SLOT.  A `&τ?` parameter's referent is
+        // `Optional(τ)` while the argument expression reads as plain `τ` (`Optional(τ)`
+        // shares `τ`'s storage, and the read yields the base), so an exact comparison
+        // answered no and the argument was passed BY VALUE with no `OpCreateStack` — the
+        // callee then deref'd a plain integer as a stack ref and the store accessor went out
+        // of bounds.  Nullability is @FR-N-Store's question, asked where a value lands, not
+        // what decides whether this argument is a LINK.
         if let Type::RefVar(ref_tp) = should
-            && ref_tp.is_equal(is_type)
+            && (ref_tp.is_equal(is_type) || ref_tp.base().is_equal(is_type.base()))
         {
             // #266: a receiver/argument that is ITSELF an already-borrowed
             // reference (its declared var type is `RefVar(_)`, e.g. a `&self`
@@ -5230,6 +5202,17 @@ impl Parser {
         // second is the defect loft#1014 was.  The wrapped sentinel keeps the template's
         // own IR as well-formed as it was — a template is type-checked and slot-allocated
         // even though it never runs — and the rewrite discards it.
+        // loft#1372 — a bare `null` written THROUGH a `&` link is a null value of the SLOT
+        // (`@FR-C-Ref` on the write side: a `&τ` reads and writes as its referent).  Asked
+        // against the LINK type, no `OpConv…FromNull` returns a `&integer?`, the conversion
+        // failed, and the whole store was dropped in silence — `q = null` through a link
+        // left the source holding its old value on both backends, with nothing said.
+        if *is_type == Type::Null
+            && let Type::RefVar(inner) = should
+        {
+            let inner = inner.as_ref().clone();
+            return self.convert(code, is_type, &inner);
+        }
         if *is_type == Type::Null
             && let Type::Reference(target, _) = should.base()
             && self.data.is_type_var_placeholder(*target)

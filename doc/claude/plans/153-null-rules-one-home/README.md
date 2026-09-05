@@ -465,10 +465,13 @@ closure and record test — a `&` of a nullable LOCAL fell past both arms and bo
 COPY (`q = &x; q = 7` left `x: integer?` unchanged, both backends), and the cure opened the
 whole `&τ?` family: every read and write site asks the link's inner type bare.  That is a
 feature the rules promise (`(B-Ref-Intro)`, `(F-ParamRef)`) and the lowerings do not carry,
-so both spellings are DECLINED at the link's one builder with a message naming the cure
-(`D-bind-17`, loft#1372; guard `153-a-link-to-a-nullable-slot-is-declined`), and the peels
-that would only serve the declined shape were not kept (a peel with no cell is the B6u
-receipt).  The matrix's NON-nullable controls found loft#1371 on the way: a whole-value
+so both spellings were DECLINED at the link's one builder with a message naming the cure
+(`D-bind-17`, loft#1372).  **The decline lasted a day: loft#1372 closed it on 2026-09-06** —
+the cure was `Type::base()` at the nine sites that asked the link's inner type bare, since
+`Optional(τ)` shares `τ`'s storage and a `&τ?` needs no representation of its own.  The
+guard's cells stayed and its expectation flipped, from
+`153-a-link-to-a-nullable-slot-is-declined` to
+`153-a-link-to-a-nullable-slot-carries-its-slot`.  The matrix's NON-nullable controls found loft#1371 on the way: a whole-value
 write through a `&` link to a text, a struct or a vector does not reach the source, and the
 struct leaks.
 

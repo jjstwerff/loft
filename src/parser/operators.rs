@@ -2230,7 +2230,17 @@ impl Parser {
         // @PLN25 slice (b): a `??` discharges null, so its RESULT is the non-null base. Peel
         // any `Optional` from the LHS type here so the null-check builder + the result type
         // see the base (e.g. `Optional<text>` routes exactly as plain `text` did pre-marker).
-        *ctp = ctp.base().clone();
+        // loft#1372 — through a `&` LINK first.  `@FR-C-Ref`: a `&τ` reads through to its
+        // referent, so a `??` on a linked slot is a read of the SLOT and its result is the
+        // slot's non-null base.  `base()` peels only `Optional`, so for a `&τ?` it was the
+        // identity: the coalesce typed its own result `&integer?`, against which EVERY
+        // default is a mismatch, and `p ?? 0` inside a `&integer?` parameter was reported as
+        // the author's error.  That refusal is half of why @FR-B-Ref-Intro's `&τ` for every
+        // τ had to be declined (D-bind-17).
+        *ctp = match &*ctp {
+            Type::RefVar(inner) => inner.base().clone(),
+            other => other.base().clone(),
+        };
         let lhs_type = ctp.clone();
         // @PLN17: boolean now has a real null sentinel (255), so `??` works — the
         // null-check for a boolean LHS is `lhs == null` (raw `== 255`), NOT the

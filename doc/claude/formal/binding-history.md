@@ -591,7 +591,7 @@ The rules doc used to carry these beside its `OPEN` line — closure summaries, 
 the times the count read 0 over a live entry.  They are timeline, so they moved here
 unchanged; [binding.md](binding.md) now states only what is open.
 
-### D-bind-17 — OPEN (2026-09-05, loft#1372, @PLN153 phase 4): a `&` link to a nullable slot is declined
+### D-bind-17 — CLOSED (2026-09-06, loft#1372, @PLN153 phase 4): a `&` link carries a nullable slot
 
 `(B-Ref-Intro)` admits `&τ` for every τ; `(B-Ref-Write)` and `(B-Ref-Uniform)` make a `&τ`
 variable a τ variable that writes the source; `(F-ParamRef)` makes a `&` parameter the
@@ -606,16 +606,35 @@ neither the link nor a cure.
 
 Found by @PLN153 phase 4's `optional` screen: the lowering's `is_scalar` closure and record
 test were two of the 353 bare shape tests, and the cell built to reach them was the finding.
-Lifting the refusals and peeling those two tests showed the whole read/write family behind
-them (`stage4/amp/*.loft`), which is the FEATURE this entry records as owed.  Until it lands,
-both spellings are DECLINED where the link type is built — `Parser::ref_var_type`, and the
-field-link site beside it — with one message naming the cure (`@FR-B-Ref-Reshape`: a link
-loft cannot honour is refused, never downgraded).  Guard:
-`tests/scripts/153-a-link-to-a-nullable-slot-is-declined.loft` (five spellings, one message
-each).  Closes when a `&τ?` binding reads and writes its slot as a `τ?` on both backends; the
-shape to build is the chokepoint phase 3 gave `(N-Store)`: one spelling of "the slot behind a
-link" every site asks through.  The whole-value write through a `&` link to a text, a struct
-or a vector — the NON-nullable controls of the same matrix — is loft#1371, apart.
+The entry stood OPEN for a day, with both spellings declined where the link type is built
+(`@FR-B-Ref-Reshape`: a link loft cannot honour is refused, never downgraded).
+
+**CLOSED 2026-09-06.**  The answer was the shape the entry named — one spelling of "the slot
+behind a link" that every site asks through — and it is `Type::base()`, because `Optional(τ)`
+shares `τ`'s storage exactly: a `&τ?` has the SAME representation as its `&τ` twin, and the
+absence rides the slot's own sentinel.  There was no new mechanism to build, only nine sites
+each asking the link's inner type BARE and so matching no arm for the wrapper:
+
+- the interpreter's `RefVar` READ and WRITE dispatch (`state/codegen.rs`), which panicked
+  *"Unknown reference variable type"*;
+- native's local-link bind and read arms (`generation/dispatch.rs`, `generation/emit.rs`),
+  which emitted a binding with no right-hand side at all;
+- native's `&`-parameter write-back — the displacement test, the text coercion and the
+  boolean one — where a `&text?` wrote `*var_p = "z"` with no `.to_string()`;
+- the `??` subject (`parser/operators.rs`), which peeled `Optional` but not the LINK, typed
+  its own result `&integer?`, and reported every default as the author's error;
+- the retype check (`variables/mod.rs`), which refused `&integer? = 7`;
+- the argument match (`parser/mod.rs`), which compared the parameter's referent against an
+  argument reading as plain `τ`, failed, and passed the argument BY VALUE — the callee then
+  deref'd an integer as a stack ref;
+- the bare-`null` conversion, which found no `OpConv…FromNull` returning a link type and
+  DROPPED the store in silence, so `q = null` left the source at its old value.
+
+Guard: `tests/scripts/1372-a-reference-links-a-nullable-slot.loft`, plus
+`tests/scripts/153-a-link-to-a-nullable-slot-carries-its-slot.loft` — this entry's own decline
+guard, whose cells stayed and whose expectation flipped from the refusal to the answer the
+rules always gave.  The whole-value write through a `&` link to a text, a struct or a vector —
+the NON-nullable controls of the same matrix — is loft#1371, closed apart.
 
 ### D-bind-16 / D-bind-11 closure summaries
 

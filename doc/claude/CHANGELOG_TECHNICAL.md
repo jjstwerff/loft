@@ -9,6 +9,44 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### loft#1372: a `&` reference links a nullable slot — D-bind-17 CLOSED (2026-09-06)
+
+`@FR-B-Ref-Intro` admits `&τ` for EVERY τ, `@FR-B-Ref-Uniform` makes a `&τ` variable a τ
+variable, `@FR-F-ParamRef` makes a `&` parameter the write-back channel, and none of them
+restricts τ.  `&τ?` was declined anyway — the deviation `D-bind-17`, opened the day before —
+because "the read and write lowerings do not carry the wrapper".
+
+They needed no wrapper.  `Optional(τ)` shares `τ`'s storage EXACTLY, so a `&τ?` has the same
+representation as its `&τ` twin and the absence rides the slot's own sentinel.  What was
+missing is the thing the deviation entry named: one spelling of *the slot behind a link*,
+asked wherever a link's inner type is read.  That spelling is `Type::base()`, and nine sites
+were asking bare:
+
+* the interpreter's `RefVar` READ and WRITE dispatch — `Optional` matched no arm and it
+  panicked *"Unknown reference variable type"*;
+* native's local-link bind and read arms — the bind emitted no right-hand side at all
+  (`let mut var_q: … =  as …;`) and rustc reported it;
+* native's `&`-parameter write-back — the displacement test, the text coercion and the
+  boolean one, so a `&text?` wrote `*var_p = "z"` with no `.to_string()`;
+* the `??` subject, which peeled `Optional` but not the LINK, typed its own result
+  `&integer?`, and reported every default as the author's error;
+* the retype check, which refused `&integer? = 7` as *"cannot change type"*;
+* the argument match, which compared the parameter's referent against an argument reading as
+  plain `τ`, answered no, and passed the argument BY VALUE — the callee then dereferenced an
+  integer as a stack ref and the store accessor went out of bounds;
+* the bare-`null` conversion, which found no `OpConv…FromNull` returning a link type and
+  DROPPED the whole store in silence — `q = null` through a link left the source at its old
+  value on both backends.
+
+Thirteen cells on both backends: the issue's own repro, the local and parameter spellings,
+the annotated bind, absent and present sources, a null written through the link, a live read
+through it, `text?` / `S?` / `vector<T>?` inners, and the two non-null controls that say what
+the answer should be.  `refuse_nullable_link` is deleted; its decline guard's cells stayed and
+its expectation flipped, from `153-a-link-to-a-nullable-slot-is-declined` to
+`…-carries-its-slot`.  Both guards falsified at 964bab93, which refuses every cell at parse
+time.  binding.md's deviation list reads **OPEN: 0**.
+
+
 ### loft#1376: a whole-value write through a `&` link to a PLACE reaches the place (2026-09-06)
 
 The sibling of loft#1371, and `@FR-B-Ref-Write` settles it the same way: at a heap τ the
@@ -140,7 +178,9 @@ binding keeps its plain type so nothing cascades — `D-bind-17` (OPEN, loft#137
 source-kind tests read through `base()` so a nullable source reaches that decline.  The
 matrix's non-nullable controls found loft#1371 (a whole-value write through a `&` link to a
 text, struct or vector does not reach the source; the struct leaks).  Guard:
-`153-a-link-to-a-nullable-slot-is-declined` (five spellings).
+`153-a-link-to-a-nullable-slot-is-declined` (five spellings).  **Superseded 2026-09-06**
+by loft#1372, which closed `D-bind-17` and flipped that guard to
+`153-a-link-to-a-nullable-slot-carries-its-slot`.
 
 ### @PLN153 phase 4, batch 2: the CFG ownership oracle sees a nullable heap local (2026-09-05)
 

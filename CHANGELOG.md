@@ -20,6 +20,12 @@ record alive when `maybe` turned out to be nothing — once per time it happened
 programs only.  A long-running loop that reassigned such a variable grew for as long as it
 ran.
 
+**A `&` reference can link a value that may be absent.**  `fn bump(p: &integer?)` and
+`q = &x` where `x: integer?` were refused outright — you had to link the non-null value and
+carry the absence beside it.  Both now work, read and write, on both backends: reading gives
+the source's current value (`p ?? 0` and the rest), writing reaches the source, and writing
+`null` clears it.
+
 **…and so does a `&` link to a field or a list element.**  `pi = &o.i; pi = S { n: 2 }`
 left `o.i` alone, while `pi.n = 2` through the same link worked — so the link looked
 correct right up to the moment you replaced the whole value.  Both now write the thing the
