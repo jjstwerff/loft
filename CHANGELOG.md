@@ -20,6 +20,11 @@ record alive when `maybe` turned out to be nothing — once per time it happened
 programs only.  A long-running loop that reassigned such a variable grew for as long as it
 ran.
 
+**…and so does a `&` link to a field or a list element.**  `pi = &o.i; pi = S { n: 2 }`
+left `o.i` alone, while `pi.n = 2` through the same link worked — so the link looked
+correct right up to the moment you replaced the whole value.  Both now write the thing the
+link names.
+
 **A `&` link to a text or a vector now behaves like the `&` you already know.**  Writing a
 `&` variable is supposed to write the thing it links — `a = 3; b = &a; b = 4` leaves `a` at
 4 — and that held for numbers, and for a `&` PARAMETER of any kind.  A `&` to a text or a

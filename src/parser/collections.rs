@@ -1225,7 +1225,30 @@ impl Parser {
             f_type.base(),
             Type::Enum(_, true, _) | Type::Reference(_, _)
         ) && op == "="
-            && !matches!(to, Value::Var(_))
+            && (!matches!(to, Value::Var(_))
+                // loft#1376 — a `&`-linked local NAMES a place.  `pi = &o.i` / `pe = &v[0]`
+                // reach no `&` lowering (a struct projection is already a VIEW under
+                // `@FR-B-View`), so the variable holds the field's or element's own `DbRef`
+                // and `is_amp_link` is what records that the `&` was written.  A whole-value
+                // write to it is therefore the same copy-INTO-the-place that writing `o.i`
+                // directly is — `@FR-B-Ref-Write` at a heap τ REPLACES the source's contents.
+                // Left to the bare-`Var` path it emitted a plain `Set`, which RE-POINTED the
+                // variable while the place kept its value, on both backends and in silence;
+                // an interior write through the same link (`pi.n = 7`) landed, which is what
+                // made the shape look like it worked.  Only an `&` link qualifies: a plain
+                // view is not marked, so `c = o.i; c = S{…}` is unchanged.
+                //
+                // The discriminator is the VALUE — the same thing native's own link arm
+                // dispatches on, and it survives an IR snapshot where a per-statement flag
+                // would not.  It has to be, because `pi = &o.j` and `pi = o.j` emit
+                // IDENTICAL ops (@PLN130 F9: a `&` at a struct projection is invisible in
+                // the IR), so a place READ cannot be told apart from a re-point and keeps
+                // the binding meaning it has today.  What is unambiguous is a value that
+                // PRODUCES a record — a literal or a call — since there is no place there to
+                // link to; that is the one this rule claims.  Routed through the copy, the
+                // BIND defined nothing and every later read reached codegen at slot 65535.
+                || (matches!(to.unspan(), Value::Var(v) if self.vars.is_amp_link(*v))
+                    && self.produces_whole_record(val)))
         {
             if std::env::var("LOFT_PROBE_TS").is_ok() {
                 eprintln!("TS   -> copy_ref branch TAKEN");
