@@ -9,7 +9,7 @@ Tracker: [@PLN153](https://github.com/loft-lang/plans/issues/153).
 
 ## Status
 
-**Active — phase 3 complete (3a, 3b, 3c — 2026-09-05); phases 4, 5, 6 next.**  The null MODEL is decided and not reopened here: @PLN102's
+**Active — phase 3 complete and gated (3a, 3b, 3c — 2026-09-05); phase 4 opened with its instrument; phases 4, 5, 6 remain.**  The null MODEL is decided and not reopened here: @PLN102's
 [keystone](../102-stability-contract/keystone-null-model.md) chose **B** (an in-band sentinel
 for scalars, out-of-band absence for references and for a struct stored inline), frozen in
 [DESIGN_DECISIONS.md § C90](../../DESIGN_DECISIONS.md), with @PLN25 (the dense element
@@ -438,6 +438,20 @@ local).  `matrix_axes.py`: element type reaches struct only — the tagged spell
 a struct alone, so the other kinds are out of this family by construction.
 `scripts/introspect_diff.sh` over the corpus: `DIFFERENT 15 of 1281` — every one an emission (a tagged projection now read through its tag at its bind or its `??`) and none a diagnostic, each green on both backends under strict stores after.  `Fixes #1367`, `Contract: settled` —
 the rules named the local's spelling; the code failed to convert at the boundary.
+
+## Phase 4 — opened: the instrument and the first measurement (2026-09-05)
+
+`scripts/optional_rank.py` ranks the screen's opaque functions the way this phase wants to
+walk them: tier 0 reads a DECLARED type (a field's, a local's or parameter's, a return's —
+where a `τ?` arrives with its wrapper on), tier 1 decides an lvalue place, tier 2 sits on the
+use path.  On the tree that holds phase 3 and the `@FR-O-Witness` walk: **353 opaque
+functions — 180 in tier 0, 18 in tier 1, 155 in tier 2**; tier 0 by file: `parser/control.rs`
+24, `scopes.rs` 18, `parser/mod.rs` 17, `parser/vectors.rs` 14, `state/codegen.rs` 12,
+`parser/definitions.rs` 11.  The tiers are regex evidence, not proof — tier 0 also holds
+emitters matching `Void` or `Text` on types that cannot be nullable — so the list is the
+ORDER, and each top-tier function is closed only by reading it: it peels through `base()`,
+or a probe cell shows a `τ?` cannot arrive there.  The walk itself is the long tail the
+ordering section names; nothing in this phase is counted yet.
 
 ## Phase ordering
 
