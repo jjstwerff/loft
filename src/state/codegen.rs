@@ -4529,6 +4529,7 @@ impl State {
         let mut tp = Type::Void;
         let mut return_expr = 0;
         let mut has_return = false;
+        let free_ops = stack.data.op_sets();
         for v in ops.iter() {
             let s_pos = self.stack_pos;
             if v.kind() == ValueType::Return {
@@ -4544,13 +4545,11 @@ impl State {
                 return_expr = 0;
                 tp = Type::Void;
             } else {
-                // Preserve return_expr across cleanup ops (FreeRef/FreeText)
-                // that don't produce a return value. These are inserted by
-                // scope analysis between the tail expression and Return(Null).
-                let is_cleanup = v.kind() == ValueType::Call && {
-                    let name = stack.data.def(v.call_to()).name();
-                    name == "OpFreeRef" || name == "OpFreeText"
-                };
+                // Preserve return_expr across cleanup ops — a free in ANY of its spellings,
+                // read off the one free-op home — that don't produce a return value.  These
+                // are inserted by scope analysis between the tail expression and Return(Null).
+                let is_cleanup =
+                    v.kind() == ValueType::Call && free_ops.frees.contains(&v.call_to());
                 if !is_cleanup {
                     has_return = false;
                     return_expr = 0;

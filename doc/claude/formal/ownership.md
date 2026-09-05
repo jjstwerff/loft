@@ -146,9 +146,21 @@ and a decision that reads the wrong one is wrong in the silent direction:
                 FREES on the proxy MUST also consult O-Override — otherwise it frees a
                 store someone else owns.
   (O-Override)  a binding may carry an explicit never-free flag
-                (`variables::Function::is_skip_free`).  Its contract is exactly "no
-                `OpFreeRef` is ever emitted for this binding", and it VETOES the proxy and
-                the scope-exit sweep alike.  It exists BECAUSE O-Proxy is unsound alone.
+                (`variables::Function::is_skip_free`).  Its contract is "no free DERIVED
+                FROM OWNERSHIP is ever emitted for this binding" — in ANY of a free's five
+                spellings (`OpFreeRef`, `OpFreeRefTag`, `OpFreeText`, `OpFreeRefIfDistinct`,
+                `OpFreeRefOrHandUp`; `use_analysis::OpSets::frees` is the one home of that
+                list, and a matcher spelling its own goes blind to the next one), from the
+                scope-exit sweep, a transition free, a pre-`Set` free or a move alike — so
+                it VETOES the proxy and the sweep alike.  It exists BECAUSE O-Proxy is
+                unsound alone.  The ONE admissible free of a never-free binding is the
+                release the MARKING pass places itself, on a fact of its own rather than on
+                the proxy: a STAGED TEXT TEMP (`Function::is_staged_text_temp` — a `??`
+                subject, a return-delivery stage) is never-free for the sweep because its
+                value outlives the block the sweep would free it in, and the pass that
+                staged it frees it after the statement that copied the value out.
+                `ownership_cfg`'s Check D (`LOFT_OWN_ORACLE=check`) is the gate: a free of
+                any other never-free binding, by any live spelling, is a RED.
   (O-Latest)    ownership is a property of the LATEST assignment to a binding, at the LOOP
                 DEPTH at which that assignment was taken (`Scopes::owned_refs`, a memo of
                 O-Oracle plus that depth).  A type-level `deps` list can express neither,

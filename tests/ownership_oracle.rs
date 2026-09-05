@@ -447,3 +447,70 @@ fn oracle_over_free_check_flags_an_injected_free() {
         "the over-free check FAILED to flag the injected bview over-free (vacuous?): {injected:?}"
     );
 }
+
+/// The never-free TRUE-POSITIVE gate (Check D, on the promoted `check` path): proving the
+/// @FR-O-Override check is not vacuous.  The B7p guard marks `d` never-free (a nullable local that
+/// only views a projection); `LOFT_OWN_INJECT_FREE_SKIPFREE=d` makes `get_free_vars` name a
+/// witness-guarded free of `d` against itself — a run-time no-op, but a free of a never-free
+/// binding in a spelling neither backend intercepts, which the check MUST report; the un-injected
+/// run MUST be clean for `d`.
+#[test]
+fn oracle_override_check_flags_an_injected_free_of_a_never_free_binding() {
+    let guard = "tests/scripts/a-nullable-view-local-does-not-free-what-it-displaces.loft";
+    let reds = |env: &[(&str, &str)]| -> Vec<String> {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg("--check")
+            .arg(root().join(guard))
+            .env("LOFT_NO_CACHE", "1")
+            .env("LOFT_OWN_ORACLE", "check");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().expect("run loft check");
+        String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .filter(|l| {
+                l.starts_with("RED ") && l.contains("never-free-freed") && l.contains(" d (v")
+            })
+            .map(str::to_string)
+            .collect()
+    };
+    assert!(
+        reds(&[]).is_empty(),
+        "Check D cried wolf on the un-injected guard: {:?}",
+        reds(&[])
+    );
+    let injected = reds(&[("LOFT_OWN_INJECT_FREE_SKIPFREE", "d")]);
+    assert!(
+        injected.iter().any(|r| r.contains("OpFreeRefIfDistinct")),
+        "Check D FAILED to flag the injected free of the never-free `d` (vacuous?): {injected:?}"
+    );
+}
+
+/// One release mechanism per local: a local whose assignments MIX ownership gets an owner
+/// witness (loft#1336) and is never-free, so it must not ALSO be given the loft#1200
+/// displacement flag — that flag's guarded `OpFreeRef` was dropped at codegen by the never-free
+/// veto on both backends, a dead free the IR carried for every witnessed local.  Check D reports
+/// such a dropped free as a `NOTE`; the 1200 guard, whose locals all take the witness, must
+/// produce none.  (Observer-only when the witness is switched off, hence the env pin.)
+#[test]
+fn a_witnessed_local_carries_no_dead_displacement_free() {
+    let guard = "tests/scripts/1200-a-nullable-record-local-frees-what-it-displaces.loft";
+    let mut cmd = Command::new(loft_bin());
+    cmd.arg("--check")
+        .arg(root().join(guard))
+        .env("LOFT_NO_CACHE", "1")
+        .env("LOFT_OWN_ORACLE", "check")
+        .env_remove("LOFT_NO_OWNER_WITNESS");
+    let out = cmd.output().expect("run loft check");
+    let notes: Vec<String> = String::from_utf8_lossy(&out.stderr)
+        .lines()
+        .filter(|l| l.starts_with("NOTE ") && l.contains("never-free"))
+        .map(str::to_string)
+        .collect();
+    assert!(
+        notes.is_empty(),
+        "a witnessed local still carries a second, dead release in the IR:\n{}",
+        notes.join("\n")
+    );
+}

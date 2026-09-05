@@ -6,7 +6,7 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — D-own-30 OPENED AND CLOSED 2026-09-05 (a nullable local holding a projection VIEW freed the store it displaced, below), after D-own-29 2026-09-04 (loft#1346, below) and D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
+OPEN: **0** — D-own-31 OPENED AND CLOSED 2026-09-05 (the never-free contract named one spelling of five and forbade a release the language ships, below); D-own-30 OPENED AND CLOSED 2026-09-05 (a nullable local holding a projection VIEW freed the store it displaced, below), after D-own-29 2026-09-04 (loft#1346, below) and D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
 single cell, its Face B CLOSED the same day, that cell's one known SYMPTOM closed 2026-08-26
 with the FACT still wrong, loft#1098, and the fact itself closed by giving every path of a
 value branch its own binding — below).  D-own-26 CLOSED 2026-09-03: its gate existed all
@@ -38,6 +38,34 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-31 — OPENED AND CLOSED (2026-09-05): the never-free contract named one spelling of five, and forbade a release the language ships
+
+`(O-Override)` read *"no `OpFreeRef` is ever emitted for this binding — exactly that sentence
+and nothing weaker."*  Measured on the `@FR-O-Override` rule-led walk (QUALITY.md B7q) over
+the 1247-file corpus, the sentence was wrong in both directions.  It named ONE of a free's
+five spellings, and the two backends intercept the flag downstream for two of them only
+(`OpFreeRef`, `OpFreeRefTag`; a bare variable operand), so a never-free binding freed by
+`OpFreeText`, `OpFreeRefIfDistinct`, `OpFreeRefOrHandUp` or through a tuple element would
+have honoured the letter of the rule while releasing the store — and the question "which ops
+free their first argument?" was a hand-spelled list in nine places, no two agreeing.  And it
+FORBADE a release the language ships and tests: a `??` text subject (`__ncc_N`) and a text
+return stage (`__ret_N`) are marked never-free so the scope-exit sweep does not free the value
+their block yields, and the pass that staged them frees them after the statement that copied
+the value out — 217 function–binding pairs in the corpus, every live-spelling free of a never-free binding
+there was, and not one anywhere else.
+
+Closed by extending the RULE, per the doctrine's other half: an edge the rules cannot express
+means the rule wants extending.  `(O-Override)` now forbids every free DERIVED FROM OWNERSHIP
+in any spelling — `use_analysis::OpSets::frees` is the one home of the list, and all nine
+matchers read it — and names the one admissible free: the release the marking pass places on
+a fact of its own, `Function::is_staged_text_temp`.  `ownership_cfg`'s Check D
+(`LOFT_OWN_ORACLE=check`) is the gate — a free of any other never-free binding by any live
+spelling is a RED, and `LOFT_OWN_INJECT_FREE_SKIPFREE` proves it fires.  Found and closed
+alongside: a local that took BOTH the loft#1200 displacement flag and the loft#1336 owner
+witness, the witness's never-free mark dropping the flag's free at codegen on both backends —
+right by accident, and 172 lines of dead IR in the 1200 guard; the witness now runs first and
+the flag's own never-free exclusion keeps a witnessed local out.
 
 ### D-own-30 — OPENED AND CLOSED (2026-09-05): a nullable local holding a projection VIEW freed the store it displaced
 

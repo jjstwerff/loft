@@ -226,6 +226,23 @@ pub(crate) struct OpSets {
     pub(crate) write_first_arg: std::sync::Arc<HashSet<u32>>,
     /// Collection `len` methods — see [`is_length_op_name`].
     pub(crate) lengths: std::sync::Arc<HashSet<u32>>,
+    /// The ops that RELEASE their first argument — one notion, five spellings: the plain
+    /// reference free, its tag-checked twin, the text free, and the two witness-guarded
+    /// conditional frees.  Every matcher that asks *"is this a free?"* reads THIS set, because
+    /// a hand-spelled name list goes blind to a new spelling at once — `check_ref_leaks`
+    /// reported a leak the compiler did not have when `OpFreeRefOrHandUp` arrived (loft#1186),
+    /// and of the nine lists this replaced no two agreed.  @FR-O-Override's contract is stated
+    /// over this notion, not over the one name the rule spells.
+    pub(crate) frees: std::sync::Arc<HashSet<u32>>,
+    /// The UNCONDITIONAL reference frees — `OpFreeRef` and `OpFreeRefTag`.  A check that asks
+    /// *"is this store released here, whatever the run"* reads this one.
+    pub(crate) unconditional_ref_frees: std::sync::Arc<HashSet<u32>>,
+    /// The witness-GUARDED reference frees — `OpFreeRefIfDistinct` and `OpFreeRefOrHandUp`: a
+    /// no-op where the placeholder aliases its witness, so a path walk reads one as CLEARING a
+    /// pending free rather than as a free.
+    pub(crate) conditional_ref_frees: std::sync::Arc<HashSet<u32>>,
+    /// `OpFreeText` — the text release, or `u32::MAX` where the table has none.
+    pub(crate) text_free: u32,
 }
 
 impl OpSets {
@@ -243,11 +260,33 @@ impl OpSets {
                 lengths.insert(d);
             }
         }
+        let nrs = |names: &[&str]| -> HashSet<u32> {
+            names
+                .iter()
+                .map(|n| data.def_nr(n))
+                .filter(|&d| d != u32::MAX)
+                .collect()
+        };
+        let unconditional_ref_frees = nrs(&["OpFreeRef", "OpFreeRefTag"]);
+        let conditional_ref_frees = nrs(&["OpFreeRefIfDistinct", "OpFreeRefOrHandUp"]);
+        let text_free = data.def_nr("OpFreeText");
+        let mut frees: HashSet<u32> = unconditional_ref_frees
+            .iter()
+            .chain(conditional_ref_frees.iter())
+            .copied()
+            .collect();
+        if text_free != u32::MAX {
+            frees.insert(text_free);
+        }
         Self {
             projections: std::sync::Arc::new(projection_ops(data)),
             value_readers: std::sync::Arc::new(value_reader_ops(data)),
             write_first_arg: std::sync::Arc::new(write_first_arg),
             lengths: std::sync::Arc::new(lengths),
+            frees: std::sync::Arc::new(frees),
+            unconditional_ref_frees: std::sync::Arc::new(unconditional_ref_frees),
+            conditional_ref_frees: std::sync::Arc::new(conditional_ref_frees),
+            text_free,
         }
     }
 }
@@ -5423,10 +5462,11 @@ mod uaf_overlay_tests {
 /// Returns the freed return-source vars, sorted + deduped. Empty = clean.
 pub fn return_source_freed(data: &Data, d_nr: u32) -> Vec<u16> {
     let def = data.def(d_nr);
+    let sets = data.op_sets();
     let ops = FreeOps {
-        fr: data.def_nr("OpFreeRef"),
-        ft: data.def_nr("OpFreeText"),
-        fif: data.def_nr("OpFreeRefIfDistinct"),
+        fr: std::sync::Arc::clone(&sets.unconditional_ref_frees),
+        ft: sets.text_free,
+        fif: std::sync::Arc::clone(&sets.conditional_ref_frees),
         db: data.def_nr("OpDatabase"),
     };
     let mut out: Vec<u16> = Vec::new();
@@ -5461,10 +5501,11 @@ pub fn return_source_freed(data: &Data, d_nr: u32) -> Vec<u16> {
 /// Returns the offending work-ref vars, sorted + deduped. Empty = clean.
 pub fn ref_param_publish_freed(data: &Data, d_nr: u32) -> Vec<u16> {
     let def = data.def(d_nr);
+    let sets = data.op_sets();
     let ops = FreeOps {
-        fr: data.def_nr("OpFreeRef"),
-        ft: data.def_nr("OpFreeText"),
-        fif: data.def_nr("OpFreeRefIfDistinct"),
+        fr: std::sync::Arc::clone(&sets.unconditional_ref_frees),
+        ft: sets.text_free,
+        fif: std::sync::Arc::clone(&sets.conditional_ref_frees),
         db: data.def_nr("OpDatabase"),
     };
     let mut out: Vec<u16> = Vec::new();
@@ -5537,14 +5578,14 @@ fn scan_rpf(
             // MAY-alias: published on either arm is published for the free that follows.
             *published = pt.union(&pe).copied().collect();
         }
-        Value::Call(d, args) if *d == ops.fr => {
+        Value::Call(d, args) if ops.fr.contains(d) => {
             if let Some(Value::Var(s)) = args.first().map(Value::unspan)
                 && published.contains(s)
             {
                 out.push(*s);
             }
         }
-        Value::Call(d, args) if *d == ops.fif || *d == ops.db => {
+        Value::Call(d, args) if ops.fif.contains(d) || *d == ops.db => {
             // IfDistinct is the SAFE free; OpDatabase re-allocates — both end the alias.
             if let Some(Value::Var(s)) = args.first().map(Value::unspan) {
                 published.remove(s);
@@ -5556,12 +5597,13 @@ fn scan_rpf(
     }
 }
 
-/// The scope-free / alloc op numbers the return-source walk keys off.
+/// The scope-free / alloc op numbers the return-source walk keys off — read off
+/// [`OpSets`], the one home of the free-op notion, so a new spelling reaches this walk too.
 struct FreeOps {
-    fr: u32,  // OpFreeRef (plain)
-    ft: u32,  // OpFreeText
-    fif: u32, // OpFreeRefIfDistinct (the SAFE conditional free)
-    db: u32,  // OpDatabase (re-alloc)
+    fr: std::sync::Arc<HashSet<u32>>, // the UNCONDITIONAL reference frees
+    ft: u32,                          // OpFreeText
+    fif: std::sync::Arc<HashSet<u32>>, // the witness-GUARDED frees (the SAFE conditional ones)
+    db: u32,                          // OpDatabase (re-alloc)
 }
 
 /// Path-sensitive walk: track the stores plain-`OpFreeRef`-freed on the current path
@@ -5596,12 +5638,12 @@ fn scan_rsf(
             scan_rsf(e, code, ops, &mut fe, out);
             *freed = ft.intersection(&fe).copied().collect();
         }
-        Value::Call(d, args) if *d == ops.fr => {
+        Value::Call(d, args) if ops.fr.contains(d) => {
             if let Some(Value::Var(s)) = args.first().map(Value::unspan) {
                 freed.insert(*s);
             }
         }
-        Value::Call(d, args) if *d == ops.fif || *d == ops.db => {
+        Value::Call(d, args) if ops.fif.contains(d) || *d == ops.db => {
             // IfDistinct is the SAFE free; OpDatabase re-allocates — both clear the store.
             if let Some(Value::Var(s)) = args.first().map(Value::unspan) {
                 freed.remove(s);
@@ -5610,7 +5652,7 @@ fn scan_rsf(
         Value::Return(r) | Value::Drop(r) => {
             let mut sources: HashSet<u16> = HashSet::new();
             let mut seen: HashSet<u16> = HashSet::new();
-            ret_alias_sources(r, code, ops.fr, ops.ft, ops.fif, &mut seen, &mut sources);
+            ret_alias_sources(r, code, ops, &mut seen, &mut sources);
             for &s in &sources {
                 if freed.contains(&s) {
                     out.push(s);
@@ -5622,16 +5664,16 @@ fn scan_rsf(
     }
 }
 
-fn is_free_op(node: &Value, fr: u32, ft: u32, fif: u32) -> bool {
-    matches!(node.unspan(), Value::Call(d, _) if *d == fr || *d == ft || *d == fif)
+fn is_free_op(node: &Value, fops: &FreeOps) -> bool {
+    matches!(node.unspan(), Value::Call(d, _) if fops.fr.contains(d) || *d == fops.ft || fops.fif.contains(d))
 }
 
 /// The last op of a sequence that carries the block's VALUE — skipping trailing
 /// scope-exit frees and `Line` markers (the same rule as `scopes::last_non_free_result`).
-fn last_value_op(ops: &[Value], fr: u32, ft: u32, fif: u32) -> Option<&Value> {
+fn last_value_op<'a>(ops: &'a [Value], fops: &FreeOps) -> Option<&'a Value> {
     ops.iter()
         .rev()
-        .find(|op| !is_free_op(op, fr, ft, fif) && !matches!(op.unspan(), Value::Line(_)))
+        .find(|op| !is_free_op(op, fops) && !matches!(op.unspan(), Value::Line(_)))
 }
 
 /// Collect the record work-refs the return value aliases: a returned `Var` is traced
@@ -5641,9 +5683,7 @@ fn last_value_op(ops: &[Value], fr: u32, ft: u32, fif: u32) -> Option<&Value> {
 fn ret_alias_sources(
     node: &Value,
     code: &Value,
-    fr: u32,
-    ft: u32,
-    fif: u32,
+    fops: &FreeOps,
     seen: &mut HashSet<u16>,
     out: &mut HashSet<u16>,
 ) {
@@ -5651,27 +5691,27 @@ fn ret_alias_sources(
         Value::Var(v) => {
             if seen.insert(*v) {
                 if let Some(rhs) = last_set_rhs(*v, code) {
-                    ret_alias_sources(rhs, code, fr, ft, fif, seen, out);
+                    ret_alias_sources(rhs, code, fops, seen, out);
                 } else {
                     out.insert(*v);
                 }
             }
         }
         Value::If(_, t, e) => {
-            ret_alias_sources(t, code, fr, ft, fif, seen, out);
-            ret_alias_sources(e, code, fr, ft, fif, seen, out);
+            ret_alias_sources(t, code, fops, seen, out);
+            ret_alias_sources(e, code, fops, seen, out);
         }
         Value::Block(bl) | Value::Loop(bl) => {
-            if let Some(l) = last_value_op(&bl.operators, fr, ft, fif) {
-                ret_alias_sources(l, code, fr, ft, fif, seen, out);
+            if let Some(l) = last_value_op(&bl.operators, fops) {
+                ret_alias_sources(l, code, fops, seen, out);
             }
         }
         Value::Insert(ops) => {
-            if let Some(l) = last_value_op(ops, fr, ft, fif) {
-                ret_alias_sources(l, code, fr, ft, fif, seen, out);
+            if let Some(l) = last_value_op(ops, fops) {
+                ret_alias_sources(l, code, fops, seen, out);
             }
         }
-        Value::Span(b) => ret_alias_sources(&b.1, code, fr, ft, fif, seen, out),
+        Value::Span(b) => ret_alias_sources(&b.1, code, fops, seen, out),
         _ => {}
     }
 }
@@ -5745,9 +5785,9 @@ mod return_source_tests {
     const DB: u32 = 103;
     fn ops() -> FreeOps {
         FreeOps {
-            fr: FR,
+            fr: std::sync::Arc::new(HashSet::from([FR])),
             ft: FT,
-            fif: FIF,
+            fif: std::sync::Arc::new(HashSet::from([FIF])),
             db: DB,
         }
     }
@@ -5855,9 +5895,9 @@ mod ref_param_publish_tests {
 
     fn ops() -> FreeOps {
         FreeOps {
-            fr: FR,
+            fr: std::sync::Arc::new(HashSet::from([FR])),
             ft: FT,
-            fif: FIF,
+            fif: std::sync::Arc::new(HashSet::from([FIF])),
             db: DB,
         }
     }

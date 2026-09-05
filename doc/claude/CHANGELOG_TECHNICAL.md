@@ -9,6 +9,32 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The never-free veto is stated over the free NOTION, and its one admissible free is named (2026-09-05)
+
+`@FR-O-Override`'s contract read *"no `OpFreeRef` is ever emitted for this binding"* — one
+spelling of five, and both backends intercept the never-free flag downstream for only two
+(`OpFreeRef`, `OpFreeRefTag`, a bare variable).  Measured over the 1247-file corpus with a new
+oracle check (Check D under `LOFT_OWN_ORACLE=check`: every free op whose first argument is a
+never-free binding, RED in a live spelling, NOTE in a dropped one): 217 function–binding pairs freed a
+never-free binding by `OpFreeText`, all of them the `??` text subject or the text return stage
+the staging pass itself frees after the value is copied out, and nothing else.  The RULE was
+extended to say so — every ownership-derived free in any spelling is forbidden; the release
+the marking pass places on a consumption fact is admissible — and the shape got a name,
+`Function::is_staged_text_temp`, which the ncc-orphan pass and Check D both read.
+`LOFT_OWN_INJECT_FREE_SKIPFREE=<var>` is the check's true-positive control.
+
+"Which ops free their first argument?" was a hand-spelled name list in nine places, no two
+agreeing (three blind to `OpFreeRefOrHandUp`, five to `OpFreeRefTag`).  `OpSets` now carries
+`frees` / `unconditional_ref_frees` / `conditional_ref_frees` / `text_free` and all nine read
+it; IR and emitted Rust byte-identical before and after on every corpus file whose IR carries
+the conditional spelling.  A local that mixed ownership took BOTH the loft#1200 displacement
+flag and the loft#1336 owner witness, the witness's never-free mark dropping the flag's free
+at codegen — the witness now runs first, so a witnessed local carries one release mechanism
+and no dead free (172 IR lines gone from the 1200 guard).  Check B consults the veto (a
+dropped free is not an over-free) and its "0 FP" claim is restated as the measurement: ten
+hits over 1247 files, one shape, each clean under `LOFT_STRICT_STORES`.
+`LOFT_SKIPFREE_TRACE=*` traces every never-free mark with its writer.
+
 ### A nullable local holding a projection view does not free the store it displaces (2026-09-05)
 
 The D-own-16 `borrows_one_argument` residual reads a nullable heap local's single-ARGUMENT

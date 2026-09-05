@@ -356,7 +356,7 @@ do_summarise() {
     fi
     echo
     echo "=== cargo-level target failures (compile or link) ==="
-    grep -a -B1 -A3 "error: test failed\|error: .* target\(s\) failed" "$log" || echo "(none)"
+    grep -a -B1 -A3 "error: test failed\|error: .* target\(s\) failed\|error: could not compile" "$log" || echo "(none)"
     echo
     echo "=== panic! / thread panics (inline) ==="
     grep -a -B1 -A3 "thread .* panicked at" "$log" | head -80 || echo "(none)"

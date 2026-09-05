@@ -641,7 +641,8 @@ fn ownership_dataflow(data: &Data, d_nr: u32, cfg: &Cfg) -> (Vec<OState>, usize)
     (outb, passes)
 }
 
-/// The def_nrs of the UNCONDITIONAL reference free — the only free-op Check B inspects.
+/// The def_nrs of the UNCONDITIONAL reference frees (`OpFreeRef` and its tag-checked twin, read
+/// off the one free-op home, `OpSets`) — the only free-ops Check B inspects.
 /// Deliberately NOT `OpFreeText` (text ownership is a separate model: a `text` sub is copied via
 /// `to_string`, so it is `Owned` at runtime even where the fact reads `Borrowed`, and `OpFreeText`
 /// is emitted regardless of deps — the "Text exception" in `scopes::get_free_vars`) and NOT
@@ -649,8 +650,11 @@ fn ownership_dataflow(data: &Data, d_nr: u32, cfg: &Cfg) -> (Vec<OState>, usize)
 /// IS the correctness mechanism for freeing a maybe-borrowed store, so flagging it cries wolf). An
 /// unconditional `OpFreeRef` of a `Borrowed` store, by contrast, is an unguarded over-free.
 fn free_op_nrs(data: &Data) -> Vec<u32> {
-    let d = data.def_nr("OpFreeRef");
-    if d == u32::MAX { Vec::new() } else { vec![d] }
+    data.op_sets()
+        .unconditional_ref_frees
+        .iter()
+        .copied()
+        .collect()
 }
 
 /// Collect the vars freed (arg 0 of an `OpFree*` call) anywhere in `body` — Check B's free-site set.
@@ -952,6 +956,9 @@ pub fn oracle_free_checks(data: &Data) {
         if over {
             total_reds += run_over_free_check(name, &body, data, d_nr, &free_ops);
         }
+        if over {
+            total_reds += run_override_check(name, &body, data, d_nr);
+        }
         if dev {
             let cfg = build(&body);
             total_reds += run_free_checks(name, &body, &cfg, data, d_nr);
@@ -989,11 +996,7 @@ fn run_leak_scan(name: &str, body: &Value, data: &Data, d_nr: u32) -> usize {
         return 0; // closure frees are codegen'd on a different clock — not visible here
     }
     let func = &data.def(d_nr).variables;
-    let all_frees: Vec<u32> = ["OpFreeRef", "OpFreeText", "OpFreeRefIfDistinct"]
-        .iter()
-        .map(|n| data.def_nr(n))
-        .filter(|&d| d != u32::MAX)
-        .collect();
+    let all_frees: Vec<u32> = data.op_sets().frees.iter().copied().collect();
     let freed: BTreeSet<u16> = collect_free_targets(body, &all_frees).into_iter().collect();
     // Only a MINTED var owns a store that can leak: an `OpDatabase` target. A var that appears only
     // in a block-result TYPE annotation (`["__retbuf"]`) but is never minted is a PHANTOM — no store,
@@ -1112,8 +1115,11 @@ fn run_leak_scan(name: &str, body: &Value, data: &Data, d_nr: u32) -> usize {
 /// self-dep work-ref `[v]` (@P302 ownership marker, not a borrow); a `??` null-coalesce temp
 /// (`__ncc_*`, whose present-arm/JOIN dep is a stale borrow after default-arm materialisation, @PLN25);
 /// and a freed PARAMETER (the retbuf-displacement reassignment — `get_free_vars` otherwise suppresses
-/// freeing caller-owned params — not a user over-free). 0 FP across scripts+docs+lib+examples
-/// (`oracle_clean_on_correct_corpus`); the true-positive is the injected `LOFT_OWN_INJECT_FREE_BORROWED`
+/// freeing caller-owned params — not a user over-free).  0 FP over the nine-file
+/// `oracle_clean_on_correct_corpus`; over the whole 1247-file corpus (2026-09-05, QUALITY.md B7q) it
+/// reports TEN, all one shape — a pass-2 work-ref borrowing the NRVO buffer of an inline call
+/// (`__ref_p2_1["__ref_1"]`, 877/882/889), each clean under `LOFT_STRICT_STORES` on both backends —
+/// so that shape is a precision residual of this check, not a corpus defect.  The true-positive is the injected `LOFT_OWN_INJECT_FREE_BORROWED`
 /// over-free (`oracle_over_free_check_flags_an_injected_free`). Pure type-dep — needs no CFG/dataflow.
 fn run_over_free_check(
     name: &str,
@@ -1138,11 +1144,75 @@ fn run_over_free_check(
             && !self_dep
             && !ncc
             && !func.is_argument(v)
+            // @FR-O-Override — a free the IR names for a never-free binding is dropped at
+            // codegen on both backends (`generate_call`, `OpFreeRefEmitter`), so it releases
+            // nothing and is not an over-free; Check D reports it as a NOTE instead.
+            && !func.is_skip_free(v)
         {
             eprintln!("RED {name}: free-of-borrowed {} (v{v}) dep={dep:?}", nm(v));
             reds += 1;
         }
     }
+    reds
+}
+
+/// Check D — the never-free contract, @FR-O-Override: a binding marked `skip_free` must have NO
+/// free emitted for it, in ANY spelling.  The flag's contract is exactly *"no `OpFreeRef` is ever
+/// emitted for this binding"*, and a free is a NOTION with five spellings — the plain free, its
+/// tag-checked twin, the text free, and the two witness-guarded conditional frees — so the check
+/// asks by notion, not by the one name the rule happens to spell.
+///
+/// Two of the spellings are intercepted DOWNSTREAM for a bare variable operand: the interpreter's
+/// `generate_call` and the native `OpFreeRefEmitter` / `OpFreeRefTagEmitter` both emit nothing for a
+/// `skip_free` variable.  An IR free in those spellings is therefore reported as a `NOTE` (the emitted
+/// program honours the contract; the IR does not say so), while the spellings NEITHER backend
+/// intercepts — `OpFreeText`, `OpFreeRefIfDistinct`, `OpFreeRefOrHandUp`, and a free reached through
+/// a tuple element — are a RED: the store the binding views is released.
+///
+/// The ONE admissible free of a never-free binding is the release the marking pass PLACES itself:
+/// a staged text temp ([`crate::variables::Function::is_staged_text_temp`]) is never-free for the
+/// scope-exit sweep because its value outlives the block, and the pass that staged it frees it by
+/// `OpFreeText` at the site it chose — after the consuming statement, or after the bytes moved into
+/// the caller's buffer.  Measured over the 1247-file corpus, that shape was every live-spelling free
+/// of a never-free binding (217 function–binding pairs, all `OpFreeText`, all `__ncc_`/`__ret_`); a free of any
+/// other never-free binding by any live spelling is a RED, and a new staging pass that needs the
+/// same allowance extends the predicate rather than this check.
+fn run_override_check(name: &str, body: &Value, data: &Data, d_nr: u32) -> usize {
+    let func = &data.def(d_nr).variables;
+    let sets = data.op_sets();
+    let mut reds = 0;
+    body.walk(&mut |x| {
+        if let Value::Call(d, args) = x
+            && sets.frees.contains(d)
+            && let Some(a0) = args.first()
+        {
+            let (v, via_tuple) = match a0.unspan() {
+                Value::Var(v) => (*v, false),
+                Value::TupleGet(v, _) => (*v, true),
+                _ => return,
+            };
+            if !func.is_skip_free(v) {
+                return;
+            }
+            let op = data.def(*d).name();
+            if *d == sets.text_free && func.is_staged_text_temp(v) {
+                return; // the release the staging pass placed — the admissible free
+            }
+            if sets.unconditional_ref_frees.contains(d) && !via_tuple {
+                eprintln!(
+                    "NOTE {name}: never-free {} (v{v}) named by {op} in the IR (dropped at codegen on both backends)",
+                    func.name(v)
+                );
+            } else {
+                eprintln!(
+                    "RED {name}: never-free-freed {} (v{v}) by {op}{}",
+                    func.name(v),
+                    if via_tuple { " (tuple element)" } else { "" }
+                );
+                reds += 1;
+            }
+        }
+    });
     reds
 }
 
@@ -1161,11 +1231,7 @@ fn run_free_checks(name: &str, body: &Value, cfg: &Cfg, data: &Data, d_nr: u32) 
     // time, not into `def.code` here, so their free set reads empty (a documented coverage gap, not
     // unsoundness — the runtime leak-check still covers closures).
     if !name.starts_with("n___lambda_") {
-        let all_frees: Vec<u32> = ["OpFreeRef", "OpFreeText", "OpFreeRefIfDistinct"]
-            .iter()
-            .map(|n| data.def_nr(n))
-            .filter(|&d| d != u32::MAX)
-            .collect();
+        let all_frees: Vec<u32> = data.op_sets().frees.iter().copied().collect();
         let freed: BTreeSet<u16> = collect_free_targets(body, &all_frees).into_iter().collect();
         let transferred = transferred_out(body, data);
         for v in under_free(exit_state, &freed, &transferred, func) {

@@ -3163,7 +3163,8 @@ impl Function {
         }
         // Mark skip_free so get_free_vars does not emit OpFreeRef for this variable.
         // with this explicit flag, keeping the type_def intact for downstream passes.
-        self.variables[v_nr as usize].skip_free = true;
+        // Through the one setter, so `LOFT_SKIPFREE_TRACE` sees this writer like every other.
+        self.set_skip_free(v_nr);
     }
 
     /// A fresh function-scoped work-ref (`__ref_N`), reusing the same variable across
@@ -3396,8 +3397,12 @@ impl Function {
         self.inline_ref_vars.contains(&v)
     }
 
-    /// Must no `OpFreeRef` ever be emitted for `v`?  Its contract is exactly that
-    /// sentence, and nothing weaker.
+    /// Must no ownership-derived free ever be emitted for `v` — in ANY of a free's five
+    /// spellings (`OpSets::frees`), from the scope-exit sweep, a transition free, a pre-`Set`
+    /// free or a move alike?  Its contract is that sentence, and nothing weaker; the one
+    /// admissible free of a marked binding is the release its marking pass PLACES itself, on
+    /// a consumption fact ([`Self::is_staged_text_temp`]), and `ownership_cfg`'s Check D
+    /// reports every other.
     ///
     /// Enforces @FR-O-Override — the never-free veto.
     ///
@@ -3445,13 +3450,34 @@ impl Function {
         self.variables[v as usize].skip_free
     }
 
+    /// Is `v` a text temp that STAGES a value across the statement or the return that reads
+    /// it — a `??` coalesce subject (`__ncc_N`) or a return-delivery stage (`__ret_N`,
+    /// `__ret_text_N`)?
+    ///
+    /// Such a temp is never-free for the scope-exit sweep — its value outlives the block the
+    /// sweep would free it in — and is released by the pass that staged it, at the site that
+    /// pass chose: the ncc-orphan pass right after the consuming statement, the return delivery
+    /// once the bytes have moved into the caller's buffer.  @FR-O-Override names this as the ONE
+    /// admissible free of a never-free binding — a release placed on a CONSUMPTION fact, never
+    /// on the ownership proxy — and `ownership_cfg`'s Check D admits exactly this predicate.
+    /// Both facts are required, as in [`Self::is_overwritten_view`]: the PREFIX says which pass
+    /// staged it, and `skip_free` that the pass did mark it.
+    #[must_use]
+    pub fn is_staged_text_temp(&self, v: u16) -> bool {
+        if !self.is_skip_free(v) || !matches!(self.tp(v).base(), Type::Text(_)) {
+            return false;
+        }
+        let n = self.name(v);
+        n.starts_with("__ncc_") || n.starts_with("__ret_")
+    }
+
     /// Mark a variable so that `get_free_vars` will not emit `OpFreeRef` for it.
     /// Used for borrowed references (e.g. par-loop result variables that point
     /// into the result vector store).
     #[track_caller]
     pub fn set_skip_free(&mut self, v: u16) {
         if let Ok(want) = std::env::var("LOFT_SKIPFREE_TRACE")
-            && self.variables[v as usize].name == want
+            && (want == "*" || self.variables[v as usize].name == want)
         {
             eprintln!(
                 "[skip_free] {} (var={v}) in {} @ {}",

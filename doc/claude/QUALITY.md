@@ -5082,6 +5082,104 @@ force slot reuse so the free is a wrong VALUE rather than surviving bytes, and t
 (the whole-value parameter bind that still frees, the view+mint that keeps its witness),
 falsified at `51646648` on both backends.
 
+#### B7q — `@FR-O-Override` walked: a contract that named one spelling of five, and the release the language ships that it excluded (2026-09-05)
+
+Picked by `rule_tags.py dups`: at 19 sites `@FR-O-Override` is the most scattered rule not yet
+walked (271 mentions of `skip_free`, 44 writers).  Its sites ask THREE questions, and the walk
+measured each over the whole 1247-file corpus (`tests/scripts` + `tests/docs` + `examples`,
+compile-only under `LOFT_OWN_ORACLE=check`, a wildcard on the marking trace, and four
+env-gated probes at the bytecode-level frees that have no IR):
+
+- **"May a free be emitted for this binding?"** — the veto, read at a free site.  The rule's
+  sentence said *"no `OpFreeRef` is ever emitted"*, and a free is a NOTION with five
+  spellings: `OpFreeRef`, `OpFreeRefTag`, `OpFreeText`, `OpFreeRefIfDistinct`,
+  `OpFreeRefOrHandUp`.  Both backends intercept the flag DOWNSTREAM for two of them — the
+  interpreter's `generate_call` and native's `OpFreeRefEmitter`/`OpFreeRefTagEmitter` emit
+  nothing for a bare never-free variable — and for none of the other three.  So a new
+  **Check D** in `ownership_cfg` asks the contract by notion: every free op whose first
+  argument (a `Var`, or a `TupleGet` of one) is never-free is a RED in a live spelling and a
+  NOTE in a dropped one.
+- **"Is this binding a view / non-owner?"** — the flag read as an OWNERSHIP fact, which the
+  rule says it is not (*"exactly that sentence and nothing weaker"*).  Twelve readers do it.
+  The shared home is `Function::owns_store` (`!inline_ref && !skip_free && is_independent`,
+  loft#664 — native allocation, coroutine persistence, the interpreter's frame teardown, the
+  parser's in-place target).  Every other reader is either CONSERVATIVE (the null-init
+  sentinel, the reclaim/NRVO `REJECT`, an arm view that only skips a free) or PREFIX-QUALIFIED
+  — `pre_eval`'s `__ret_` + flag, `emit.rs`'s `__ncc_` + flag, `is_overwritten_view`'s
+  `_mv_`/`__ncc_` + flag — which is the de-conflation loft#1155 already established.  Two
+  DIAGNOSTIC blind spots remain and are recorded, not fixed: the leak scan skips every
+  never-free binding (a leaked transferred or staged binding is invisible to it) and
+  `validate_slots` skips any slot pair with a never-free member (written for the S34 slot
+  share, it covers every other meaning too).
+- **"What makes a binding never-free?"** — 44 writers, and they mean FOUR things: (i) a VIEW
+  the owner frees (match/capture payload bindings, element and field views, the borrowed
+  `??` arm, B7p's nullable view locals — the large majority); (ii) TRANSFERRED, the owner is
+  elsewhere (`__ret_` stages, the moved source, a witnessed local whose witness frees, a
+  rebind's `__vdb`); (iii) a DEAD declaration with no store at all (`unregister_work_ref`,
+  `clean_work_refs`, collapsed work-refs); and (iv) a DEFERRED release — never-free for the
+  SWEEP, freed by the pass that marked it, on a consumption fact.  Of the 44, 38 fired on
+  the corpus, five never did (among them `state/codegen.rs`'s single-use MOVE shortcut, which
+  the @PLN90 move plans superseded and which no corpus program reaches), and one wrote the
+  field directly and so was invisible to the trace (`mark_skip_free_by_name`, now routed
+  through the setter).
+
+**The disagreement, and it was between the rule and the code.**  Check D's first run reported
+**9054 REDs over 217 function–binding pairs — every one an `OpFreeText`, every one a `__ncc_N` or `__ret_N`
+text temp**, and not one `OpFreeRefIfDistinct`, `OpFreeRefOrHandUp` or tuple-element free of a
+never-free binding anywhere in 1247 files.  Those are meaning (iv): the `??` text subject is
+marked never-free so the scope-exit sweep does not free the value its block yields, and the
+@PLN85 ncc-orphan pass frees it right after the statement that copied it out; the loft#1357
+return stage does the same after the bytes move into the caller's buffer.  The language ships
+that release, it is tested (156, 622, 1357), and the rule's literal sentence forbade it — so
+the RULE was extended, not the code: `(O-Override)` now reads *no free DERIVED FROM OWNERSHIP,
+in any of the five spellings*, and names the ONE admissible free — the release the marking
+pass places itself, on a fact of its own.  That shape has a name now,
+`Function::is_staged_text_temp` (flag + `__ncc_`/`__ret_` prefix + text, the same
+prefix-and-flag pattern as `is_overwritten_view`); the orphan pass reads it instead of its
+own three-line spelling, and Check D admits exactly it.  Recorded as D-own-31, opened and
+closed.
+
+**The second finding was two mechanisms on one local.**  Check D's 14 NOTEs — an IR
+`OpFreeRef(c)` of a never-free `c`, dropped at codegen — were all in loft#1200's own guard:
+a local whose assignments mix ownership received BOTH the loft#1200 displacement flag
+(`if __lbo_c { OpFreeRef(c) }`) and the loft#1336 owner witness, whose never-free mark then
+made the codegen veto drop the flag's free on both backends.  Right by accident, and dead
+weight: 172 `__lbo_` lines in that file's IR.  The witness block now runs BEFORE the
+displacement flags, so `nullable_locals_that_displace`'s existing never-free exclusion keeps
+a witnessed local out — one release mechanism per local, 0 NOTEs over the corpus, the 1200
+and 1336 guards green on both backends under `LOFT_POISON` + `LOFT_STRICT_STORES`.
+
+**The third was the notion spelled nine ways.**  "Which ops free their first argument?" was a
+hand-spelled name list in nine places — `ownership_cfg` (twice), `pre_eval::free_op_var`,
+`scopes::scope_free_op_var`, `check_ref_leaks`, `use_analysis::FreeOps` (twice), codegen's
+`is_cleanup`, the debugger's UAF tracker and `introspect`'s per-iteration-free check — and
+**no two lists agreed**: three knew nothing of `OpFreeRefOrHandUp`, five nothing of
+`OpFreeRefTag`, `is_cleanup` knew two of the five.  `check_ref_leaks`'s own comment had
+predicted this — *"every matcher keyed on the op NAME went blind to the new spelling at
+once"* (loft#1186) — and then stayed the only list that was complete.  `OpSets` (the
+`Data`-cached op-set home) now carries `frees`, `unconditional_ref_frees`,
+`conditional_ref_frees` and `text_free`, and all nine read it.  Verified as a refactor:
+IR and emitted Rust BYTE-IDENTICAL before and after on the nine corpus files whose IR carries
+`OpFreeRefOrHandUp` plus the 1336 guard; the `is_cleanup` probe had already shown its 1966
+misses (1554 `IfDistinct`, 19 `OrHandUp`, 393 `OpFreeScratch`) all landed with
+`return_expr = 0, has_return = false`, so widening it changes no bytecode on the corpus.
+
+**Side-finding, recorded.**  Check B's doc claimed *"0 FP across scripts+docs+lib+examples"*;
+the test behind the claim runs nine files.  Over 1247 it reports 110 `free-of-borrowed` (100
+from the fact-based pass, all a vector header naming its own `__vdb_N` backing; 10 from the
+dep-based pass, all a pass-2 work-ref borrowing an inline call's NRVO buffer,
+`__ref_p2_1["__ref_1"]`), and each file runs clean under `LOFT_STRICT_STORES` + `LOFT_POISON`
+on both backends — a precision residual of the checker, now stated as measured.  Check B also
+consults the veto now: a free the IR names for a never-free binding is dropped downstream and
+is not an over-free.
+
+**Verified.**  Check D 0 RED / 0 NOTE over 1247 files; `oracle_override_check_flags_an_injected_free_of_a_never_free_binding`
+proves it can fire (`LOFT_OWN_INJECT_FREE_SKIPFREE=<var>` makes the sweep name a
+witness-guarded free of a never-free binding against itself — a run-time no-op the IR still
+names); `a_witnessed_local_carries_no_dead_displacement_free` pins the one-mechanism rule on
+the 1200 guard.  Guards 1200, 1336, B7p, 1357, 156, 622 and 1186 green on both backends.
+`LOFT_SKIPFREE_TRACE=*` (new wildcard) is the writer census instrument.
+
 #### B2 — open, and the owner's call
 
 | decision | evidence | why it is not mine to take |

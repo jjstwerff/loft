@@ -1710,20 +1710,15 @@ fn run_scan_phase(
     for v in mixed_ownership_locals(orig_code, &function, data, d_nr) {
         function.mark_borrow_arm(v);
     }
-    let displace_locals = nullable_locals_that_displace(orig_code, &function, data);
-    for &v in &displace_locals {
-        let name = format!("__lbo_{}", function.name(v));
-        let flag = function.add_temp_var(&name, &Type::Boolean);
-        scopes.var_scope.insert(flag, 0);
-        scopes.var_order.push(flag);
-        scopes.local_owns.insert(v, flag);
-    }
     // loft#1336 / @FR-O-Witness — the OWNER WITNESS of a local whose assignments MIX
     // ownership.  Minted before the scan for the same reason the two flags above are: the
     // first assignment that has to maintain it already needs somewhere to write.  The local
     // is marked never-free (@FR-O-Override) here, so every static free site — the pre-`Set`
     // free, the transition frees, the scope-exit sweep — declines it and the witness is the
-    // ONE thing that releases its stores.  The witness carries a self-dep: not a borrow, and
+    // ONE thing that releases its stores.  Minted BEFORE the loft#1200 displacement flags
+    // below for the same reason: `nullable_locals_that_displace` excludes a never-free local,
+    // so a witnessed local is never also given a `__lbo_` flag whose guarded free the codegen
+    // veto would drop anyway — one release mechanism per local, and no dead free in the IR.  The witness carries a self-dep: not a borrow, and
     // not the empty list @FR-O-Proxy reads as "owner", so no site frees it on its own.
     let witness_locals = owner_witness_locals(
         orig_code,
@@ -1747,6 +1742,14 @@ fn run_scan_phase(
         scopes.var_scope.insert(w, 0);
         scopes.var_order.push(w);
         scopes.owner_witness.insert(v, w);
+    }
+    let displace_locals = nullable_locals_that_displace(orig_code, &function, data);
+    for &v in &displace_locals {
+        let name = format!("__lbo_{}", function.name(v));
+        let flag = function.add_temp_var(&name, &Type::Boolean);
+        scopes.var_scope.insert(flag, 0);
+        scopes.var_order.push(flag);
+        scopes.local_owns.insert(v, flag);
     }
     // A nullable heap local that holds a PROJECTION VIEW owns no store it must free (a view
     // is never owned, @FR-O-Owner).  Mark it never-free (@FR-O-Override) so the D-own-16
@@ -3696,6 +3699,18 @@ fn inject_free_borrowed() -> Option<&'static str> {
     use std::sync::OnceLock;
     static V: OnceLock<Option<String>> = OnceLock::new();
     V.get_or_init(|| std::env::var("LOFT_OWN_INJECT_FREE_BORROWED").ok())
+        .as_deref()
+}
+
+/// @FR-O-Override TEST-ONLY: the NEVER-FREE var name for which `get_free_vars` emits a
+/// witness-guarded free against ITSELF — `OpFreeRefIfDistinct(v, v)`, a run-time no-op (one store on
+/// both sides) that the IR nevertheless NAMES as a free of a never-free binding, which
+/// `ownership_cfg`'s Check D must report.  The check's true-positive gate; cached like
+/// [`inject_drop_free`]; never set outside tests.
+fn inject_free_skipfree() -> Option<&'static str> {
+    use std::sync::OnceLock;
+    static V: OnceLock<Option<String>> = OnceLock::new();
+    V.get_or_init(|| std::env::var("LOFT_OWN_INJECT_FREE_SKIPFREE").ok())
         .as_deref()
 }
 
@@ -6793,7 +6808,7 @@ impl Scopes<'_> {
     /// Enforces @FR-O-Proxy. The empty dep list is the cheap PROXY for "this binding owns
     /// its store" and the rule says it is unsound alone, so the two obligations it names
     /// are discharged together and in one place: the `O-Override` veto (`is_skip_free`,
-    /// whose contract is exactly "no `OpFreeRef` is ever emitted for this binding"), and
+    /// whose contract is "no ownership-derived free, in any spelling, for this binding"), and
     /// the carve-out that a user PARAMETER belongs to the caller while the promoted NRVO
     /// buffer is the one argument that is really a local this function minted.
     ///
@@ -8020,6 +8035,12 @@ impl Scopes<'_> {
                     && !function.is_skip_free(v)
                     && !self.free_transferred.contains(&v)
                     && !captured_ref;
+                if function.is_skip_free(v) && inject_free_skipfree() == Some(function.name(v)) {
+                    ls.push(Value::Call(
+                        data.def_nr("OpFreeRefIfDistinct"),
+                        vec![Value::Var(v), Value::Var(v)],
+                    ));
+                }
                 if scope_debug && !emit {
                     eprintln!(
                         "[scope_debug] NOT freeing '{}' (var={v}, scope={}, to_scope={to_scope}): \
@@ -11242,8 +11263,7 @@ fn collect_consumed_ncc_text(node: &Value, function: &Function, out: &mut Vec<u1
         Value::Block(bl) if bl.name == "ncc" => {
             for op in &bl.operators {
                 if let Value::Set(v, val) = op.unspan()
-                    && function.is_skip_free(*v)
-                    && matches!(function.tp(*v).base(), Type::Text(_))
+                    && function.is_staged_text_temp(*v)
                     && function.name(*v).starts_with("__ncc_")
                     // Only the REAL coalesce-subject assignment (a Call / field
                     // access / nested block — a producer of an owned String)
@@ -11413,14 +11433,12 @@ impl Scopes<'_> {
 }
 
 fn scope_free_op_var(op: &Value, data: &Data) -> Option<u16> {
-    if let Value::Call(d, args) = op.unspan() {
-        let name = data.def(*d).name();
-        if matches!(name, "OpFreeRef" | "OpFreeText" | "OpFreeRefIfDistinct")
-            && let Some(arg0) = args.first()
-            && let Value::Var(v) = arg0.unspan()
-        {
-            return Some(*v);
-        }
+    if let Value::Call(d, args) = op.unspan()
+        && data.op_sets().frees.contains(d)
+        && let Some(arg0) = args.first()
+        && let Value::Var(v) = arg0.unspan()
+    {
+        return Some(*v);
     }
     None
 }
@@ -12501,12 +12519,13 @@ fn check_ref_leaks(
     // NAME went blind to the new spelling at once.  A free-op list is a claim about a
     // NOTION — "this op releases its first argument" — and each new spelling of that notion
     // has to arrive here too, or the assert reports a leak the compiler does not have.
-    let free_ops = [
-        data.def_nr("OpFreeRef"),
-        data.def_nr("OpFreeRefTag"),
-        data.def_nr("OpFreeRefIfDistinct"),
-        data.def_nr("OpFreeRefOrHandUp"),
-    ];
+    let sets = data.op_sets();
+    let free_ops: Vec<u32> = sets
+        .unconditional_ref_frees
+        .iter()
+        .chain(sets.conditional_ref_frees.iter())
+        .copied()
+        .collect();
     let mut freed: HashSet<u16> = HashSet::new();
     collect_freed_vars(ir, &free_ops, &mut freed);
 
