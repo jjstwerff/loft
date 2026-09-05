@@ -377,13 +377,42 @@ fn reshaped_containers(code: &Value, data: &Data) -> HashSet<u16> {
 /// (an insert, which also shifts every later element) and `OpHashAdd` (which can rehash and
 /// move records).
 fn grown_containers(code: &Value, data: &Data) -> HashSet<u16> {
-    containers_named_by(code, data, &|name| {
-        matches!(
+    let mut out: HashSet<u16> = HashSet::new();
+    code.walk(&mut |v| {
+        let Value::Call(d, args) = v else { return };
+        let name = data.def(*d).name();
+        if !matches!(
             name,
             "OpNewRecord" | "OpPreAllocVector" | "OpAppendVector" | "OpInsertVector" | "OpHashAdd"
-        )
-        .then_some(0)
-    })
+        ) {
+            return;
+        }
+        // `OpNewRecord(parent, tp, fld)` names its container in TWO parts, and only the
+        // whole-variable form belongs here: `fld == u16::MAX` is an append to the variable
+        // itself (`v += [x]` emits `OpNewRecord(v, tp, 65535)`), while any other `fld` is an
+        // append to that variable's FIELD (`s.us_redo += [x]` emits `OpNewRecord(s, tp, 1)`).
+        //
+        // Collecting the parent for the second shape shakes every view rooted at the same
+        // variable whichever field it names.  Measured on `moros_editor`'s `undo_pop`:
+        // `e = s.us_entries[idx]` was materialised because the SIBLING field `s.us_redo` grew,
+        // so each undo entry was read out of a copy, the stack silently stopped recording, and
+        // `undo_depth` answered 0 where 3 was due.  A field-qualified growth is left
+        // UNCOLLECTED rather than compared field-wise, which keeps this function the lower
+        // bound its sibling's doc claims: a missed disturbance costs a materialise, a spurious
+        // one costs a program its meaning.
+        if name == "OpNewRecord"
+            && !matches!(
+                args.get(2).map(Value::unspan),
+                Some(Value::Int(f)) if *f == i32::from(u16::MAX)
+            )
+        {
+            return;
+        }
+        if let Some(Value::Var(c)) = args.first().map(Value::unspan) {
+            out.insert(*c);
+        }
+    });
+    out
 }
 
 /// The container variables `code` names at the argument `which` picks, for the ops it picks.

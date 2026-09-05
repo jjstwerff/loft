@@ -675,7 +675,20 @@ refusal names it.
   Guard: `tests/scripts/1373-growing-a-container-ends-the-places-inside-it.loft`, eight cells
   on both backends with four controls (the inner-realloc shape 85 measures, a nested field
   read, a view dead at the growth, and a view with no disturbance at all — the last is the
-  boundary a fix that materialised everything would cross).  Residual, filed rather than
+  boundary a fix that materialised everything would cross).  ⚠ **It shipped for one commit with a spurious materialise, and the fix's own guard could not
+  see it.**  `OpNewRecord(parent, tp, fld)` names its container in TWO parts, and reading the
+  parent alone shook every view rooted at that variable whichever field it named:
+  `moros_editor`'s `undo_pop` reads `e = s.us_entries[idx]` and appends to `s.us_redo`, so each
+  undo entry came out of a copy, the undo stack silently stopped recording, and `undo_depth`
+  answered 0 where 3 was due — a program's meaning changed, with only an advice.  A
+  field-qualified growth is now left UNCOLLECTED (`fld == u16::MAX` is the whole-variable
+  append), which is the honest direction: a missed disturbance costs a materialise, a spurious
+  one costs a program its meaning.  The residual is loft#1384 — matching field-wise needs the
+  type table, because the view carries a byte OFFSET and the growth a field NUMBER.  What
+  caught it was `make ci`'s `moros_editor` html smoke, the only thing in the tree exercising
+  that shape, and it is NOT in the corpus the emission diff walks (`tests/fixtures/libs` is
+  outside it) — so a four-file diff read as a small blast radius while a library was broken.
+  Residual, filed rather than
   bundled: a COLLECTION-typed element view is still stale (loft#1377) — the walk records it
   once the type gate admits it and the advice fires, but the materialise arm is record-shaped,
   so the author would be told about a copy they did not get.  `Contract: strained` — the rule

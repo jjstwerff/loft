@@ -16,6 +16,12 @@
 // `len(b) == 0`, and a struct element answered `4294967296`, on both backends with strict
 // stores silent.
 //
+// NOT closed here either, and measured: a view of a FIELD's element while that SAME field grows
+// (`d = w.a[0]; w.a += [...]`) is still stale — `4294967296`, both backends, silent.  The two
+// sides name the field in different spaces, which is why it is not simply a wider comparison:
+// the view carries a BYTE OFFSET (`OpGetVector(OpGetField(w, 16, …), …)`) and the growth carries
+// a field NUMBER (`OpNewRecord(w, tp, 1)`), so matching them needs the type table.  loft#1384.
+//
 // NOT closed here, and measured rather than assumed: a COLLECTION-typed element view
 // (`b = w[0]` on a `vector<vector<integer>>`) reads `len(b) == 0` after the same growth.  The
 // walk records it once the gate admits the type and the advice fires — but the materialise arm
@@ -25,6 +31,7 @@
 //
 // @falsified-at: cbc58429 — interpret exit 1 -> 0, interpret 1 assertion failures -> 0, native exit 1 -> 0, native 1 assertion failures -> 0
 struct S { n: integer }
+struct W { a: vector<S>, b: vector<S> }
 struct O { inner: I }
 struct I { v: vector<integer> }
 
@@ -98,7 +105,23 @@ fn a_view_with_no_disturbance_still_writes_through() {
   assert(v[0].n == 5, "control: with nothing disturbing the container the view writes through");
 }
 
+// CONTROL, and the one that caught a regression this fix shipped with for one commit: a view of
+// ONE field is not disturbed by a SIBLING field's growth.  `OpNewRecord(parent, tp, fld)` names
+// its container in two parts, and reading the parent alone shook every view rooted at the same
+// variable whichever field it named — `moros_editor`'s `undo_pop` reads `e = s.us_entries[idx]`
+// and appends to `s.us_redo`, so each undo entry came out of a copy and `undo_depth` answered 0
+// where 3 was due, on both backends, with only an advice.
+fn a_sibling_fields_growth_does_not_disturb_this_view() {
+  w = W { a: [S { n: 1 }], b: [] };
+  d = w.a[0];
+  for i in 0..200 { w.b += [S { n: i }]; }
+  assert(d.n == 1, "control: a view of one field survives a sibling field's growth");
+  d.n = 5;
+  assert(w.a[0].n == 5, "control: and still writes through, because nothing disturbed it");
+}
+
 fn main() {
+  a_sibling_fields_growth_does_not_disturb_this_view();
   a_view_read_after_growth_is_its_own_copy();
   the_answer_does_not_depend_on_the_capacity();
   a_write_through_a_materialised_view_does_not_reach_the_container();

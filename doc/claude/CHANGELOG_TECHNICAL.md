@@ -9,6 +9,25 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### (B-Disturb)'s growth event names a whole variable, not a variable's field (2026-09-06, loft#1384)
+
+loft#1373 shipped for one commit with a spurious materialise.  `OpNewRecord(parent, tp, fld)`
+names its container in TWO parts, and `grown_containers` read the parent alone, so a growth of
+`s.us_redo` shook a view of `s.us_entries` — `moros_editor`'s `undo_pop` then read every undo
+entry out of a copy, the stack silently stopped recording, and `undo_depth` answered `0` where
+`3` was due, on both backends, with only an advice.  A field-qualified growth is now left
+UNCOLLECTED (`fld == u16::MAX` is the whole-variable append), which is the honest direction: a
+missed disturbance costs a materialise, a spurious one costs a program its meaning.  The
+residual — a view of a field's element while THAT field grows — is loft#1384, and matching
+field-wise needs the type table, since the view carries a byte OFFSET and the growth a field
+NUMBER.
+
+What caught it was `make ci`'s `moros_editor` html smoke, the only thing in the tree that
+exercises the shape.  It is not in the corpus `introspect_diff.sh` walks — `tests/fixtures/libs`
+is outside it — so a four-file diff, five green subject suites and a green falsify all read
+clean while a library was broken.  Control added to the guard:
+`a_sibling_fields_growth_does_not_disturb_this_view`.  `Refs #1384`.
+
 ### A statement `if` discards what its arms yield, on `--native` too (2026-09-06, loft#1381)
 
 `(F-Block)` says a block's value is discarded "where the BLOCK itself is a statement — a
