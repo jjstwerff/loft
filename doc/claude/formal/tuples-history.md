@@ -56,15 +56,26 @@ what the declining version bought by making the record cells wrong.
 the template's record copy does not fit either, so it is removed and the member aliases —
 `fn keep<T>(a: T) -> (T, integer) { s = a; t = (s, 7); return t; }` with a `vector<integer>`
 reads `len` 3 through the returned copy after the source grew, where the concrete twin reads 2.
-That is the pre-loft#1365 behaviour rather than a new fault, and it is where it stops because
-the cure needs the collection copy BUILT at monomorph time.  Rebuilding it there was measured
-answering correctly on all four collection cells, and it leaks one store: a vector member's
-copy mints a store holder (`__vdb_N`) whose free is emitted by the parse-time
-`synthetic_tuple_return` builder as an `OpFreeRefIfDistinct`, so a holder minted AFTER that
-builder has run is in no free list — the measured shape returns the tuple, which is what puts
-the member's release on that path.  Declaring the new variable at the top level (the loft#1175
-hoist) is necessary and not sufficient; the free has to be emitted too, by whichever pass owns
-the return path for this monomorph.
+That is the pre-loft#1365 behaviour rather than a new fault, and it is where it stops — but
+not for the reason two earlier readings of this entry gave, both of which the IR contradicts.
+Rebuilding the collection copy at monomorph time WORKS: all four collection cells answer their
+concrete twin's value on both backends, the callee's own `OpFreeRefIfDistinct` on the member's
+store holder is emitted exactly as the concrete twin's is, and the `scopes::check` ordering
+that an earlier draft blamed is not a factor (it runs after the parse, so a monomorph-minted
+variable IS visible to it).
+
+What it leaks is one store in the CALLER, and the cause is a return-ABI divergence that has
+nothing to do with the member copy.  A concrete `fn c(…) -> (vector<integer>, integer)` returns
+the synthetic `__tuple<…>` RECORD, and the caller copies the member out of it into a backing it
+owns.  The monomorph of the same generic returns a STACK tuple — its signature reads
+`(vector<integer>, integer)` — so the caller binds `r = __ref_1.0`, a bare projection with no
+copy and no backing, and the store the callee allocated for the member is adopted by nobody.
+The member copy merely makes that visible: before it there was no store to lose.
+
+So the cure is not in this pass at all.  It is that a generic's tuple return should be boxed
+the way a named function's is (`Parser::boxed_tuple_return`, the machinery loft#1349 and
+D-tup-7 already touch), after which the caller-side copy the concrete path performs applies
+unchanged and the collection member is copied and freed like any other.
 
 **Closes when** the vector and keyed cells read their concrete twin's answer on both backends
 with no leaked store, and `matrix_axes.py` reads the container-kind axis at `vector` and `hash`
