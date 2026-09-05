@@ -75,6 +75,55 @@ the undischarged receiver exactly as for a `S?` local.  Guards:
 `153-a-tagged-element-read-by-a-variable-index-is-one-null.loft`,
 `153-a-method-call-on-a-tagged-element-reports-the-undischarged-receiver.loft`.
 `Fixes #1374`.
+### loft#1371: a `&` link to a text or vector LOCAL is a link, and a whole-value write through one reaches the source (2026-09-05)
+
+`@FR-B-Ref-Write` is the `&` ladder's north star and `@FR-B-Ref-Uniform` says a `&τ`
+variable is used exactly like a τ variable, read and write alike, for a scalar or a heap
+value.  Neither narrows τ, and the `&` PARAMETER channel already kept both promises for
+every heap kind (`calls.md F-ParamRef`) — the LOCAL bind kept them for a scalar, a record
+and a tuple and special-cased the rest, which is what `B-Ref-Uniform` says not to do.  The
+parameter cells are what made the answer decidable rather than a design call: they are the
+same rule at the same τ, and they were right throughout.
+
+Four lowerings, one per shape the special-casing produced:
+
+* **text** — `parse_assign_op`'s `stack_src` now admits a `Type::Text(_)` source, so the
+  bind takes the same `RefVar(τ)` + `OpCreateStack(src)` form the parameter has.  Before,
+  a text source matched no arm at all: the `&` was dropped and the bind COPIED, in both
+  directions (`pc = &c; pc = "z"` left `c` at "a", and `c = "z"` afterwards was not visible
+  through `pc`).  Native represents the link as `*mut String` rather than the parameter's
+  `&mut String` — a raw pointer for the same reason the scalar link uses one, so the source
+  local stays readable while the link is live — and the `Stack`-variant text ops take one
+  `unsafe` wrapper at the op dispatch rather than one per op.
+* **vector** — the `&` bind's `DbRef` share aliases element writes and appends already, but
+  left the variable plain-typed, so `create_vector` gave a whole-value write a FRESH backing
+  and re-pointed the local at it (`pe = [2, 2]` left `len(e)` at 1).  A `&`-linked vector
+  local now reaches the `OpClearVector` branch a `&vector` parameter already takes, so the
+  write clears the SHARED store and refills it in place.
+* **the annotated spellings** — `pc: &text = c` and `pe: &vector<T> = e` typed the variable
+  as a link over a value; the interpreter read the buffer as a stack ref and panicked
+  (`store.rs` out-of-bounds; `keys.rs` store_nr out of range).  The vector annotation now
+  yields the plain vector type its prefix twin gives, and `amp_vector_bind` asks through the
+  `RefVar` wrapper the annotation coerces the source to.  `vector<T>?` is deliberately not
+  matched, so it still reaches loft#1372's refusal.
+* **struct** — the displacement release was gated on `is_argument` on the interpreter and
+  absent from native's representation entirely.  The gate goes (the question is about the
+  LINK, not how it was introduced — native's twin already asked only the inner type and the
+  ownership), and native's local `&struct` link becomes `*mut DbRef` into the source's slot
+  instead of the source's DbRef by value, which is what lets a whole-value write reach the
+  source there at all.  Both backends now stash / install / `OpFreeRefIfDistinct`.
+
+Measured as a 30-cell boundary matrix on both backends over five axes — source type kind,
+bind spelling, source place, write kind, and the `&`-parameter control — each cell's value
+hand-computed from the rules before the first run, asserting value and leak.  Guard:
+`tests/scripts/1371-a-whole-value-write-through-an-amp-link-reaches-the-source.loft`
+(`@falsified-at: 964bab93`).  `B-Ref-Write` now states its heap clause, which is what the
+issue asked the binding chapter for.
+
+**Still open, filed apart:** a `&` to a struct PLACE — `pi = &o.i`, `pe = &v[0]` — carries a
+whole-value write on neither backend.  That is a link to a projection rather than to a
+local, and it is a different lowering.
+
 
 ### @PLN153 phase 4, batch 1: the opaque verbs' bare callers, and a `&` link to a nullable slot declined (2026-09-05)
 

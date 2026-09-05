@@ -4850,9 +4850,9 @@ impl State {
             // orphaned the one it displaced — a leak on the interpreter, and one more
             // reason the two backends answered this shape differently (loft#1371).
             let amp_owned_writeback = (matches!(
-                    *tp,
-                    Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
-                ) || crate::parser::vectors::is_keyed(&tp))
+                *tp,
+                Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
+            ) || crate::parser::vectors::is_keyed(&tp))
                 && matches!(
                     crate::use_analysis::ownership_of(stack.data, stack.def_nr, value),
                     crate::use_analysis::Own::Owned

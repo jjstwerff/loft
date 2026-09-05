@@ -14,6 +14,15 @@ invariants, internal phase numbers)?  See
 
 ## 2026-09
 
+**A `&` link to a text or a vector now behaves like the `&` you already know.**  Writing a
+`&` variable is supposed to write the thing it links — `a = 3; b = &a; b = 4` leaves `a` at
+4 — and that held for numbers, and for a `&` PARAMETER of any kind.  A `&` to a text or a
+vector LOCAL was quietly different: `pc = &c; pc = "z"` left `c` alone (the `&` was dropped
+and you got a copy), and `pe = &e; pe = [2, 2]` gave `pe` a new list instead of replacing
+`e`'s contents.  Writing the link with the `&` on the type instead of the value
+(`pc: &text = c`) could crash outright.  All of these now do what the plain-language rule
+says, on both backends, and a `&` to a struct no longer leaks the value it replaces.
+
 The **say-what-you-do** release. Two threads, and they turned out to be one: every page of
 the language reference was read against the compiler that ships, and most of what came back
 was not a wrong sentence but a promise nothing was keeping.

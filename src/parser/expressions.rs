@@ -5863,10 +5863,24 @@ use a separate collection or add after the loop"
                 // `vector` arm), so a `vector<S>` annotation already arrives
                 // rewritten; no per-site hook here.
                 let tp = if is_ref {
-                    // D-tup-2 — the SAME admitted-element gate the signature uses; before it
-                    // was shared, a `&(text, text)` LOCAL sailed past the refusal a `&(text,
-                    // text)` PARAMETER got and reached codegen as an internal compiler error.
-                    self.ref_var_type(tp)
+                    // A `&`-linked vector LOCAL is the SHARED `DbRef`, not a stack link:
+                    // `pe = &e` gives the variable the plain vector type and aliases
+                    // through it, so the annotated spelling gives it the same type rather
+                    // than a `RefVar` the bind never builds.  Wrapped, the annotation
+                    // described a link that was not there and every read of `pe` derefed a
+                    // vector buffer as a stack ref — an interpreter panic (loft#1371).  A
+                    // `&vector` PARAMETER keeps its `RefVar`: there the link IS the call
+                    // ABI.  `vector<T>?` is deliberately not matched here, so it still
+                    // reaches the nullable-link refusal below (loft#1372).
+                    if matches!(tp, Type::Vector(_, _)) {
+                        tp
+                    } else {
+                        // D-tup-2 — the SAME admitted-element gate the signature uses;
+                        // before it was shared, a `&(text, text)` LOCAL sailed past the
+                        // refusal a `&(text, text)` PARAMETER got and reached codegen as
+                        // an internal compiler error.
+                        self.ref_var_type(tp)
+                    }
                 } else {
                     tp
                 };

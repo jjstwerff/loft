@@ -1,4 +1,5 @@
 # QUALITY — Open Issues, Active Designs, Enhancement Plan
+# QUALITY — Open Issues, Active Design  Re-measured again (re-measured after loft#1371 gave the `&` LOCAL link the lowering the `&` PARAMETER has, for a text and a vector source): optional `720 | 360 | 5 | 355`, unspan `405 | 381 | 24`.  Re-measured again (re-measured after @PLN153 phase 4 batch 1 (the `&` lowering's source tests read through base())): optional `717 | 359 | 5 | 353`, unspan `402 | 378 | 24`.  Re-measured again (re-measured after @PLN153 phase 3c joined with the @FR-O-Witness walk): optional `716 | 358 | 5 | 353`, unspan `402 | 378 | 24`.s, Enhancement Plan
 
 This document is the single source of truth for **what's broken, what's
 being fixed, and what should be fixed next**.  It replaces the earlier
@@ -2458,7 +2459,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 720 | 360 | 5 | **355** |
+| 720 | 361 | 5 | **354** |
 
 The `@FR-O-Complete` walk (B7u) moved one function from opaque to seeing-through:
 `scopes::needs_pre_init`, which names the locals that get a null before a branch and the
