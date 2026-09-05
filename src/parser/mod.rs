@@ -6852,14 +6852,30 @@ impl Parser {
             // and never reached generic resolution.  Order-dependent, and the message
             // named the innocent second call site.
             //
-            // Non-collection concretes are unchanged: a struct's, an integer's and a
-            // text's type-def name IS their own name.
-            let base = if Self::is_collection_type(concrete.base()) {
+            // loft#1383 — an INTEGER keys on its own name for the same reason a collection
+            // does: its type DEF erases the WIDTH.  Every `Integer(_)` resolves to the one
+            // `integer` def, so `T = u8` and `T = u16` both mangled to `t_7integer_id` and
+            // the second call was checked against the FIRST instantiation — narrow first
+            // refused the wider call outright, wide first admitted the narrower one by
+            // widening, so the program's meaning depended on the ORDER of two statements.
+            // `Type::name` carries the range (`integer(0, 255)` vs `integer(0, 65535)`),
+            // which is the identity `@FR-G-Mono` wants: ONE copy per DISTINCT instantiation.
+            // Collapsing the width is right for CONVERSION (`(C-Int)` admits a widening) and
+            // wrong for identity, which is why one predicate could not serve both.
+            //
+            // Non-collection, non-integer concretes are unchanged: a struct's, a float's and
+            // a text's type-def name IS their own name.
+            let base = if Self::is_collection_type(concrete.base())
+                || matches!(concrete.base(), Type::Integer(_))
+            {
                 concrete.name(&self.data)
             } else {
                 self.data.def(type_nr).name().to_string()
             };
-            let safe = base.replace(['<', '>', ',', ' '], "_");
+            // The parentheses come from an integer's range spelling; the replacement stays
+            // 1:1 so the LEN prefix `original_name` / `find_method_receivers` parse back is
+            // still correct.
+            let safe = base.replace(['<', '>', ',', ' ', '(', ')'], "_");
             format!("t_{}{}_{name}", safe.len(), safe)
         };
         // Return existing instantiation if already created.

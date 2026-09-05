@@ -9,6 +9,32 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### loft#1383: a generic at two integer widths is two monomorphs (2026-09-06)
+
+`@FR-G-Mono` says a call with concrete argument types produces ONE specialised copy per
+DISTINCT instantiation.  Two integer WIDTHS are two instantiations and collided into one:
+every `Integer(_)` resolves to the single `integer` type DEF, so `T = u8` and `T = u16` both
+mangled to `t_7integer_id` and the second call was checked against the FIRST instantiation.
+
+The consequence was order-dependence in the program's MEANING: narrow first REFUSED the wider
+call (*"cannot implicitly narrow u16 to u8"*, naming the innocent second call site), wide first
+admitted the narrower one by widening.  Collapsing the width is right for CONVERSION —
+`(C-Int)` admits a widening — and wrong for IDENTITY, which is why one predicate could not
+serve both.
+
+The key is now the concrete type's own name, which carries the range, exactly as loft#1024 did
+for a collection whose type def erases its element.  The mangled name feeds a Rust identifier,
+so the range spelling's parentheses join the 1:1 replacement set and the LEN prefix
+`original_name` / `find_method_receivers` parse back stays correct.
+
+Measured on the emitted definitions: the same width twice yields ONE monomorph
+(`t_15integer_0__255__id`), two widths yield TWO — it distinguishes without multiplying.
+Eight cells on both backends, including the `vector<T>`-returning shape whose collision typed
+an inferred local `vector<u8>` on pass 1 and `vector<integer>` on pass 2.  Guard:
+`tests/scripts/1383-a-generic-at-two-integer-widths-is-two-monomorphs.loft`,
+`@falsified-at: 964bab93`.
+
+
 ### loft#1378: a generic at a struct in a reference cycle no longer kills the process (2026-09-06)
 
 `Parser::type_element_size` sums a struct's fields because a struct-typed vector element is

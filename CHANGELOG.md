@@ -20,6 +20,12 @@ record alive when `maybe` turned out to be nothing — once per time it happened
 programs only.  A long-running loop that reassigned such a variable grew for as long as it
 ran.
 
+**A generic function used at two integer widths now works in either order.**  Calling the
+same generic with a `u8` and then a `u16` was rejected — *"cannot implicitly narrow u16 to
+u8"*, pointing at the second call — while writing the two calls the other way round compiled
+fine.  The two widths were being treated as one specialisation. They are now two, and the
+order you write them in no longer matters.
+
 **A linked list or a tree no longer crashes the compiler when a generic touches it.**
 `struct Node { value: integer, next: reference<Node>? }` passed to any generic function killed
 the process outright — no error message, no output. The compiler was walking the struct's own
