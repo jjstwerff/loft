@@ -640,15 +640,37 @@ Comparing a compiler arm's effect under `--tests` on a `main`-ful guard answered
 "4 passed / 4 passed" — which reads as *this changes nothing* and means *neither side ran
 the thing that changes*.
 
-**The control builds are cached and never pruned.**  Each ref costs about 2 GB under
-`~/.cache/tmp/loft-falsify/<ref>` and `<ref>-target`, beside a `head-target` and a
-`shared-target`, and nothing removes them: on 2026-09-05 the directory held 364 GB, the root
-filesystem was full, and `make ci` failed in the NATIVE corpus with `FAIL unknown-mode` after
+**The control builds are cached, and the cache prunes itself.**  Each ref costs about 2 GB
+under `~/.cache/tmp/loft-falsify/<ref>` and `<ref>-target` (the native leg links
+`libloft.rlib` and its dependency rlibs, so the binary alone is not enough), beside a
+`head-target` and a `shared-target`.  Kept forever, they held 364 GB on 2026-09-05 and filled
+the root filesystem, and `make ci` failed in the NATIVE corpus with `FAIL unknown-mode` after
 four `loft: low space in /var/tmp/loft-test-scratch-… — reclaimed … MB` lines — a disk-full
-symptom that reads like a code fault.  A gate that fails on an unrelated suite right after
-those lines is the disk; `df -h /` before a gate, and prune with
-`find ~/.cache/tmp/loft-falsify -mindepth 1 -maxdepth 1 -mtime +0 -exec rm -rf {} +` (every
-entry is a regenerable build).
+symptom that reads like a code fault.  The script now keeps the `LOFT_FALSIFY_KEEP` (default 4)
+most recently used controls and removes the rest with their worktrees.  A gate that fails on an
+unrelated suite right after "low space" lines is the disk: `df -h /`, then § Scratch hygiene.
+
+### Scratch hygiene — what loft writes to a temp directory, and what removes it
+
+Every native compile, html export and test probe lands in the temp directory (`TMPDIR`; under
+`make ci` the per-checkout `/var/tmp/loft-test-scratch-<id>`), and each family has one rule
+that removes it.  Measured 2026-09-05 before the rules existed: 434 GB under one `~/.cache/tmp`.
+
+| what | who writes it | what removes it |
+|---|---|---|
+| `loft_native_bin_<pid>`, `loft_native_<pid>.rs` | a `--native` run's compile | the run itself when it ends normally; a run killed from OUTSIDE (a `timeout` wrapper, a harness kill, Ctrl-C) cannot, so **every native compile first sweeps the artefacts of dead processes** (`platform::reclaim_dead_native_scratch`, silent).  Sixteen thousand of them, 151 GB, had accumulated with nothing looking |
+| `loft_test_native_<stem>_bin` / `.key` / `.rs` | `--tests --native`, a per-file binary cache keyed by stem | the low-space reclaim (aged entries) and `sweep_scratch.sh --days` |
+| `<dir>/.loft/cache/<entry>` | the program cache a test writes beside its probe — every probe has a fresh name, so the cache only grows (13 GB in one test's dir) | `sweep_scratch.sh` (entries older than a day) |
+| `loft_html_*`, `loft_p*`, `loft_rebuild_*`, `loft-*` | the html, probe, rebuild and serve suites | `sweep_scratch.sh` (older than a day) |
+| `~/.cache/tmp/loft-falsify/<ref>{,-target}` | `make falsify` control builds | the script itself, LRU to `LOFT_FALSIFY_KEEP` |
+| `~/.cache/tmp/claude-<uid>/<project>/<session>` | the agent harness's per-session scratch (170 GB, 284 sessions) | `make sweep-scratch` (older than two weeks) |
+| `target/debug/deps` | cargo: every test binary of every dependency hash ever built (76–110 GB per checkout) | `make sweep-target` (`cargo sweep --time 14`) |
+
+`make ci` runs `scripts/sweep_scratch.sh` on its own scratch at the start of every gate (it
+used to keep seven days); `make sweep-scratch` runs it on the checkout's scratch and on
+`TMPDIR` with the session prune, and prints `df` after.  Both touch only loft's own names,
+only dead pids or aged entries, and never a sibling checkout's gate scratch.  A run of `df -h /`
+before a gate is cheaper than reading a `FAIL unknown-mode` as a code fault.
 
 ### The set a suite RUNS is not the set it CONTAINS (`LOFT_TRACE_ASSERTS`)
 

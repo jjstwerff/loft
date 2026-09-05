@@ -131,6 +131,19 @@ matrix moved on exactly those seven cells and nowhere else; `scripts/introspect_
 the corpus (stderr included) reads `DIFFERENT 16 of 1272` — every one a stderr line and none an emission: the thirteen corpus files that gained a warning (nine nullable indexes after a `find`, three `null` keys, one `null` into a vector field), reviewed one by one, and the three new guards, which differ by construction; the admitting-faces guard is silent on both
 builds with every value pinned.  `(N-Store)` in `formal/types.md` now names its slots and
 its non-stores.  `Fixes #1366`.
+### Scratch hygiene: a native compile sweeps dead-process artefacts, and the scratch families each have a pruning rule (2026-09-05)
+
+One box held 434 GB of loft scratch under `~/.cache/tmp` (16,326 `loft_native_bin_<pid>`
+binaries from runs killed from outside, 364 GB of `make falsify` control builds, 170 GB of
+agent-session scratch) and `make ci` died in the native corpus with `FAIL unknown-mode`.
+Now: `platform::native_compile_space_ok` sweeps dead-process artefacts on EVERY compile
+(`reclaim_dead_native_scratch`), keeping the aged fallback for the low-space path so the test
+runner's per-file cache survives; `scripts/sweep_scratch.sh` carries one rule per family and
+`make ci` runs it on its own scratch (was a seven-day `find`); `make sweep-scratch` /
+`make sweep-target` are the by-hand sweeps; `scripts/falsify.sh` keeps `LOFT_FALSIFY_KEEP`
+(4) controls.  TESTING.md § Scratch hygiene is the table.  Guard:
+`tests/native_scratch_hygiene.rs`.
+
 ### A vector local bound from a value branch copies at the parser's selector, and a vector parameter rebinds locally (2026-09-05, loft#1370, D-own-35 / D-call-14)
 
 The vector twin of B7v's record fix, closed at the vector copy's own home (QUALITY.md B7w):

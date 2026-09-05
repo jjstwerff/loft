@@ -260,6 +260,20 @@ if [ ! -x "$TGT/debug/loft" ]; then
   build "$WT" "$TGT" >/dev/null || { echo "the control does not build" >&2; exit 1; }
 fi
 CONTROL="$TGT/debug/loft"
+# The control build is a full debug `target/` (~2 GB: the native leg links `libloft.rlib` and
+# its dependency rlibs, so the binary alone is not enough).  Kept per ref and never pruned,
+# these reached 364 GB and filled the disk (2026-09-05).  Keep the LOFT_FALSIFY_KEEP most
+# recently USED controls (default 4) — this one is stamped now — and remove the rest, their
+# worktrees with them.
+touch "$TGT" "$WT" 2>/dev/null
+keep="${LOFT_FALSIFY_KEEP:-4}"
+for old in $(ls -td "$CACHE"/*-target 2>/dev/null | tail -n +$((keep + 1))); do
+  case "$old" in */head-target|*/shared-target) continue;; esac
+  sha=${old##*/}; sha=${sha%-target}
+  git -C "$ROOT" worktree remove --force "$CACHE/$sha" >/dev/null 2>&1 || rm -rf "$CACHE/$sha"
+  rm -rf "$old"
+done
+git -C "$ROOT" worktree prune >/dev/null 2>&1
 # A separate target dir on purpose: the main one may be mid-`make ci`, and cargo's build
 # lock is per target dir — building into it stalls a gate that is already running.
 HERE=$(build "$ROOT" "$CACHE/head-target") || { echo "this tree does not build" >&2; exit 1; }

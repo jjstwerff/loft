@@ -346,6 +346,26 @@ fn scratch_owner_pid(name: &str) -> Option<u32> {
     let stem = name.split('.').next().unwrap_or(name);
     stem.rsplit('_').next()?.parse().ok()
 }
+/// The pid of the process that owns `name`, for the two shapes the RUNTIME itself writes
+/// per process and nothing else: `loft_native_bin_<pid>` and `loft_native_<pid>.rs`, the
+/// pid being the whole of what follows the prefix.  `None` for every other name — the
+/// native test suite names its files by script STEM (`loft_native_<stem>.rs`,
+/// `loft_native_<stem>_<pid>_bin`), and a stem that ends in digits
+/// (`discard_slot_per_type_795`) read as a dead pid to the looser
+/// [`scratch_owner_pid`], so a worker's compile swept a sibling's live source out from
+/// under its rustc.  A name this cannot claim is judged by age alone, and only under low
+/// space.
+fn runtime_scratch_pid(name: &str) -> Option<u32> {
+    let digits = if let Some(rest) = name.strip_prefix("loft_native_bin_") {
+        rest
+    } else {
+        name.strip_prefix("loft_native_")?.strip_suffix(".rs")?
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
 
 /// Whether `pid` is a live process — `Some(true/false)` on Linux (procfs),
 /// `None` (unknown) elsewhere.
@@ -374,6 +394,24 @@ fn pid_alive(pid: u32) -> Option<bool> {
 /// Those files ARE the binary cache, so this is called only when a path is
 /// already space-constrained; the next run recompiles.
 pub fn reclaim_native_scratch(dir: &std::path::Path) -> u64 {
+    reclaim_native_scratch_by(dir, true)
+}
+
+/// The sweep every native compile runs first, silently: the artefacts of processes that are
+/// PROVABLY dead — a `loft_native_bin_<pid>` or `loft_native_<pid>.rs` whose pid no longer
+/// exists.  A run that ends normally removes its own binary; one killed from outside (a
+/// `timeout` wrapper, a harness kill, Ctrl-C) cannot, and with nothing else ever looking at
+/// the directory those were accumulating one per killed process, ten megabytes each, until
+/// the disk was full (sixteen thousand of them on one box).  Bounded by construction: after
+/// this, the directory holds at most one artefact per LIVE process.  The age fallback of
+/// [`reclaim_native_scratch`] is deliberately NOT applied here — a name without a pid is the
+/// test runner's per-file binary cache (`loft_test_native_<stem>_bin`), which is a cache only
+/// as long as it survives a compile that has room.
+pub fn reclaim_dead_native_scratch(dir: &std::path::Path) -> u64 {
+    reclaim_native_scratch_by(dir, false)
+}
+
+fn reclaim_native_scratch_by(dir: &std::path::Path, aged_too: bool) -> u64 {
     let own_pid = std::process::id();
     let mut freed = 0u64;
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -385,13 +423,18 @@ pub fn reclaim_native_scratch(dir: &std::path::Path) -> u64 {
         if !(name.starts_with("loft_native_") || name.starts_with("loft_test_native_")) {
             continue;
         }
-        let pid = scratch_owner_pid(&name);
-        let proven_stale = match pid {
+        // Provably stale only through the strict shapes; the looser parse below serves the
+        // age fallback's "is anyone alive behind this name" question and nothing else.
+        let proven_stale = match runtime_scratch_pid(&name) {
             Some(p) if p == own_pid => false,
             Some(p) => pid_alive(p) == Some(false),
             None => false,
         };
+        let pid = scratch_owner_pid(&name);
         if !proven_stale {
+            if !aged_too {
+                continue;
+            }
             // Liveness unknown (foreign pid without procfs, or no pid in the
             // name) — fall back to age: anything under an hour old may be an
             // in-flight emission of a parallel process.
@@ -417,11 +460,14 @@ pub fn reclaim_native_scratch(dir: &std::path::Path) -> u64 {
 }
 
 /// Preflight check for a single native compile writing into `scratch`.
-/// Returns `true` when there is enough headroom to proceed.  When space is
-/// below [`tmpfs_min_free_bytes`], first reclaims loft's own stale artefacts
-/// and re-checks; only if it is *still* low does it return `false` (callers
-/// skip that compile with a warning rather than risk overflowing RAM).
+/// Returns `true` when there is enough headroom to proceed.  Every call first sweeps the
+/// artefacts of dead processes ([`reclaim_dead_native_scratch`], silent), so the scratch
+/// directory stays bounded whatever killed the runs before this one.  When space is still
+/// below [`tmpfs_min_free_bytes`], the aged artefacts go too (the test runner's per-file
+/// binary cache included) and the space is re-checked; only if it is *still* low does it
+/// return `false` (callers skip that compile with a warning rather than risk overflowing RAM).
 pub fn native_compile_space_ok(scratch: &std::path::Path) -> bool {
+    let _ = reclaim_dead_native_scratch(scratch);
     let floor = tmpfs_min_free_bytes();
     match fs_avail_bytes(scratch) {
         // df unavailable → unknown → don't block (preserve old behaviour).
@@ -490,9 +536,33 @@ mod reclaim_tests {
         // u32::MAX-1 — no real pid (Linux pid_max caps far below); provably dead.
         let dead = dir.join("loft_native_4294967294.rs");
         let fresh_no_pid = dir.join("loft_native_bin_notapid");
+        // The native suite's stem-named source, whose stem happens to end in digits: not a
+        // pid, and not the runtime's to sweep however dead "795" is.
+        let stem_named = dir.join("loft_native_discard_slot_per_type_795.rs");
         std::fs::write(&own, "live").unwrap();
         std::fs::write(&dead, "stale").unwrap();
         std::fs::write(&fresh_no_pid, "fresh").unwrap();
+        std::fs::write(&stem_named, "live source of a sibling worker").unwrap();
+        // The dead-only sweep (every compile): the dead pid goes, the fresh no-pid entry
+        // stays whatever its age — it is the test runner's cache, not a leftover.
+        let dead_only = reclaim_dead_native_scratch(&dir);
+        assert!(
+            dead_only > 0,
+            "the dead-only sweep must reclaim the dead-pid file"
+        );
+        assert!(
+            !dead.exists(),
+            "dead-pid file must go in the dead-only sweep"
+        );
+        assert!(
+            own.exists() && fresh_no_pid.exists(),
+            "own-pid and no-pid entries survive the dead-only sweep"
+        );
+        assert!(
+            stem_named.exists(),
+            "a stem-named suite file survives the dead-only sweep"
+        );
+        std::fs::write(&dead, "stale").unwrap();
         let freed = reclaim_native_scratch(&dir);
         assert!(own.exists(), "own-pid file must survive the reclaim");
         assert!(

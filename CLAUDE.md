@@ -75,6 +75,10 @@ make profile ARGS="--interpret p.loft"   # which loft FN/LINE/PATH burns the tim
                                          #   over loft's own Rust.  `make profile-corpus` checks
                                          #   the instruments against known answers — PERFORMANCE.md
 make index ; ./scripts/idx tag:@P259     # rebuild + query the tracker index (prefer over grep -rn)
+make sweep-scratch                       # reclaim loft's temp scratch (dead-process native
+                                         #   artefacts, aged test caches, old agent sessions);
+                                         #   `df -h /` before a gate — a full disk fails the
+                                         #   NATIVE corpus with a code-shaped message
 make view                                # branch-aware doc/code viewer; binds LOOPBACK,
                                          #   LOFT_VIEW_PORT (default 8765).  Remote:
                                          #   ssh -N -L 8765:127.0.0.1:8765 <host>

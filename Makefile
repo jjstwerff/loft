@@ -90,6 +90,14 @@
 #
 # Every target above is defined as a real rule later in this file.  Scroll
 # down to any name to see exactly what it does.
+#
+# Housekeeping (the box, not the build):
+#
+#   make sweep-scratch   Reclaim loft's temp scratch: dead-process native artefacts,
+#                        aged test caches, agent sessions older than two weeks.
+#                        Run when `df` says so — TESTING.md § Scratch hygiene.
+#   make sweep-target    Drop cargo artefacts no build in two weeks has used.
+#
 # =========================================================================
 
 # Cache clean/release rebuilds with sccache when it is installed.  Exported
@@ -517,7 +525,21 @@ CI_LIVE_GATES = $$( n=0; seen=""; for f in .ci-running ../*/.ci-running; do [ -f
 # mostly contention), best of two runs, and prints what drifted.  `speed-discover`
 # is the wide parallel pass that finds which tests deserve an annotation.
 # Nothing here fails: correctness fails a build, speed is what you read.
-.PHONY: speed profile profile-corpus speed-discover speed-bless
+.PHONY: speed profile profile-corpus speed-discover speed-bless sweep-scratch sweep-target
+
+sweep-scratch:  ## Reclaim loft's scratch: dead-process native artefacts, aged test caches, old sessions
+	@# What loft writes to a temp dir and what removes it — TESTING.md § Scratch hygiene.
+	@# Safe by construction: only loft's own names, only dead pids or aged entries, and a
+	@# sibling checkout's gate scratch is never touched (each checkout has its own).
+	@scripts/sweep_scratch.sh --sessions $(TEST_SCRATCH) "$${TMPDIR:-$$HOME/.cache/tmp}"
+	@df -h / | tail -1
+
+sweep-target:  ## Drop cargo artefacts no build in two weeks has used (stale-hash test binaries)
+	@# `target/debug/deps` keeps every test binary of every dependency hash it ever built
+	@# (76-110 GB per checkout measured); cargo-sweep removes the ones no recent build
+	@# touched.  Installs the tool on first use, exactly as `make ci` does for nextest.
+	@(cargo sweep --version >/dev/null 2>&1 || cargo install cargo-sweep --locked) && cargo sweep --time 14
+	@du -sh target 2>/dev/null
 profile:  ## Sampling profile of a loft run: make profile ARGS="--interpret p.loft"
 	@scripts/profile.sh $(PROFILE_FLAGS) -- $(ARGS)
 profile-corpus:  ## Check the profilers against bench/profile_oracle.tsv, then report drift
@@ -1986,7 +2008,7 @@ ci: ci-guard
 	# touching the wasm bundle.  Other dev-only suites (test-packages,
 	# test-gl-smoke, test-gl-golden) live in `make ci-full`.
 	mkdir -p $(TEST_SCRATCH) && \
-	{ find $(TEST_SCRATCH) -mindepth 1 -maxdepth 1 -mtime +7 -exec rm -rf {} + 2>/dev/null || true; } && \
+	{ scripts/sweep_scratch.sh $(TEST_SCRATCH) >> result.txt 2>&1 || true; } && \
 	export $(TEST_ENV) && \
 	{ gates=$(CI_LIVE_GATES); jobs=$$(( $$(nproc) / $${gates:-1} )); if [ $$jobs -lt 2 ]; then jobs=2; fi; \
 	  export CARGO_BUILD_JOBS=$$jobs NEXTEST_TEST_THREADS=$$jobs; } && \

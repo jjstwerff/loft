@@ -119,6 +119,10 @@ with `strace` on the PATH, runs `make` under a signals-only trace so the sender'
 `make` dies (`target/gate-killer-snapshot.txt`). `scripts/ci-run.sh status` then answers
 KILLED with the sender named, instead of a verdict-less `result.txt`.
 
+**And ask `df -h /` before a gate.**  A full disk fails the NATIVE corpus with `FAIL
+unknown-mode` after `low space` lines, which reads as a code fault; `make sweep-scratch`
+reclaims loft's own scratch (TESTING.md § Scratch hygiene).
+
 **Run a 19-second triple FIRST when the change touches parser diagnostics, guards or docs.**
 `make ci` stops at its first failure, so each cycle surfaces exactly ONE new problem and costs
 the full ten minutes to do it. Measured over one afternoon's work on the nullable-collection
