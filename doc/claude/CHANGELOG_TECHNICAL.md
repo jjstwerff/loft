@@ -9,6 +9,47 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### @PLN153 phase 5, batch 1: a read that names no record answers `nullref` (2026-09-06, loft#1374, D-layout-5 / D-layout-6)
+
+`(L-Null)` gives a reference that has left its slot ONE spelling of absence, `nullref`; an
+element read past the end, a keyed miss and a zero child pointer answered the container's live
+`store_nr` with `rec == 0` instead, and only the `rec`-testing readers (`OpEqRef`,
+`OpConvBoolFromRef`, `is_absent_collection`) saw it — the handle test (`OpRefIsNull`), a `S?`
+parameter, a `-> S?` return and the nullable call-result bind all read it present, the bind
+copying garbage.  `DbRef::or_null` is the one predicate, called where a read mints a value:
+`vector::get_vector` (the hoisted read falls back to it), `State::vec_get_or_raise` and
+`Stores::vec_get_or_raise_runtime`, `Stores::get_ref`, and the exits of `State::get_record`
+and `codegen_runtime::OpGetRecord`.  A runtime change on its own; with the two parser
+halves below, `scripts/introspect_diff.sh` against the pre-batch compiler reads
+`DIFFERENT 18 of 1289` — the two new guards (one compiler refuses them), fourteen files
+where a record bind into a NULLABLE local (`t: S? = s`) now takes the null-aware bind
+(`OpBindOrCopy`; the `rec`-tested native bind) in place of `OpDatabase` + `OpCopyRecord`,
+and two where a tagged element's field read now consults the discriminant first.
+The `vec_get_or_raise` comment that kept the container's `store_nr` "so wrapping ops that call
+`stores.store(&db)` directly don't panic" was measured false: no op in `fill.rs` resolves a
+store before testing `rec` — but the interpreter's `State::iterate` and `State::step` did,
+where their native twins (`codegen_runtime::OpIterate` / `OpStep`) test the holder's record
+first; the two had drifted, and a `for` over a collection FIELD of a holder reached through
+`nullref` (`for t in tokens[i].subs` past the end) read the store's header word as the
+collection record before and indexed `allocations[u16::MAX]` after.  Both now test the record
+first and iterate nothing, which is what C80 asks of a read through null; the six iteration
+scratch builders (`build_hash_sorted_vec` and its unsorted, radix, index, trie-prefix and
+radix-range siblings) answer `nullref` for an absent holder for the same reason, since a
+`for` over a `hash` field collects its records into a scratch before the iterate.  Beside it, both
+backends' record binds chose the null-aware form
+by the SOURCE's type alone (`gen_set_first_ref_var_copy`; `dispatch.rs`'s record bind), so a
+bare view holding `nullref` into a `S?` local copied nothing into an allocated record;
+`Variables::bind_admits_absence` asks both sides for both.  Two readers of a `vector<S?>`
+element: `parse_index` wrapped the tagged `__nullable<S>` element `Optional` for an unfit index
+(`τ??`, refused between passes as a type change; `null_census` now counts an `Optional` over
+the synthetic), and E2's field/method receiver projected the payload without the discriminant
+— it now goes through `read_through_tag`, and a dense-`self` method reports `(N-Store)` for
+the undischarged receiver exactly as for a `S?` local.  Guards:
+`1374-an-absent-pointer-leaves-its-slot-as-nullref.loft`,
+`153-a-tagged-element-read-by-a-variable-index-is-one-null.loft`,
+`153-a-method-call-on-a-tagged-element-reports-the-undischarged-receiver.loft`.
+`Fixes #1374`.
+
 ### @PLN153 phase 4, batch 1: the opaque verbs' bare callers, and a `&` link to a nullable slot declined (2026-09-05)
 
 `is_dbref`, `heap_dep`, `heap_def_nr` and `is_scalar` are opaque to `Optional` themselves, so

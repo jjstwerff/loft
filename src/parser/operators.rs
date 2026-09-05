@@ -652,16 +652,18 @@ impl Parser {
     /// spellings ask one question: a `??` that discharged a null `== null` reports, or the
     /// reverse, would be two answers where the rules give one.
     ///
-    /// Absence has three encodings, because a collection is reached three ways: a HANDLE
-    /// (a local, a parameter, a return) carries the store_nr sentinel; a SLOT (a field, a
-    /// vector element) holds [`DbRef::ABSENT_REC`] in its four-byte word; and a MISSED
-    /// lookup answers a DbRef with no record at all.  `OpVectorIsNull`
-    /// (`vector::is_absent_collection`) is the one test that reads all three.
+    /// Absence has two encodings, because a collection is reached two ways: a VALUE (a
+    /// local, a parameter, a return, and what a missed lookup or an index past the end
+    /// answers — `DbRef::or_null`) carries the store_nr sentinel; a SLOT (a field, a
+    /// vector element) holds [`DbRef::ABSENT_REC`] in its four-byte word.
+    /// `OpVectorIsNull` (`vector::is_absent_collection`) is the one test that reads both,
+    /// and it also reads a reference whose HOLDER has no record — a field read through an
+    /// unallocated buffer — as absent, since no slot is there to consult.
     ///
-    /// `OpConvBoolFromRef`'s `rec != 0` reads only the third, which is why the coalesce
-    /// used to call every null collection FIELD present: a field read is a sub-reference
-    /// whose `rec` is the HOLDER's record, so the default was unreachable and a `hash`
-    /// / `index` then dereferenced the absent record (loft#1120).
+    /// `OpConvBoolFromRef`'s `rec != 0` reads only that last case, which is why the
+    /// coalesce used to call every null collection FIELD present: a field read is a
+    /// sub-reference whose `rec` is the HOLDER's record, so the default was unreachable
+    /// and a `hash` / `index` then dereferenced the absent record (loft#1120).
     fn collection_is_null(&mut self, operand: &Value) -> Value {
         self.cl("OpVectorIsNull", std::slice::from_ref(operand))
     }
@@ -772,8 +774,11 @@ impl Parser {
                 self.cl("OpRefIsNull", &[operand])
             }
         } else if matches!(tp, Type::Optional(_)) && matches!(tp.base(), Type::Reference(_, _)) {
-            // Gate on `Optional`, NOT bare `Reference`: a collection LOOKUP result is a
-            // bare `Reference` whose miss is `rec == 0`, and `OpRefIsNull` misreads it.
+            // Gate on `Optional`, NOT bare `Reference`: a bare `Reference` — a lookup
+            // result, an element read trusted by contract — keeps the generic `OpEqRef`
+            // dispatch, whose `rec` test is total over every value a read answers
+            // (`nullref` has `rec == 0` too, `DbRef::or_null`) and over a reference whose
+            // holder has no record, which `OpRefIsNull`'s store-number test is not.
             self.cl("OpRefIsNull", &[operand])
         } else {
             return None;

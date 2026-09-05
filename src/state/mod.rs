@@ -5150,28 +5150,20 @@ impl State {
             self.raise_recoverable(crate::runtime_error::RuntimeErrorKind::NegativeIndex {
                 idx: index,
             });
-            // Sentinel matches the legacy `vector::get_vector` OOB
-            // shape (preserve `db.store_nr`, set `rec=0`) so wrapping
-            // ops like `OpGetText` / `OpGetByte` that call
-            // `stores.store(&db)` directly don't panic on the
-            // production-mode log-and-continue path.  `rec == 0`
-            // remains the universal null-DbRef indicator.
-            return crate::keys::DbRef {
-                store_nr: db.store_nr,
-                rec: 0,
-                pos: 0,
-            };
+            // The value an index that names no element answers is `nullref`, the same
+            // value `vector::get_vector` answers: a reference leaving its slot has ONE
+            // spelling of absence (`DbRef::or_null`, @FR-L-Null).  Every typed reader
+            // tests `rec == 0` before it resolves a store, so the log-and-continue path
+            // reads the typed null off it exactly as it read the old container-store
+            // sentinel.
+            return crate::keys::DbRef::NULL;
         }
         if normalized >= i64::from(len) {
             self.raise_recoverable(crate::runtime_error::RuntimeErrorKind::IndexOutOfBounds {
                 idx: index,
                 len,
             });
-            return crate::keys::DbRef {
-                store_nr: db.store_nr,
-                rec: 0,
-                pos: 0,
-            };
+            return crate::keys::DbRef::NULL;
         }
         crate::vector::get_vector(db, size, index, &self.database.allocations)
     }

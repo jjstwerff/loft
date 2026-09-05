@@ -72,6 +72,16 @@ place — mutating `s` afterwards no longer shows through `t.0` when `T` is a st
 generic and the non-generic spelling of the same function had been giving different
 answers, which is the one thing a type variable is supposed never to do.  A `T` bound to a
 vector or a keyed collection is still shared rather than copied (loft#1365).
+**A lookup that finds nothing is `null` everywhere it goes.**  `v[i]` past the end, `h[k]` for
+a key that is not there, and the same read on a `sorted` or an `index`, used to answer a value
+that only some null tests could see: bound to a `S?` local it read as present, passed to a
+`S?` parameter its `!= null` passed and its fields read `null`, returned from a `-> S?`
+function it came back present, and `b = find(v, 9); b.n` read garbage.  Every one of those
+now sees `null`, on both backends.  Two neighbours fixed on the way: a `vector<S?>` element
+read by a variable index (`v[i]` rather than `v[1]`) no longer refuses to compile, and a
+field read or a method call on an absent `vector<S?>` element (`v[i].n`, `v[i].area()`) is
+`null` rather than a record of zeroes.
+
 **A list chosen by an `if`, a `match` or a `??` is your own copy.**  Assigning a vector from a
 branch — `x = if c { a } else { b }`, a `match`, `x = s.items ?? fallback` — now copies the chosen
 branch the way `x = a` does, so writing through `x` no longer changes `a`; that holds on the first

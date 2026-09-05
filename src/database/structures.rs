@@ -1703,14 +1703,13 @@ impl Stores {
         }
     }
 
+    /// The record a four-byte child pointer field names, as a VALUE: `nullref` when the
+    /// holder has no record or the pointer is zero (`DbRef::or_null`, @FR-L-Null) — a zero
+    /// pointer is the slot's spelling of absence and does not leave the slot.
     #[must_use]
     pub fn get_ref(&self, db: &DbRef, fld: u32) -> DbRef {
         if db.rec == 0 {
-            return DbRef {
-                store_nr: db.store_nr,
-                rec: 0,
-                pos: 0,
-            };
+            return DbRef::NULL;
         }
         let store = self.store(db);
         let res = store.get_u32_raw(db.rec, db.pos + fld);
@@ -1719,6 +1718,7 @@ impl Stores {
             rec: res,
             pos: 8,
         }
+        .or_null()
     }
 
     #[must_use]

@@ -25,16 +25,24 @@ use crate::data::{Data, Type};
 
 /// How many `Optional` nodes in `tp` sit DIRECTLY under another `Optional` — the count of
 /// `τ??` shapes, at any depth (a `vector<integer??>` counts once, for the element).
-pub fn nested_optionals_in(tp: &Type) -> usize {
-    fn walk(tp: &Type, under_optional: bool, out: &mut usize) {
+///
+/// A tagged `__nullable<S>` enum IS a spelling of `S?` — the slot's (`@FR-L-Null-Tag`) —
+/// so an `Optional` over one is `τ??` as much as `Optional(Optional(τ))` is; `is_tagged`
+/// says which enum definitions are that synthetic, since a `Type` alone cannot.  The first
+/// census read 0 over the corpus while `vector<S?>` read by a variable index typed its
+/// element `Optional(__nullable<S>)` on every program that had one: an oracle that carries
+/// only the spelling it was built from measures nothing about the other.
+pub fn nested_optionals_in(tp: &Type, is_tagged: &dyn Fn(u32) -> bool) -> usize {
+    fn walk(tp: &Type, under_optional: bool, is_tagged: &dyn Fn(u32) -> bool, out: &mut usize) {
         let here = matches!(tp, Type::Optional(_));
-        if here && under_optional {
+        let tagged = matches!(tp, Type::Enum(d, true, _) if is_tagged(*d));
+        if (here || tagged) && under_optional {
             *out += 1;
         }
-        tp.for_each_child(&mut |c| walk(c, here, out));
+        tp.for_each_child(&mut |c| walk(c, here, is_tagged, out));
     }
     let mut n = 0;
-    walk(tp, false, &mut n);
+    walk(tp, false, is_tagged, &mut n);
     n
 }
 
@@ -61,9 +69,10 @@ pub fn census(data: &Data) -> (usize, usize, Vec<String>) {
     let mut scanned = 0usize;
     let mut nested = 0usize;
     let mut where_ = Vec::new();
+    let is_tagged = |d: u32| data.def(d).name.starts_with("__nullable<");
     each_type(data, |place, tp| {
         scanned += 1;
-        let n = nested_optionals_in(tp);
+        let n = nested_optionals_in(tp, &is_tagged);
         if n > 0 {
             nested += n;
             where_.push(format!("{place}: {tp}"));
@@ -94,12 +103,20 @@ mod tests {
         Type::Boolean
     }
 
+    /// No enum is the tagged synthetic in these cells unless a cell says so.
+    fn none_tagged(_: u32) -> bool {
+        false
+    }
+
     #[test]
     fn a_plain_and_a_single_optional_read_zero() {
-        assert_eq!(nested_optionals_in(&int()), 0);
-        assert_eq!(nested_optionals_in(&Type::optional(int())), 0);
+        assert_eq!(nested_optionals_in(&int(), &none_tagged), 0);
+        assert_eq!(nested_optionals_in(&Type::optional(int()), &none_tagged), 0);
         assert_eq!(
-            nested_optionals_in(&Type::Vector(Box::new(Type::optional(int())), Deps::none())),
+            nested_optionals_in(
+                &Type::Vector(Box::new(Type::optional(int())), Deps::none()),
+                &none_tagged
+            ),
             0
         );
     }
@@ -108,15 +125,28 @@ mod tests {
     #[test]
     fn a_hand_built_nested_optional_reads_one() {
         let nested = Type::Optional(Box::new(Type::Optional(Box::new(int()))));
-        assert_eq!(nested_optionals_in(&nested), 1);
+        assert_eq!(nested_optionals_in(&nested, &none_tagged), 1);
         // …and at depth, through a container, it is still found and still counts once.
         let deep = Type::Vector(Box::new(nested), Deps::none());
-        assert_eq!(nested_optionals_in(&deep), 1);
+        assert_eq!(nested_optionals_in(&deep, &none_tagged), 1);
         // A triple counts two nestings, so the number is a count and not a flag.
         let triple = Type::Optional(Box::new(Type::Optional(Box::new(Type::Optional(
             Box::new(int()),
         )))));
-        assert_eq!(nested_optionals_in(&triple), 2);
+        assert_eq!(nested_optionals_in(&triple, &none_tagged), 2);
+    }
+
+    /// The tagged synthetic is a spelling of `S?`, so an `Optional` over it is `τ??` — and
+    /// the same shape over a USER enum is one `?` and reads 0, so the count is about the
+    /// synthetic and not about enums.
+    #[test]
+    fn an_optional_over_the_tagged_synthetic_reads_one() {
+        let over_tagged = Type::Optional(Box::new(Type::Enum(7, true, Deps::none())));
+        assert_eq!(nested_optionals_in(&over_tagged, &|d| d == 7), 1);
+        assert_eq!(nested_optionals_in(&over_tagged, &none_tagged), 0);
+        // A bare tagged element, the slot's own spelling, is one `?`.
+        let bare = Type::Enum(7, true, Deps::none());
+        assert_eq!(nested_optionals_in(&bare, &|d| d == 7), 0);
     }
 
     /// The former itself never builds one — `(N-Idem)`'s home, measured rather than assumed.
@@ -125,6 +155,6 @@ mod tests {
         let once = Type::optional(int());
         let twice = Type::optional(once.clone());
         assert_eq!(once, twice);
-        assert_eq!(nested_optionals_in(&twice), 0);
+        assert_eq!(nested_optionals_in(&twice, &none_tagged), 0);
     }
 }

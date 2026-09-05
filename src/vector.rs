@@ -462,9 +462,11 @@ pub fn ordered_finish(sorted: &DbRef, rec: &DbRef, keys: &[Key], stores: &mut [S
 /// consults it so `xs == null` and `xs == []` finally answer differently.
 ///
 /// A DbRef with no record or offset reaches no slot at all, and is answered ABSENT without
-/// touching a store: that is the shape a null handle and a MISSED lookup both arrive in.
-/// [`length_vector`] guards on the same three cases and calls them all length `0`, which is
-/// the same judgement seen from the other side — nothing is there to count.
+/// touching a store: a null handle is `nullref` (and so is what a missed lookup or an index
+/// past the end answers — `DbRef::or_null`), and a reference whose HOLDER has no record — a
+/// field read through an unallocated buffer — names no slot either.  [`length_vector`]
+/// guards on the same cases and calls them all length `0`, which is the same judgement seen
+/// from the other side — nothing is there to count.
 ///
 /// `#[inline]` because a generated `--native` program links this across a crate boundary
 /// with no LTO — see [`get_vector`].
@@ -475,12 +477,11 @@ pub fn is_absent_collection(db: &DbRef, stores: &[Store]) -> bool {
         return true;
     }
     if db.rec == 0 || db.pos == 0 {
-        // No record, hence no slot, hence no collection.  This is what a MISSED lookup
-        // answers — `get_vector` hands back `rec: 0, pos: 0` for an out-of-range index —
-        // so reading it as "present" is what made `vv[9] == null` answer `false` while
-        // `vv[9] ?? d` beside it took the default (loft#1120).  An allocated collection,
-        // empty or not, always addresses a real slot (`rec != 0`), which is what keeps
-        // `xs == []` and `xs == null` different answers.
+        // No record, hence no slot, hence no collection: a field read through a holder
+        // that has no record.  Reading it as "present" is what made `vv[9] == null`
+        // answer `false` while `vv[9] ?? d` beside it took the default (loft#1120).  An
+        // allocated collection, empty or not, always addresses a real slot (`rec != 0`),
+        // which is what keeps `xs == []` and `xs == null` different answers.
         return true;
     }
     keys::store(db, stores).get_u32_raw(db.rec, db.pos) == DbRef::ABSENT_REC
@@ -540,8 +541,11 @@ pub fn clear_vector(db: &DbRef, stores: &mut [Store]) {
 #[inline]
 pub fn get_vector(db: &DbRef, size: u32, from: i64, stores: &[Store]) -> DbRef {
     // Indexing into a null (absent) vector yields the null element, not an OOB
-    // on stores[u16::MAX].  (An out-of-range index on a real vector returns the
-    // same null element below — the two read as the same absent value.)
+    // on stores[u16::MAX].  An out-of-range index on a real vector answers the SAME
+    // value below: `(L-Null)` gives a reference that leaves its slot ONE spelling of
+    // absence, `nullref`, and an element read is the point the value is minted
+    // (`DbRef::or_null`).  Answering the container's `store_nr` with `rec == 0` instead
+    // was a second spelling that only `rec`-testing consumers could read (loft#1374).
     if db.is_null() {
         return DbRef::NULL;
     }
@@ -555,21 +559,13 @@ pub fn get_vector(db: &DbRef, size: u32, from: i64, stores: &[Store]) -> DbRef {
     }
     let store = keys::store(db, stores);
     if from == i64::MIN {
-        return DbRef {
-            store_nr: db.store_nr,
-            rec: 0,
-            pos: 0,
-        };
+        return DbRef::NULL;
     }
     let v_rec = store.collection_rec(db.rec, db.pos);
     let l = length_vector(db, stores);
     let f = if from < 0 { from + i64::from(l) } else { from };
     if f < 0 || f >= i64::from(l) {
-        DbRef {
-            store_nr: db.store_nr,
-            rec: 0,
-            pos: 0,
-        }
+        DbRef::NULL
     } else {
         DbRef {
             store_nr: db.store_nr,

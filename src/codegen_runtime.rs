@@ -675,8 +675,23 @@ fn lazy_fetch_fn(element: &str) -> Option<LazyFetchFn> {
 }
 
 /// Look up a record in a collection by key values.
-/// Bytecode equivalent: `OpGetRecord` in `src/state/io.rs:353`.
+/// Bytecode equivalent: `OpGetRecord` in `src/state/io.rs` (`State::get_record`).
+///
+/// The one exit answers the record as a VALUE: `nullref` for a miss, whichever arm of the
+/// lookup missed (`DbRef::or_null`, @FR-L-Null) — the interpreter's twin normalises at its
+/// exit the same way, so the two backends hand back one spelling of absence.
 pub fn OpGetRecord(
+    cell: &std::cell::UnsafeCell<Stores>,
+    data: DbRef,
+    db_tp: i32,
+    key: &[crate::keys::Content],
+) -> DbRef {
+    get_record_lookup(cell, data, db_tp, key).or_null()
+}
+
+/// [`OpGetRecord`]'s lookup: resident first, then the lazy source.  Every miss arm answers
+/// a reference with no record and the caller spells it as a value.
+fn get_record_lookup(
     cell: &std::cell::UnsafeCell<Stores>,
     data: DbRef,
     db_tp: i32,
@@ -684,11 +699,7 @@ pub fn OpGetRecord(
 ) -> DbRef {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     if data.rec == 0 {
-        DbRef {
-            store_nr: data.store_nr,
-            rec: 0,
-            pos: 0,
-        }
+        DbRef::NULL
     } else {
         // @PLN129 arc A — same miss path as the interpreter, so both backends
         // agree about what is resident. @PLN133 S8 splits the miss from the

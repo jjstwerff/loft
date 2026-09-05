@@ -109,59 +109,27 @@ impl Parser {
             t = *tp;
         }
         // @PLN25 E2 — a METHOD CALL or an S-level field access on a `__nullable<S>`
-        // receiver (`v[i].method()` / `v[i].struct_method`): unwrap the receiver to
-        // dense `S` (the payload offset-ref, gap 2) so the normal `Reference(S)`
-        // field/method dispatch below resolves it.  Two cases:
+        // receiver (`v[i].method()` / `v[i].struct_method`).  Two cases reach here:
         //  - a trailing `(` is a method call — `find_poly_enum_field` matches the
         //    method's fn-ref entry copied into `Some` and would read it as a FIELD
-        //    (→ "Field access not supported on type fn …"); unwrap takes precedence;
-        //  - no `Some`-variant field of that name — an S-level access; unwrap.
+        //    (→ "Field access not supported on type fn …");
+        //  - no `Some`-variant field of that name — an S-level access.
         // A plain DATA field of `Some` (no `(`) resolves via `find_poly_enum_field`
         // below and is left untouched here.
+        //
+        // `@FR-L-Null-Which` — the receiver is read THROUGH ITS TAG (`read_through_tag`):
+        // the base of a field read or a method call is not a slot, so the tagged value
+        // becomes the pointer `S?` here — the payload's address when the discriminant says
+        // present, `nullref` when it says absent — and the field/method dispatch below
+        // proceeds on that pointer exactly as it does for a `S?` local.  Projecting the
+        // payload's sub-ref without consulting the discriminant read an ABSENT element as
+        // a record of zeroes: `v[i].n ?? -1` answered `0` where `x = v[i]; x.n ?? -1`
+        // beside it answered `-1`, on both backends.
         if let Type::Enum(enum_d, true, _) = &t
             && self.data.def(*enum_d).name.starts_with("__nullable<")
             && (self.lexer.peek_token("(") || self.find_poly_enum_field(*enum_d, &field).is_none())
         {
-            let enum_d = *enum_d;
-            // Resolve the dense `S` def from the `Some` variant's inline `payload` field
-            // TYPE — NOT by re-parsing the enum name via `def_nr("S")`, which returns
-            // `u16::MAX` for a CROSS-LIB struct (its def is source-qualified), the
-            // `Unknown field __nullable<S>.field` regression for a library struct.
-            let some_d = self.data.variant_of(enum_d, "Some");
-            let payload_attr = self.data.attr(some_d, "payload");
-            let struct_d = if payload_attr == usize::MAX {
-                u32::MAX
-            } else {
-                match self.data.attr_type(some_d, payload_attr) {
-                    Type::Reference(d, _) => d,
-                    _ => u32::MAX,
-                }
-            };
-            if struct_d != u32::MAX && self.data.attributes(struct_d) > 0 {
-                if !self.first_pass {
-                    // Single-payload form: the dense `S` lives in the `Some` variant's
-                    // inline `payload` field, so unwrap to a sub-ref at `payload`'s byte
-                    // offset.  That sub-ref IS a valid dense `S` (it shares S's offset
-                    // table), so the field/method access below re-dispatches on dense `S`
-                    // with no copy.
-                    let off = self
-                        .database
-                        .position(self.data.def(some_d).known_type(), "payload");
-                    *code = self.get_val(
-                        &Type::Reference(struct_d, crate::data::Deps::none()),
-                        false,
-                        u32::from(off),
-                        code.clone(),
-                        u32::MAX,
-                    );
-                }
-                let dep = t.depend();
-                let mut new_t = Type::Reference(struct_d, crate::data::Deps::none());
-                for on in dep {
-                    new_t = new_t.depending(on);
-                }
-                t = new_t;
-            }
+            self.read_through_tag(code, &mut t);
         }
         let dnr = self.data.type_def_nr(&t);
         if matches!(t, Type::Vector(_, _)) && self.vector_operations(code, &field, e_tp) {
@@ -1027,7 +995,17 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
             // `Optional` so `(N-Store)` forces a `?? d` / `τ?` slot / guard at the store site.
             // The F1a landing (deps Optional-transparency + the corpus/lib migrations) cleared the
             // blast radius, so this is now folded into the DN1 default (was DEV-GATED `LOFT_INDEX_DEV`).
-            if crate::keys::pln25_dn1_enabled() && !self.last_index_fit {
+            // A tagged `__nullable<S>` element is ALREADY the slot's spelling of `S?`
+            // (`@FR-L-Null-Tag`), and its absence is read through the tag when the value
+            // leaves the slot; wrapping it here built `Optional(__nullable<S>)` — the `τ??`
+            // `@FR-N-Idem` forbids, which `Type::optional` cannot see because the synthetic
+            // is an `Enum` to it — and a `vector<S?>` read by a variable index then typed
+            // its local `S?` on one pass and `__nullable<S>?` on the other and refused the
+            // program as a type change.
+            if crate::keys::pln25_dn1_enabled()
+                && !self.last_index_fit
+                && self.tagged_pointer_type(&elm_type).is_none()
+            {
                 elm_type = Type::optional(elm_type);
             }
         } else if matches!(t, Type::Text(_)) {

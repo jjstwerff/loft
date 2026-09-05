@@ -3372,12 +3372,10 @@ impl State {
         // sentinel and leaves the destination null.  It allocates on the arm that needs it,
         // so no `OpDatabase` is emitted ahead of it.
         //
-        // Not `OpCopyRefOrNull`, which is built for the same shape one read kind over: it
-        // binds `Stores::null()`, whose `store_nr` is a REAL slot with `rec == 0`, while a
-        // `x == null` on a record lowers to `OpRefIsNull` and tests `store_nr == u16::MAX`.
-        // The two spellings of absence agree for the element read it was written for and
-        // not for a bound local.
-        if matches!(stack.function.tp(src), Type::Optional(_)) {
+        // Asked of both sides through the one predicate the native record bind asks
+        // (`Variables::bind_admits_absence`): a source typed non-null can still hold
+        // `nullref`, and a nullable destination has to receive it as absence.
+        if stack.function.bind_admits_absence(v, src) {
             self.generate(&Value::Var(src), stack, false);
             // A PUSH op reads at the PRE-push position, so the witness offset is taken
             // BEFORE `add_op`; the slot the opcode POPS into is taken after, at the

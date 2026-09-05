@@ -374,6 +374,25 @@ impl DbRef {
         self.store_nr == u16::MAX
     }
 
+    /// The VALUE spelling of this reference: [`DbRef::NULL`] when it names no record,
+    /// itself otherwise.
+    ///
+    /// Enforces @FR-L-Null for a reference that leaves its slot as a value — a local, a
+    /// parameter, a return, the subject of `??` or `?`: absence there is `nullref` and
+    /// nothing else.  A slot spells absence its own way (a zero record pointer, a
+    /// discriminant of 0, [`DbRef::ABSENT_REC`]) and a read that names no record — an index
+    /// past the end, a keyed miss, a zero child pointer — would otherwise hand that slot
+    /// spelling up as a `DbRef` with the container's live `store_nr` and `rec == 0`.  A
+    /// handle test reads the `store_nr` alone (`OpRefIsNull`), a bind copies from the
+    /// record it names, and the two disagreed about one value: `x = v[i]` past the end was
+    /// present to `x == null`, and the bind's copy was a record of garbage (loft#1374).  So
+    /// every read that can name no record answers through this at the point the value is
+    /// minted, and no consumer has to know a second spelling.
+    #[must_use]
+    pub const fn or_null(self) -> DbRef {
+        if self.rec == 0 { DbRef::NULL } else { self }
+    }
+
     /// The record id a COLLECTION FIELD stores to mean *absent* (loft#917).
     ///
     /// [`DbRef::NULL`] says absent in the `store_nr`, which a field cannot use: a field

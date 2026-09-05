@@ -2691,6 +2691,24 @@ impl Function {
         self.variables[var_nr as usize].argument = false;
     }
 
+    /// May the record bind `var = src` carry ABSENCE — is either side typed `τ?`?
+    ///
+    /// The one question both backends' record-bind emitters ask before choosing the
+    /// null-aware bind over the plain allocate-then-copy (`state/codegen.rs`
+    /// `gen_set_first_ref_var_copy`, `generation/dispatch.rs` the whole-value record bind).
+    /// A copy of an absent value is absent: `OpCopyRecord` from `nullref` reads nothing
+    /// and leaves the destination holding the record allocated for it, PRESENT where its
+    /// source was absent.  The destination's type is asked as well as the source's because
+    /// a source typed non-null can hold `nullref` — a keyed lookup and an element read
+    /// trusted by contract are typed bare views, and a miss or an overrun answers the one
+    /// value spelling of absence (`DbRef::or_null`, @FR-L-Null); asked of the source alone,
+    /// `x = t.h[k]; y: S? = x` on a miss read `y == null` false where `x == null` read
+    /// true, on both backends.  A dense destination keeps the plain copy: `(N-Store)` has
+    /// already reported that it cannot hold absence.
+    #[must_use]
+    pub fn bind_admits_absence(&self, var: u16, src: u16) -> bool {
+        matches!(self.tp(src), Type::Optional(_)) || matches!(self.tp(var), Type::Optional(_))
+    }
     pub fn is_argument(&self, var_nr: u16) -> bool {
         (var_nr as usize) < self.variables.len() && self.variables[var_nr as usize].argument
     }

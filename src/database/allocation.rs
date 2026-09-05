@@ -1580,6 +1580,13 @@ impl Stores {
     /// iterator-local allocated by `parse_for_iter_setup`.
     #[allow(dead_code)]
     pub fn build_hash_sorted_vec(&mut self, hash_ref: &DbRef, tp: u16) -> DbRef {
+        // A holder with no record — reached through `nullref` — holds no collection, and
+        // has no store to build a scratch in: the scratch is `nullref` too, which `iterate`,
+        // `step` and `free_iteration_scratch` all read as empty (the same test opens each).
+        // Collecting the records first resolved `allocations[u16::MAX]`.
+        if hash_ref.rec == 0 {
+            return DbRef::NULL;
+        }
         let keys = self.types[tp as usize].keys.clone();
         let recs = crate::hash::records_sorted(hash_ref, &self.allocations, &keys);
         self.build_ref_scratch(hash_ref, &recs)
@@ -1592,6 +1599,10 @@ impl Stores {
     /// wasted work.  Iteration order therefore differs from sequential
     /// `for e in h` (which is key-ordered) — acceptable for a hash.
     pub fn build_hash_unsorted_vec(&mut self, hash_ref: &DbRef, _tp: u16) -> DbRef {
+        // An absent holder has no scratch — see `build_hash_sorted_vec`.
+        if hash_ref.rec == 0 {
+            return DbRef::NULL;
+        }
         let recs = crate::hash::records(hash_ref, &self.allocations);
         self.build_ref_scratch(hash_ref, &recs)
     }
@@ -1602,6 +1613,10 @@ impl Stores {
     /// index), so `radix_db::records` already yields the records sorted: no O(n log n)
     /// key sort, just the O(n) tree walk.  The `tp` is unused for the same reason.
     pub fn build_radix_sorted_vec(&mut self, coll: &DbRef, _tp: u16) -> DbRef {
+        // An absent holder has no scratch — see `build_hash_sorted_vec`.
+        if coll.rec == 0 {
+            return DbRef::NULL;
+        }
         let recs = crate::radix_db::records(coll, &self.allocations);
         self.build_rec_scratch(coll, &recs)
     }
@@ -1612,6 +1627,10 @@ impl Stores {
     /// (`Stores::fields`); result iterated via the same Ordered (on=3) path as the hash/radix
     /// scratches.
     pub fn build_index_sorted_vec(&mut self, coll: &DbRef, tp: u16) -> DbRef {
+        // An absent holder has no scratch — see `build_hash_sorted_vec`.
+        if coll.rec == 0 {
+            return DbRef::NULL;
+        }
         let left = self.fields(tp);
         if left == u16::MAX {
             return self.build_rec_scratch(coll, &[]);
@@ -1649,6 +1668,10 @@ impl Stores {
     /// There is no `till` here and that is the point: a prefix is the whole query, so
     /// the caller never constructs the successor string a `sorted` range would need.
     pub fn build_trie_prefix_vec(&mut self, coll: &DbRef, tp: u16, pre: &str, limit: i64) -> DbRef {
+        // An absent holder has no scratch — see `build_hash_sorted_vec`.
+        if coll.rec == 0 {
+            return DbRef::NULL;
+        }
         let keys = self.types[tp as usize].keys.clone();
         let cap = (limit >= 0).then_some(limit as usize);
         let recs = crate::trie_db::prefix(coll, &self.allocations, &keys, pre.as_bytes(), cap);
@@ -1669,6 +1692,10 @@ impl Stores {
         tz: i64,
         limit: i64,
     ) -> DbRef {
+        // An absent holder has no scratch — see `build_hash_sorted_vec`.
+        if coll.rec == 0 {
+            return DbRef::NULL;
+        }
         let keys = self.types[tp as usize].keys.clone();
         let n = keys.len().min(crate::radix_db::MAX_AXES);
         let from = [fx, fy, fz];

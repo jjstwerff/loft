@@ -9,7 +9,7 @@ Tracker: [@PLN153](https://github.com/loft-lang/plans/issues/153).
 
 ## Status
 
-**Active — phase 3 complete and gated (3a, 3b, 3c — 2026-09-05); phase 4 opened with its instrument; phases 4, 5, 6 remain.**  The null MODEL is decided and not reopened here: @PLN102's
+**Active — phase 3 complete and gated (3a, 3b, 3c — 2026-09-05); phase 4 opened with its instrument and three batches landed; phase 5 opened by loft#1374 and its first batch landed (2026-09-06); the long tails of 4 and 5, and 6, remain.**  The null MODEL is decided and not reopened here: @PLN102's
 [keystone](../102-stability-contract/keystone-null-model.md) chose **B** (an in-band sentinel
 for scalars, out-of-band absence for references and for a struct stored inline), frozen in
 [DESIGN_DECISIONS.md § C90](../../DESIGN_DECISIONS.md), with @PLN25 (the dense element
@@ -86,7 +86,7 @@ the axes it reports unreached are the cells still to build, not a note.
 | **2** | **`N-Prop` has 10 `nullflow_enabled()` sites in 4 files.**  Which question does each ask — propagate, gate, or warn?  Fold the fact-reading half onto one predicate; the per-site residue stays where it is per-site. | `introspect` output (IR, bytecode, Rust) byte-identical over the 1247-file corpus against the committed compiler (the B7r/B7s method), under the default AND under `LOFT_NO_NULLFLOW=1`. | **Done** 2026-09-05 — § Phase 2 fold |
 | **3** | **The `N-Store` refusal at ONE point.**  Today the teeth sit at the local slot, the field, the return, the index, the call argument and the heap half as separate gates, each a spelling; a nullable reaching a non-null slot through a position none of them covers is answered wrong in silence.  One check where every store passes — the `⇐` lowering, whose ten push sites and six admission lists B6t already measured — is the chokepoint. | The Stage A matrix, position × type kind × discharge, with an `@EXPECT_WARNING` / `@EXPECT_ERROR` cell wherever a nullable meets a non-null slot undischarged and a silent cell wherever it is discharged; `make falsify` against the current build names the cells that pass silently today. | **Done** 2026-09-05 — 3a, 3b, 3c (§ Phase 3a–3c) |
 | **4** | **The `optional` screen, ranked.**  The 352 opaque functions ordered by *can an undischarged value reach here*: declaration reads (a field's, a local's, a return's declared type) and lvalue places first, use-path sites last.  Each function in the top tier either peels through `base()` or is shown unreachable by a probe cell. | The gated `optional` audit row in QUALITY.md moves DOWN and every moved function has a cell; a peel added with no cell is the B6u receipt and is not counted. | Open |
-| **5** | **`@FR-L-Null`'s 45 citations converged.**  The two questions B6u split — *what value means absent in this storage?* (the per-type sentinel table frozen in C90, `Stores::is_null`) and *is this the same storage?* (`base()`) — each have a home; every citation either reads it or is removed as a redundant spelling. | The site count goes DOWN, and where a change is a fold the emission is byte-identical over the corpus; where it is a fix, a probe cell. | Open |
+| **5** | **`@FR-L-Null`'s 45 citations converged.**  The two questions B6u split — *what value means absent in this storage?* (the per-type sentinel table frozen in C90, `Stores::is_null`) and *is this the same storage?* (`base()`) — each have a home; every citation either reads it or is removed as a redundant spelling. | The site count goes DOWN, and where a change is a fold the emission is byte-identical over the corpus; where it is a fix, a probe cell. | **Opened** 2026-09-06 — batch 1 (§ Phase 5) |
 | **6** | **Re-measure.**  `make bug-review` on the null/sentinel class after the plan's watermark against the window before it. | The class falls, or the residual names a mechanism this plan did not touch and a follow-on plan is filed for it. | Open |
 
 ## Phase 0 — result (2026-09-05)
@@ -504,6 +504,49 @@ member (the tuple-set dispatch), a nullable scalar hoisted out of a branch (the 
 prologue's `is_scalar`), an absent element bound to a local.  Refusals met on the way, each
 honest and recorded: a `par` worker cannot answer `S?` (*not supported*, the concurrency
 chapter silent on it), a generator cannot spell `iterator<S?>` (refused at the type).
+
+## Phase 5 — opened: the value spelling of absence has one home (2026-09-06)
+
+The opening cell was loft#1374, filed by phase 4's return-delivery matrix: an absent element
+handed back as `S?` read PRESENT at the handle test and garbage after the bind.  The matrix
+for it (`~/workspace/pln153-scratch/stage5/cells`, written before the first run): four sources
+of a slot-spelled absence — a vector index past the end and before the front, a `hash`, a
+`sorted` and an `index` miss — across nine sinks (an inferred bind and its `==`/`!=`, a
+declared local, a `S?` argument, a `-> S?` return by tail, by inferred and by declared local,
+the return's bind and its field, a copy-bind, an inline test, a field read), with a
+`reference<S>?` field and every source PRESENT as controls, on both backends under strict
+stores and poison.  Every `S?` sink of every source was wrong before; the controls were right.
+Every cell reads by a VARIABLE index or an absent key, because a constant index is trusted by
+contract and its overrun is a C80 null that no rule above the runtime sees (`(N-Index)`'s
+EXCEPT) — measured beside the promised cells and found to answer the same `nullref`.
+
+**Batch 1 — the READ mints the value.**  B6u split `@FR-L-Null` into two questions, and this
+is the second one's home for a pointer: *what value means absent* in a reference that has
+left its slot is `nullref`, and the point that value is minted is the read that names no
+record.  `DbRef::or_null` is the one predicate; `vector::get_vector`, the two
+`vec_get_or_raise` twins, `Stores::get_ref` and the exits of the interpreter's and the native
+keyed lookup call it.  A runtime change on its own (the emission moves below are the two
+parser halves' — `DIFFERENT 18 of 1289` against the pre-batch compiler: the two new guards,
+fourteen record binds into a nullable local now null-aware, two tagged field reads now
+through the tag), and every consumer that tested `rec == 0` still does, since `nullref` has
+`rec == 0` too; the
+`get_vector` doc had claimed the two out-of-range answers "read as the same absent value" for
+a year while the code answered two.  The same walk found the record bind choosing its
+null-aware form by the SOURCE's type alone on both backends, so `x = t.h[k]; y: S? = x` on a
+miss allocated a record for `y` and copied nothing into it; `Variables::bind_admits_absence`
+asks both sides for both emitters.  Two more readers of a `vector<S?>` element came out of the
+tagged control cell: a variable index wrapped the tagged element `Optional` — the `τ??`
+`(N-Idem)` forbids, which refused the program as a type change between passes and which the
+phase-0 census could not see because it counted `Optional(Optional)` alone (it now counts an
+`Optional` over the synthetic, with a hand-built cell as its control) — and the field read
+`v[i].n` projected the payload without the discriminant, answering an absent element's field
+as `0` (`(L-Null-Which)`: the receiver of a field read or a method call is not a slot and is
+read through its tag).  Records: `formal/layout-history.md` D-layout-5 and D-layout-6.
+
+**What remains of phase 5.**  The 44 `@FR-L-Null` citations are still mostly the PEEL half's
+(`base()` before a shape question); the walk that reads each and either keeps it as a reader
+of one of the two homes or removes it as a redundant spelling is the long tail, batch by
+batch, each with a cell.
 
 ## Phase ordering
 

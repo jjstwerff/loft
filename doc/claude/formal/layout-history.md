@@ -147,6 +147,62 @@ backends under strict stores); the corpus moved on fifteen files, every one an e
 a diagnostic, each green on both backends.  `Contract: settled` — the rules named the local's
 spelling; the code failed to convert at the boundary.
 
+- **D-layout-5 — an absent pointer left its slot in the SLOT's spelling** (2026-09-06,
+  loft#1374).  `L-Null` gives a reference that is a VALUE one spelling of absence, `nullref`,
+  and `L-Null-Which` says a local, a parameter and a return are values.  An element read
+  past the end, a keyed miss and a zero child pointer answered the container's live
+  `store_nr` with `rec == 0` instead — the shape a reference has when its HOLDER has no
+  record — and only the `rec`-testing readers saw it.  The handle test (`OpRefIsNull`) read
+  it present, a `S?` parameter's `!= null` passed and its field read answered the integer
+  null, a `-> S?` return delivered it present, and the nullable call-result bind
+  deep-copied a record that was not there into a fresh store of garbage: `b = re(v, 9); b
+  == null` was `false` and `b.n` was `5695106865`, both backends, strict stores silent.  A
+  local bound from the read directly was right by accident — that spelling lowers to
+  `OpEqRef`, which tests `rec`.  The `get_vector` doc already said the two OOB answers
+  "read as the same absent value"; the code answered two.
+
+  Ten cells (`~/workspace/pln153-scratch/stage5/cells`): the vector past the end and before
+  the front, `hash`, `sorted` and `index` misses, each across nine sinks, both backends —
+  every `S?` sink wrong before, the pointer-field control right.  **Status — CLOSED.**  One
+  predicate, `DbRef::or_null`, at the exits where a read mints a value: `vector::get_vector`,
+  `State::vec_get_or_raise` and `Stores::vec_get_or_raise_runtime`, `Stores::get_ref`,
+  `State::get_record` and `codegen_runtime::OpGetRecord`; no emission moved (a runtime
+  change), every consumer that tested `rec == 0` still does (`nullref` has `rec == 0`).
+  The same walk found the record bind choosing its null-aware form by the SOURCE's type
+  alone, on both backends (`gen_set_first_ref_var_copy`, the native record bind): `x =
+  t.h[k]; y: S? = x` on a miss copied nothing into a record allocated for `y`, and `y ==
+  null` read false where `x == null` read true.  One predicate for both emitters,
+  `Variables::bind_admits_absence`, asked of both sides.  And a consumer that resolves a
+  holder's store BEFORE testing its record now panics where it used to read the store's
+  header word: the interpreter's `iterate` and `step` did, where their native twins test
+  first (loft#691's shared cursor derivation had left the entry test unshared) — both now
+  test the record first, and the iteration scratch builders (a `hash`, `radix`, `index` or
+  `trie` walk collects its records into a scratch before the iterate) answer `nullref` for
+  an absent holder, so a `for` over a collection field reached through `nullref` iterates
+  nothing on every kind, as C80 asks.  Guard:
+  `tests/scripts/1374-an-absent-pointer-leaves-its-slot-as-nullref.loft`.
+  `Contract: settled` — the rule named the value's spelling; the reads did not mint it.
+
+- **D-layout-6 — a tagged element read by a variable index was `τ??`, and its field read
+  skipped the tag** (2026-09-06).  Two readers of a `vector<S?>` element, found by the same
+  matrix.  `parse_index` wrapped the element type `Optional` for an index not trusted by
+  contract, and the element type is the tagged `__nullable<S>` — already `S?` in the slot's
+  spelling — so the read typed `Optional(__nullable<S>)`, the `τ??` `N-Idem` forbids; the
+  local bound from it took `S?` on one pass and `__nullable<S>?` on the other and the program
+  was refused as a type change, while the same read by a constant index compiled.  The
+  phase-0 census read 0 over the corpus because it counted `Optional(Optional)` and not an
+  `Optional` over the synthetic; it now counts both, with a hand-built cell as its control.
+  And the field read `v[i].n` (E2 in `fields.rs`) projected the payload's sub-ref without
+  consulting the discriminant, so an absent element's field answered the payload's zero —
+  `v[1].n ?? -1` was `0` where `x = v[1]; x.n ?? -1` beside it was `-1` — by a constant
+  index as much as a variable one, both backends.  **Status — CLOSED.**  `parse_index` asks
+  `tagged_pointer_type` before wrapping; the E2 receiver goes through `read_through_tag`, so
+  the field read and the method call proceed on the pointer `S?` exactly as for a local (and
+  a method with a dense `self` reports `(N-Store)` for the undischarged receiver, as it does
+  for a local).  Guards: `153-a-tagged-element-read-by-a-variable-index-is-one-null.loft`,
+  `153-a-method-call-on-a-tagged-element-reports-the-undischarged-receiver.loft`.
+  `Contract: settled`.
+
 ### the status line formal/README.md's area table carried until 2026-09-04
 
 **rules written (2026-07-07), 1 open** — the FORMAT counterpart to heap.md's steps (it defines the `field_offset` heap.md reads at); one format (RAM = disk); nullability is a sentinel, not a layout (`L-Null`); **D-layout-1** (no version guard on persisted bytes, #477) is **mechanism-shipped** — the golden test + the `.dschema` sidecar — pending a durable-store consumer to auto-invoke it (@PLN97)

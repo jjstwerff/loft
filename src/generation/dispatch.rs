@@ -988,9 +988,10 @@ impl Output<'_> {
             // Allocating first and copying second would be worse than the panic — it leaves
             // the destination holding the record allocated for it, PRESENT where its source
             // was absent.  Same shape and same predicate as the element-read arm above
-            // (loft#823): `rec == 0` is the absence test every store accessor uses, and it
-            // covers both spellings — the true sentinel and an index past a live container.
-            if matches!(variables.tp(*src), Type::Optional(_)) {
+            // (loft#823): `rec == 0` is the absence test every store accessor uses.  Which
+            // binds may carry absence is `Variables::bind_admits_absence`'s question, asked
+            // of both sides and shared with the interpreter's record bind.
+            if variables.bind_admits_absence(var, *src) {
                 // On the absent arm the placeholder must go back: at a FIRST bind that is
                 // the `null_named` store allocated just above, while a REASSIGNMENT is
                 // already wrapped by `output_set`'s `_old_*` stash, which frees the

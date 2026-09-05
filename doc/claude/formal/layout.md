@@ -195,7 +195,21 @@ The rule wants splitting rather than weakening, and the split is decidable from 
                local took whichever spelling its last assignment parsed (loft#1367).  A view
                taken this way holds the PAYLOAD's address: a later clear of the slot is not
                visible through it, exactly as through a `reference<S>?` field after the field
-               is cleared; the slot's own reads see the tag.
+               is cleared; the slot's own reads see the tag.  The base of a FIELD READ or a
+               METHOD CALL is not a slot either: `v[i].n` and `v[i].m()` on a tagged element
+               read the receiver through its tag first, so an absent element's field is the
+               typed null and its method receives `nullref`, as a `S?` local's would.
+               And the pointer half has ONE value spelling: a read that names no record — an
+               index past the end or before the front, a keyed miss, a zero child pointer —
+               answers `nullref` AT THE READ (`DbRef::or_null`, the exit of
+               `vector::get_vector`, the two `vec_get_or_raise` twins, `Stores::get_ref`,
+               `State::get_record` and `codegen_runtime::OpGetRecord`).  The slot spellings
+               (`ABSENT_REC`, discriminant 0, a zero pointer) never leave their slot; a
+               `DbRef` carrying a live `store_nr` with `rec == 0` is a reference whose
+               HOLDER has no record, not an absent value, and only the total `rec` tests
+               (`OpEqRef`, `OpConvBoolFromRef`, `is_absent_collection`) read it.  Handed up
+               instead, that shape was present to the handle test and garbage to the copy
+               (loft#1374).
   (L-Null-Text) `text` reserves TWO spellings of absence and they are ONE value: an UNSET
                handle (str_rec 0 — the `nullref` above) and an ALLOCATED record holding the
                `STRING_NULL` (`"\0"`) bytes.  A reader tests the CONTENT, never the handle
@@ -287,7 +301,15 @@ falsifier ([@PLN97](../plans/97-layout-contract/README.md)):
   `tests/scripts/1316-a-nullable-reference-field-is-still-a-pointer.loft` scores that on
   behaviour instead, on both backends: the marked field must SHARE (write through the source, read
   it through the field) and the unmarked one must COPY, which is the pair no layout dump
-  distinguishes.
+  distinguishes.  The VALUE spelling — a read that names no record answers `nullref` —
+  is `tests/scripts/1374-an-absent-pointer-leaves-its-slot-as-nullref.loft`, both backends
+  under strict stores: an index past the end and before the front, a `hash`, `sorted` and
+  `index` miss, each through a local bind, a declared local, a `S?` argument, a `-> S?`
+  return and its bind, a copy-bind, an inline test and a field read, with every source
+  PRESENT as the control (a write through the handle must reach the container, which a fix
+  that copied would fail).  The tagged receiver of a field read and a method call is
+  `153-a-tagged-element-read-by-a-variable-index-is-one-null.loft` and
+  `153-a-method-call-on-a-tagged-element-reports-the-undischarged-receiver.loft`.
 - **`L-Null-Text`** — `tests/scripts/1270-an-absent-text-is-one-absence.loft`, on both backends:
   every way of SAYING absent (literal `null`, an omitted field, an assignment, a call, a parse)
   writes ONE document and round-trips to itself, while an allocated `""` stays a present value.
