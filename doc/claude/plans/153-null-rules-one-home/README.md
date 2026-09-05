@@ -451,7 +451,27 @@ functions — 180 in tier 0, 18 in tier 1, 155 in tier 2**; tier 0 by file: `par
 emitters matching `Void` or `Text` on types that cannot be nullable — so the list is the
 ORDER, and each top-tier function is closed only by reading it: it peels through `base()`,
 or a probe cell shows a `τ?` cannot arrive there.  The walk itself is the long tail the
-ordering section names; nothing in this phase is counted yet.
+ordering section names.
+
+**Batch 1 — the opaque `data.rs` verbs' bare callers (2026-09-05).**  The screen's caller
+half names the verbs that are opaque THEMSELVES — `is_dbref(Optional(Reference))` is false,
+`heap_dep` and `heap_def_nr` answer `None`, `is_scalar(Optional(Integer))` is false — so
+every bare caller answers wrong for a `τ?` at once; the walk went caller by caller
+(`stage4/cells/CELLS.md`, eight cells; `stage4/amp/`, the `&` matrix).  Closed by cells:
+the `par` clause refuses a `-> S?` worker (a refusal, honest); a generator cannot spell
+`iterator<S?>` at all (refused at the type); a `S?` parameter rebound in its body delivers
+correctly; a `-> S?` return delivers correctly.  The finding: the `&` lowering's `is_scalar`
+closure and record test — a `&` of a nullable LOCAL fell past both arms and bound a SILENT
+COPY (`q = &x; q = 7` left `x: integer?` unchanged, both backends), and the cure opened the
+whole `&τ?` family: every read and write site asks the link's inner type bare.  That is a
+feature the rules promise (`(B-Ref-Intro)`, `(F-ParamRef)`) and the lowerings do not carry,
+so both spellings are DECLINED at the link's one builder with a message naming the cure
+(`D-bind-17`, loft#1372; guard `153-a-link-to-a-nullable-slot-is-declined`), and the peels
+that would only serve the declined shape were not kept (a peel with no cell is the B6u
+receipt).  The matrix's NON-nullable controls found loft#1371 on the way: a whole-value
+write through a `&` link to a text, a struct or a vector does not reach the source, and the
+struct leaks.  The ownership oracles' four bare `heap_dep` sites (`ownership_cfg.rs`) read a
+`S?` local as "not a heap store" and are the next batch's first cells.
 
 ## Phase ordering
 

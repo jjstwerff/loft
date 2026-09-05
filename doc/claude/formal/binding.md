@@ -333,7 +333,13 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 
 ## Deviations
 
-**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
+**OPEN: 1.**
+- **D-bind-17** — `&τ?` is declined: `(B-Ref-Intro)` admits `&τ` for every τ, and a link to a
+  NULLABLE slot (`q = &x` with `x: integer?`, `fn f(p: &integer?)`) is refused where its type
+  is built (`Parser::ref_var_type`) until the read and write lowerings carry the wrapper on
+  both backends (loft#1372).  Before the refusal the local bind was a silent copy.
+
+Every other deviation this doc has carried is closed; the record is in
 [binding-history.md](binding-history.md).
 
 > **A zero here is a claim to re-measure, and this is what the oracle covers.** The `&`

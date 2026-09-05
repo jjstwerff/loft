@@ -591,6 +591,32 @@ The rules doc used to carry these beside its `OPEN` line — closure summaries, 
 the times the count read 0 over a live entry.  They are timeline, so they moved here
 unchanged; [binding.md](binding.md) now states only what is open.
 
+### D-bind-17 — OPEN (2026-09-05, loft#1372, @PLN153 phase 4): a `&` link to a nullable slot is declined
+
+`(B-Ref-Intro)` admits `&τ` for every τ; `(B-Ref-Write)` and `(B-Ref-Uniform)` make a `&τ`
+variable a τ variable that writes the source; `(F-ParamRef)` makes a `&` parameter the
+write-back channel.  Nothing restricts τ, so `&integer?` should link a nullable slot.  It does
+not: a link's inner type is asked BARE at every read and write site — `??` sees `&integer?`
+and refuses its default, `+` and a copy-out see a non-null slot and warn, the interpreter's
+write dispatch has no arm for the wrapper, native's parameter type does not match the write —
+and the `&` of a nullable LOCAL fell past the scalar and record arms of the lowering and bound
+a silent COPY: `q = &x; q = 7` left `x: integer?` at 5 on both backends, with nothing said.
+The parameter's body was refused on its write and on its read with retype messages that named
+neither the link nor a cure.
+
+Found by @PLN153 phase 4's `optional` screen: the lowering's `is_scalar` closure and record
+test were two of the 353 bare shape tests, and the cell built to reach them was the finding.
+Lifting the refusals and peeling those two tests showed the whole read/write family behind
+them (`stage4/amp/*.loft`), which is the FEATURE this entry records as owed.  Until it lands,
+both spellings are DECLINED where the link type is built — `Parser::ref_var_type`, and the
+field-link site beside it — with one message naming the cure (`@FR-B-Ref-Reshape`: a link
+loft cannot honour is refused, never downgraded).  Guard:
+`tests/scripts/153-a-link-to-a-nullable-slot-is-declined.loft` (five spellings, one message
+each).  Closes when a `&τ?` binding reads and writes its slot as a `τ?` on both backends; the
+shape to build is the chokepoint phase 3 gave `(N-Store)`: one spelling of "the slot behind a
+link" every site asks through.  The whole-value write through a `&` link to a text, a struct
+or a vector — the NON-nullable controls of the same matrix — is loft#1371, apart.
+
 ### D-bind-16 / D-bind-11 closure summaries
 
 **D-bind-16 CLOSED 2026-09-03** (loft#1321): `(B-Copy)` is read ARM BY ARM at a branch join.

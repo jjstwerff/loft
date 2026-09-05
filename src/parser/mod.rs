@@ -2330,7 +2330,42 @@ impl Parser {
     /// stack for an all-scalar tuple, and a reference to the `__tuple<…>` RECORD — what a `&S`
     /// is — for anything else.  The remaining refusal is for an element the record cannot
     /// spell or lay out as a field.
+    /// `@FR-B-Ref-Intro` admits `&τ` for every τ, and `&τ?` is the one spelling the
+    /// lowerings do not carry: a link's inner type is asked BARE at every read and write
+    /// site (`??` sees `&integer?` and refuses its default, `+` and a copy-out see a
+    /// non-null slot, the write dispatch has no arm, native's parameter type does not
+    /// match), and a `&` of a nullable LOCAL used to fall past the scalar/record arms and
+    /// bind a silent COPY — `p = &x; p = 7` left `x: integer?` unchanged.  Until the link
+    /// carries a nullable slot on both backends, the link is DECLINED where its type is
+    /// built (`@FR-B-Ref-Reshape`: never downgraded).  The one home for both spellings —
+    /// the `&` parameter and the `&` local bind — and the deviation is `D-bind-17`.
+    ///
+    /// `true` when declined; the caller then keeps the PLAIN type, so the refusal is the
+    /// one message and no retype cascades after it.  Reported on pass 1 when the type is
+    /// already resolved (a pass-1 error stops the compile there), else on pass 2 — once
+    /// either way.
+    pub(crate) fn refuse_nullable_link(&mut self, tp: &Type) -> bool {
+        if !matches!(tp, Type::Optional(_)) {
+            return false;
+        }
+        let resolved = !crate::data::Data::type_has_unresolved(tp);
+        if resolved || !self.first_pass {
+            let nm = tp.name(&self.data);
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a `&` reference cannot link a nullable `{nm}` yet — link the non-null value \
+                 (`x: {}`) and carry the absence beside it, or pass the value and return it",
+                tp.base().name(&self.data)
+            );
+        }
+        true
+    }
+
     pub(crate) fn ref_var_type(&mut self, tp: Type) -> Type {
+        if self.refuse_nullable_link(&tp) {
+            return tp;
+        }
         // A `&(…)` whose elements are not all scalars is a reference to the synthesized
         // `__tuple<…>` RECORD — exactly what a `&S` is — rather than a stack link: a heap
         // element has no stack form the reference ops can address (tuples.md T-Ref).  The

@@ -46,6 +46,12 @@ is the moment it leaves its slot, so every such local, `??` and `?` behaves as i
 plain `S?` value.  One thing to know: such a local views the field's record, so clearing the
 field afterwards is not visible through the local, exactly as with a pointer field.
 
+**A `&` reference to a nullable value is refused with a message, not silently copied.**
+`q = &x` with `x: integer?` used to bind a plain copy — `q = 7` left `x` unchanged and nothing
+said so — and a `&integer?` parameter could be neither read nor written in its body.  Both
+now say *a `&` reference cannot link a nullable `integer?` yet* and name the way round; the
+link itself is still owed (loft#1372).
+
 **`loft introspect` shows the program as it is parsed.**  When a program had already run
 once, the startup cache answered the next `introspect` from its bundle, and the dump then
 named every variable `65535` with a `-` where its slot number and span belong — two runs of

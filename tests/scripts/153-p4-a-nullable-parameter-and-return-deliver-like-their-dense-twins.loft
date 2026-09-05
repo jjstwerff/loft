@@ -1,0 +1,26 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN153 phase 4 — two `optional`-screen sites shown UNREACHED by a wrong answer, with the
+// cell that shows it rather than a peel with no cell (the B6u receipt): the argument
+// delivery record (`use_analysis::collect_free_candidates`, `func.tp(v).heap_dep()` asked
+// bare of a rebound parameter) and the return delivery (`heap_return_delivery`, the same
+// verb asked bare of a `-> S?` return).  A nullable parameter rebound in its body keeps the
+// caller's record whole and releases its own; a `-> S?` return delivers the record or null.
+// Both backends under strict stores; if either site ever decided a store for the nullable
+// spelling, this is the cell that goes red.
+//
+// @falsified-at: none — a positive control for two sites the screen ranks; pins what holds.
+struct S { n: integer }
+fn rebind(p: S?) -> integer { p = S { n: 9 }; p.n ?? -1 }
+fn clear(p: S?) -> integer { if p != null { p = null; } p.n ?? -1 }
+fn mk(k: integer) -> S? { if k > 0 { S { n: k } } else { null } }
+fn main() {
+  a: S? = S { n: 1 }; b: S? = S { n: 2 };
+  assert(rebind(a) == 9 && (a.n ?? -1) == 1, "a rebound nullable parameter keeps the caller's record: {a.n ?? -1}");
+  assert(clear(b) == -1 && (b.n ?? -1) == 2, "a cleared nullable parameter keeps the caller's record: {b.n ?? -1}");
+  assert(rebind(null) == 9, "a rebound null parameter: {rebind(null)}");
+  x = mk(1); y = mk(0);
+  assert((x.n ?? -1) == 1 && (y.n ?? -1) == -1, "a nullable return delivers the record or null: {x.n ?? -1} {y.n ?? -1}");
+  println("nullable parameter and return deliver");
+}

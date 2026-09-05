@@ -9,6 +9,23 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### @PLN153 phase 4, batch 1: the opaque verbs' bare callers, and a `&` link to a nullable slot declined (2026-09-05)
+
+`is_dbref`, `heap_dep`, `heap_def_nr` and `is_scalar` are opaque to `Optional` themselves, so
+each bare caller answers wrong for a `τ?` at once; the walk went caller by caller with a cell
+each (`pln153-scratch/stage4/`).  The finding: the `&` lowering's `is_scalar` closure and
+record test let a `&` of a nullable LOCAL fall past both arms and bind a silent COPY (`q = &x;
+q = 7` left `x: integer?` unchanged on both backends), and lifting the parameter side's
+retype refusals showed every read and write site asks a link's inner type bare — `??`, `+`,
+the copy-out, the interpreter's write dispatch, native's parameter type.  A feature the rules
+promise and the lowerings do not carry, so `Parser::ref_var_type` (and the field-link site)
+now DECLINES a `&τ?` with one message naming the cure, both spellings, once per link, and the
+binding keeps its plain type so nothing cascades — `D-bind-17` (OPEN, loft#1372); the two
+source-kind tests read through `base()` so a nullable source reaches that decline.  The
+matrix's non-nullable controls found loft#1371 (a whole-value write through a `&` link to a
+text, struct or vector does not reach the source; the struct leaks).  Guard:
+`153-a-link-to-a-nullable-slot-is-declined` (five spellings).
+
 ### @PLN153 phase 3c: a tagged projection reaching a local is read through its tag (2026-09-05)
 
 `(L-Null-Tag)` reserves the tagged `__nullable<S>` for INLINE storage and `(L-Null)` gives

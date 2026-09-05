@@ -2752,9 +2752,14 @@ use a separate collection or add after the loop"
         // is coerced to the RefVar target in the annotated form).  A non-scalar source
         // keeps the single-indirect view from P1; a non-`Var` source is a later rung.
         if op == "=" && self.amp_pending {
+            // Through `base()`: a nullable source reaches the `&` lowering like its non-null
+            // twin — and is then DECLINED there (`ref_var_type`), loudly.  Asked bare, the `?`
+            // fell past every arm below and the `&` was silently a copy: `p = 7` left
+            // `x: integer?` unchanged on both backends (`@FR-B-Ref-Reshape`: loft declines a
+            // link it cannot honour, it never downgrades it to a copy).
             let is_scalar = |t: &Type| {
                 matches!(
-                    t,
+                    t.base(),
                     Type::Integer(..)
                         | Type::Float
                         | Type::Single
@@ -2781,7 +2786,10 @@ use a separate collection or add after the loop"
             let stack_src = match *code.unspan() {
                 Value::Var(src)
                     if is_scalar(self.vars.tp(src))
-                        || matches!(self.vars.tp(src), Type::Reference(..) | Type::Tuple(_)) =>
+                        || matches!(
+                            self.vars.tp(src).base(),
+                            Type::Reference(..) | Type::Tuple(_)
+                        ) =>
                 {
                     Some(src)
                 }
@@ -2856,8 +2864,14 @@ use a separate collection or add after the loop"
                 // and that is the site that has to hold it, because a `&(…) = <not a
                 // variable>` never reaches this lowering at all.  Here the gate covers the
                 // other spelling, `b = &a`, whose element types nothing has looked at yet.
+                // …and a declined annotation (`r: &integer? = x`) left the binding PLAIN, so
+                // the seam keeps it plain too rather than reporting the same link twice.
                 s_type = if var_nr != u16::MAX && self.vars.is_annotated(var_nr) {
-                    Type::RefVar(Box::new(linked))
+                    if matches!(self.vars.tp(var_nr), Type::RefVar(_)) {
+                        Type::RefVar(Box::new(linked))
+                    } else {
+                        linked
+                    }
                 } else {
                     self.ref_var_type(linked)
                 };
@@ -2867,8 +2881,10 @@ use a separate collection or add after the loop"
                 // uniform RefVar deref (`OpGet*/OpSet*(c,0)`), and native keys its
                 // pointer construction off this `OpGetField`/`OpGetVector` value — so no
                 // per-variable flag is needed and the link survives an IR snapshot.
-                *code = eref;
-                s_type = Type::RefVar(Box::new(s_type));
+                if !self.refuse_nullable_link(&s_type) {
+                    *code = eref;
+                    s_type = Type::RefVar(Box::new(s_type));
+                }
             }
         }
         // A `&` of a tuple PLACE (`b = &v[0]`, `b = &s.pair`) reaches no lowering above,

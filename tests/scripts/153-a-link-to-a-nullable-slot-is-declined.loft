@@ -1,0 +1,40 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN153 phase 4 — a `&` link to a NULLABLE slot is declined where the link type is built
+// (`Parser::ref_var_type`, and the field-link site beside it), on both spellings: the `&`
+// local bind and the `&` parameter.  `(B-Ref-Intro)` admits `&τ` for every τ, and `&τ?` is the
+// one spelling the lowerings do not carry — a link's inner type is asked bare at every read
+// and write site — so until they do the link is refused rather than downgraded
+// (`(B-Ref-Reshape)`).  Before this, the local bind was a SILENT COPY: `q = &x; q = 7` left
+// `x: integer?` at 5 with nothing said, on both backends (the `optional` screen's bare
+// `is_scalar` callers at the `&` lowering); the parameter's body was refused with a retype
+// message that named neither the link nor the cure.  loft#1372 is the record of the feature
+// still owed.
+//
+// Every cell below is one spelling of the same link; each is expected to carry the decline.
+//
+// @falsified-at: 44be76fb → here (hand-measured): on the parent build the scalar local bind
+//   compiles and prints `x=5` (the silent copy), the annotated bind and the parameter are
+//   refused with `cannot change type from &integer? to integer`, and the field link binds a
+//   view of the tagged slot; none of them carries this message.
+// @EXPECT_ERROR: a `&` reference cannot link a nullable `integer?` yet
+// @EXPECT_ERROR: a `&` reference cannot link a nullable `S?` yet
+// @EXPECT_ERROR: a `&` reference cannot link a nullable `text?` yet
+struct S { n: integer }
+struct O { opt: S? }
+fn bump(p: &integer?) { p = (p ?? 0) + 1; }
+fn name(p: &text?) { p = "z"; }
+fn main() {
+  x: integer? = 5;
+  q = &x; q = 7;                        // the local bind
+  r: &integer? = x; r = 8;              // the annotated local bind
+  bump(x);                              // the parameter
+  s: S? = S { n: 1 };
+  t = &s; t = null;                     // a nullable record local
+  o = O { opt: S { n: 2 } };
+  u = &o.opt;                           // a link into a tagged field
+  w: text? = "a";
+  name(w);
+  println("unreached {x} {s == null} {u == null} {w}");
+}
