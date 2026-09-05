@@ -253,12 +253,15 @@ mod tests {
         assert_eq!(observe(src), Ok(Outcome::Ran));
     }
 
-    /// A fault the front-end catches at COMPILE time (a constant `1/0`) is a
-    /// `Diagnostics` rejection, not a run — the boundary between `Rejected` and
-    /// a runtime `Ran` fault.
+    /// A fault the front-end catches at COMPILE time is a `Diagnostics` rejection, not
+    /// a run — the boundary between `Rejected` and a runtime `Ran` fault.  A constant
+    /// `1 / 0` is `integer?` (`(N-Div)`), and storing it into a NARROW `u8` is the
+    /// `(N-Store)` error, since a `u8` has no bit pattern left for null; into a
+    /// full-width `integer` it is a warning and the program RUNS (@PLN153 phase 3b), so
+    /// the narrow slot is the one that still draws the line this cell measures.
     #[test]
     fn compile_time_fault_is_rejected() {
-        let src = b"fn main() { x: integer = 1 / 0; }";
+        let src = b"fn main() { x: u8 = 1 / 0; }";
         assert_eq!(observe(src), Ok(Outcome::Rejected));
     }
 
