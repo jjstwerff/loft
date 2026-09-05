@@ -858,6 +858,27 @@ impl Parser {
             .any(|a| matches!(a.unspan(), Value::Var(v) if self.vars.is_caller_hidden_buf(*v)))
     }
 
+    /// Does `val` PRODUCE a whole record of its own, rather than READ a place that already
+    /// holds one?
+    ///
+    /// The question a `&`-linked local's whole-value write has to ask (loft#1376).  A `&` at
+    /// a struct projection is invisible in the IR — `pi = &o.j` and `pi = o.j` emit identical
+    /// ops (@PLN130 F9) — so a place READ cannot be told apart from a re-point of the link,
+    /// and it keeps the binding meaning it has.  A value that MINTS a record has no place
+    /// behind it to link to, so a write of one through a link is unambiguously
+    /// `@FR-B-Ref-Write`: copy it INTO the place the link names.
+    ///
+    /// An object literal (a `Block`, or the `Insert` spelling) and a call answer yes; a
+    /// builtin `Op*` accessor — the field, element and keyed-element reads every link bind
+    /// is built from — answers no, as does a bare variable.
+    pub(crate) fn produces_whole_record(&self, val: &Value) -> bool {
+        match val.unspan() {
+            Value::Block(_) | Value::Insert(_) | Value::CallRef(_, _) => true,
+            Value::Call(d, _) => !self.data.def(*d).name().starts_with("Op"),
+            _ => false,
+        }
+    }
+
     pub(crate) fn copy_ref(&mut self, to: &Value, code: &Value, f_type: &Type) -> Value {
         let d_nr = self.data.type_def_nr(f_type);
         let tp = self.data.def(d_nr).known_type();

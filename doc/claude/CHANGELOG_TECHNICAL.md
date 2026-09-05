@@ -97,6 +97,39 @@ the undischarged receiver exactly as for a `S?` local.  Guards:
 `153-a-tagged-element-read-by-a-variable-index-is-one-null.loft`,
 `153-a-method-call-on-a-tagged-element-reports-the-undischarged-receiver.loft`.
 `Fixes #1374`.
+### loft#1376: a whole-value write through a `&` link to a PLACE reaches the place (2026-09-06)
+
+The sibling of loft#1371, and `@FR-B-Ref-Write` settles it the same way: at a heap τ the
+write REPLACES the source's contents.  `pi = &o.i` and `pe = &v[0]` reach no `&` lowering at
+all — a struct projection is already a VIEW under `@FR-B-View`, so both spellings emit the
+same ops and only `is_amp_link` records that the `&` was written.  The variable holds the
+field's or element's own `DbRef`, so an INTERIOR write through it landed, which is what made
+the shape look like it worked; a WHOLE-VALUE write emitted a plain `Set` that re-pointed the
+variable while the place kept its value, on both backends and in silence.
+
+The copy-INTO-the-place branch that serves `o.i = S { … }` already existed; it was gated on
+the target NOT being a bare `Var`, which is exactly what a `&`-linked local is.  It now also
+admits a bare `Var` that `is_amp_link` names, so the link reaches the lowering writing the
+place directly has always had — one home, not a second copy.  `@FR-B-Disturb` is why the
+answer is a copy rather than a refusal: overwriting a place is not disturbing it, so a view
+of it survives.
+
+The discriminator is the VALUE, through the new `produces_whole_record` — the same thing
+native's own link arm dispatches on, and it survives an IR snapshot where a per-statement flag
+would not.  It HAS to be the value: `pi = &o.j` and `pi = o.j` emit identical ops (@PLN130 F9
+— a `&` at a struct projection is invisible in the IR), so a place READ cannot be told apart
+from a re-point of the link and keeps its binding meaning.  What is unambiguous is a value
+that MINTS a record — an object literal or a call — because there is no place behind it to
+link to; that is the one case this rule claims.  An allow-list of accessor NAMES was the wrong
+shape and is what a keyed element read (`c = &s[30]`) fell through: routed into the copy, the
+bind defined nothing and every later read reached codegen at slot 65535.  A PLAIN view is not
+marked either way, so `c = o.i; c = S { … }` keeps `@FR-B-Copy`'s meaning.
+
+Nine cells on both backends (place kind, write kind, nesting depth, direction, and the
+plain-view and local-link controls); `tests/scripts/1376-…loft`, `@falsified-at: 964bab93`.
+It also closes the two cells loft#1371's matrix left red.
+
+
 ### loft#1369: a nullable rebind from an ABSENT source releases the record it displaces (2026-09-06)
 
 `@FR-O-Proxy` — the destination owns the store it holds, so a rebind that displaces it must
