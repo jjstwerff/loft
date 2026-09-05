@@ -38,6 +38,12 @@ u8"*, pointing at the second call — while writing the two calls the other way 
 fine.  The two widths were being treated as one specialisation. They are now two, and the
 order you write them in no longer matters.
 
+**A linked list or a tree no longer crashes the compiler when a generic touches it.**
+`struct Node { value: integer, next: reference<Node>? }` passed to any generic function killed
+the process outright — no error message, no output. The compiler was walking the struct's own
+`next` edge round and round while measuring it. It now recognises that a field pointing back
+at its own struct is a link rather than something stored inside it.
+
 **A `&` reference can link a value that may be absent.**  `fn bump(p: &integer?)` and
 `q = &x` where `x: integer?` were refused outright — you had to link the non-null value and
 carry the absence beside it.  Both now work, read and write, on both backends: reading gives
