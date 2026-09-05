@@ -6,7 +6,7 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **1** — D-tup-9 (opened 2026-09-05, loft#1365 — below; NARROWED the same day to the collection half, the record and scalar bindings closed).  (D-tup-8 opened and closed 2026-09-04, loft#1361 — below; D-tup-7 opened and closed 2026-09-04, loft#1350 — below; D-tup-4's KEYED half CLOSED 2026-08-31, loft#1230); D-tup-5 and D-tup-6 opened and closed
+OPEN: **0** — D-tup-9 opened and closed 2026-09-05 (loft#1365 — below: the record and scalar bindings by @PLN153 phase 1, the collection half by the @FR-F-Ret join).  (D-tup-8 opened and closed 2026-09-04, loft#1361 — below; D-tup-7 opened and closed 2026-09-04, loft#1350 — below; D-tup-4's KEYED half CLOSED 2026-08-31, loft#1230); D-tup-5 and D-tup-6 opened and closed
 2026-08-28; D-tup-3 opened and closed 2026-08-26; D-tup-2 closed the day the
 rule it needed was written down.  Bounded by the oracle note below — **and D-tup-3 is what that
 note was warning about**: it was found by giving an element a HEAP type, which this doc's
@@ -14,7 +14,7 @@ all-`(integer, integer)` oracle cannot express, so the zero above never covered 
 D-tup-6 are two more from the same blind spot, one axis further: a NULLABLE element, which the
 all-`(integer, integer)` oracle cannot express either.
 
-### D-tup-9 — NARROWED to the collection half (2026-09-05, loft#1365): a tuple literal member typed by a type variable
+### D-tup-9 — OPENED AND CLOSED (2026-09-05, loft#1365): a tuple literal member typed by a type variable
 
 `(T-Cons)` copies a heap element INTO a tuple literal and `binding.md (B-Copy)` copies a plain
 bind.  D-tup-8 made that hold for a member whose type is KNOWN at the literal; this is the
@@ -52,35 +52,22 @@ tuple as a return value, a two-field record so a wrong row shows in the value, t
 loop and in an `if` arm — plus four scalar cells as the control, since keeping them green is
 what the declining version bought by making the record cells wrong.
 
-**Still OPEN for a COLLECTION binding.**  With `T` bound to a `vector` or a keyed collection
-the template's record copy does not fit either, so it is removed and the member aliases —
-`fn keep<T>(a: T) -> (T, integer) { s = a; t = (s, 7); return t; }` with a `vector<integer>`
-reads `len` 3 through the returned copy after the source grew, where the concrete twin reads 2.
-That is the pre-loft#1365 behaviour rather than a new fault, and it is where it stops — but
-not for the reason two earlier readings of this entry gave, both of which the IR contradicts.
-Rebuilding the collection copy at monomorph time WORKS: all four collection cells answer their
-concrete twin's value on both backends, the callee's own `OpFreeRefIfDistinct` on the member's
-store holder is emitted exactly as the concrete twin's is, and the `scopes::check` ordering
-that an earlier draft blamed is not a factor (it runs after the parse, so a monomorph-minted
-variable IS visible to it).
-
-What it leaks is one store in the CALLER, and the cause is a return-ABI divergence that has
-nothing to do with the member copy.  A concrete `fn c(…) -> (vector<integer>, integer)` returns
-the synthetic `__tuple<…>` RECORD, and the caller copies the member out of it into a backing it
-owns.  The monomorph of the same generic returns a STACK tuple — its signature reads
-`(vector<integer>, integer)` — so the caller binds `r = __ref_1.0`, a bare projection with no
-copy and no backing, and the store the callee allocated for the member is adopted by nobody.
-The member copy merely makes that visible: before it there was no store to lose.
-
-So the cure is not in this pass at all.  It is that a generic's tuple return should be boxed
-the way a named function's is (`Parser::boxed_tuple_return`, the machinery loft#1349 and
-D-tup-7 already touch), after which the caller-side copy the concrete path performs applies
-unchanged and the collection member is copied and freed like any other.
-
-**Closes when** the vector and keyed cells read their concrete twin's answer on both backends
-with no leaked store, and `matrix_axes.py` reads the container-kind axis at `vector` and `hash`
-for a guard in `tests/scripts/`.  Workaround, verified: copy the member by hand before it
-enters the literal.
+**The collection half, closed by the join rather than by the copy pass (2026-09-05).**  With
+`T` bound to a `vector` or a keyed collection the template's record copy does not fit either,
+so the collapse unwraps it — and the member is then a VIEW of its local
+(`Variables::retarget_tuple_member_deps`, `(B-View)`; the first cut stripped the dep and
+freed the caller's hash at the callee's exit, which the @FR-F-Ret guard's second call
+observed).  The @FR-F-Ret walk (QUALITY.md B7t, calls-history D-call-13) boxes a generic's
+`-> (T, …)` at instantiation exactly as a named function's is boxed, so the copy the concrete
+path performs at the RETURN applies unchanged and happens once.  Measured on the joined tree,
+both backends, no leaked store: `keep<T>(a: T) -> (T, integer)` with a `vector<integer>` reads
+`len` 2 through the returned copy after the source grew to 3; with a `hash`, 1 against 2 — the
+concrete twin's answers.  Two earlier readings of this entry named a missing free and a stack
+tuple ABI as the cause; the ABI was the true one and the walk closed it.  The guard is the
+walk's own `a-generic-instance-returns-what-its-concrete-twin-returns.loft` (`vector_tuplocal`,
+`keyed_tuplocal`).  A generic's tuple built and NEVER returned keeps the view, and no program
+can observe that — an opaque `T` bound to a collection has no mutator to reach it through — so
+that last cell is unmeasurable rather than open.
 
 ### D-tup-8 — OPENED AND CLOSED (2026-09-04, loft#1361): a tuple with a heap member was shared where the rules say copy
 

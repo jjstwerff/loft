@@ -7769,7 +7769,8 @@ impl Parser {
     fn collapse_parametric_tuple_member_copies(&mut self, d_nr: u32) {
         let mut code = self.data.definitions[d_nr as usize].code.clone();
         let this = &*self;
-        let mut dropped: Vec<u16> = Vec::new();
+        // (backing the element depended on, the local the member now IS a view of — if any)
+        let mut dropped: Vec<(u16, Option<u16>)> = Vec::new();
         code.map_nodes(&mut |v| {
             let Some(src) = this.tuple_member_copy_source(v) else {
                 return;
@@ -7779,12 +7780,20 @@ impl Parser {
                 return;
             }
             // The block's tail is the backing it filled, and that is the dep the element
-            // type was given.
-            if let Some(backing) = b.operators.last().and_then(|o| match o.unspan() {
+            // type was given.  Unwrapped to a plain local, the member is that local's VIEW
+            // (`(B-View)`): the dep moves to the local rather than vanishing, because an
+            // element with no dep is read as OWNED and freed at scope exit — and here it is
+            // the caller's store.
+            let backing = b.operators.last().and_then(|o| match o.unspan() {
                 Value::Var(x) => Some(*x),
                 _ => None,
-            }) {
-                dropped.push(backing);
+            });
+            let view_of = match src.unspan() {
+                Value::Var(x) => Some(*x),
+                _ => None,
+            };
+            if let Some(backing) = backing {
+                dropped.push((backing, view_of));
             }
             *v = src;
         });
@@ -7794,7 +7803,9 @@ impl Parser {
         self.data.definitions[d_nr as usize].code = code;
         let vars = &mut self.data.definitions[d_nr as usize].variables;
         for v in 0..vars.count() {
-            vars.make_tuple_members_independent(v, &dropped);
+            for (backing, view_of) in &dropped {
+                vars.retarget_tuple_member_deps(v, &[*backing], *view_of);
+            }
         }
     }
 

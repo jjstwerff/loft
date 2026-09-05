@@ -113,6 +113,40 @@ the `@FR-O-Latest` rule-led walk (QUALITY.md B7p, `formal/ownership-history.md` 
 guarded by `tests/scripts/a-nullable-view-local-does-not-free-what-it-displaces.loft`,
 falsified at `51646648` on both backends.
 
+### The @FR-F-Ret join: a monomorph mint that reused a template name, and a collapsed member that owned what it viewed (2026-09-05)
+
+Picking loft2's `64437246` (a generic's instance returns what its concrete twin returns) onto
+this branch turned its own 52-cell guard red on both backends — the guard passes on the
+branch it was written on, and every guard of this branch passed too, so the defects were in
+the PRODUCT of the two streams, the shape DEBUG.md § the seam names.  Two mechanisms, both on
+this branch's side:
+
+**A work-ref minted in the monomorph frame re-claimed a template name.**  `Function::copy`
+started every work counter at 0, and `work_refs` reuses an existing `__ref_N` by name when
+the counter is behind it — the pass-1/pass-2 same-site rule.  On this branch the TEMPLATE of
+`fn g<T>(x: T) -> (T, integer) { s = x; t = (s, 7); return t; }` already mints `__ref_1` for
+its tuple-member copy (loft#1361); the picked `promote_monomorph_tuple_return` then asked for
+a work-ref in the instance and was handed the same `v3 __ref_1`, retyping the member's backing
+into the boxed return record while `t` still depended on it.  The caller read a zeroed record.
+Carrying the template's stored counter was measured NOT to be enough (`LOFT_TRACE_WORKREF`
+still showed the reuse; the stored number is not trustworthy at every instantiation), so
+`copy` now DERIVES all eight counters from the names the cloned table carries —
+`<prefix><digits>` exactly, so `__ref_` cannot read `__ref_p2_1`.  A monomorph-time mint is
+always a new name; the reuse arm keeps the case it was written for.
+
+**A member unwrapped to a local owned it.**  For a collection-bound `T`, @PLN153 phase 1's
+`collapse_parametric_tuple_member_copies` unwraps the template's record copy to the bare local
+and stripped the element's dep on the backing — which made the instance's `t` read as OWNING
+its member, so the IR freed `t.0` at the callee's exit: the caller's hash.  A one-call probe
+read the freed store back intact, even under `LOFT_STRICT_STORES`; the guard's second call is
+what observed it.  The dep now moves to the local the member is a view of
+(`Variables::retarget_tuple_member_deps`, `(B-View)`), and the member is neither freed nor
+copied — the aliasing D-tup-9's collection half already records.
+
+Verified: the picked guard 52/52 on both backends, every guard of this branch, the template
+matrix, the parser and scopes subjects.  `LOFT_VAR_TABLE` and `LOFT_TRACE_WORKREF` are what
+found both; the guard alone said "0".
+
 ### @PLN153 phase 1: every N rule has one home, and a measured pair behind its citation (2026-09-05)
 
 Eighteen `@FR-N-*` rules in `types.md`, three of them cited when the plan opened (7 sites)

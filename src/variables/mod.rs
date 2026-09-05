@@ -697,6 +697,20 @@ impl Function {
         self.owner_witness.clone_from(&other.owner_witness);
     }
 
+    /// The highest `N` among this table's `<prefix><N>` names — the number a work counter must
+    /// start past so a new mint cannot re-claim a name something already depends on.  Matches
+    /// `<prefix>` followed by digits ONLY, so `__ref_` does not read `__ref_p2_1` as its own.
+    fn highest_minted(table: &Function, prefix: &str) -> u16 {
+        table
+            .names
+            .keys()
+            .filter_map(|n| n.strip_prefix(prefix))
+            .filter(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+            .filter_map(|rest| rest.parse::<u16>().ok())
+            .max()
+            .unwrap_or(0)
+    }
+
     pub fn copy(other: &Function) -> Self {
         Function {
             name: other.name.clone(),
@@ -717,14 +731,27 @@ impl Function {
             variables: other.variables.clone(),
             annotated: other.annotated.clone(),
             arm_consumed: other.arm_consumed.clone(),
-            work_text: 0,
-            work_ctext: 0,
-            work_text_p2: 0,
-            work_ref: 0,
-            work_ref_p2: 0,
-            work_vdb: 0,
-            work_kvb: 0,
-            work_fmt: 0,
+            // Every work COUNTER starts past the names the table already carries — derived from
+            // the NAMES, not copied, because the stored number is not trustworthy at every
+            // instantiation (a monomorph built from a pass-1 body, a reset between the passes).
+            // The live sets below do not carry.
+            // A monomorph is this table plus passes that MINT (a boxed tuple return, a text
+            // return buffer, a par lowering), and a name is a SITE only within one pass:
+            // `work_refs` reuses an existing `__ref_N` by name when the counter is behind it.
+            // Starting at 0 here handed `promote_monomorph_tuple_return` the `__ref_1` the
+            // template's tuple-member copy had already claimed, retyping the member's backing
+            // into the return record while `t` still depended on it — the caller read zeroes
+            // (the join of loft#1361 and the @FR-F-Ret walk, 2026-09-05).  Past the carried
+            // names, a monomorph-time mint is always new; the empty sets keep the before/after
+            // snapshots the passes take (`work_texts()`) meaning "minted here".
+            work_text: Self::highest_minted(other, "__work_"),
+            work_ctext: Self::highest_minted(other, "__work_c"),
+            work_text_p2: Self::highest_minted(other, "__work_p2_"),
+            work_ref: Self::highest_minted(other, "__ref_"),
+            work_ref_p2: Self::highest_minted(other, "__ref_p2_"),
+            work_vdb: Self::highest_minted(other, "__vdb_"),
+            work_kvb: Self::highest_minted(other, "__kvb_"),
+            work_fmt: Self::highest_minted(other, "__fmt_"),
             work_texts: BTreeSet::new(),
             work_refs: BTreeSet::new(),
             inline_ref_vars: other.inline_ref_vars.clone(),
@@ -1411,6 +1438,21 @@ impl Function {
     /// fills makes the element look owned by an empty variable, and the store the member
     /// really holds is then freed by nobody.
     pub fn make_tuple_members_independent(&mut self, var_nr: u16, remove: &[u16]) -> bool {
+        self.retarget_tuple_member_deps(var_nr, remove, None)
+    }
+
+    /// [`Self::make_tuple_members_independent`] with a destination: every dep on a member of
+    /// `remove` is replaced by a dep on `to` when given, or dropped when not.  The replacement
+    /// is what a collapsed copy needs — a member unwrapped to a plain LOCAL is a VIEW of that
+    /// local (`(B-View)`), and a tuple whose element depends on nothing is read as OWNING it,
+    /// which freed the aliased argument's store at the callee's exit (the keyed tuple-via-local
+    /// cell of the @FR-F-Ret guard, both backends, 2026-09-05).
+    pub fn retarget_tuple_member_deps(
+        &mut self,
+        var_nr: u16,
+        remove: &[u16],
+        to: Option<u16>,
+    ) -> bool {
         let mut tp = self.variables[var_nr as usize].type_def.clone();
         let crate::data::Type::Tuple(elems) = &mut tp else {
             return false;
@@ -1424,9 +1466,15 @@ impl Function {
                     moved = true;
                 }
             }
+            if moved
+                && let Some(t) = to
+                && !deps.contains(&t)
+            {
+                deps.push(t);
+            }
         }
         if moved {
-            self.trace_type_change(var_nr, &tp, "make_tuple_members_independent");
+            self.trace_type_change(var_nr, &tp, "retarget_tuple_member_deps");
             self.variables[var_nr as usize].type_def = tp;
         }
         moved
