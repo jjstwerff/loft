@@ -11,6 +11,29 @@ All notable changes to the loft language and interpreter.
 
 ### loft#1368: a return that may borrow one of two sources is FRESH (2026-09-06)
 ### A value-`if` is not a coalesce, and an `else if` chain converts at its arms (2026-09-06, `@FR-E-Uncomp-NN` walk, loft#1379 / loft#1380)
+### A statement `if` discards what its arms yield, on `--native` too (2026-09-06, loft#1381)
+
+`(F-Block)` says a block's value is discarded "where the BLOCK itself is a statement — a
+`;`-terminated one", and `(F-Drop)` adds that the work still runs.  The interpreter has always
+done that; the native emitter rendered each arm as a Rust EXPRESSION, so
+`if c { println("x") } else { 5 };` handed rustc a `()` arm beside an `i64` one and the author
+got a raw `error[E0308]: `if` and `else` have incompatible types` for a program loft accepts.
+The `else if` chain failed the same way.
+
+`emit.rs::output_if_inner` gives that shape `{ <arm>; }` on both sides, which is what a
+statement means.  The discriminator is a VOID arm beside a non-void one and is exact rather
+than a proxy: an `if` read as a VALUE has arms the parser already made agree, and a void one
+could not be read.  Both arms must be POSITIVELY typed — the first cut read an arm the emitter
+cannot type as void, which fired on six TUPLE files and cost each the value its `if` was there
+to produce; the corpus diff named all six.  Emission: DIFFERENT 17 of 1292 against 50f87d36,
+every one the intended `{ … ; }` wrap, all 17 re-run green on `--native`.
+
+Measured beside it and filed apart: the MIRROR statement `if c { 5 } else { println("x") };` is
+REFUSED at parse time ("expected integer, got void on else") while the arms swapped compile —
+one order of a statement `if` accepted and the other not, where `(F-Block)` discards either
+(loft#1382).  `Fixes #1381`.
+
+### Growing a container ends the places inside it — (B-Disturb)'s fourth event (2026-09-06, loft#1373, D-bind-18)
 
 `Parser::range_guard_inside_discharge` (@PLN152) matched the bare-variable `??` lowering — a
 plain `Value::If` — by node shape, so every author's value-`if` stored into a narrow slot was
