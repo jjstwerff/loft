@@ -9,7 +9,7 @@ Tracker: [@PLN153](https://github.com/loft-lang/plans/issues/153).
 
 ## Status
 
-**Active — phases 0 and 1 done (2026-09-05), phase 2/3 next.**  The null MODEL is decided and not reopened here: @PLN102's
+**Active — phases 0, 1 and 2 done (2026-09-05); phase 3 (the design call) next.**  The null MODEL is decided and not reopened here: @PLN102's
 [keystone](../102-stability-contract/keystone-null-model.md) chose **B** (an in-band sentinel
 for scalars, out-of-band absence for references and for a struct stored inline), frozen in
 [DESIGN_DECISIONS.md § C90](../../DESIGN_DECISIONS.md), with @PLN25 (the dense element
@@ -83,7 +83,7 @@ the axes it reports unreached are the cells still to build, not a note.
 |---|---|---|---|
 | **0** | **Probe first.**  Is `τ??` constructible today (`N-Idem` — `Type::optional` in `data.rs` is the candidate home), and is `N-Intro` the only null-direction conversion in `⤳`?  A corpus census with an env-gated report, since `[profile.dev.package.loft]` compiles a `debug_assert` OUT of the library. | The report over the 1247-file corpus reads 0 for `τ??` — and a probe that constructs one by hand makes it read 1, so the zero is not vacuous. | **Done** 2026-09-05 — § Phase 0 result |
 | **1** | **Census: one home per N rule.**  For each of the 18, the predicate or emitter that decides it today.  Candidates: `N-Coal` → `parser/operators.rs::build_null_coalesce_default`; `N-Default` → the `x?` lowering + `Data::has_default`; `N-Store`/`N-Decl` → the `(N-Store)` teeth (`keys.rs`: the DN3 gate, the call-arg gate, the heap gate); `N-Prop` → `nullflow_enabled()`; `N-Join` → the inferred-assignment join; `N-Match` → the null arm; `N-Div`/`N-Arith`/`N-Cast`/`N-Cast?` → operator typing ([float-null-domain-typing.md](../102-stability-contract/float-null-domain-typing.md)); `N-Dense` → element storage; `N-Parse` → folded into `N-Cast`; `N-Index`, `N-Reserve`, `N-Store` already cited. | Per rule, ONE probe pair on both backends — a program where the rule must hold and one where its negation must be refused — green BEFORE the `@FR-` citation is added.  `rule_tags.py check` then reports 18/18 cited; a rule whose only evidence is the citation is the B6u failure and does not count. | **Done** 2026-09-05 — § Phase 1 census |
-| **2** | **`N-Prop` has 10 `nullflow_enabled()` sites in 4 files.**  Which question does each ask — propagate, gate, or warn?  Fold the fact-reading half onto one predicate; the per-site residue stays where it is per-site. | `introspect` output (IR, bytecode, Rust) byte-identical over the 1247-file corpus against the committed compiler (the B7r/B7s method), under the default AND under `LOFT_NO_NULLFLOW=1`. | Open |
+| **2** | **`N-Prop` has 10 `nullflow_enabled()` sites in 4 files.**  Which question does each ask — propagate, gate, or warn?  Fold the fact-reading half onto one predicate; the per-site residue stays where it is per-site. | `introspect` output (IR, bytecode, Rust) byte-identical over the 1247-file corpus against the committed compiler (the B7r/B7s method), under the default AND under `LOFT_NO_NULLFLOW=1`. | **Done** 2026-09-05 — § Phase 2 fold |
 | **3** | **The `N-Store` refusal at ONE point.**  Today the teeth sit at the local slot, the field, the return, the index, the call argument and the heap half as separate gates, each a spelling; a nullable reaching a non-null slot through a position none of them covers is answered wrong in silence.  One check where every store passes — the `⇐` lowering, whose ten push sites and six admission lists B6t already measured — is the chokepoint. | The Stage A matrix, position × type kind × discharge, with an `@EXPECT_WARNING` / `@EXPECT_ERROR` cell wherever a nullable meets a non-null slot undischarged and a silent cell wherever it is discharged; `make falsify` against the current build names the cells that pass silently today. | Open — the one design call |
 | **4** | **The `optional` screen, ranked.**  The 352 opaque functions ordered by *can an undischarged value reach here*: declaration reads (a field's, a local's, a return's declared type) and lvalue places first, use-path sites last.  Each function in the top tier either peels through `base()` or is shown unreachable by a probe cell. | The gated `optional` audit row in QUALITY.md moves DOWN and every moved function has a cell; a peel added with no cell is the B6u receipt and is not counted. | Open |
 | **5** | **`@FR-L-Null`'s 45 citations converged.**  The two questions B6u split — *what value means absent in this storage?* (the per-type sentinel table frozen in C90, `Stores::is_null`) and *is this the same storage?* (`base()`) — each have a home; every citation either reads it or is removed as a redundant spelling. | The site count goes DOWN, and where a change is a fold the emission is byte-identical over the corpus; where it is a fix, a probe cell. | Open |
@@ -222,6 +222,63 @@ Observations for phases 2 and 3, from locating these:
   gates), which is phase 3's starting census in numbers.
 
 `rule_tags.py check` after the citations: every one of the 18 N rules cited, each at the home the table names, each with its pair in `tests/scripts/153-n-*.loft`.
+
+## Phase 2 — fold: one predicate per RULE reads the null-flow flag (2026-09-05)
+
+The ten `nullflow_enabled()` reads did not split by *propagate / gate / warn* — they split by
+RULE, and a site reading the bare flag said nothing about which: 3 decide `N-Store`'s
+warn/error split (mod.rs, two branches and the heap target), 3 `N-Prop` (`operand_nullable`
+in `operators.rs`, the null-transparent math fns in mod.rs), 3 `N-Domain` (the float `/`/`%`
+typing, the stdlib `-> τ?` strip under the opt-out, the constant-in-domain elision), 1
+`N-Cast` (the bare `text as τ` assertion).  Each rule now has a FACE of the flag under its own
+name in `keys.rs` — `nprop_enabled`, `ndomain_enabled`, `ncast_asserts`,
+`nstore_softens(narrow)` — cited `@FR-N-*`, so a rule's flag-reading sites are one grep and
+the flip stays one switch.  The N-Store WIDTH test (`byte_width < 8`) was spelled by hand in
+both branches and could only agree by accident; `Parser::nstore_narrow` is its one home.
+`heap_target ||` stays per-site: it is the site's own fact, not the rule's.
+
+**Verify.**  `scripts/introspect_diff.sh <before> <after>` — the B7r/B7s method made a script:
+`introspect` (IR + bytecode + generated Rust, and stderr) of the pre-fold and post-fold
+compilers over every corpus file.  Under the default: **IDENTICAL 1268/1268**.  Under `LOFT_NO_NULLFLOW=1`:
+**IDENTICAL 1268/1268**.  Nothing a program emits moved.
+
+**What it leaves for phase 3.**  The split's two halves now have one home each, but the
+REFUSAL still has five: the two `nstore_diag` branches here, `change_var_type`'s "cannot
+change type" for a declared local (an ERROR where this split would WARN), the call-argument
+and heap gates in `keys.rs`, and `control.rs`'s two cited sites.  Phase 3's chokepoint is
+where those five become one call to `nstore_softens` / `nstore_narrow`.
+
+## Phase 3 — measured before the design (2026-09-05)
+
+**The refusal's twelve sites.**  `n_store_violation` + `n_store_violation_inner` are asked
+from eleven positions (`convert_callers_classified.md` in the plan's notes classifies the 61
+`convert` callers as store / test / discharge / internal), and `change_var_type`'s "cannot
+change type from `τ` to `τ?`" is a twelfth that refuses where the others warn.
+
+**Stage A — 102 cells, position × element kind × discharge**, hand-checked, both backends
+(`tests/scripts/153-n-*-refused*.loft` are the REFUSE cells; the HOLD cells are
+`153-n-rules-hold.loft`): every discharged cell is silent; a declared LOCAL is an ERROR at
+every width (stricter than `(N-Store)`, which says warn at full width); `element` / `arg` /
+`return` warn, narrow errors; and SEVEN undischarged cells are SILENT — a `τ?` into a
+tuple-literal member for all six kinds, and `vector<τ>?` into a non-null struct field.  They
+reproduce on `main` (f4f10cc5, a fresh build): **loft#1366**, fixed by this phase's fold.
+
+**Stage B — loft2's two-spellings cells (their @FR-O walk, F3):** one local assigned from BOTH
+spellings of `S?` — the embedded field's `__nullable<S>` (`L-Null-Tag`) and the pointer
+(`L-Null`) — `x = y; x = o.opt` and the reverse; the branch form; `x = o.opt` alone as the
+control.  Reproduce on `main`: c1 is a use-after-free under `LOFT_STRICT_STORES=1`
+`LOFT_POISON=1` (the owner witness frees the parameter's store), silent-wrong without.  The
+bind of a tagged projection into a local IS this phase's junction (`L-Null-Which`: a local's
+spelling is the pointer, so the bind goes through `emit_nullable_slot_read`), so it is the
+phase's second matrix rather than a separate fix: **loft#1367** (loft2 filed it; this phase's
+commit carries `Fixes #1367`).
+
+**Design call (from the notes' candidate C):** split `convert` into `convert_store` for the
+STORE flavour (the twelve asks fold onto it, one `nstore_softens` / `nstore_narrow` decision)
+and leave the test/discharge/internal callers on `convert`; the `types.md:135` vs `:159`
+severity inconsistency (local ERROR vs full-width WARN) is settled by the rule's own text and
+the local's ERROR becomes the split's warn — recorded as `Contract: strained` if the local's
+severity moves.
 
 ## Phase ordering
 

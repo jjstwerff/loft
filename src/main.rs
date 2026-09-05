@@ -8788,8 +8788,15 @@ fn main() {
                 None => (None, None),
             }
         };
-    let program_cache_on =
-        loft::cache::program_cache_enabled() && script_desugared.is_none() && !script_mode;
+    // `introspect` reports what the PARSER emits for this program, so it always parses: a
+    // warm bundle carries no variable table, and the dump then rendered every variable as
+    // `name(65535)` with `-` in the slot table — two runs of one binary read as two
+    // compilers (measured 2026-09-05 on the released 2026.8.0, `LOFT_NO_CACHE=1` was the
+    // only way to compare emissions).
+    let program_cache_on = loft::cache::program_cache_enabled()
+        && script_desugared.is_none()
+        && !script_mode
+        && !introspect_mode;
     p.track_sources = program_cache_on;
     // @PLN11 G2/M6 — on a warm hit with LOFT_CODEGEN_STORE, the cache is loaded
     // as a SKELETON (def table only) and the mmap'd bundle store is returned

@@ -1562,7 +1562,7 @@ impl Parser {
         // identical until the flag flips default-on. Self-contained fns only (no desugar cascade):
         // sqrt / asin / acos. (pow / log — and their desugar consumers exp / ln / log2 / log10 —
         // land with the constant-in-domain elision, step 3.5.)
-        if !crate::keys::nullflow_enabled()
+        if !crate::keys::ndomain_enabled()
             && matches!(result, Type::Optional(_))
             && matches!(
                 fn_name.as_str(),

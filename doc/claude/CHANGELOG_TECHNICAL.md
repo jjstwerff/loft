@@ -9,6 +9,35 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### @PLN153 phase 2: the null-flow flag is read through one face per rule, and the fold changed nothing (2026-09-05)
+
+Ten sites read `nullflow_enabled()`, and the plan expected them to split by what they do —
+propagate, gate, warn.  They split by RULE instead: three decide `N-Store`'s warn/error split,
+three `N-Prop`, three `N-Domain`, one `N-Cast`, and a site reading the bare flag said nothing
+about which, so the sites drifted — both `N-Store` branches re-spelled the narrow-width test
+by hand.  `keys.rs` gains the flag's four faces (`nprop_enabled`, `ndomain_enabled`,
+`ncast_asserts`, `nstore_softens(narrow)`), each cited `@FR-N-*` and each the flag and nothing
+more, and `Parser::nstore_narrow` is the one home for `byte_width < 8`.  `heap_target ||`
+stays per-site, being the site's fact and not the rule's.
+
+Verified the way a refactor that claims to change nothing has to be:
+`scripts/introspect_diff.sh` (the B7r/B7s method as a script — `introspect` of two compilers
+over the corpus, stderr included) reads `IDENTICAL 1268/1268` under the default and `IDENTICAL 1268/1268` under
+`LOFT_NO_NULLFLOW=1`.  What phase 3 inherits in numbers: the refusal itself still has five
+homes, and one of them (`change_var_type` for a declared local) is an ERROR where this split
+would warn.
+
+### `loft introspect` always parses — a warm cache hit rendered every variable as 65535 (2026-09-05)
+
+Found by the byte-identity run above: a binary living outside `target/` (cached) read as a
+DIFFERENT compiler from the same source built inside it (never cached), on one file — and
+the difference was the cache, not the code.  A warm bundle carries no variable table, so the
+dump printed `n#index(65535)` and `-` in the slot table's number and span columns; two runs
+of the released 2026.8.0 on `examples/fizzbuzz.loft` emit differently.  `introspect` reports
+what the parser emits, so it now parses whatever the cache holds (`main.rs`, beside the
+script and sandbox exemptions).  Guard: `arc_e_program_cache::introspect_parses_fresh_under_a_warm_program_cache`,
+red with the gate inverted.
+
 ### A generic's instance returns what its concrete twin returns (2026-09-05)
 
 `@FR-F-Ret` says a returned whole heap value is fresh.  A monomorph kept the RECORD lowering

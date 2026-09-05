@@ -18,6 +18,12 @@ The **say-what-you-do** release. Two threads, and they turned out to be one: eve
 the language reference was read against the compiler that ships, and most of what came back
 was not a wrong sentence but a promise nothing was keeping.
 
+**`loft introspect` shows the program as it is parsed.**  When a program had already run
+once, the startup cache answered the next `introspect` from its bundle, and the dump then
+named every variable `65535` with a `-` where its slot number and span belong — two runs of
+the same command on the same file did not print the same thing.  `introspect` now always
+parses; ordinary runs keep the cache.
+
 **A generic function returns a value of its own, like a plain function does.**  `fn same<T>(x: T)
 -> T { x }` used to hand back the argument itself when `T` was a struct, a vector or a keyed
 collection, so `r = same(v); r[0] = 99` changed `v`, and `fn pair<T>(x: T) -> (T, integer)`

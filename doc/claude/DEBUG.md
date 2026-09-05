@@ -512,6 +512,20 @@ lands (protocol step 7) — e.g. `302-vector-buffer-delivery.loft` /
 
 ## Introspection CLI (`--introspect`)
 
+**Is a refactor byte-identical?  `scripts/introspect_diff.sh <before-loft> <after-loft>
+[--env VAR=VALUE]…`** runs `introspect` (IR + bytecode + generated Rust, and stderr) with both
+compilers over every corpus file (`tests/scripts`, `tests/docs`, `examples`) and prints one
+line per DIFFERING file plus `IDENTICAL n/m` or `DIFFERENT k of m`; exit 0 / 1 / 2 (usage).
+A refactor that claims to change nothing is verified by this and by nothing weaker — the suite
+asserts VALUES, so a compiler that emits differently and computes the same values passes it.
+Read the verdict from the script's exit, not a pipeline's; an empty corpus is a usage error,
+not a verdict (a copy run outside the tree once read `IDENTICAL 0/0`); both binaries are
+absolutised (a relative `target/debug/loft` resolved inside the file's directory and read as
+DIFFERENT on every file); and both PARSE (`LOFT_NO_CACHE=1`) — `introspect` now always does,
+because a warm bundle carries no variable table and rendered every variable as `name(65535)`.
+@PLN153 phase 2 is its first customer: `IDENTICAL 1268/1268` under the default and under
+`LOFT_NO_NULLFLOW=1` for the null-flow fold.
+
 `loft --introspect <file>` packages the dump primitives behind one
 flag, dumping bytecode + generated Rust + slot tables + per-fn type
 tables to stdout (or per-section files).  No env vars, no test

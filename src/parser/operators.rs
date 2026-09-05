@@ -3470,7 +3470,7 @@ impl Parser {
                     && matches!(ctp, Type::Text(_))
                     && matches!(rt.base(), Type::Integer(_) | Type::Float | Type::Single)
                 {
-                    if crate::keys::nullflow_enabled() && !self.lexer.peek_token("??") {
+                    if crate::keys::ncast_asserts() && !self.lexer.peek_token("??") {
                         if !self.first_pass {
                             diagnostic!(
                                 self.lexer,
@@ -3928,7 +3928,7 @@ impl Parser {
             // divisor yields the reserved null; a divisor provably non-zero keeps `τ`.
             let div_nullable = (operator == "/" || operator == "%")
                 && (matches!(ctp.base(), Type::Integer(_))
-                    || (crate::keys::nullflow_enabled()
+                    || (crate::keys::ndomain_enabled()
                         && matches!(ctp.base(), Type::Float | Type::Single)))
                 && !self.divisor_provably_nonzero(&second_code);
             // @PLN102 (N-Prop) Phase 2 — capture operand nullability BEFORE `call_op` consumes
@@ -3939,7 +3939,7 @@ impl Parser {
             // untouched here, so overflow of two non-null values still types non-null.
             // @FR-N-Prop: a nullable operand makes the result nullable — null PROPAGATES
             // through a value-preserving scalar op rather than being laundered by it.
-            let operand_nullable = crate::keys::nullflow_enabled()
+            let operand_nullable = crate::keys::nprop_enabled()
                 && (matches!(*ctp, Type::Optional(_)) || matches!(second_type, Type::Optional(_)));
             *ctp = self.call_op(
                 code,

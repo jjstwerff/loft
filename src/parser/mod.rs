@@ -4198,9 +4198,8 @@ impl Parser {
             // Keep the hard ERROR only for a NARROW width (`byte_width < 8`), whose non-null form
             // spends the whole width on real values, so a null there would silently corrupt.
             // Gate OFF → the current uniform hard error (this branch stays byte-identical).
-            let narrow =
-                !never_error && matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
-            if crate::keys::nullflow_enabled() && !narrow {
+            let narrow = Self::nstore_narrow(target_tp, never_error);
+            if crate::keys::nstore_softens(narrow) {
                 let msg = diagnostic_format(
                     Level::Warning,
                     format_args!(
@@ -4245,7 +4244,7 @@ impl Parser {
         // back to silence.  Letting it fall through to that error instead would hand the opt-out
         // a refusal this branch never had — the one outcome the freeze forbids here.
         let heap_target = crate::keys::heap_nstore_enabled()
-            && crate::keys::nullflow_enabled()
+            && crate::keys::nstore_softens(false)
             && crate::data::is_dbref(target_tp)
             && !self.data.is_nullable_wrapper(target_tp);
         if crate::keys::pln25_dn1_enabled()
@@ -4256,13 +4255,12 @@ impl Parser {
             // @PLN102 (N-Store) Phase 1 — same warn/error split as the DN3 branch: a bare `null`
             // into a NON-narrow scalar target warns (the slot reserves its null distinctly, so it
             // holds null and reads back null); a NARROW width keeps the hard error (no room).
-            let narrow =
-                !never_error && matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
+            let narrow = Self::nstore_narrow(target_tp, never_error);
             // A heap target never escalates.  There is no narrow heap width to run out of room
             // the way a `u8` does, and loft#1232 settled the rest: reporting where there was
             // silence is a strict gain, while refusing what a shipped package already compiles is
             // the break the freeze forbids.  Raising the tier later is COMPATIBILITY.md's process.
-            if heap_target || (crate::keys::nullflow_enabled() && !narrow) {
+            if heap_target || crate::keys::nstore_softens(narrow) {
                 // The scalar wording is unchanged to the byte — `scalar ` is what the heap half
                 // drops, not a second message.  Two spellings of one diagnostic is how the
                 // fixtures that pin this text would start disagreeing with the rule behind it.
@@ -4286,6 +4284,16 @@ impl Parser {
             return true;
         }
         false
+    }
+
+    /// The WIDTH half of @FR-N-Store's warn/error split: a slot whose non-null form spends
+    /// the whole width on real values (`u8`…`u32`, `byte_width < 8`) has no bit pattern left
+    /// for null, so a nullable stored into it is an ERROR; a full-width slot reserves its null
+    /// distinctly and WARNS instead (`keys::nstore_softens` is the flag half).  `never_error`
+    /// is the caller's "this site never escalates" — a null literal into a heap target.  Two
+    /// branches spelled this test by hand and could only agree by accident; this is the one.
+    fn nstore_narrow(target_tp: &Type, never_error: bool) -> bool {
+        !never_error && matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8)
     }
 
     /// @PLN25 DN1 — the scalar types whose default flips to NON-null (a bare `null` needs `τ?`).
@@ -5589,13 +5597,13 @@ impl Parser {
             // math fn with a provably in-domain CONSTANT argument cannot be null (`sqrt(4.0)`,
             // `pow(2.0, 3.0)`, `ln(2.0)`), so peel the `τ?` its decl carries. Only under
             // LOFT_NULLFLOW, and only the constant subset (variable-arg range-tracking is deferred).
-            if crate::keys::nullflow_enabled()
+            if crate::keys::ndomain_enabled()
                 && matches!(ret, Type::Optional(_))
                 && self.math_arg_in_domain(name, list)
             {
                 // Phase 3.5 elision: a provably-in-domain constant arg peels the `τ?`.
                 ret.base().clone()
-            } else if (matches!(name, "min" | "max" | "clamp") || crate::keys::nullflow_enabled())
+            } else if (matches!(name, "min" | "max" | "clamp") || crate::keys::nprop_enabled())
                 && Self::is_null_transparent(name)
                 && !matches!(ret, Type::Optional(_))
                 && Self::is_non_null_scalar(&ret)

@@ -989,6 +989,38 @@ pub fn nullflow_enabled() -> bool {
     *ON.get_or_init(|| !env_set("LOFT_NO_NULLFLOW"))
 }
 
+/// The per-RULE faces of [`nullflow_enabled`] (@PLN153 phase 2).  Ten sites read the flag,
+/// and they decide four different rules; a site that reads the bare flag says nothing about
+/// which, so the sites drifted apart — three of them re-spelled the N-Store narrow test by
+/// hand.  Each face below is the flag under the rule's name and nothing more, so
+/// `@FR-N-Prop`'s sites are a grep and the flip stays one switch.
+///
+/// @FR-N-Prop — null PROPAGATES through a value-preserving op (`n + 5`, `abs(n)`, the
+/// null-transparent math fns): the result is `τ?` when an operand is.
+pub fn nprop_enabled() -> bool {
+    nullflow_enabled()
+}
+
+/// @FR-N-Domain — a domain-PARTIAL op types `τ?` (float `/` and `%`, `sqrt`, `ln`, `pow`…);
+/// the stdlib declares them so, and a provably in-domain constant argument peels it.
+pub fn ndomain_enabled() -> bool {
+    nullflow_enabled()
+}
+
+/// @FR-N-Cast — a bare `text as τ` is an ASSERTION a parse cannot make, so it is refused and
+/// the checked `as τ?` is the spelling; `(N-Parse)` folds into it.
+pub fn ncast_asserts() -> bool {
+    nullflow_enabled()
+}
+
+/// @FR-N-Store — the warn/error SPLIT: a nullable into a FULL-WIDTH non-null slot warns (the
+/// slot reserves its null distinctly, the store proceeds), a NARROW one errors (no bit
+/// pattern for null).  `narrow` is the caller's width test; this is the one place the flag
+/// decides which side of the split a site is on.
+pub fn nstore_softens(narrow: bool) -> bool {
+    nullflow_enabled() && !narrow
+}
+
 /// `LOFT_NO_STEER=1` (@PLN102 arc C — the recommended-idiom steer channel) — DEFAULT ON, opt OUT.
 /// When on, a call FROM OWNED source (the entry project) to a `#superseded "Y"` symbol emits a
 /// `Level::Warning` steering the author toward `Y` (the old form keeps working — a never-break
