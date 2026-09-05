@@ -635,6 +635,48 @@ the corpus (stderr included) reads `DIFFERENT 16 of 1272` — every one a stderr
 builds with every value pinned.  `(N-Store)` in `formal/types.md` now names its slots and
 its non-stores.  `Fixes #1366`.
 
+### A null element of a linked group leaves nothing, and a hash remove of an absent record is a no-op (2026-09-06, the B7x gate flake)
+
+`make ci` on ffae9ce6 passed with one flaky: the B7x guard's r4 cell (`w.es[0] = E{…}` into a
+NULL slot of a `vector<E?>` group member) read `len(by_k) == 1`, one seed in twenty.  The
+element-level unlink loop B7x emits (`group_sibling_unlinks`) handed the OLD element to
+`Stores::remove` whether or not it was a record; a null slot arrives as a record whose key
+reads as zero, and two views answered two wrong ways: `hash::hash_rec_pos` probed for a record
+the table did not hold, WRAPPED to the home bucket and answered it, so `remove` zeroed a live
+sibling's entry under every seed whose zero-key bucket was occupied; `tree::remove` asserted
+`Item not found` on every seed (the `index` member, deterministic).  Two homes fixed:
+`Stores::absent_nullable_record` is the one null test both halves of `@FR-Col-Group` ask
+(`link_siblings` on ENTER — it already skipped a non-`Some` — and `Stores::remove` on LEAVE,
+for the keyed kinds), and `hash_rec_pos` answers `Option`, stopping at the first empty slot,
+so a remove of an absent record is a no-op, never a hole.  Guard
+`a-null-element-of-a-linked-group-leaves-nothing` (hash / index / trie / all three; first,
+middle, last slot; refill, null-over-null, `remove(i)`; nested), 0 failures over 60 seeds
+where 2 in 40 failed; falsified by hand on ffae9ce6 (exit 101 → 0 both backends).
+
+### A generic at a self-referential struct no longer dies in the parser (2026-09-06, loft#1378)
+
+`fill_monomorph_body` → `rewrite_vector_write_triplets` sized a `vector<T>` element for EVERY
+generic body — eagerly, before any `out += [v]` triplet was looked for — through
+`Parser::type_element_size`, a type-alone re-derivation that summed a struct's fields and
+descended into a field of the struct's own type without end.  `fn id<T>(v: T) -> T? { v }` at
+`struct Node { value: integer, next: reference<Node>? }` was a bare SIGSEGV on both backends
+(and under `introspect`); the release refused it earlier at the layout, and the loft#1316 layout
+fix made the crash reachable.  The element id now comes from `Data::vector_element_type` — the
+one home the concrete `+=` append asks — and the stride from `Stores::size`, as the concrete
+`OpPreAllocVector` is sized; `type_element_size` is deleted.  Behind the crash sat the same
+disagreement one level down: the rewritten WRITE (`primitive_setter_call`) keyed its width on
+the alias def's `forced_size`, which `type_elm` never carries for a monomorph's concrete type,
+so every narrow element of a generic `vector<T>` was written eight bytes wide — `200 0` for two
+`u8`s at 2b992851, `29768 32767` for `-3000, 3000` as `i16` — and with the stride corrected that
+became an eight-byte write into a two-byte slot; the in-body READ (`wrap_vector_get_val`) took
+eight bytes back.  Both now go through the concrete build sites' own home,
+`vectors::narrow_elm_write` / `narrow_elm_read` (the `NarrowIntKind` derivation
+`Parser::narrow_elm_set` carried, now a free function it wraps).  Guard `1378` (write and
+in-body read at `u8`, `i16`, `i32`; the self-referential, mutual and nested cells; one generic
+per integer width because of loft#1383, filed: two widths collide into one monomorph).  Named
+residual: `par_elem_size` (collections.rs) and `data::element_stack_size` are two more
+derivations of a vector element's stride, unwalked.
+
 ### A value-`if` is not a coalesce, and an `else if` chain converts at its arms (2026-09-06, `@FR-E-Uncomp-NN` walk, loft#1379 / loft#1380)
 
 `Parser::range_guard_inside_discharge` (@PLN152) matched the bare-variable `??` lowering — a

@@ -115,6 +115,13 @@ named every variable `65535` with a `-` where its slot number and span belong �
 the same command on the same file did not print the same thing.  `introspect` now always
 parses; ordinary runs keep the cache.
 
+**A generic function works at a self-referential struct.**  Calling `fn id<T>(v: T) -> T?`
+with a `Node` whose `next` is a `reference<Node>?` used to kill the compiler outright — no
+message, just a crash — because sizing a `vector<Node>` element walked into `next` forever.
+It now asks the store for the size, like every other vector does — and a generic that builds
+a `vector<u8>` or `vector<i16>` now writes and reads its elements at their own width, where it
+used to hand back a neighbour's bytes (`200 0` for two bytes `200, 201`).  (loft#1378)
+
 **An `if` you write is yours, and an `else if` arm is an `else` arm.**  Storing an
 if-expression into a `u8` (or any narrow type) used to treat it as a `??` fallback: the then
 arm could read `null` in a slot that has no null, and the first thing compared in your

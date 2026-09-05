@@ -285,11 +285,7 @@ impl Stores {
                     // Index ONLY a `Some` record (discriminant 2).  A null element is either
                     // the zeroed/absent slot (discriminant 0) or the explicit `Null` variant
                     // (discriminant 1); both are skipped.
-                    if self
-                        .nullable_some_variant(self.content(sibling_content))
-                        .is_some()
-                        && self.store(rec).get_byte(rec.rec, rec.pos, 0) != 2
-                    {
+                    if self.absent_nullable_record(self.content(sibling_content), rec) {
                         continue;
                     }
                     let o = self.field_ref(data, parent_tp, *fld_nr);

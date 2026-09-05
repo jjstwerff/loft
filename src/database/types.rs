@@ -901,6 +901,21 @@ impl Stores {
         None
     }
 
+    /// Is `rec`, an element of a collection whose element type is `content`, the ABSENT half
+    /// of a `__nullable<S>` — the zeroed slot (discriminant 0) or the explicit `Null` variant
+    /// (1), anything but a `Some` (2)?  `false` for every dense element.
+    ///
+    /// The one home for the test both halves of `@FR-Col-Group` ask about a null element: it
+    /// is in no keyed view, so `link_siblings` indexes only a `Some` and [`Stores::remove`]
+    /// unlinks only a `Some`.  Read apart, the ENTER half skipped it and the LEAVE half did
+    /// not — a `vector<E?>` slot holding null reached the unlink loop as a record whose key
+    /// reads as zero, and the hash zeroed a live sibling's bucket while the index asserted
+    /// `Item not found`.
+    pub(crate) fn absent_nullable_record(&self, content: u16, rec: &crate::keys::DbRef) -> bool {
+        self.nullable_some_variant(content).is_some()
+            && self.store(rec).get_byte(rec.rec, rec.pos, 0) != 2
+    }
+
     /// The variant record that actually declares a field of a STRUCT-ENUM value.
     ///
     /// `c.limbs` on `enum Shape { Circle { limbs: vector<float> }, … }` is written through
