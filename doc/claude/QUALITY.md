@@ -5615,6 +5615,210 @@ been verified under the other.  The issue's keyed claim did not reproduce: the
 first cell of any walk is the filed reproducer, run, not read.  Held FIXED and named: a promoted
 return buffer reassigned from a value branch keeps the value form.
 
+#### B7x — `@FR-Col-Group` walked: the three element-level writes through the vector member that reached no chokepoint, and a shape the rule reads one way and the pairing test another (2026-09-05)
+
+Picked over `@FR-O-Move` (16 sites) because every one of those sites lives in the return-delivery
+code the sibling's @PLN153 branch is rewriting (+539 in `control.rs`, +834 in `scopes.rs`), while
+the group rule's nine sites sit in four files that branch barely touches.  Split into three
+questions: **which fields form a group** (`Stores::field`, `Parser::collection_groups`,
+`link_shared_nullable_views` — three derivations), **which write routes maintain every member**
+(`Stores::record_finish` for adding; the unlink loop `keyed_group_remove` and `loop_group_remove`
+each carried for leaving), and **which removal routes free once**.  Matrix: 31 `probe-matrix`
+cells and one wrong-on-purpose control, `--interpret` first, then native — a forward-declared
+element in both orders, index write (replace / null / replace into a null slot, dense and
+`vector<E?>` holders), `remove(i)` (first, last, out of range, in a loop, through a parameter),
+three and four members, two groups in one struct, nested under `vector<R>` and `vector<R?>`, a
+struct returned from a callee, a struct copy, a nullable vector member, a type alias, a whole
+value from a local, a variant-typed holder, a struct-enum element, a JSON round trip, two locals,
+a duplicate key through either route, a local record mutated after entry, a struct literal, and
+the two-vectors-plus-hash shape; plus nine lint shapes read against the db's answer.
+
+**Findings.**
+
+- **Every element-level write through the VECTOR member left the keyed views stale**, both
+  backends, pre-existing (A/B'd against the main-based build): `w.es[0] = E{k:11}` copied INTO
+  the record in place, so `by_k` held it under the hash of the OLD key — `by_k[11]` null,
+  `by_k[7]` null, `len(by_k)` still 2; `w.es[0] = null` on a `vector<E?>` left the view one
+  entry long; `w.es.remove(0)` left the removed key findable and a re-add of it counted twice
+  (`len` 3 over 2 records); the same one nesting level down.  Silent every time — a `len` that
+  disagrees with its own lookups is a legal reading of a group that happens to hold that many.
+  `e#remove` (loft#903) and the keyed removal (loft#900) were the only LEAVING routes covered.
+- **The two derivations of group formation agree.**  Nine declaration shapes — forward-declared
+  element, alias, variant, `hash<E[k]>?`, `vector<E?>`, three members, two groups interleaved,
+  `vector<E>?`, two plain vectors — and `linked-group-apart` fired exactly where the db linked.
+  A negative result, now measured.
+- **The rule reads a shape one way and the pairing test another** (loft#1375, `D-col-1` OPEN):
+  `{ a: vector<E>, b: vector<E>, h: hash<E[k]> }` — each vector links to `h` and never to the
+  other, so `h` holds the union and each vector only its own entries (`via a: a=2 b=0 h=2`).
+  Contrived, `wa:clean`; which vector HOLDS is a design call, filed for the sibling and left out
+  of the guard so its green is not read as covering it.
+- **A key write through the vector member is refused with a clear message** (`Cannot write to
+  key field E.id — create a record instead`), through `&` too; the same shape the language
+  reference documents for the keyed spelling.  A struct-enum element cannot be keyed at all,
+  refused at the declaration naming the variants.  Both SEE/SAY-clean.
+- **`v.remove(i)` typed `void`** while STDLIB.md and the op both said `boolean`: `ok =
+  v.remove(2)` failed with *Cannot format type void*.  Additive; now `boolean`.
+- **DATABASE.md carried two paragraphs contradicting their own neighbours** — loft#1152 "still
+  open" beside the section describing its fix, and "group formation is still order-dependent"
+  beside loft#1158's guard.  Both rewritten.
+
+**The one home.**  `Parser::group_elem_write` (`src/parser/collections.rs`): the element is
+bound ONCE to a temporary (`hoist_index_arg` keeps the index single-evaluation), every keyed
+sibling unlinks it through `Parser::group_sibling_unlinks` — the loop both removal spellings
+carried by hand, now shared — the write runs against the temporary, and a replace ends with
+`OpLinkRecord` → `Stores::link_record_siblings`, `record_finish`'s sibling half factored out
+(the primary already holds the record; `record_finish` would append it a second time).  Reached
+from the three `towards_set` arms (null write, nullable convert, `copy_ref`) and from
+`vector_operations` for `remove`.  The temporary is typed as the element PLACE resolves, deps
+included — typed from the vector's element alone the native emitter read `found = v[i]` as an
+owning bind and deep-copied the record, the unlinks ran on the copy, and the run died in
+`store.rs` with a corrupt reference (`@FR-B-Copy` / `@FR-O-NoDiverge`, the interpreter had
+passed).  `holder_type` reads the field type an `OpGetField` carries as its third operand and
+resolves a vector-element base, so a nested group (and one under `vector<R?>`) is found.
+`link_record_siblings` tests `rec.rec == 0` before resolving any store (an out-of-range place
+reads null; the sibling's absent-read change makes a store resolved first a panic).  Rule text
+extended with the LEAVING clause and `(Col-Group-Dup)` — a duplicate key through ANY member
+displaces the older record from the keyed members and leaves it in the vector (measured through
+both routes).
+
+**Verified.**  Guard `a-group-element-written-through-the-vector-member-reaches-every-member`
+(19 rows, every row its own element type), `make falsify`'d at 2b992851 on both backends.
+Targeted suites `store` 262, `parser` 1514, `codegen` 257, `runtime` 181, `scopes` 619 — all
+green; fmt, clippy, `cargo check --no-default-features` clean; `index/target_surface.json`
+regenerated (97 builtins) and `surface-check` in sync.  Corpus IR census, 1270 files against
+the falsify control of 2b992851: 12 structural moves after normalising the stdlib line numbers
+the new declaration shifted, 11 of them exactly the `remove` retyping (`drop OpRemoveVector` +
+`FreeStack(discard)`) and the twelfth the new guard; all 44 files whose text moved at all green
+on both backends under `LOFT_STRICT_STORES=1 LOFT_POISON=1` / `LOFT_NATIVE_LEAK_CHECK=1`.
+
+**Method.**  The first cell of every route was its filed spelling, RUN: the keyed-dup clause was
+written only after the keyed route was measured, not inferred from the vector route.  A census
+baseline built from a control needs the control's OWN `default/` — the work tree's stdlib
+declares an op the old table does not have, and a positional op table would have dispatched
+every later op one slot off; and a census that compares source-path comments reports the whole
+corpus moved.  Held FIXED and named: `Parser::field_site` (expressions.rs) and
+`Parser::keyed_field_site` + `holder_type` (collections.rs) are still two derivations of *which
+struct field does this collection expression name*; a merge threads the assign's `parent_tp`
+into the removal sites and has no defect behind it today.
+
+#### B7y — `@FR-E-Uncomp-NN` walked: the non-nullable matrix loft#1246 never built, a value-`if` every narrow store mistook for a `??`, and an `else if` chain never held to its own type (2026-09-06)
+
+Picked because its deviations closed five days earlier (D-op-7/8) and its eight sites sit in
+`data.rs`, `generation/mod.rs` and `expressions.rs`, outside the sibling's @PLN153 churn.  Split
+into three questions: **what is `default(τ)`** (`IntegerSpec::default_value`, one home since
+loft#1254, asked by `to_default`, `uninitialised_native_value` and the parser's range guard);
+**null or default** (`uncomputable_default`, one home since D-op-8, asked by both range paths);
+and **where does an uncomputable result LAND** — the question whose siblings the fixes' guards
+never enumerated.  1246 scored the NULLABLE slot in every position and the NON-nullable one only
+on the compound path (`n += 10`); 1030 added a `u8`/`u32` field and a `u32` element.  So the
+matrix was the non-nullable slot × {plain assignment, reassignment, struct literal, field write,
+element write, argument, return} × {`+`, `*`, `-`, `/ 0`, `% 0`, unary `-`} × {`u8`, `i8`,
+`i16`, `u16`, `u32`, `i32`, `limit(10,20)`}, hand-computed, both backends — 32 cells, then 60
+more once the first defect named the axis it lived on (the SPELLING of the stored expression).
+
+**The compound path is right everywhere** — every `+= -= *= /= %=` cell answers the rule's
+default (`0`, or `10` for `limit(10,20)`) on a local, a field, an element, a struct in a vector
+and a return, and `i32` answers `null` as C85 decided.  The plain-assignment cells are right by
+REFUSAL: `c: u8 = a + b` — `a` and `b` themselves `u8` — is *"cannot implicitly narrow integer
+to u8"*, because C85 types the sum `integer`; so are the `match`, the block, the argument, the
+return and the literal field.  Two spellings were not refused, and both answered wrong:
+
+- **A value-`if` was a `??` to every narrow store (loft#1379, `sev:high`, `silent-wrong`; in
+  2e6a04ba, so on `main` and in 2026.9.0).**  `c: u8 = if t { a + b } else { a }` read `null`
+  in a `u8`; `q: integer limit(10,20) = if t { o + p } else { o }` read `null` where `q = o + p`
+  answers `10`; and `c: u8 = if k == 1000 { a } else { b }` answered **10** for a TRUE
+  condition.  `range_guard_inside_discharge` (@PLN152) recognised the bare-variable `??` —
+  which lowers to a plain `if coalesce_not_null(v) { v } else { d }` with no marker — by the
+  node alone, so every author's `if` matched: it wrapped the then arm in a checked cast (null in
+  a slot with no code for one; the `limit` default lost), range-cast the FIRST OPERAND OF THE
+  CONDITION (`(k as u8?) == 1000`), and told the seam the store was discharged, so the refusal
+  never fired.  The classifier now asks the BUILDER: `Parser::bare_variable_discharge` accepts
+  an `if` only when its then arm is a plain read of `v` and its condition is exactly
+  `coalesce_not_null(v)` for `v`'s type.  An author's `if x != null { x } else { 5 }` is not one
+  (`!= null` spells `OpNeInt`, the builder `OpConvBoolFromInt`) and is judged as the narrowing it
+  is.  `null_discharge_subject`'s looser `If` arm stays, documented as sound on a LEFT-hand side
+  only, where no author's `if` can stand.  Baselined: b1ccf0e9 refuses all three.
+- **An `else if` chain was typed by its first arm and never converted to it (loft#1380,
+  `sev:high`, `silent-wrong`; pre-existing on b1ccf0e9).**  `x: integer = if a { 1 } else if b
+  { 2.5 } else { 3 }` printed the float's bits (`4612811918334230528`), `f: float = … else if b
+  { 2 } …` the integer's, and 260 reached a `u8` local, argument and return — a field or element
+  read `0` because the STORE's width check (984) caught what the parser let through.  `parse_if`
+  parsed the chain through a recursive `parse_if` expecting nothing, and kept its type out of the
+  join (loft#936/#978: only what it borrows).  Now `parse_if_expecting` threads the enclosing
+  then arm's type into the chain's then block, so `parse_block`'s tail conversion covers it as it
+  covers the plain else — the literal-fit exemption (`else if k == 2 { 7 }` into a `u8` is
+  accepted, as `match` and the plain `else` accept it; an after-the-fact `convert` of the whole
+  chain refused it and was discarded for that), the sibling-variant carve-out and the loft#1350
+  tuple boxing (both keyed on `arm_of_sibling`, "handed a sibling expression's type", rather than
+  on the `else` keyword) and the honest deps.  A `Void` then arm expects nothing of its chain, as
+  before.  Baselined: b1ccf0e9 prints the same bits.
+
+**Filed, not fixed:** loft#1381 — a statement `if` whose else arm yields a value it discards
+(`else { 5 }`) fails rustc natively (E0308) while the interpreter runs it; loud, pre-existing,
+`area:native`, `wa:clean` (`else { 5; }`).
+
+**Measured negatives:** the bare-variable `??` cells into a `u8` (`integer?`, an `i16?` and a
+`u8?` nulled by overflow, the `ncc` expression subject) keep the author's fallback; a `u8?`
+target through an `if` stays `null`; agreeing chains of `u8`, text, vector, enum-variant, tuple
+and nullable arms answer the taken arm; the 152 / 1211 / 1212 / 1214 / 1205 / 1246 / 1249 /
+1030 / 984 / 1009 / 1254 / 936 / 978 / 1117 / 1103 / 1019 guards are green on both backends.
+Guards: `1379` + `1379b` (6 value functions over 6 positions, 10 refusal cells), `1380` +
+`1380b` (7 value functions, 7 refusal cells), falsified at 2b992851 on both backends.  Audit
+row: `optional` 713→714 / 354→355 (the `tp.base()` in the new predicate).
+
+**A register note.**  `types.md` read `OPEN: 0` over both — `(N-Decl)` and `(I-Narrow)` were
+complete and settled the answer; what nobody had re-measured was the code against them for the
+`if` and `else if` SPELLINGS of a store.  The third time (types-history.md), and the doc's own
+warning applied to itself: complete rules, a register at zero, two live silent-wrongs.
+
+#### B7z — loft#1378 closed: the generic path's own vector-element stride, and the self-reference it could not size (2026-09-06)
+
+Taken from the sibling's filing because it is parser work.  `rewrite_vector_write_triplets`
+computed the element stride of a `vector<T>` write for EVERY monomorph body — before it had
+found a write to rewrite — through `type_element_size`, a type-alone re-derivation of the
+struct's byte size that summed the fields and recursed into `next: reference<Node>?`, so `fn
+id<T>(v: T) -> T? { v }` at a self-referential struct was a bare SIGSEGV on both backends and
+under `introspect` (confirmed as unbounded: an unlimited stack turns it into a hang).  The
+concrete `+=` append already asks the one home for the element's storage type
+(`Data::vector_element_type`, loft#624's "every writer AND reader routes here") and the store for
+its stride (`database.size(known)`); the generic path now asks the same two and
+`type_element_size` is gone.  Guard `1378` moves the return (nullable, dense, a `vector<T>`
+that writes), the self-reference (direct, mutual) and the element type the rewritten write is
+sized for (`Node`, plain and nested struct, `i32`, `u8`, `i16`, `text`, `float`, two elements
+each, both read back), falsified by hand on ffae9ce6 (SIGSEGV → 0, both backends; the crash
+predates every cached falsify ref).  **The cell that read `200 0`.**  The stride was one of
+THREE disagreeing derivations in the generic path, and fixing it alone turned a wrong read into
+an eight-byte write into a two-byte slot: `primitive_setter_call` keyed the element WRITE's
+width on the alias def's `forced_size` — `type_elm(concrete)` resolves every integer to the one
+`integer` def, which has none — and `wrap_vector_get_val` read every integer through `OpGetInt`.
+`Parser::narrow_elm_set` (the concrete literal / append / slice write, loft#1036's home) already
+derived the op from `NarrowIntKind`; it is now a wrapper over the free `vectors::narrow_elm_write`,
+which the monomorph rewrite calls too, and `narrow_elm_read` is its read twin for a generic
+body's `v[i]`.  Measured cell for cell at `u8`, `i16`, `i32`, both backends.  **Filed:**
+loft#1383 — a generic instantiated at two integer widths in one program collides into one
+monomorph (`is_equal` ignores the width), so the guard carries one generic per width.
+**Named residual:** the vector-element STRIDE still has three derivations — `Stores::size` via
+`vector_element_type`, `par_elem_size` (collections.rs, the `par` worker) and
+`data::element_stack_size` — a walk of its own (`@FR-L-Narrow` is the rule it would start from).
+
+**The flake the gate reported, run down (B7x's r4, `sev:high` had it shipped).**  `make ci`
+on ffae9ce6 passed with one flaky: `a-group-element-written-through-the-vector-member-…` r4
+(a record into a NULL slot of a `vector<E?>` group member) read `len(by_k) == 1`, reproduced
+at 2 seeds in 40 (`LOFT_HASH_SEED=0x0044fd4163d6edde`), deterministic per seed, both backends.
+Matrix over the keyed KIND split it: `hash` lost a live sibling under some seeds, `index`
+panicked `tree.rs: Item not found` on every seed, `trie` was clean; three live keys lost
+exactly ONE, which one changing with the seed; a plain `h[missing] = null` was clean.  Root:
+B7x's unlink loop hands the OLD element to `Stores::remove` even when the slot is null — a
+record whose key reads as zero and that no view holds — and `hash::hash_rec_pos`, probing for a
+record the table does not hold, wrapped to the home bucket and answered it, which `remove`
+zeroed.  Two homes: `Stores::absent_nullable_record` is the one null test both halves of
+`@FR-Col-Group` now ask (`link_siblings` on ENTER already skipped a non-`Some`; `Stores::remove`
+on LEAVE did not), and `hash_rec_pos` answers `Option`, stopping at the first empty slot, so a
+remove of an absent record is a no-op.  Guard `a-null-element-of-a-linked-group-leaves-nothing`:
+0 failures in 60 seeds, both known seeds pass, falsified by hand on ffae9ce6 (exit 101 → 0,
+both backends).  A lesson for the guard convention: a hash-seed-dependent cell needs a
+deterministic sibling (the `index` cell) to be falsifiable in one run.
+
 #### B2 — open, and the owner's call
 
 | decision | evidence | why it is not mine to take |
