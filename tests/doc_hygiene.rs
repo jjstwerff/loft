@@ -1587,48 +1587,75 @@ fn repro_matrix_covers_every_published_triple() {
         );
     }
 
-    // And each row's RUNNER must natively build its target. Coverage alone let a
-    // row pass while proving nothing: `x86_64-apple-darwin` sat on `macos-14`,
-    // which is arm64, so the job rebuilt aarch64 and reported it under the x86_64
-    // name — x86_64 was never verified while looking verified. A cross-compiled
-    // binary is not expected to equal a natively built one, so a mismatched pair
-    // can only ever fail, and for a reason that says nothing about the source.
+    // And each row's RUNNER must be the one the RELEASE builds that target on. Coverage
+    // alone let a row pass while proving nothing: `x86_64-apple-darwin` sat on `macos-14`
+    // (arm64) while the release built it natively on `macos-13` (x86_64), so the job
+    // rebuilt aarch64 and reported it under the x86_64 name — x86_64 was never verified
+    // while looking verified. A rebuild proves reproducibility only when it repeats the
+    // release's own build: same runner architecture, hence the same toolchain and the
+    // same cross-or-native decision. Since GitHub retired its Intel macOS image the
+    // release CROSS-builds `x86_64-apple-darwin` on Apple Silicon, and the rebuild has to
+    // do exactly that too — so the check compares the two workflows' runners for each
+    // target rather than the runner against the target's own architecture, which no
+    // longer has an image to satisfy it.
     //
     // Keyed on the runner image's architecture, which is the fact that went wrong:
-    // `macos-13` is the x86_64 image, `macos-14` and `macos-latest` are arm64.
-    let arch_of_runner = |os: &str| -> Option<&'static str> {
+    // `macos-13` was the x86_64 image, `macos-14`/`macos-15`/`macos-latest` are arm64.
+    let arch_of_runner = |os: &str| -> &'static str {
         match os {
-            "macos-13" => Some("x86_64"),
-            "macos-14" | "macos-15" | "macos-latest" => Some("aarch64"),
-            o if o.starts_with("ubuntu") || o.starts_with("windows") => Some("x86_64"),
-            _ => None,
+            "macos-13" => "x86_64",
+            "macos-14" | "macos-15" | "macos-latest" => "aarch64",
+            o if o.starts_with("ubuntu") || o.starts_with("windows") => "x86_64",
+            _ => panic!(
+                "runner `{os}`, whose architecture this check does not know — add it to \
+                 `arch_of_runner` so the pairing stays checkable"
+            ),
         }
     };
-    let mut pending_os: Option<String> = None;
-    for line in wf.lines() {
-        let t = line.trim();
-        if let Some(os) = t.strip_prefix("- os:") {
-            pending_os = Some(os.trim().to_string());
-        } else if let Some(target) = t.strip_prefix("target:") {
-            let target = target.trim();
-            let Some(os) = pending_os.take() else {
-                continue;
-            };
-            let Some(arch) = arch_of_runner(&os) else {
-                panic!(
-                    "repro-build.yml matrix uses runner `{os}`, whose architecture this \
-                     check does not know — add it to `arch_of_runner` so the pairing \
-                     stays checkable"
-                );
-            };
-            assert!(
-                target.starts_with(arch),
-                "repro-build.yml pairs target `{target}` with runner `{os}` ({arch}): \
-                 that job would cross-compile and could only ever report a mismatch. \
-                 Give it a {} runner",
-                target.split('-').next().unwrap_or(target)
-            );
+    // `(target, os)` per matrix item, whichever key an item lists first: release.yml
+    // writes `- target:` then `os:`, repro-build.yml writes `- os:` then `target:`.
+    let matrix_pairs = |yaml: &str| -> Vec<(String, String)> {
+        let mut pairs = Vec::new();
+        let (mut target, mut os): (Option<String>, Option<String>) = (None, None);
+        for line in yaml.lines() {
+            let t = line.trim();
+            if t.starts_with("- ") {
+                target = None;
+                os = None;
+            }
+            let t = t.trim_start_matches("- ").trim();
+            if let Some(v) = t.strip_prefix("target:") {
+                target = Some(v.trim().to_string());
+            } else if let Some(v) = t.strip_prefix("os:") {
+                os = Some(v.trim().to_string());
+            }
+            if let (Some(tg), Some(o)) = (&target, &os) {
+                pairs.push((tg.clone(), o.clone()));
+                target = None;
+                os = None;
+            }
         }
+        pairs
+    };
+    let release =
+        std::fs::read_to_string(".github/workflows/release.yml").expect("read release.yml");
+    let built_on = matrix_pairs(&release);
+    for (target, os) in matrix_pairs(&wf) {
+        if !loft::self_update::PUBLISHED_TRIPLES.contains(&target.as_str()) {
+            continue;
+        }
+        let Some((_, release_os)) = built_on.iter().find(|(t, _)| *t == target) else {
+            panic!(
+                "release.yml has no build row for `{target}`, so nothing says where to rebuild it"
+            );
+        };
+        assert_eq!(
+            arch_of_runner(&os),
+            arch_of_runner(release_os),
+            "repro-build.yml rebuilds `{target}` on `{os}` but release.yml builds it on \
+             `{release_os}`: a rebuild on another architecture is a different build, so it \
+             could only ever report a mismatch. Give it a runner of the release's architecture"
+        );
     }
 }
 
