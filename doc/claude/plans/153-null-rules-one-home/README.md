@@ -470,8 +470,20 @@ so both spellings are DECLINED at the link's one builder with a message naming t
 that would only serve the declined shape were not kept (a peel with no cell is the B6u
 receipt).  The matrix's NON-nullable controls found loft#1371 on the way: a whole-value
 write through a `&` link to a text, a struct or a vector does not reach the source, and the
-struct leaks.  The ownership oracles' four bare `heap_dep` sites (`ownership_cfg.rs`) read a
-`S?` local as "not a heap store" and are the next batch's first cells.
+struct leaks.
+
+**Batch 2 — the CFG ownership oracle's heap filter (2026-09-05).**  `ownership_cfg.rs` asked
+`heap_dep()` of a local's type bare at its four "is this a heap local?" filters (the leak scan's
+candidate set, the minted-store scan, the over-free check, the return dump), so a NULLABLE heap
+local was never a candidate: the over-free positive control (`08-overfree-positive-control`)
+with its view declared `vector<integer>?` (`08b`, the twin) went unflagged under the same
+injected free the dense one is flagged for — the oracle green over exactly the twin this plan
+is about.  Peeled through `base()` at all four; the cell is
+`oracle_over_free_check_sees_a_nullable_view_local` in `tests/ownership_oracle.rs` (the
+un-injected twin clean, the injected one RED on `bview`).  The leak scan's two filters are
+shown unreached by a nullable-typed var on today's lowering — a nullable local's record is
+minted into a work-ref it then adopts (`__ref_p2_1`), never into the local itself — and are
+peeled alongside so a lowering that mints into the local directly is covered by existing.
 
 ## Phase ordering
 

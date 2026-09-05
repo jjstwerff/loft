@@ -516,6 +516,48 @@ fn oracle_over_free_check_flags_an_injected_free() {
 /// witness-guarded free of `d` against itself — a run-time no-op, but a free of a never-free
 /// binding in a spelling neither backend intercepts, which the check MUST report; the un-injected
 /// run MUST be clean for `d`.
+/// @PLN153 phase 4 — the over-free check sees a NULLABLE view local as the heap local it is.
+///
+/// `08b` is the positive control (08) with `bview` declared `vector<integer>?`: the same
+/// dep-carrying view of the holder's store behind a nullability marker (`@FR-L-Null`, the
+/// same storage).  Check B's heap filter asked `heap_dep()` of the local's type BARE, so the
+/// nullable spelling was never a candidate and the injected over-free went unflagged while the
+/// dense control's was flagged — the oracle green over exactly the twin @PLN153 is about.
+/// Both halves: the un-injected run stays clean, the injected one goes RED on `bview`.
+#[test]
+fn oracle_over_free_check_sees_a_nullable_view_local() {
+    let ctrl = "doc/claude/plans/94-cfg-ownership-dataflow/probes/08b-overfree-positive-control-nullable.loft";
+    let reds = |env: &[(&str, &str)]| -> Vec<String> {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg("--interpret")
+            .arg(root().join(ctrl))
+            .env("LOFT_NO_CACHE", "1")
+            .env("LOFT_OWN_ORACLE", "check");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().expect("run loft check");
+        String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .filter(|l| {
+                l.starts_with("RED ") && l.contains("free-of-borrowed") && l.contains("bview")
+            })
+            .map(str::to_string)
+            .collect()
+    };
+    assert!(
+        reds(&[]).is_empty(),
+        "the over-free check cried wolf on the un-injected nullable control: {:?}",
+        reds(&[])
+    );
+    let injected = reds(&[("LOFT_OWN_INJECT_FREE_BORROWED", "bview")]);
+    assert!(
+        injected.iter().any(|r| r.contains("bview")),
+        "the over-free check FAILED to flag the injected over-free of a NULLABLE view (the \
+         heap filter read the wrapper as not-a-heap-local): {injected:?}"
+    );
+}
+
 #[test]
 fn oracle_override_check_flags_an_injected_free_of_a_never_free_binding() {
     let guard = "tests/scripts/a-nullable-view-local-does-not-free-what-it-displaces.loft";

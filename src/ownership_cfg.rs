@@ -753,7 +753,7 @@ fn under_free(
             // @FR-O-Proxy asks oracle — @PLN94's flow-sensitive oracle runs BESIDE the shipped
             // analysis and drives no codegen (SI-1), so nothing it concludes reaches an emitter.
             // It also scans for UNDER-free, the opposite direction from the veto's.
-            func.tp(v).heap_dep().is_some() // only a HEAP store can leak (not a scalar)
+            func.tp(v).base().heap_dep().is_some() // only a HEAP store can leak (not a scalar)
                 && func.tp(v).depend().is_empty() // owns its store (empty dep)
                 && !func.is_argument(v)
                 && !freed.contains(&v)
@@ -931,7 +931,7 @@ pub fn oracle(data: &Data) {
                 // side, one line per heap-returning function, so a disagreement between them
                 // is a grep rather than a theory (@FR-O-Oracle walk, QUALITY.md B7r).
                 let def = data.def(d_nr);
-                if def.returned().heap_dep().is_some() {
+                if def.returned().base().heap_dep().is_some() {
                     eprintln!(
                         "RETSUM {name} adopts={} oracle={:?}",
                         def.return_adopts_fresh_store(),
@@ -1107,7 +1107,7 @@ fn run_leak_scan(name: &str, body: &Value, data: &Data, d_nr: u32) -> usize {
     for (_, v) in func.snapshot_names() {
         // @FR-O-Proxy asks oracle — the leak scan, which reports UNDER-free and emits nothing.
         if minted.contains(&v)
-            && func.tp(v).heap_dep().is_some()
+            && func.tp(v).base().heap_dep().is_some()
             && func.tp(v).depend().is_empty()
             && !func.is_argument(v)
             && !func.skip_free(v)
@@ -1172,7 +1172,11 @@ fn run_over_free_check(
         let dep = func.tp(v).depend();
         let self_dep = dep.len() == 1 && dep[0] == v;
         let ncc = func.name(v).starts_with("__ncc_");
-        if func.tp(v).heap_dep().is_some()
+        // Through `base()`: a nullable VIEW local (`bview: vector<integer>? = h.data`) is the
+        // borrowed heap local it is (`@FR-L-Null`), and an injected free of it must read RED
+        // exactly as its dense twin's does — asked bare, the wrapper made this check blind;
+        // the three sibling filters above read through `base()` for the same reason.
+        if func.tp(v).base().heap_dep().is_some()
             && !dep.is_empty()
             && !self_dep
             && !ncc

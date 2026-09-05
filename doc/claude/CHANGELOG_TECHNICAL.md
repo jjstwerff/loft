@@ -26,6 +26,14 @@ matrix's non-nullable controls found loft#1371 (a whole-value write through a `&
 text, struct or vector does not reach the source; the struct leaks).  Guard:
 `153-a-link-to-a-nullable-slot-is-declined` (five spellings).
 
+### @PLN153 phase 4, batch 2: the CFG ownership oracle sees a nullable heap local (2026-09-05)
+
+`ownership_cfg.rs` asked `heap_dep()` of a local's type bare at its four heap filters, so a
+nullable heap local was never a leak or over-free candidate: the over-free positive control
+with its view declared `vector<integer>?` went unflagged under the injected free the dense
+control is flagged for.  Peeled through `base()` at all four; cell
+`oracle_over_free_check_sees_a_nullable_view_local` + probe `08b-overfree-positive-control-nullable`.
+
 ### @PLN153 phase 3c: a tagged projection reaching a local is read through its tag (2026-09-05)
 
 `(L-Null-Tag)` reserves the tagged `__nullable<S>` for INLINE storage and `(L-Null)` gives
