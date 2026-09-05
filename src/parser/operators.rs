@@ -305,7 +305,22 @@ impl Parser {
                         // The empty-literal `v = []` reassign is handled by the
                         // `ls.is_empty()` clear below; a rebind param gets a fresh backing
                         // (`db_ops` non-empty), so neither reaches here.
-                        if db_ops.is_empty()
+                        // loft#1371 — a `&`-LINKED vector LOCAL (`pe = &e`) is the same
+                        // question one step out: a fresh backing would re-point the link,
+                        // so the whole-value write must clear the SHARED store and refill
+                        // it in place.  `vector_db` DOES allocate for a local, so this arm
+                        // drops `db_ops` rather than finding it empty.  The empty literal
+                        // (`pe = []`) takes its clear from the `ls.is_empty()` block below.
+                        let amp_linked = !self.first_pass
+                            && var_nr != u16::MAX
+                            && self
+                                .amp_vector_locals
+                                .contains(&(self.context, self.vars.name(var_nr).to_string()));
+                        if amp_linked {
+                            if !ls.is_empty() {
+                                front.push(self.cl("OpClearVector", &[Value::Var(var_nr)]));
+                            }
+                        } else if db_ops.is_empty()
                             && !self.first_pass
                             && self.vars.is_argument(var_nr)
                             && !ls.is_empty()

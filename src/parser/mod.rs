@@ -641,6 +641,15 @@ pub struct Parser {
     /// T-Ref); every other tuple local keeps its stack form.  Recorded in pass 1 at the link
     /// and consulted at the bind in pass 2, the same shape as `adopted_ret_defs`.
     ref_linked_tuple_locals: std::collections::HashSet<(u32, String)>,
+    /// loft#1371 — vector LOCALS bound by a `&` link (`pe = &e`, `pe: &vector<T> = e`),
+    /// keyed `(function, name)`.  The bind SHARES the source's `DbRef`, which already
+    /// aliases every element write and every append; a WHOLE-VALUE write is the one
+    /// operation that would re-point the local at a fresh store instead of reaching the
+    /// source, so `create_vector` clears the shared store and refills it in place for
+    /// these — the lowering a `&vector` PARAMETER already takes (`@FR-B-Ref-Write`).
+    /// Recorded at the link and consulted at the literal, the same shape as
+    /// `ref_linked_tuple_locals`.
+    amp_vector_locals: std::collections::HashSet<(u32, String)>,
     /// loft#945 — every `(function, variable)` whose vector LITERAL turned out to be the
     /// RECEIVER of a `.map`/`.filter`/`.reduce` chain (`d = [1, 2, 3].map(…)`).
     ///
@@ -1310,6 +1319,7 @@ impl Parser {
             infer_ret_defs: std::collections::HashSet::new(),
             adopted_ret_defs: std::collections::HashSet::new(),
             ref_linked_tuple_locals: std::collections::HashSet::new(),
+            amp_vector_locals: std::collections::HashSet::new(),
             literal_chain_lhs: std::collections::HashSet::new(),
             bound_method_stubs: Vec::new(),
             stub_origin: std::collections::HashMap::new(),

@@ -4842,8 +4842,14 @@ impl State {
             // and a same-store install degrades to a no-op.  Path-sensitive (the
             // ops sit on the write-back branch only).  Heap inner type only; scalar
             // `&` has no store to free.
-            let amp_owned_writeback = stack.function.is_argument(var)
-                && (matches!(
+            // The question is about the LINK, not about how the link was INTRODUCED:
+            // `@FR-B-Ref-Uniform` says a `&τ` variable is used exactly like a τ variable,
+            // and the native twin (`generation/dispatch.rs`) already asks only the inner
+            // type and the ownership.  Gated on `is_argument`, a `&` LOCAL bind
+            // (`pd = &d; pd = S { n: 2 }`) installed the fresh store through the link and
+            // orphaned the one it displaced — a leak on the interpreter, and one more
+            // reason the two backends answered this shape differently (loft#1371).
+            let amp_owned_writeback = (matches!(
                     *tp,
                     Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
                 ) || crate::parser::vectors::is_keyed(&tp))
