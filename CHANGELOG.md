@@ -81,6 +81,11 @@ place — mutating `s` afterwards no longer shows through `t.0` when `T` is a st
 generic and the non-generic spelling of the same function had been giving different
 answers, which is the one thing a type variable is supposed never to do.  A `T` bound to a
 vector or a keyed collection is still shared rather than copied (loft#1365).
+**An `if` used as a statement no longer trips the native compiler.**  `if c { println("x") }
+else { 5 };` ran fine interpreted and failed to build with `--native`, reporting a Rust type
+error for loft code you wrote.  A statement's value is thrown away — that is what a statement
+is — and both backends now agree.
+
 **A value you read out of a list stays yours when the list grows.**  `d = v[0]` followed by
 appends used to read whatever was at the old address once the list outgrew its allocation —
 right for a few appends, garbage for many, with nothing said either way.  Now the value is

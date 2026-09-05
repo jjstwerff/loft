@@ -1746,6 +1746,27 @@ impl Output<'_> {
         // Boolean and the gate stays closed.
         let bool_unify = !matches!(false_v, Value::Null)
             && matches!(self.infer_type(IrNode::Native(true_v)), Some(Type::Boolean));
+        // `(F-Block)` in `formal/calls.md` — an `if` in STATEMENT position discards what its
+        // arms yield, and the work still runs.  The interpreter has always done that; the
+        // native emitter rendered each arm as a Rust expression, so `if c { println("x") }
+        // else { 5 }` handed rustc a `()` arm beside an `i64` one and the user got a raw
+        // E0308 for a program loft accepts (loft#1381).
+        //
+        // A VOID arm beside a non-void one is exactly that position and nothing else: an `if`
+        // used as a VALUE has arms the parser already made agree, and a void one could not be
+        // read.  So the two arms are made to yield `()` by discarding each with a `;`, which
+        // is what a statement means.
+        // Both arms must be POSITIVELY typed: an arm the emitter cannot type is not evidence
+        // of a statement, and reading "unknown" as void fired this on six tuple files whose
+        // arms `infer_type` answers `None` for — each then lost the value the `if` was there
+        // to produce (E0308 on `--native`, measured over the corpus).
+        let stmt_discard = match (self.arm_result(true_v), self.arm_result(false_v)) {
+            (Some(t), Some(f)) => {
+                matches!(t, Type::Void) != matches!(f, Type::Void)
+                    && !matches!(false_v, Value::Null)
+            }
+            _ => false,
+        };
         // For `text_string_unify` we emit `{ (<branch>).to_string() }` around
         // each arm so the if-expression unifies on `String`.  Rust requires
         // braces for if-arms regardless of inner expression form, so even if
@@ -1758,6 +1779,10 @@ impl Output<'_> {
             // operand that lifted a value-struct-returning call → `<lift>; <predicate>`), so
             // `(( stmt; expr ) as u8)` is invalid Rust. `({ … } as u8)` is valid either way.
             write!(w, " {{({{")?;
+        } else if stmt_discard {
+            // An outer block whose single statement is the arm: `{ <arm>; }` yields `()`
+            // whatever the arm yields, and a `Block` arm brings its own braces inside it.
+            write!(w, " {{")?;
         } else if b_true {
             write!(w, " ")?;
         } else if text_unify {
@@ -1792,6 +1817,8 @@ impl Output<'_> {
             write!(w, ")}} else ")?;
         } else if bool_unify {
             write!(w, "}} as u8)}} else ")?;
+        } else if stmt_discard {
+            write!(w, ";}} else ")?;
         } else if let Value::Block(_) = *true_v {
             write!(w, " else ")?;
         } else {
@@ -1803,7 +1830,7 @@ impl Output<'_> {
             write!(w, "{{&*(")?;
         } else if bool_unify {
             write!(w, "{{({{")?;
-        } else if !b_false {
+        } else if stmt_discard || !b_false {
             write!(w, "{{")?;
         }
         self.indent += u32::from(!b_false || text_string_unify || bool_unify);
@@ -1824,6 +1851,8 @@ impl Output<'_> {
             write!(w, ")}}")?;
         } else if bool_unify {
             write!(w, "}} as u8)}}")?;
+        } else if stmt_discard {
+            write!(w, ";}}")?;
         } else if !b_false {
             write!(w, "}}")?;
         }
@@ -1832,6 +1861,19 @@ impl Output<'_> {
             write!(w, " }}")?;
         }
         Ok(())
+    }
+
+    /// What an `if` ARM yields, as the emitter can see it: a `Block`'s declared result, or
+    /// the inferred type of anything else.
+    ///
+    /// A block's own `result` rather than `infer_type` because the two disagree on exactly the
+    /// case that matters — an arm block holding a discarded value is typed by its declaration,
+    /// and inference reads the last operator.
+    fn arm_result(&mut self, v: &Value) -> Option<Type> {
+        match v.unspan() {
+            Value::Block(bl) => Some(bl.result.clone()),
+            other => self.infer_type(IrNode::Native(other)),
+        }
     }
 
     fn pre_declare_branch_vars(
