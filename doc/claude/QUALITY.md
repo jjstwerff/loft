@@ -5250,6 +5250,54 @@ a borrow-returning function has none of, and the copy-vs-adopt of the value itse
 oracle (loft#1346).  Recorded as a `@FR-G-Mono` observation: the monomorph's declared return
 dep is a proxy that reads "fresh" for a borrowed return, and only the oracle knows better.
 
+#### B7s — `@FR-O-NoDiverge` walked: the twin gates kept "verbatim" by hand, and a receipt that named readers it never had (2026-09-05)
+
+Picked by `rule_tags.py dups`: 13 sites.  The rule says both backends translate the SAME
+`deps` facts and therefore cannot diverge — every free/copy/move question is answered by
+reading a carried fact, never re-worked out in a code generator.  Its sites ask two
+questions: *which decisions still LIVE in a backend* (the re-derivations the rule tolerates
+only if both backends spell them identically), and *which have moved INTO the IR* so one op
+serves both (the transition frees, the owner witness, the detach — the rule's preferred
+mechanism, and where every recent fix went).
+
+**The disagreement was structural rather than measured.**  The one decision still made in
+both backends — the displacement free at a heap reassignment — is two predicates,
+`state/codegen.rs`'s `owned_ref` and `generation/dispatch.rs`'s `owned_ref_reassign`, each
+carrying the other's condition list "verbatim" by hand, and their comments record four
+rounds of drift, each found by a leak or an abort on one backend alone: the keyed kinds, the
+VECTOR destination (loft#1328, one store per iteration to frame exit and a `store table
+exhausted` abort at 70 000 iterations on native only), the `@FR-O-Override` veto, and the
+detach (loft#1331).  A third spelling of the one-argument borrow test they share
+(`d: S? = p`, D-own-16's residual) sat in the scope-exit sweep's `borrow_witness`.  The
+fact-reading half now has ONE home, `Function::owns_displaced_store` (the store-backed kinds
+through `base()`, the empty-dep proxy or the one-argument borrow, the override veto, the
+capture exclusion, the detach), with `Function::borrows_one_argument` beneath it; both backends
+and the sweep read it, and what stays per backend is only what IS per backend — the
+interpreter's hidden-buffer-argument exclusion; native's declared-local, store-producing-rhs
+and retbuf-witness conditions.  Verified as a refactor: `introspect` output — IR, bytecode and
+emitted Rust — BYTE-IDENTICAL across all 1247 corpus files against the committed compiler, so
+the two hand-kept lists agreed everywhere the corpus reaches, and cannot drift again.
+
+**One citation was a false receipt.**  `Function::has_borrow_arm`'s doc said *"read by BOTH
+backends' displacement frees, so neither can free on the proxy where the other declines
+(@FR-O-NoDiverge)"*.  Neither reads it, and neither ever did: its one reader since loft#1333
+is the fn-ref collection-delivery strip in `scopes.rs`, which leaves a mixed binding's dep in
+place — and it is that DEP, read by both frees, that keeps them agreeing.  The mechanism the
+receipt described would have been a third fact beside the deps; the actual one is the deps.
+Corrected at the site.  A record-typed mixed local is covered by a different route again, the
+owner witness — two predicates (`mixed_ownership_locals`, gated on a fn-ref call;
+`owner_witness_locals`, on a user heap-record local) for two overlapping readings of "mixed",
+recorded rather than merged: they answer different sites and neither is redundant today.
+
+**The census, for the next walk.**  Ownership-fact reads that remain in a backend rather than
+in the IR: about 30 lines in `state/codegen.rs` and 20 in `generation/dispatch.rs`, of which
+the displacement gate above was the only PAIR spelled twice; the remainder are single-sided
+by design (the interpreter's `owned_reassigned` sentinel reset, native's `_own_store_`
+runtime-Join witness and `_rb_w_` entry-buffer witness — each the other backend's equivalent
+of an IR op, reached by a different mechanism and agreed by result, which `differential_oracle`
+and `leak_cross_mode` measure).  The rule's direction of travel is unchanged: a decision both
+backends need belongs in the IR; one they cannot share belongs behind one predicate.
+
 #### B2 — open, and the owner's call
 
 | decision | evidence | why it is not mine to take |

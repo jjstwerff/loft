@@ -197,74 +197,30 @@ impl Output<'_> {
             // store).  But when it has an entry-buffer witness, a CONDITIONAL
             // reassignment must free the orphaned fn-owned intermediate — guarded
             // (below) against the witness so the caller's buffer is never freed.
+            // @FR-O-Proxy asks free — the fact-reading half is `Function::owns_displaced_store`,
+            // the ONE spelling both backends read (@FR-O-NoDiverge; the interpreter's twin is
+            // `state/codegen.rs`'s `owned_ref`).  Until it had one home this list was kept "the
+            // interpreter's verbatim" by hand, and four rounds of drift are in its history: the
+            // keyed kinds, the VECTOR destination (`x: vector<T> = []; for i in 0..N { x = m(i) }`
+            // held one store per iteration while the interpreter stayed flat), the override
+            // veto, and the detach.  What this side adds is native's own: the Rust local must
+            // already be DECLARED (a reassignment, not the first bind); the right-hand side must
+            // PRODUCE a store — a call in either spelling, an inline object `Insert`, or a
+            // `Block` that builds one (the `nullable_unwrap_copy` / `ncc` materialisers,
+            // `chosen = v[i] ?? d`), where a bare `Var` rhs is a copy whose own arm frees what it
+            // displaces (loft#1328: `CallRef` is the second call spelling and was missing — one
+            // store per iteration to frame exit and a `store table exhausted` abort at 70 000
+            // iterations on this backend alone, an accept/reject split the rule forbids); and a
+            // retbuf-attr return-local frees only with an entry-buffer witness, guarded below so
+            // the caller's buffer is never the store released.  The displaced free is guarded by
+            // `_old != place` and released through `free_displaced`, which declines a
+            // free-protected store.
             let owned_ref_reassign = self.declared.contains(&var)
-                // The five KEYED kinds are here for the reason the interpreter's twin
-                // (`state/codegen.rs`'s `owned_ref`) carries: a keyed local's handle is the same
-                // store-backed slot, so `c = null` — which lowers to `OpNullRefSentinel`, not to
-                // the in-place clear — displaced its store with nothing naming it.  Read through
-                // `base()`, because a dense keyed local cannot be assigned the sentinel at all.
-                // Both backends leaked identically here, which is @FR-O-NoDiverge holding: they
-                // read the same fact and it was short by the same kinds.
-                // A VECTOR destination belongs here for the same reason, and was the one kind
-                // this side never carried: `x: vector<T> = []; for i in 0..N { x = m(i) }` over
-                // a fn-ref held one store per iteration, released only at frame exit, while the
-                // interpreter's twin stayed flat.  @FR-O-NoDiverge is what settles it — the two
-                // backends read the SAME deps facts, so a shape test present on one side and
-                // absent on the other is the divergence the rule forbids, not a judgement call
-                // this side gets to make.  The list is now the interpreter's verbatim, `base()`
-                // and all, so the peel covers the nullable destination too.
-                && (matches!(
-                    variables.tp(var).base(),
-                    Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
-                ) || crate::parser::vectors::is_keyed(variables.tp(var).base()))
-                && !variables.is_captured(var)
-                // D-own-16 residual, the native twin of `state/codegen.rs`'s
-                // `borrows_one_argument`.  Both backends must read the SAME fact
-                // (@FR-O-NoDiverge); leaving this side short is how the two came to disagree
-                // about the keyed kinds.  The displaced free is guarded by `_old != place`
-                // and released through `free_displaced`, which declines a free-protected
-                // store, so the caller's argument survives the first round.
-                && (variables.tp(var).depend().is_empty() || {
-                    let d = variables.tp(var).depend().clone();
-                    d.len() == 1
-                        && d[0] != var
-                        && matches!(variables.tp(var), Type::Optional(_))
-                        && variables.is_argument(d[0])
-                        && !variables.is_argument(var)
-                })
-                // @FR-O-Proxy asks free — the empty dep list is only a PROXY for ownership, so a
-                // free taken on it must consult @FR-O-Override.  The interpreter's twin
-                // (`state/codegen.rs`'s `owned_ref`) already does; this one did not, which
-                // made the two backends read different facts for the same decision — the
-                // asymmetry @FR-O-NoDiverge exists to forbid.  Latent when found (no shape
-                // reproduced a fault, including under LOFT_POISON / LOFT_STRICT_STORES),
-                // and closed because the rule is what says which fact a free may read.
-                && !variables.is_skip_free(var)
-                // A fresh-store-producing rhs: a call in EITHER spelling, an inline
-                // object `Insert`, or a `Block` that builds a new store (the
-                // `nullable_unwrap_copy` / `ncc` materialisers — `chosen = v[i] ?? d`).
-                // A bare `Var` rhs (a borrow / move) is excluded — `depend().is_empty()`
-                // above already gates out borrowed locals.
-                //
-                // loft#1328 — `CallRef` is the second spelling and it was missing, so a local
-                // rebound from a CLOSURE call displaced its store with nothing freeing it:
-                // `x: P? = null; for i in 0..N { x = m(i) }` held one store per iteration to
-                // frame exit.  Not a leak the exit gate can see — everything is freed when the
-                // frame ends — but the PEAK grows with N, and at 70 000 iterations `--native`
-                // aborts with `store table exhausted` where the interpreter completes. That is
-                // an accept/reject split, which @FR-O-NoDiverge forbids: the interpreter's twin
-                // reaches this through `state/codegen.rs`'s `owned_ref`, which keys on the
-                // DESTINATION and so never had a spelling to miss.
+                && variables.owns_displaced_store(var, to, self.data)
                 && matches!(
                     to.unspan(),
                     Value::Call(_, _) | Value::CallRef(_, _) | Value::Insert(_) | Value::Block(_)
                 )
-                // …and a DETACH is not one of them, though it is spelled as a call.  The
-                // shapes above are listed as "a fresh-store-producing rhs"; the null
-                // sentinel produces no store, so the free this gate emits — of the store the
-                // binding moves OFF — has nothing licensing it (loft#1331,
-                // `crate::data::is_null_sentinel_detach`).
-                && !crate::data::is_null_sentinel_detach(var, to, self.data, variables)
                 && (!is_retbuf_attr || self.retbuf_witness.contains(&var));
             if owned_ref_reassign {
                 let name = sanitize(variables.name(var));

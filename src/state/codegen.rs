@@ -2246,42 +2246,17 @@ impl State {
             // `OWNS` for a local a lambda has CAPTURED, and freeing there is a use-after-free
             // against the closure's capture-time DbRef.  The licence has to come from a
             // per-run witness.
-            // D-own-16 residual — a nullable heap local BOUND FROM A PARAMETER.  Its dep list
-            // names that parameter for the whole frame, so the local reads as a permanent
-            // borrow and every store a later minting call hands it leaks.  @FR-O-Latest is a
-            // per-RUN fact, and the dep list is flow-INsensitive; but the dep NAMES the
-            // variable the local might still be aliasing, so the question is decidable at
-            // runtime by store IDENTITY, with no witness slot.
-            //
-            // The displaced free this licenses is the GUARDED one (`nullable_local` routes it
-            // there), and its two side conditions are exactly what makes this safe on the
-            // FIRST round, where the displaced store is still the caller's: `free_displaced`
-            // declines a free-protected store — @FR-H-Free's other side condition — so the
-            // caller's argument is never released here.  Measured: `LOFT_POISON=1` answers
-            // identically to `LOFT_POISON=0`, which is what says no use-after-free survives.
-            let borrows_one_argument = {
-                let d = stack.function.tp(v).depend().clone();
-                d.len() == 1
-                    && d[0] != v
-                    && matches!(stack.function.tp(v), Type::Optional(_))
-                    && stack.function.is_argument(d[0])
-                    && !stack.function.is_argument(v)
-            };
-            // @FR-O-Proxy asks free — the pre-Set free of the store `v` is displacing.
-            let owned_ref = (matches!(
-                stack.function.tp(v).base(),
-                Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
-            ) || crate::parser::vectors::is_keyed(stack.function.tp(v).base()))
-                && (stack.function.tp(v).depend().is_empty() || borrows_one_argument)
-                && !stack.function.is_skip_free(v)
-                && !stack.function.is_captured(v)
-                // A DETACH displaces a store without claiming to have owned it, so the
-                // pre-Set free below has nothing licensing it.  The native twin
-                // (`generation::dispatch`'s `owned_ref_reassign`) reads the same predicate —
-                // this side has no rhs-shape gate of its own, so without it the two backends
-                // would disagree about one shape (loft#1331, @FR-O-NoDiverge).
-                && !crate::data::is_null_sentinel_detach(v, value, stack.data, &stack.function)
-                && !is_hidden_buf_arg;
+            // @FR-O-Proxy asks free — the pre-Set free of the store `v` is displacing.  The
+            // fact-reading half is `Function::owns_displaced_store`, the ONE spelling both
+            // backends read (@FR-O-NoDiverge; its native twin is `generation/dispatch.rs`'s
+            // `owned_ref_reassign`).  What this side adds is the interpreter's own: the hidden
+            // buffer ARGUMENT is excluded, because the caller owns that store.  The one-argument
+            // borrow the predicate admits (`d: S? = p`, D-own-16's residual) licenses only the
+            // GUARDED free — `nullable_local` below routes it there — and `free_displaced`
+            // declines a free-protected store, so the caller's argument is never released here;
+            // measured: `LOFT_POISON=1` answers identically to `LOFT_POISON=0`.
+            let owned_ref =
+                stack.function.owns_displaced_store(v, value, stack.data) && !is_hidden_buf_arg;
             // An `OpNewRecord` RHS returns an INTERIOR ref into an existing
             // container's backing store (a vector element / nested field), so
             // the new value can land in the SAME store as v's old value —

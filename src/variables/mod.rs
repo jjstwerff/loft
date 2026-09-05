@@ -3386,11 +3386,69 @@ impl Function {
         self.borrow_arm_vars.insert(v);
     }
 
-    /// Is `v` a mixed binding, borrowed on some path?  Read by BOTH backends' displacement
-    /// frees, so neither can free on the proxy where the other declines (@FR-O-NoDiverge).
+    /// Is `v` a mixed binding, borrowed on some path?  Read by ONE site — the fn-ref
+    /// collection-delivery strip in `scopes.rs` (loft#1333), which then leaves the binding's
+    /// dep in place.  Neither backend's displacement free reads this flag: both read the DEPS
+    /// (`Self::owns_displaced_store`), and a dep the strip no longer empties is what keeps them
+    /// from freeing on the proxy — agreeing, as @FR-O-NoDiverge requires, through the one fact
+    /// they share rather than through this one.  A record-typed mixed local is covered by a
+    /// different route again, its owner witness (`owner_witness_locals`, @FR-O-Witness).
     #[must_use]
     pub fn has_borrow_arm(&self, v: u16) -> bool {
         self.borrow_arm_vars.contains(&v)
+    }
+
+    /// Does `v`, a NULLABLE heap local, borrow exactly ONE argument of this function — the
+    /// D-own-16 residual `d: S? = p`, whose single dep names a parameter and nothing else?
+    ///
+    /// Such a local's dep reads as a permanent borrow though a later minting call may hand it
+    /// a store of its own; the displaced free it licenses is the GUARDED one, decided at run
+    /// time by store identity against the argument the dep names (`free_displaced` declines a
+    /// free-protected store, so the caller's argument survives the first round).  The ONE
+    /// spelling of a test three sites carried by hand — the interpreter's pre-`Set` free
+    /// (`state/codegen.rs`), the native reassignment gate (`generation/dispatch.rs`) and the
+    /// scope-exit sweep's borrow witness (`scopes.rs`) — so the two backends cannot drift on it
+    /// (@FR-O-NoDiverge).
+    #[must_use]
+    pub fn borrows_one_argument(&self, v: u16) -> bool {
+        let d = self.tp(v).depend();
+        d.len() == 1
+            && d[0] != v
+            && matches!(self.tp(v), Type::Optional(_))
+            && self.is_argument(d[0])
+            && !self.is_argument(v)
+    }
+
+    /// May the store `v` DISPLACES at `v = value` be freed — the fact-reading half of the
+    /// displacement free, asked identically by both backends?
+    ///
+    /// `v` names a store-backed kind (a record, a record enum, a vector or a keyed collection,
+    /// read through `base()` so the nullable spelling is the same binding); its dep list says it
+    /// OWNS — empty (@FR-O-Proxy) or the one-argument borrow above; it is not never-free
+    /// (@FR-O-Override, the veto the proxy needs) and not captured (a closure holds its
+    /// capture-time `DbRef`, @FR-L-CapHeap); and the assignment is not a DETACH, which
+    /// displaces a store without claiming to have owned it (`is_null_sentinel_detach`).
+    ///
+    /// Enforces @FR-O-NoDiverge: this was two predicates, `state/codegen.rs`'s `owned_ref` and
+    /// `generation/dispatch.rs`'s `owned_ref_reassign`, each carrying the other's list
+    /// "verbatim" by hand — and each time one gained a kind or a veto the other had to be found
+    /// and taught it (the keyed kinds, the vector destination, the override veto, the detach:
+    /// four such rounds are in their history).  What stays per backend is only what IS per
+    /// backend: the interpreter excludes the hidden buffer ARGUMENT (the caller owns that
+    /// store), native asks that the Rust local be already declared, that the right-hand side
+    /// produce a store, and that a retbuf-attr local carry an entry-buffer witness.
+    #[must_use]
+    pub fn owns_displaced_store(&self, v: u16, value: &Value, data: &Data) -> bool {
+        (matches!(
+            self.tp(v).base(),
+            Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
+        ) || crate::parser::vectors::is_keyed(self.tp(v).base()))
+            // @FR-O-Proxy asks free — the displacement free follows on this answer, so the
+            // @FR-O-Override veto is consulted right after it, as every free on the proxy must.
+            && (self.tp(v).depend().is_empty() || self.borrows_one_argument(v))
+            && !self.is_skip_free(v)
+            && !self.is_captured(v)
+            && !crate::data::is_null_sentinel_detach(v, value, data, self)
     }
 
     pub fn is_inline_ref(&self, v: u16) -> bool {

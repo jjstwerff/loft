@@ -127,6 +127,18 @@ a carried fact*, never re-worked out in the code generator. And because both bac
 the same answer, they can't disagree — which is exactly what makes the operational rules
 hold on native as well as interp.
 
+**Where a decision still lives in a backend, it is spelled ONCE.**  The displacement free at
+a heap reassignment is the one store-lifetime decision both code generators still make
+themselves, and its fact-reading half is `Function::owns_displaced_store` (the store-backed
+kinds, the empty-dep proxy or the one-argument borrow `Function::borrows_one_argument`, the
+`O-Override` veto, the capture exclusion, the detach) — read by the interpreter's `owned_ref`,
+native's `owned_ref_reassign` and the scope-exit sweep alike.  Two lists kept "verbatim" by
+hand drifted four times, each found by a leak or an abort on one backend only (QUALITY.md
+B7s); one predicate cannot.  What stays per backend is only what IS per backend — the
+interpreter's hidden-buffer-argument exclusion, native's declared-local and store-producing
+right-hand-side conditions.  A fact both backends need belongs in the IR; one they cannot
+share belongs behind one predicate.
+
 ### The facts that answer it — there are four, and `deps` is not the oracle
 
 `O-Deps` above is written as though `deps` were the single source of truth. It is not, and

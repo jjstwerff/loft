@@ -7969,15 +7969,14 @@ impl Scopes<'_> {
                 // the frame (or has an entry stash, below); an arbitrary local dep can itself be
                 // freed or reassigned before this scope ends, and then the comparison names a
                 // store that is already gone.
-                let borrow_witness = if dep.len() == 1
-                    && dep[0] != v
-                    && matches!(function.tp(v), Type::Optional(_))
+                // The one-argument borrow is `Function::borrows_one_argument`, the spelling both
+                // backends' displacement frees read (@FR-O-NoDiverge); this sweep asks it of a
+                // RECORD local only, and never of a never-free one (@FR-O-Override).
+                let borrow_witness = if function.borrows_one_argument(v)
                     && matches!(
                         function.tp(v).base(),
                         Type::Reference(_, _) | Type::Enum(_, true, _)
                     )
-                    && function.is_argument(dep[0])
-                    && !function.is_argument(v)
                     && !function.is_skip_free(v)
                 {
                     // A REBINDABLE parameter's slot stops naming the caller's store once it is

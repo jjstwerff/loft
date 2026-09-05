@@ -9,6 +9,22 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The displacement free reads one predicate on both backends (2026-09-05)
+
+`@FR-O-NoDiverge` says both backends translate the same `deps` facts.  The one store-lifetime
+decision still made in each code generator — freeing the store a heap local displaces at a
+reassignment — was two predicates, `state/codegen.rs`'s `owned_ref` and
+`generation/dispatch.rs`'s `owned_ref_reassign`, kept "the interpreter's verbatim" by hand and
+drifted four times (the keyed kinds, the vector destination, the override veto, the detach),
+each found by a leak or an abort on one backend alone; the one-argument borrow test they share
+had a third spelling in the scope-exit sweep.  The fact-reading half now has one home,
+`Function::owns_displaced_store` with `Function::borrows_one_argument` beneath it; both
+backends and the sweep read it, and only what is genuinely per backend stays at the site.
+`introspect` output (IR, bytecode, Rust) is byte-identical across all 1247 corpus files.
+`Function::has_borrow_arm`'s doc claimed both backends' displacement frees read it; neither
+does — its one reader is the fn-ref delivery strip, and the dep that strip keeps is what the
+frees read — so the receipt now says so.
+
 ### The ownership oracle joins a minted variable's other definitions, and its shadow reads the one base translation (2026-09-05)
 
 `@FR-O-Oracle`'s two derivations — `use_analysis::ownership_of` and the @PLN94 flow-sensitive
