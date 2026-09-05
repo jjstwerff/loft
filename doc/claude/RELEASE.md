@@ -976,9 +976,16 @@ Two corrections it carries that this document used to get wrong:
   The clone is a different path from the one users take, and it was the only
   one anybody ever exercised — so the thing we smoke-tested was not the thing
   we shipped.  (The tag pipeline now runs each bundle too; see below.)
-- `scripts/install.sh` — the documented `curl | sh` path — is executed by no
-  workflow.  `tests/doc_hygiene.rs` only checks statically that its
-  `uname`→triple mapping matches `PUBLISHED_TRIPLES`.
+- `scripts/install.sh` — the documented `curl | sh` path — is run end to end by
+  `tests/self_update_swap.rs` against a bundle built the way `make-release.sh`
+  builds one, served over `file://` (Linux x86_64, the host the script's `uname`
+  mapping names in CI); `tests/doc_hygiene.rs` checks statically that the mapping
+  matches `PUBLISHED_TRIPLES`.  What only the by-hand run covers is the real
+  transport — the GitHub CDN and the sidecar it serves — and the SHIPPED binary's
+  own `verify-self`.  The script used to copy `bin/` and `default/` only and then
+  hand `verify-self` the manifest of the whole bundle, so every installation it
+  made ended in *the installation does not verify*; 2026.8.0 shipped that way and
+  the by-hand item did not catch it.
 
 The per-item landing procedures in the release's plans are separate and still
 apply (e.g. NDB.0 in [`plans/34-native-debug/`](plans/34-native-debug)).

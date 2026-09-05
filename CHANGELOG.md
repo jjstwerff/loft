@@ -258,6 +258,12 @@ shell idiom there is.
 - A tuple carrying text can be handed to an `if` binding and the original still read
   afterwards on `--native` — `t = if c { pair } else { (0, "z") }; pair.1` used to refuse
   to compile, because the arm had moved the value.
+- `scripts/install.sh` — the `curl | sh` path — installs the whole bundle now: the README,
+  the examples and the reference PDF beside `bin/` and `default/`, which is also what
+  `loft self-update` installs. It used to copy the runtime only and then hand
+  `loft verify-self` the manifest of the full bundle, so every installation it made ended
+  in *the installation does not verify*. A test now runs the script against a bundle built
+  the way a release builds one.
 
 ---
 

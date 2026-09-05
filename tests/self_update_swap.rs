@@ -196,3 +196,114 @@ fn a_bundle_that_fails_its_manifest_replaces_nothing() {
         "a refused bundle must leave the running binary untouched"
     );
 }
+
+/// `scripts/install.sh` installs the WHOLE bundle — the unit `apply_bundle` above
+/// installs — and the installation it leaves passes `loft verify-self`.
+///
+/// The script is the documented `curl | sh` path.  It used to copy `bin/` and `default/`
+/// only and then hand the manifest of the FULL bundle to `verify-self`, which counts a
+/// missing file as a failure, so every installation it made ended in "the installation
+/// does not verify" — and nothing ran the script to notice (2026.8.0 shipped that way).
+/// A `file://` base URL keeps the run local: `curl` serves the fixture zip the way the
+/// release CDN would.  Linux x86_64 only: the script derives the artifact name from
+/// `uname`, and that is the one such host CI runs the tests on.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn install_sh_installs_the_whole_bundle_and_it_verifies() {
+    use std::io::Write as _;
+    let version = env!("CARGO_PKG_VERSION");
+    let name = format!("loft-{version}-x86_64-unknown-linux-musl");
+    let root = scratch("install-sh");
+
+    // A bundle laid out the way make-release.sh lays one out: the runtime and the files
+    // a user reads, all under one manifest.
+    let bundle = root.join(&name);
+    write(
+        &bundle.join("bin").join("loft"),
+        &std::fs::read(env!("CARGO_BIN_EXE_loft")).unwrap(),
+    );
+    for e in std::fs::read_dir("default").unwrap().flatten() {
+        if e.path().extension().is_some_and(|x| x == "loft") {
+            write(
+                &bundle.join("default").join(e.file_name()),
+                &std::fs::read(e.path()).unwrap(),
+            );
+        }
+    }
+    write(&bundle.join("README.md"), b"# loft\n");
+    write(
+        &bundle.join("examples").join("hello.loft"),
+        b"fn main() { println(\"hello\"); }\n",
+    );
+    write_manifest(&bundle);
+    let manifest = std::fs::read_to_string(bundle.join("SHA256SUMS")).unwrap();
+    let listed: Vec<&str> = manifest
+        .lines()
+        .map(|l| &l[l.find("  ").unwrap() + 2..])
+        .collect();
+
+    // Serve it as the releases page does: <base>/v<version>/<name>.zip plus its sidecar.
+    let srv = root.join("srv");
+    let dir = srv.join(format!("v{version}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let zip_path = dir.join(format!("{name}.zip"));
+    {
+        let mut w = zip::ZipWriter::new(std::fs::File::create(&zip_path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .unix_permissions(0o755);
+        for rel in listed.iter().copied().chain(std::iter::once("SHA256SUMS")) {
+            w.start_file(format!("{name}/{rel}"), opts).unwrap();
+            w.write_all(&std::fs::read(bundle.join(rel)).unwrap())
+                .unwrap();
+        }
+        w.finish().unwrap();
+    }
+    write(
+        &dir.join(format!("{name}.zip.sha256")),
+        format!(
+            "{}  {name}.zip\n",
+            sha256_hex(&std::fs::read(&zip_path).unwrap())
+        )
+        .as_bytes(),
+    );
+
+    let prefix = root.join("prefix");
+    let out = std::process::Command::new("sh")
+        .arg("scripts/install.sh")
+        .arg("--prefix")
+        .arg(&prefix)
+        .arg("--version")
+        .arg(version)
+        .env("LOFT_INSTALL_BASE", format!("file://{}", srv.display()))
+        // No registry index under this home and no registry to fetch one from (a closed
+        // loopback port: `InstallOptions::default()` is not offline), so the origin row is
+        // informational and the verdict rests on the two manifest rows the bundle carries.
+        .env("LOFT_HOME", root.join("home"))
+        .env("LOFT_REGISTRY_URL", "http://127.0.0.1:9/")
+        .output()
+        .expect("run sh scripts/install.sh");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "install.sh failed\n--- stdout\n{stdout}\n--- stderr\n{stderr}"
+    );
+    // Every file the manifest lists is installed — the property that lets verify-self
+    // hold the installation to the manifest at all.
+    for rel in &listed {
+        assert!(
+            prefix.join(rel).is_file(),
+            "install.sh did not install {rel}\n--- stdout\n{stdout}\n--- stderr\n{stderr}"
+        );
+    }
+    assert!(
+        prefix.join("SHA256SUMS").is_file(),
+        "the manifest itself was not installed"
+    );
+    let confirm = format!("files: {} file(s) match", listed.len());
+    assert!(
+        stdout.contains(&confirm),
+        "verify-self did not confirm the whole manifest (wanted `{confirm}`)\n--- stdout\n{stdout}\n--- stderr\n{stderr}"
+    );
+}

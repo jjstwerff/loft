@@ -110,12 +110,25 @@ src="$tmp/x/$NAME"
 [ -f "$src/bin/loft" ] || die "the archive does not contain bin/loft"
 
 mkdir -p "$PREFIX/bin" "$PREFIX/default"
-# Copy the bundle as the release laid it out: loft resolves its stdlib at
-# <binary-dir>/../default, so bin/ and default/ must land together or the install runs
-# with a stdlib that does not match its binary.
-cp -R "$src/default/." "$PREFIX/default/"
-# The bundle's one manifest, and the file `loft verify-self` needs to check anything.
-[ -f "$src/SHA256SUMS" ] && cp "$src/SHA256SUMS" "$PREFIX/SHA256SUMS"
+# Install the WHOLE bundle as the release laid it out — the same unit `loft self-update`
+# installs: every file `SHA256SUMS` lists, plus the manifest itself.  `loft verify-self`
+# holds an installation to that manifest and reports a missing file as a failure (the
+# manifest says it should be there), so a runtime-only copy of bin/ and default/ can
+# never verify.  bin/loft goes last, renamed into place (below).
+for entry in "$src"/*; do
+  name=$(basename "$entry")
+  [ "$name" = bin ] && continue
+  if [ -d "$entry" ]; then
+    mkdir -p "$PREFIX/$name" && cp -R "$entry/." "$PREFIX/$name/"
+  else
+    cp "$entry" "$PREFIX/$name"
+  fi || die "cannot copy $name into $PREFIX"
+done
+# Anything shipped beside the binary in bin/ (none today) lands before the binary does.
+for entry in "$src"/bin/*; do
+  [ "$(basename "$entry")" = loft ] && continue
+  cp -R "$entry" "$PREFIX/bin/" || die "cannot copy bin/$(basename "$entry") into $PREFIX"
+done
 cp "$src/bin/loft" "$PREFIX/bin/loft.new"
 chmod +x "$PREFIX/bin/loft.new"
 # Rename into place: a running loft can be replaced this way, and an interrupted copy
