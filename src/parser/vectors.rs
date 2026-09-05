@@ -5010,6 +5010,16 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
             Type::Reference(d, _) | Type::Enum(d, true, _) => Some(*d),
             _ => None,
         } {
+            // A member typed by a generic's TYPE VARIABLE is not copied here.  Its record
+            // row is the template placeholder (`__typevar_T`), which no record may be
+            // allocated with (loft#1070's guard), and what the member IS — a scalar with
+            // nothing to copy, or a record — is decided per instantiation, after this parse.
+            // So the generic keeps the pre-copy layout, the element slot holding the local's
+            // handle: `formal/tuples.md` D-tup-9 (loft#1365) records that a struct-bound `T`
+            // therefore still aliases, and names the monomorph-time copy as the cure.
+            if self.data.is_type_var_placeholder(d_nr) {
+                return None;
+            }
             let kt = self.data.def(d_nr).known_type();
             if kt == u16::MAX {
                 return None;

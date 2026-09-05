@@ -1492,7 +1492,7 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 44 | **10** | 34 |
+| 44 | **12** | 32 |
 
 (`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
 so the row cannot go stale — the same arrangement the `unspan` table has.)
@@ -1506,6 +1506,11 @@ written for BOTH spellings from the start — the screen asked, before the row w
 whether a tuple element viewed through `q.0` could reach a `-> vector<T>?` return, and it can
 (`tests/scripts/1345-…loft`'s tuple-element cell), so the leaf handles `TupleGet` and the
 third column stays where it was.
+
+loft#1361 moved it to 44 · 12: `classify_vec_bind` and `parse_assign_op_inner` now read the
+member of a TUPLE LOCAL through the `TupleGet` spelling — the whole-tuple bind and the
+assignment off `t.i` lower onto the same owned copy a heap local gets, where before each
+saw only the call spelling and let the member's handle through.
 
 loft#1195 moved it to 42 · 8 · **34** with `parser::field_place`, which reads a comprehension
 destination as a PLACE (root variable + `OpGetField` offsets) and does not carry the

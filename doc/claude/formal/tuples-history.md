@@ -6,13 +6,42 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** (D-tup-8 opened and closed 2026-09-04, loft#1361 — below; D-tup-7 opened and closed 2026-09-04, loft#1350 — below; D-tup-4's KEYED half CLOSED 2026-08-31, loft#1230); D-tup-5 and D-tup-6 opened and closed
+OPEN: **1** — D-tup-9 (opened 2026-09-05, loft#1365 — below).  (D-tup-8 opened and closed 2026-09-04, loft#1361 — below; D-tup-7 opened and closed 2026-09-04, loft#1350 — below; D-tup-4's KEYED half CLOSED 2026-08-31, loft#1230); D-tup-5 and D-tup-6 opened and closed
 2026-08-28; D-tup-3 opened and closed 2026-08-26; D-tup-2 closed the day the
 rule it needed was written down.  Bounded by the oracle note below — **and D-tup-3 is what that
 note was warning about**: it was found by giving an element a HEAP type, which this doc's
 all-`(integer, integer)` oracle cannot express, so the zero above never covered it.  D-tup-5 and
 D-tup-6 are two more from the same blind spot, one axis further: a NULLABLE element, which the
 all-`(integer, integer)` oracle cannot express either.
+
+### D-tup-9 — OPEN (2026-09-05, loft#1365): a tuple literal member typed by a type variable is not copied
+
+`(T-Cons)` copies a heap element INTO a tuple literal and `binding.md (B-Copy)` copies a plain
+bind.  D-tup-8 made that hold for a member whose type is KNOWN at the literal; this is the member
+whose type is a generic's type variable.  `Parser::tuple_member_owned_copy` decides at PARSE time
+whether a member is a record to copy, and a type-variable member looks like one — `Type::Reference`
+to the `__typevar_T` placeholder — so the copy allocated a record with the placeholder's row and
+tripped loft#1070's guard on both backends (`template_matrix::u3_b1a_addable_pair_with_hoisted_sum`,
+`u3_b2_addable_ordered_pair`: `pair_sum<T: Addable>(a, b) -> (T, T)` with `T` an integer).  The
+copy is therefore DECLINED for a type-variable member, which is the layout the language shipped
+before D-tup-8: the element slot holds the local's handle.
+
+Measured, both backends: `fn generic<T: Bumpable>(a: T) -> integer { s = a; t = (s, 1);
+s.bump(); t.0.value() }` answers `1` for a `Counter { n: 0 }` where the rules say `0`, and
+mutating through `t.0` changes `s`.  The same body with `Counter` written in place of `T`
+answers `0` since D-tup-8.
+
+**Why it stays open here rather than closing with D-tup-8.**  What the member IS — a scalar
+with nothing to copy, or a record — exists only per instantiation, after the template is parsed.
+The cure is a monomorph-time step in `retarget_parametric_type_rows`'s pass: collapse the
+`tuple_member_copy` block to its source for a scalar binding, retarget its row for a record
+binding — and the tuple element's placeholder is a separate row (`__typevar_T#2`) from the
+function's own `T`, so the bindings have to cover it first.  That is a change to the monomorph
+path, not to the copy, and it is not made on a branch whose brief is the known-type copy.
+
+**Closes when** the generic probe above answers `0` on both backends and `matrix_axes.py`
+reads the tuple-member axis at `type variable` for a guard in `tests/scripts/`.  Workaround,
+verified: mutate the local before it enters the literal.
 
 ### D-tup-8 — OPENED AND CLOSED (2026-09-04, loft#1361): a tuple with a heap member was shared where the rules say copy
 
