@@ -176,7 +176,14 @@ signature() { # <binary> <tree> <guard-path> <extra-args…> ; "exit|asserts|lea
   # library scored INERT — measured on the loft#1259 parser guard, which fails outright
   # against the pre-fix `lib/parser.loft` and reported "the control and this tree answer
   # the same".  A guard is scored against a tree by running it there.
+  # The arena instruments pass through when the caller armed them.  A defect that only an
+  # instrument can see — a stale work-ref reclaiming, in place, a store number another
+  # record has since taken, which `LOFT_POISON=1` turns into a garbage read and plain mode
+  # hides behind the allocator's reuse order — is scored on the channel that sees it, and
+  # the guard's `@falsified-at` line says which one was armed.
   out=$(cd "$tree" && timeout -k 5 "$((lim + 20))" env LOFT_NATIVE_LEAK_CHECK=1 LOFT_TIMEOUT="$lim" \
+        ${LOFT_POISON:+LOFT_POISON="$LOFT_POISON"} \
+        ${LOFT_STRICT_STORES:+LOFT_STRICT_STORES="$LOFT_STRICT_STORES"} \
         "$bin" "$@" "$file" 2>&1); rc=$?
   local asserts leak panic refusals
   asserts=$(echo "$out" | grep -c "assertion failed")

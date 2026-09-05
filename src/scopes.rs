@@ -142,7 +142,11 @@ struct Scopes<'s> {
     /// a real free in the fresh-store case.  Scope-safe for native:
     /// `av` (outer/function) outlives `v` (inner), so `av`'s Rust
     /// `let` is still live where `v`'s free fires.
-    witness_buffer: HashMap<u16, u16>,
+    ///
+    /// One witness can adopt SEVERAL buffers — the arms of a value branch each mint one
+    /// (`y = if c { S { … } } else { S { … } }`) and the witness holds whichever arm ran —
+    /// so the free declines against every one of them.
+    witness_buffer: HashMap<u16, Vec<u16>>,
     /// Reference vars whose LATEST scanned assignment gave them an OWNED store (a call
     /// whose filtered return deps are empty, a deep-copied var, …), mapped to the loop
     /// depth (`loops.len()`) at that assignment.
@@ -4444,6 +4448,38 @@ fn inline_literal_work_ref(rhs: &Value, function: &Function, data: &Data) -> Opt
     built_here.then_some(av)
 }
 
+/// Every construction work-ref a right-hand side DELIVERS to the binding it is assigned to:
+/// [`inline_literal_work_ref`] at the value's tail, reached through each `if` arm (a `match`
+/// lowers to `if`s) and each block's last operator.  `if c { S { … } } else { S { … } }`
+/// delivers one of two, and the binding adopts whichever arm ran.
+fn adopted_work_refs(rhs: &Value, function: &Function, data: &Data, out: &mut Vec<u16>) {
+    let tail = |ops: &[Value]| {
+        ops.iter()
+            .rev()
+            .find(|o| !matches!(o.unspan(), Value::Line(_)))
+            .cloned()
+    };
+    match rhs.unspan() {
+        Value::If(_, t, f) => {
+            adopted_work_refs(t, function, data, out);
+            adopted_work_refs(f, function, data, out);
+        }
+        Value::Block(bl) => {
+            if let Some(w) = inline_literal_work_ref(rhs, function, data) {
+                out.push(w);
+            } else if let Some(last) = tail(&bl.operators) {
+                adopted_work_refs(&last, function, data, out);
+            }
+        }
+        Value::Insert(ops) => {
+            if let Some(last) = tail(ops) {
+                adopted_work_refs(&last, function, data, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Does a closure record's adoption take over the frame-exit free of local `v`?
 ///
 /// One home for the question `get_free_vars` asks before emitting a free and
@@ -5760,7 +5796,10 @@ impl Scopes<'_> {
                                 // once by the buffer's function-exit OpFreeRef);
                                 // fresh-store → real free.  Scope-safe for
                                 // native because `av` (outer) outlives `v`.
-                                self.witness_buffer.entry(v).or_insert(av);
+                                let buffers = self.witness_buffer.entry(v).or_default();
+                                if !buffers.contains(&av) {
+                                    buffers.push(av);
+                                }
                             }
                         }
                     }
@@ -5838,19 +5877,43 @@ impl Scopes<'_> {
         //
         // So it frees exactly where the plain free did whenever the stores differ, and only
         // declines where the plain free was releasing a store someone else still owns.
+        //
+        // The SAME two names, the other way round, where the local is INNER-scoped — a loop
+        // body — and the buffer is the function's: that is @P378(a)'s shape, and it takes
+        // @P378(a)'s answer (`witness_buffer`).  The local dies once per iteration, and a plain
+        // free there releases the buffer's store while the buffer keeps naming it; the next
+        // pass re-mints through `OpDatabase`, which REUSES the slot's store in place — a number
+        // the free handed back and another record has since taken.  `for … { o = O { opt: S {
+        // n: 6 } }; y: S? = S { n: 3 }; }` wrote the second iteration's literal over `o`'s
+        // record on both backends, and nothing reported it: the store was live, just not the
+        // buffer's.  With the pairing, the local's free is `OpFreeRefIfDistinct(y, buffer)`:
+        // declined while they alias (the buffer keeps its store, reuses it in place, frees it
+        // once at exit), a real free where the local moved on.  Every arm of a value branch
+        // minted a buffer of its own and the local adopted whichever ran, so the pairing
+        // carries them all and the free declines against each.
         if matches!(
             function.tp(v).base(),
             Type::Reference(_, _) | Type::Enum(_, true, _)
-        ) && let Some(av) = inline_literal_work_ref(unspanned_value, function, data)
-            && av != v
-        {
-            // The witness must outlive the buffer, or native's `let` for it has fallen out
-            // of scope by the time the buffer's free runs — the same condition the
-            // call-shaped pairing above states at length.
-            let av_scope = self.var_scope.get(&av).copied().unwrap_or(u16::MAX);
+        ) {
+            let mut adopted: Vec<u16> = Vec::new();
+            adopted_work_refs(unspanned_value, function, data, &mut adopted);
             let v_scope = self.var_scope.get(&v).copied().unwrap_or(u16::MAX);
-            if v_scope != u16::MAX && v_scope <= av_scope {
-                self.literal_buffer.entry(av).or_insert(v);
+            for av in adopted {
+                if av == v || v_scope == u16::MAX {
+                    continue;
+                }
+                // The witness must outlive the buffer, or native's `let` for it has fallen
+                // out of scope by the time the buffer's free runs — the same condition the
+                // call-shaped pairing above states at length.
+                let av_scope = self.var_scope.get(&av).copied().unwrap_or(u16::MAX);
+                if v_scope <= av_scope {
+                    self.literal_buffer.entry(av).or_insert(v);
+                } else if av_scope != u16::MAX {
+                    let buffers = self.witness_buffer.entry(v).or_default();
+                    if !buffers.contains(&av) {
+                        buffers.push(av);
+                    }
+                }
             }
         }
         // @PLN130 F2 — an element view that is live across a RESHAPE of its container cannot
@@ -8079,7 +8142,7 @@ impl Scopes<'_> {
                     // that backwards is a rollback that runs once for a loop that opened
                     // a transaction on every pass.
                     let is_buffer = is_work_ref && self.paired_witness.contains_key(&v)
-                        || self.witness_buffer.values().any(|&b| b == v);
+                        || self.witness_buffer.values().any(|bs| bs.contains(&v));
                     if let Some(&jw) = self.lift_join_witness.get(&v) {
                         // loft#1257 — free the lifted collection return only where it is NOT
                         // the caller's own store.  A `Join` is owned on one arm and a borrow
@@ -8141,7 +8204,7 @@ impl Scopes<'_> {
                             data.def_nr("OpFreeRefIfDistinct"),
                             vec![Value::Var(v), Value::Var(witness)],
                         ));
-                    } else if let Some(&buffer) = self.witness_buffer.get(&v) {
+                    } else if let Some(buffers) = self.witness_buffer.get(&v).cloned() {
                         // @P378(a) — `v` is an inner-scoped witness whose store
                         // is the outer `__ref_N` buffer (adoption).  Skip the
                         // per-iteration free when they still alias so the
@@ -8154,10 +8217,28 @@ impl Scopes<'_> {
                         if let Some(hook) = self.scope_end_drop(function, v, data) {
                             ls.push(hook);
                         }
-                        ls.push(Value::Call(
-                            data.def_nr("OpFreeRefIfDistinct"),
-                            vec![Value::Var(v), Value::Var(buffer)],
-                        ));
+                        // Several buffers — one per arm of the value branch `v` was bound
+                        // from — free only where `v` aliases NONE of them; the single-buffer
+                        // case is the one op.
+                        if let [buffer] = buffers[..] {
+                            ls.push(Value::Call(
+                                data.def_nr("OpFreeRefIfDistinct"),
+                                vec![Value::Var(v), Value::Var(buffer)],
+                            ));
+                        } else {
+                            let mut free = call("OpFreeRef", v, data);
+                            for &buffer in buffers.iter().rev() {
+                                free = v_if(
+                                    Value::Call(
+                                        data.def_nr("OpDistinctStore"),
+                                        vec![Value::Var(v), Value::Var(buffer)],
+                                    ),
+                                    free,
+                                    Value::Null,
+                                );
+                            }
+                            ls.push(free);
+                        }
                     } else if let Some(w) = borrow_witness {
                         // Free ONLY when the local no longer names what its dep names.
                         if let Some(hook) = self.scope_end_drop(function, v, data) {
@@ -10551,10 +10632,19 @@ impl Scopes<'_> {
 /// answer separately and was always right, so nothing outside the interpreter
 /// changed.
 fn needs_pre_init(tp: &Type) -> bool {
+    // Through `base()`: a nullable `S?` / `vector<T>?` / `text?` local is the same slot
+    // behind a nullability marker (`@FR-L-Null`), and it needs the same initialisation —
+    // the null it holds on the path that never assigned it.  Matching the bare spelling
+    // left the nullable twin with none: first assigned inside a branch, the second arm's
+    // `Set` was a REASSIGNMENT whose guarded displacement free read an uninitialised
+    // slot (a refused free of `0xDEADBEEF`, or the free of whatever live store the
+    // previous frame left there); first assigned inside a loop body, it stayed scoped
+    // to the body and the read after the loop was a use-after-free on the interpreter
+    // and an unresolved `var_x` under rustc.  Both backends, every nullable kind.
     matches!(
-        tp,
+        tp.base(),
         Type::Text(_) | Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-    ) || crate::parser::vectors::is_keyed(tp)
+    ) || crate::parser::vectors::is_keyed(tp.base())
 }
 
 /// After a return value has been COPIED — into the caller's hidden `&text` buffer, or into

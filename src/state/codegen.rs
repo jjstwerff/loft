@@ -1867,6 +1867,35 @@ impl State {
         }
     }
 
+    /// The null-init of a NULLABLE vector local (`vector<T>?`): the slot takes the null
+    /// sentinel — ABSENT — never the empty store its dense twin allocates.  What reaches
+    /// here is the pre-init a branch or a loop emits for a local first assigned inside it
+    /// (`scopes::needs_pre_init`): on the path that never assigns, `x != null` must answer
+    /// false, and the assignment that does run installs its own value over the sentinel.
+    /// Routed by `Type`, not by the dense arm's peel: that arm allocates a store and, for a
+    /// borrowed vector, a stack placeholder into the DEP's slot — with `x` itself left
+    /// unwritten, the read on the untaken path was a poisoned frame word (`DbRef store_nr
+    /// 48879 is out of range`).
+    ///
+    /// A KEYED nullable local is NOT routed here: its assignment is `OpReplaceKeyed` INTO
+    /// the local's own store, so the null-init has to allocate that store (`gen_keyed_null`,
+    /// the same answer `--native` gives), and on the untaken path the local reads as present
+    /// and empty on both backends — what absence means for a keyed local is the null model's
+    /// question (@PLN153), not this lowering's.
+    pub(super) fn gen_set_first_nullable_collection_null(&mut self, stack: &mut Stack, v: u16) {
+        let ref_size = size_of::<crate::keys::DbRef>() as u16;
+        let slot_end = stack.function.stack(v).saturating_add(ref_size);
+        if stack.position < slot_end {
+            let bump = stack.step(slot_end) - stack.position;
+            stack.add_op("OpReserveFrame", self);
+            self.code_add(bump);
+            stack.position += bump;
+        }
+        let slot_offset = stack.var_pos(v);
+        stack.add_op("OpInitRefSentinel", self);
+        self.code_add(slot_offset);
+    }
+
     /// P188: first-assignment init for a keyed-collection local
     /// (`sorted<T[key]>`, `hash<T[key]>`, `index<T[key]>`,
     /// `spatial<T[key]>`).  Allocates a fresh store and claims a
@@ -3066,6 +3095,11 @@ impl State {
             } else {
                 self.gen_set_first_ref_call_copy(stack, v, value, d_nr);
             }
+        } else if *value == Value::Null
+            && matches!(stack.function.tp(v), Type::Optional(_))
+            && matches!(stack.function.tp(v).base(), Type::Vector(_, _))
+        {
+            self.gen_set_first_nullable_collection_null(stack, v);
         } else if matches!(stack.function.tp(v), Type::Vector(_, _)) && *value == Value::Null {
             self.gen_set_first_vector_null(stack, v);
         } else if crate::parser::vectors::is_keyed(stack.function.tp(v)) && *value == Value::Null {

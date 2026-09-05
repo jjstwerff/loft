@@ -75,6 +75,20 @@ which point the read returned the wrong value.  A view of a local's field or a v
 element failed the same way.  A projection is a view and owns nothing, so it is left alone;
 a nullable local that actually mints a record of its own still releases it.
 
+**A nullable local behaves like its dense twin inside a branch and a loop.**  `y: S? = S {
+n: 3 }` inside a loop body — or a struct-enum literal, or the literal in an `if`/`match`
+arm — was minted in a buffer the loop's next pass reused in place after another record had
+taken it, so the second iteration's literal overwrote that record on both backends and
+nothing said so.  A `S?`, `vector<T>?` or `text?` local first assigned inside one arm of an
+`if` freed a stale word on the other arm (a refused free, or on the second call the free of
+a live record), and one first assigned inside a loop body could not be read after the loop
+(a use-after-free on the interpreter, a rustc error natively) where the same dense local
+could.  And a keyed local bound from a `match` leaked the arm's collection where the
+`if … else if …` spelling did not.  Each now does what the dense or the `if` spelling always
+did.  One shape stays open: a nullable local assigned both a field like `o.opt` and a plain
+`S?` value keeps only the last assignment's representation (loft#1367, being folded into
+the null model's one bind junction; use a separate local per source until then).
+
 **Every text buffer a frame mints is released.**  A handful of shapes answered the right
 value on both backends while the interpreter left one text buffer behind per call: a
 lambda returning a captured text through `??`, a nullable text local returned, a

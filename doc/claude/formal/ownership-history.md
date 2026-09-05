@@ -6,7 +6,7 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — D-own-32 OPENED AND CLOSED 2026-09-05 (the oracle called a minted variable Owned regardless of its other definitions, and its shadow re-derived the base translation, below); D-own-31 OPENED AND CLOSED 2026-09-05 (the never-free contract named one spelling of five and forbade a release the language ships, below); D-own-30 OPENED AND CLOSED 2026-09-05 (a nullable local holding a projection VIEW freed the store it displaced, below), after D-own-29 2026-09-04 (loft#1346, below) and D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
+OPEN: **0** — D-own-33 OPENED AND CLOSED 2026-09-05 (the per-path fact was short of four homes, every one a nullable local not treated as the heap local it is: a literal buffer adopted inside a loop, the branch pre-init, the loop hoist, a keyed `match` bind, below; a fifth face is loft#1367, owned by @PLN153); D-own-32 OPENED AND CLOSED 2026-09-05 (the oracle called a minted variable Owned regardless of its other definitions, and its shadow re-derived the base translation, below); D-own-31 OPENED AND CLOSED 2026-09-05 (the never-free contract named one spelling of five and forbade a release the language ships, below); D-own-30 OPENED AND CLOSED 2026-09-05 (a nullable local holding a projection VIEW freed the store it displaced, below), after D-own-29 2026-09-04 (loft#1346, below) and D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
 single cell, its Face B CLOSED the same day, that cell's one known SYMPTOM closed 2026-08-26
 with the FACT still wrong, loft#1098, and the fact itself closed by giving every path of a
 value branch its own binding — below).  D-own-26 CLOSED 2026-09-03: its gate existed all
@@ -38,6 +38,52 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-33 — OPENED AND CLOSED (2026-09-05): the per-path fact was short of four homes, every one a nullable local not treated as the heap local it is
+
+`(O-Complete)` requires the fact PER BINDING and PER PATH — every binding, every arm.  Measured on
+the `@FR-O-Complete` rule-led walk (QUALITY.md B7u) with the matrix the rule states and its
+guards had not crossed — the STATEMENT form, a local assigned on two paths with different
+ownership, every cell called twice — the record, vector and keyed columns held (81 of 81) and
+the nullable column did not, in four ways that are not the mixed-path join at all:
+
+1. **A binding that adopts a literal's work-ref inside a loop body had two owners.**  `y: S? =
+   S { n: 3 }` (and a struct-enum literal, and a literal in an `if`/`match` arm) builds in a
+   function-scoped `__ref_p2_N` the binding aliases.  loft#1317 paired the buffer's forced
+   exit free with the local and declined the pairing where the local is inner-scoped — a loop
+   body.  There the binding's per-iteration free returned the store, the buffer kept the
+   number, and the next iteration's `OpDatabase` reused it in place after another record had
+   taken it: the second iteration's literal was written over that record, both backends,
+   nothing reported.  Closed by giving the literal buffer the pairing @P378(a) already gives a
+   CALL buffer (`witness_buffer`): the adopter's free declines while they alias and the buffer
+   keeps, reuses in place and frees once at exit — carried for every arm's buffer.  A MOVE at
+   the adopt was tried first and reverted: it was right for the loop and contradicted every
+   site that reads the buffer as the owner (the owner witness, loft#1200's flag, the `??`
+   lift), four leaks from one reset.
+2. **A nullable local first assigned inside a branch held no null on the other path.**
+   `scopes::needs_pre_init` listed the bare heap spellings and did not peel `Optional`, so the
+   second arm's `Set` was a reassignment whose guarded displacement free read an
+   uninitialised frame word — a refused free, or the free of a live store the previous frame
+   left there.  Closed by the peel.
+3. **A nullable local first assigned inside a loop body stayed body-scoped** — the hoist reads
+   the same predicate — and the read after the loop was a use-after-free (interpreter) or an
+   unresolved `var_x` (rustc).  The same peel; a nullable VECTOR's null-init then needed the
+   sentinel rather than the dense arm's store or placeholder (`gen_set_first_nullable_collection_null`).
+   A keyed nullable local reads present-and-empty on the untaken path on both backends — its
+   assignment copies INTO its own store, so the init allocates — and what absence means for it
+   is @PLN153's question, recorded and not frozen.
+4. **A keyed local bound through a `match` never freed the taken arm's store**: `join_arms`
+   (loft#1154's per-arm licence for the free-source bit) took the `scalar_match` block as one
+   arm.  It now reaches a value block's tail, where every `match` keeps its chain.
+
+A fifth face is OPEN elsewhere: two spellings of `S?` meeting in one local (loft#1367, the
+tagged field projection and the pointer), owned by @PLN153 phase 3 through `(L-Null-Which)`.
+
+Guards: `a-binding-that-adopts-a-literal-buffer-inside-a-loop-frees-it-once` (falsified at
+64437246 under `LOFT_POISON=1` — plain mode hands the stale buffer its own number back; the
+poison sweep is the CI leg), `a-nullable-local-first-assigned-inside-a-branch-or-loop-holds-null-on-the-other-path`,
+`a-keyed-local-bound-through-a-match-frees-the-arm-that-ran`.  Corpus IR moved in 20 of 1241
+files, all green on both backends under strict stores.
 
 ### D-own-32 — OPENED AND CLOSED (2026-09-05): the oracle called a minted variable Owned regardless of its other definitions, and its shadow re-derived the base translation
 

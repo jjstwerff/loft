@@ -82,6 +82,17 @@ Anything that just borrows is tracked but never frees. Crucially, *where* to fre
 **computed** from these facts, not guessed per code-site — and it's computed for **every**
 binding on **every** branch, not just the easy ones.
 
+**`(O-Complete)`'s "every path" has two halves, and a set-and-reconcile of OWNERSHIP covers
+only one.**  The other is what the binding HOLDS on the paths that never assigned it — the
+null a local first assigned inside a branch carries on the other arm, and outside the loop
+that first bound it — and which store a binding that ADOPTS a compiler buffer's record is
+freeing at its own scope exit when that scope is inside the buffer's.  Both were measured
+short of the rule for the NULLABLE spellings alone (D-own-33): `needs_pre_init` names the
+locals that get the null and the hoist, and it must peel `Optional`; a literal's `__ref_p2_N`
+adopted inside a loop body takes the pairing a call's `__ref_N` already has (`witness_buffer`,
+@P378(a)) so one owner frees once; and the free-source licence of a keyed join reaches every
+`match` arm, not only an `if`'s.  The rule did not change: the code did, at those three homes.
+
 **`O-Detach` is about ORDER, and it is the one rule here that a correct ownership FACT cannot
 save you from.** Every other rule answers *who owns this store*; this one answers *when may the
 lowering act on that answer*. A binding whose ownership is computed perfectly is still read as

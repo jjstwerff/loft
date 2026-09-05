@@ -475,7 +475,20 @@ impl Parser {
                     }
                 }
             }
-            Value::Block(bl) if bl.operators.len() == 1 => Self::join_arms(&bl.operators[0], out),
+            // A value block's arms are its TAIL's: a plain arm block holds the one value, and
+            // a `match` lowers to a block that binds its subject first (`scalar_match`,
+            // `tuple_match`, `vector_match`, …) and then holds the `if` chain that chooses
+            // — the same shape as `ncc` above, without a subject to substitute.  Taking the
+            // whole block as one arm made every `match` a value the bracket cannot name, so
+            // the conservative never-free stood: `x = match k { 0 => { mk(1) }, _ => { mk(2)
+            // } }` on a keyed local copied the taken arm's fresh store out and abandoned it,
+            // one per evaluation, where the `if … else if …` spelling of the same program
+            // freed it (loft#1154's fix reached the `if`, not the `match`).
+            Value::Block(bl) => {
+                if let Some(last) = bl.operators.last() {
+                    Self::join_arms(last, out);
+                }
+            }
             other => out.push(other),
         }
     }

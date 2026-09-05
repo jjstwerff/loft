@@ -577,6 +577,15 @@ requires one on every file added under `tests/scripts/`, against the ratchet in
 `tests/falsified.baseline`; `// @falsified-at: none — <reason>` is the honest opt-out for a
 file that genuinely cannot fail on any earlier build.
 
+**A defect only an instrument can see is scored with the instrument armed.**  `LOFT_POISON=1
+LOFT_STRICT_STORES=1 make falsify GUARD=… REF=…` passes both through to the control and to
+this tree.  Measured need: a stale work-ref reclaiming, in place, a store number another
+record had since taken (QUALITY.md B7u) read as `INERT` in plain mode on every shape tried —
+the allocator hands the stale buffer its own freed number back — and as six assertion
+failures under the arena poison.  A guard falsified that way says so beside its line, and
+names the CI leg that runs with the instrument (the nightly poison sweep), because on the
+plain suites it passes on every build.
+
 ⚠ **Two shapes it cannot score, and both report INERT — which reads as "your guard measures
 the wrong thing" when the truth is "this tool cannot see this kind of fix".**
 

@@ -9,6 +9,41 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The per-path fact reaches the nullable spellings (2026-09-05, `@FR-O-Complete` walk, D-own-33)
+
+Four defects, one shape — a nullable local not treated as the heap local it is — found by
+the statement-form matrix of QUALITY.md B7u (a local assigned on two paths with different
+ownership, every cell called twice) on both backends:
+
+- **A literal's work-ref adopted inside a loop body** (`y: S? = S { … }`, a struct-enum
+  literal, an `if`/`match`-arm literal) had two owners: the binding's per-iteration free
+  returned the store, the function-scoped `__ref_p2_N` kept the number, and the next pass's
+  `OpDatabase` reused it in place after another record had taken it.  loft#1317's pairing
+  declined the inner-scoped case.  The literal buffer now takes the pairing a CALL buffer has
+  (@P378(a) `witness_buffer`, extended to a list so a two-arm literal branch declines against
+  both), reached through `scopes::adopted_work_refs`.  A move at the adopt was tried and
+  reverted (the owner witness, loft#1200's flag and the `??` lift all read the buffer as the
+  owner; four leaks).
+- **`scopes::needs_pre_init` peels `Optional`**: a nullable local first assigned inside a
+  branch gets its `Set(x, null)` and one first assigned inside a loop body is hoisted, as the
+  dense twin always was.  A nullable VECTOR's null-init is the sentinel
+  (`state/codegen.rs::gen_set_first_nullable_collection_null`); a keyed one keeps the
+  allocating init its `OpReplaceKeyed` assignment needs.
+- **`Parser::join_arms` reaches a value block's tail**, so `join_source_frees` licenses the
+  free-source bit for every `match` arm as it did for an `if` chain; a keyed local bound
+  through a `match` freed nothing before.
+- `scripts/falsify.sh` passes `LOFT_POISON` / `LOFT_STRICT_STORES` through when the caller
+  arms them — the loop-literal defect is observable only under the arena poison, and the
+  guard's `@falsified-at` line says so.
+
+Filed, owned by @PLN153 phase 3: loft#1367 (two spellings of `S?` in one local).
+
+### A generic's keyed member reaches the concrete key-field refusal (2026-09-05)
+
+A consequence of the entry below: a generic's tuple or keyed member now takes the concrete
+twin's lowering, so an instance whose hash is keyed on the field its own code writes meets
+the `Cannot write to key field` refusal the concrete function always met.  A program that
+compiled only because the instance skipped that path is refused now, with the same message.
 ### @PLN153 phase 2: the null-flow flag is read through one face per rule, and the fold changed nothing (2026-09-05)
 
 Ten sites read `nullflow_enabled()`, and the plan expected them to split by what they do —
