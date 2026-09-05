@@ -2455,8 +2455,17 @@ impl Function {
             // work-buffer local (control.rs return-deps hoist) re-assigned from a
             // nullable call result; `Optional(τ)` shares `τ`'s sentinel storage, so the
             // buffer carries the null (`STRING_NULL`) without a type change.
+            // loft#1372 — and the other direction, `&τ? ← τ`: the link's SLOT is what a write
+            // through it has to fit, and whether that slot may be absent is `@FR-N-Store`'s
+            // question, asked where the value lands, not a RETYPE of the link.  Both sides
+            // peel, so `&integer? = 7` and `&integer? = null` are admitted exactly as
+            // `x: integer? = 7` and `= null` are on the slot itself; unpeeled, the write
+            // through a nullable link was refused as *"cannot change type from `&integer?`
+            // to `integer`"*, which is @FR-B-Ref-Intro's `&τ` for every τ not holding.
             if let Type::RefVar(in_tp) = var_tp
-                && in_tp.is_equal(type_def.base())
+                && (in_tp.is_equal(type_def.base())
+                    || in_tp.base().is_equal(type_def.base())
+                    || (matches!(**in_tp, Type::Optional(_)) && matches!(type_def, Type::Null)))
             {
                 return self.is_new(var_nr);
             }

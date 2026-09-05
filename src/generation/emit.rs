@@ -340,7 +340,7 @@ impl Output<'_> {
                     return write!(w, "var_{var_name}");
                 } else if let Type::RefVar(inner) = variables.tp(var)
                     && matches!(
-                        **inner,
+                        inner.base(),
                         Type::Integer(..)
                             | Type::Float
                             | Type::Single
@@ -353,15 +353,16 @@ impl Output<'_> {
                     // to read the linked source's current value.  loft#1371 — a local
                     // `&text` link holds `*mut String` and reads as a borrow of it, the
                     // same shape the `&text` PARAMETER reads through.
-                    if matches!(**inner, Type::Boolean) {
+                    // loft#1372 — the read side asks the SLOT too.
+                    if matches!(inner.base(), Type::Boolean) {
                         return write!(w, "unsafe {{ *var_{var_name} == 1 }}");
                     }
-                    if matches!(**inner, Type::Text(_)) {
+                    if matches!(inner.base(), Type::Text(_)) {
                         return write!(w, "unsafe {{ &*var_{var_name} }}");
                     }
                     return write!(w, "unsafe {{ *var_{var_name} }}");
                 } else if let Type::RefVar(inner) = variables.tp(var)
-                    && matches!(**inner, Type::Reference(..))
+                    && matches!(inner.base(), Type::Reference(..))
                     && self.local_record_link.contains(&var)
                 {
                     // loft#1371 — a local `&struct` link built from `OpCreateStack` holds

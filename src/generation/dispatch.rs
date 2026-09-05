@@ -314,15 +314,21 @@ impl Output<'_> {
                 // twin of the interp stash + `OpFreeRefIfDistinct` at the RefVar-set
                 // site (codegen.rs).  Heap inner type only; a `RefVar(Text)` buffer
                 // has no such displaced store.
+                // loft#1372 — through `base()` at every one of these: a `&τ?` PARAMETER has
+                // the same representation as its `&τ` twin (`Optional(τ)` shares `τ`'s
+                // storage), so the displacement question, the text coercion and the boolean
+                // one are all the SLOT's.  Asked bare, a `&text?` write-back emitted
+                // `*var_p = "z"` with no `.to_string()` and rustc rejected it.
+                let inner_slot = inner.base();
                 let amp_owned_writeback = (matches!(
-                    **inner,
+                    inner_slot,
                     Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                ) || crate::parser::vectors::is_keyed(inner))
+                ) || crate::parser::vectors::is_keyed(inner_slot))
                     && matches!(
                         crate::use_analysis::ownership_of(self.data, self.def_nr, to),
                         crate::use_analysis::Own::Owned
                     );
-                let needs_text_coerce = matches!(**inner, Type::Text(_));
+                let needs_text_coerce = matches!(inner_slot, Type::Text(_));
                 // A `&boolean` slot holds the tri-state STORAGE byte (`u8`: 0/1/255,
                 // null-capable) while an expression like `!b` produces a two-state
                 // `bool`, so the write needs the same conversion `OpSetBoolean` carries
@@ -330,7 +336,7 @@ impl Output<'_> {
                 // `*var_b = (…) != 1;` into a `&mut u8` and rustc rejected it — the
                 // second half of loft#655, invisible until the interpreter half was
                 // fixed and compilation got far enough to reach it.
-                let needs_bool_coerce = matches!(**inner, Type::Boolean);
+                let needs_bool_coerce = matches!(inner_slot, Type::Boolean);
                 if amp_owned_writeback {
                     write!(w, "{{ let _old_disp = *var_{name}; *var_{name} = ")?;
                 } else {
@@ -376,10 +382,15 @@ impl Output<'_> {
         // The `&mut String` a `&text` PARAMETER carries cannot serve here — it would freeze
         // the source local for the link's whole life, and loft allows reading `c` while
         // `pc` links it.
+        // loft#1372 — through `base()`: `Optional(τ)` shares `τ`'s storage exactly, so a
+        // `&τ?` local link has the same representation as its `&τ` twin and the null rides
+        // the slot's own sentinel.  Asked bare, `Optional` matched no arm, the bind emitted
+        // no right-hand side at all (`let mut var_q: … =  as …;`) and rustc reported it —
+        // which is why @FR-B-Ref-Intro's `&τ` for every τ had to be declined here too.
         if !variables.is_argument(var)
             && let Type::RefVar(inner) = variables.tp(var)
             && matches!(
-                **inner,
+                inner.base(),
                 Type::Integer(..)
                     | Type::Float
                     | Type::Single
@@ -395,7 +406,9 @@ impl Output<'_> {
             // Rust's borrow checker forbids), matching the interpreter and loft's
             // internal unchecked-aliasing model.  Scalars don't move, so the pointer
             // stays valid for the source's scope.
-            let base = rust_type(inner, &Context::Variable);
+            // The SLOT's Rust type, for the same reason: a `&integer?` local is a
+            // `*mut i64` exactly as a `&integer` one is (loft#1372).
+            let base = rust_type(inner.base(), &Context::Variable);
             // Dispatch on the construction VALUE, which is in the IR (so it survives a
             // snapshot round-trip) — no per-variable flag needed: an `OpGetField` value
             // is an L3 struct-field link, `OpGetVector`/`OpVectorRef` an L4 element link,
@@ -459,10 +472,10 @@ impl Output<'_> {
                 // write-THROUGH to the linked source
                 // Write half of the same conversion the read does (loft#655): the
                 // slot is the `u8` storage byte, the RHS is a `bool`.
-                let bool_link = matches!(**inner, Type::Boolean);
+                let bool_link = matches!(inner.base(), Type::Boolean);
                 // A text RHS yields a `&str` or a `String`; the slot is a `String`.  The
                 // same coercion the `&text` PARAMETER write-back carries.
-                let text_link = matches!(**inner, Type::Text(_));
+                let text_link = matches!(inner.base(), Type::Text(_));
                 write!(w, "unsafe {{ *var_{name} = ")?;
                 if bool_link {
                     write!(w, "u8::from(")?;
@@ -488,7 +501,7 @@ impl Output<'_> {
         // `o` is the same L7 edge the #257 alias has.
         if !variables.is_argument(var)
             && let Type::RefVar(inner) = variables.tp(var)
-            && matches!(**inner, Type::Reference(..))
+            && matches!(inner.base(), Type::Reference(..))
             && let Value::Call(d_nr, cargs) = to.unspan()
             && self.data.def(*d_nr).name() == "OpCreateStack"
             && let [src_arg] = cargs.as_slice()

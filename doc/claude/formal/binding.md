@@ -355,13 +355,16 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 
 ## Deviations
 
-**OPEN: 1.**
-- **D-bind-17** — `&τ?` is declined: `(B-Ref-Intro)` admits `&τ` for every τ, and a link to a
-  NULLABLE slot (`q = &x` with `x: integer?`, `fn f(p: &integer?)`) is refused where its type
-  is built (`Parser::ref_var_type`) until the read and write lowerings carry the wrapper on
-  both backends (loft#1372).  Before the refusal the local bind was a silent copy.
+**OPEN: 0** — D-bind-17 CLOSED 2026-09-06 (loft#1372): a `&` link now carries a NULLABLE
+slot, so `(B-Ref-Intro)`'s *`&τ` for every τ* holds with no τ excluded.  `Optional(τ)` shares
+`τ`'s storage, so a `&τ?` has the same representation as its `&τ` twin and the absence rides
+the slot's own sentinel; what was missing was not a mechanism but one spelling of the SLOT
+behind a link, at the nine sites that each asked the link's inner type bare.  The entry read:
+*`&τ?` is declined — a link to a NULLABLE slot (`q = &x` with `x: integer?`,
+`fn f(p: &integer?)`) is refused where its type is built, until the read and write lowerings
+carry the wrapper on both backends; before the refusal the local bind was a silent copy.*
 
-Every other deviation this doc has carried is closed; the record is in
+Every deviation this doc has carried is closed; the record is in
 [binding-history.md](binding-history.md).
 
 > **A zero here is a claim to re-measure, and this is what the oracle covers.** The `&`

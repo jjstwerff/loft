@@ -3281,10 +3281,12 @@ use a separate collection or add after the loop"
                 // uniform RefVar deref (`OpGet*/OpSet*(c,0)`), and native keys its
                 // pointer construction off this `OpGetField`/`OpGetVector` value — so no
                 // per-variable flag is needed and the link survives an IR snapshot.
-                if !self.refuse_nullable_link(&s_type) {
-                    *code = eref;
-                    s_type = Type::RefVar(Box::new(s_type));
-                }
+                // loft#1372 — a NULLABLE scalar place links like its non-null twin:
+                // `Optional(τ)` shares `τ`'s storage, so the same `OpGet*/OpSet*(c, 0)`
+                // deref serves it and the null rides the slot's own sentinel.  This site
+                // used to decline it (D-bind-17).
+                *code = eref;
+                s_type = Type::RefVar(Box::new(s_type));
             }
         }
         // A `&` of a tuple PLACE (`b = &v[0]`, `b = &s.pair`) reaches no lowering above,
