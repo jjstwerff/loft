@@ -4568,9 +4568,24 @@ use a separate collection or add after the loop"
                 return Type::Void;
             }
             if literal_builds_into_dest {
-                let mut ops = self.clear_vector_field(to, &lhs_parent_tp);
-                ops.push(code.clone());
-                *code = Value::Insert(ops);
+                let clear = self.clear_vector_field(to, &lhs_parent_tp);
+                // After the literal's snapshot of this destination, when it took one: the
+                // clear is the detach the snapshot must precede (`@FR-O-Detach`).  Put it
+                // INSIDE the block at the snapshot's end rather than ahead of the whole
+                // block, or the snapshot copies an already-emptied destination and the build
+                // reads its own result — which is what a CAPTURED collection did, the one
+                // destination that reaches this arm and reads itself (loft#1391).
+                if snapshot_len > 0
+                    && let Value::Block(bl) = code
+                {
+                    for (i, op) in clear.into_iter().enumerate() {
+                        bl.operators.insert(snapshot_len + i, op);
+                    }
+                } else {
+                    let mut ops = clear;
+                    ops.push(code.clone());
+                    *code = Value::Insert(ops);
+                }
                 return Type::Void;
             }
             if !is_nonempty_literal

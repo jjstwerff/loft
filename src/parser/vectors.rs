@@ -93,6 +93,21 @@ pub(crate) fn narrow_elm_read(
 
 // Lambda and vector expression parsing.
 
+/// One step of a PLACE — what `s.f`, `v[0]` and `v[i]` each contribute to the identity of the
+/// location a build is assigned to, so *"is this read the destination?"* is an equality.
+///
+/// A nullable element read is the same place as a plain one, which is why both spellings
+/// normalise to the element steps rather than carrying the op.  An element step is admitted
+/// only for an index one statement cannot change — a constant, or a variable, since no
+/// expression inside a single statement rewrites one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum PlaceStep {
+    Field(i32),
+    ElemConst(i32),
+    ElemVar(u16),
+    Capture(i32),
+}
+
 impl Parser {
     /// The store op that writes one NARROW-integer vector element the concrete build sites
     /// emit — [`narrow_elm_write`] with the element in a local; see its doc for the contract.
@@ -3952,7 +3967,7 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
     /// answers "different place" for `s.inner.v` on the left and `s.inner.v` on the right —
     /// the nesting is what makes it bite, since a one-level `s.v` has only a bare `Var`
     /// under it.
-    pub(crate) fn field_place(&self, v: &Value) -> Option<(u16, Vec<i32>)> {
+    pub(crate) fn field_place(&self, v: &Value) -> Option<(u16, Vec<PlaceStep>)> {
         match v.unspan() {
             Value::Var(x) => Some((*x, Vec::new())),
             Value::Call(d, args) if *d == self.data.def_nr("OpGetField") => {
@@ -3960,7 +3975,42 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
                     return None;
                 };
                 let (root, mut path) = self.field_place(args.first()?)?;
-                path.push(*off);
+                path.push(PlaceStep::Field(*off));
+                Some((root, path))
+            }
+            // An ELEMENT step, so `xs[0].items` is a place of its own rather than nothing.
+            // Both spellings of the read are the SAME place — a nullable read of an element
+            // is that element — so they normalise to one step; the index decides which
+            // element, and only an index this statement cannot change is admitted: a
+            // constant, or a variable, which no expression inside one statement rewrites.
+            // Anything else (a computed index) is not named and falls back to declining, as
+            // every unnameable destination here does.
+            Value::Call(d, args)
+                if matches!(
+                    self.data.def(*d).name(),
+                    "OpGetVector" | "OpGetVectorNullable" | "OpVectorRef"
+                ) =>
+            {
+                let step = match args.get(2)?.unspan() {
+                    Value::Int(i) => PlaceStep::ElemConst(*i),
+                    Value::Var(i) => PlaceStep::ElemVar(*i),
+                    _ => return None,
+                };
+                let (root, mut path) = self.field_place(args.first()?)?;
+                path.push(step);
+                Some((root, path))
+            }
+            // A CAPTURED collection.  A closure reaches its capture through
+            // `OpGetDbRef(__closure, <offset>)` — @PLN93's build-into-target writes straight
+            // through it — so the destination is neither a variable nor a field chain, and a
+            // build inside the closure could not be told from a read of something else.  It
+            // IS a place: the closure record and the slot the capture sits in.
+            Value::Call(d, args) if self.data.def(*d).name() == "OpGetDbRef" => {
+                let Value::Int(off) = args.get(1)?.unspan() else {
+                    return None;
+                };
+                let (root, mut path) = self.field_place(args.first()?)?;
+                path.push(PlaceStep::Capture(*off));
                 Some((root, path))
             }
             _ => None,
@@ -4008,15 +4058,28 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
         if self.first_pass || (vec != u16::MAX && self.keyed_local(vec)) {
             return None;
         }
-        let field_place = if is_field {
-            Some(self.field_place(dest)?)
-        } else {
-            None
+        // Any destination that is not a bare VARIABLE is named by its PLACE, whether the
+        // caller called it a field or not.  A CAPTURED collection is neither a variable nor a
+        // field — a closure reaches it through `OpGetDbRef(__closure, <offset>)` — so gating
+        // the place on `is_field` left it with no read test at all and the build read its own
+        // emptied result (loft#1391).  A field whose place cannot be named still declines, as
+        // it did.
+        let field_place = match dest.unspan() {
+            Value::Var(_) => None,
+            _ if is_field => Some(self.field_place(dest)?),
+            _ => self.field_place(dest),
         };
         let reads = {
             let ro: Vec<&Value> = parts.iter().map(|p| &**p).collect();
-            self.comprehension_reads_target(vec, is_var, &ro)
-                || self.comprehension_needs_own_buffer(vec, dest, is_var, is_field, &ro)
+            match &field_place {
+                Some(place) => ro
+                    .iter()
+                    .any(|v| v.any_node(&mut |n| self.field_place(n).is_some_and(|p| p == *place))),
+                None => {
+                    self.comprehension_reads_target(vec, is_var, &ro)
+                        || self.comprehension_needs_own_buffer(vec, dest, is_var, is_field, &ro)
+                }
+            }
         };
         if !reads {
             return None;

@@ -142,6 +142,13 @@ named every variable `65535` with a `-` where its slot number and span belong �
 the same command on the same file did not print the same thing.  `introspect` now always
 parses; ordinary runs keep the cache.
 
+**A list built from what it replaces reads the old value, at the last two places it did
+not.**  `xs[0].items = [xs[0].items[1]?, xs[0].items[0]?]` — reversing a list that lives in a
+struct inside a list — answered zeros, and so did the same line inside a closure over the
+list.  Both read what the destination held when the statement began now, as a plain local, a
+field and a parameter already did.  Reading a NEIGHBOURING field, or another element's, is
+untouched: those are different places and are read as they stand.  (loft#1391)
+
 **A `&` link to a vector keeps up with its source.**  `q = &v; v = [7, 8, 9]` left `q`
 reading the two elements `v` had when the link was taken, while `v` read three — on both
 backends, with nothing said.  The link now follows the source, as the `&` to a struct, a text

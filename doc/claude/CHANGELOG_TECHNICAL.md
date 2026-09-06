@@ -30,6 +30,30 @@ Filed: loft#1394 (a payload binding written inside the arm, which needs the walk
 model), loft#1392, loft#1395.  formal: binding-history D-bind-19, IMPLEMENTATIONS.md's
 `@FR-O-Oracle` row.
 
+### A build reads its destination through an element or a capture (2026-09-06, loft#1391)
+
+`(I-Comp)` is *whichever destination*; D-iter-4's snapshot reached the ones
+`Parser::field_place` could name — a variable and a chain of `OpGetField`.  The two it could
+not answered the EMPTIED result on both backends, silently: a field reached through an ELEMENT
+(`xs[0].items = [xs[0].items[1]?, …]`) and a collection a CLOSURE captured.
+
+Closed in the PLACE.  `field_place` gained an ELEMENT step — the index must be one a single
+statement cannot change (a constant or a variable), and both element spellings normalise to one
+step, since a nullable read of an element is that element — and a CAPTURE step,
+`OpGetDbRef(__closure, <offset>)`, which is @PLN93's build-into-target.  Two gates beside it had
+hidden the second destination: the place was computed only when the caller SAID the destination
+was a field, so a capture had no read test at all; and `literal_builds_into_dest` ran its
+`OpClearVector` ahead of the whole block, so the snapshot copied an already-emptied destination
+— the clear sits inside the block after the snapshot now, where the field spelling has always
+put it.
+
+Guard `a-build-reads-its-destination-through-an-element-or-a-capture` (14 cells: both
+destinations by literal, comprehension and `+=`, a variable index, a surrounding loop, an
+if-arm, and five controls — a sibling field, another element's field, a nested plain field, the
+plain local, and a capture that reads only `len`), falsified at 00ff5bb5.  `matrix_axes.py` is
+what named the loop and comprehension axes the first cut had held fixed.  formal:
+iteration-history.md D-iter-5.
+
 ### A vector link follows a rebind of its source (2026-09-06, loft#1392)
 
 `(B-Ref-Alias)` / `(B-Ref-Uniform)`: a `&` binding is a live link.  A vector link SHARES the
