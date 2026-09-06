@@ -617,6 +617,11 @@ impl State {
     pub fn new(mut db: Stores) -> State {
         let stack_cur = db.database(1000);
         db.stack_store_at_zero = true; // #306 — protect slot 0 from whole-store frees
+        // @PLN154 — arm the stack shadow.  Here and only here: the shadow is what makes a
+        // store the one whose slots are checked, so a heap store never carries one.
+        if crate::stack_verify::enabled() {
+            db.store_mut(&stack_cur).arm_init_shadow();
+        }
         let stack_cap_bytes = db.store(&stack_cur).byte_capacity() as u32;
         // Allocate the constant store (CONST_STORE = 1). Starts empty,
         // populated during byte_code(), locked before execution.
@@ -1814,10 +1819,11 @@ impl State {
                 self.ensure_stack(
                     bytes.len() as u32 + Self::generator_zone2_size(d_nr, self.data_ptr) as u32,
                 );
-                let dest = self
-                    .database
-                    .store_mut(&self.stack_cur)
-                    .addr_mut::<u8>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
+                let dest = self.database.store_mut(&self.stack_cur).addr_span_mut(
+                    self.stack_cur.rec,
+                    self.stack_cur.pos + self.stack_pos,
+                    bytes.len(),
+                );
                 unsafe {
                     std::ptr::copy_nonoverlapping(bytes.as_ptr(), dest, bytes.len());
                 }
@@ -1835,7 +1841,7 @@ impl State {
                     if zone_size > 0 {
                         let zone_abs = self.stack_cur.pos + stack_base + bytes.len() as u32;
                         let store = self.database.store_mut(&self.stack_cur);
-                        let ptr = store.addr_mut::<u8>(self.stack_cur.rec, zone_abs);
+                        let ptr = store.addr_span_mut(self.stack_cur.rec, zone_abs, zone_size);
                         // SAFETY: zone_abs points inside the stack store; zone_size
                         // bytes there are within the pre-reserved frame region.
                         unsafe {
@@ -1900,10 +1906,11 @@ impl State {
                 // step is identity → advances value_size, same as the old loop.
                 let step = self.stack_step(value_size);
                 self.ensure_stack(step);
-                let dst = self
-                    .database
-                    .store_mut(&self.stack_cur)
-                    .addr_mut::<u8>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
+                let dst = self.database.store_mut(&self.stack_cur).addr_span_mut(
+                    self.stack_cur.rec,
+                    self.stack_cur.pos + self.stack_pos,
+                    value_size as usize,
+                );
                 unsafe {
                     std::ptr::write_bytes(dst, 0, value_size as usize);
                 }
@@ -2056,10 +2063,11 @@ impl State {
         self.active_coroutines.pop();
 
         // Slide the yielded value to stack_base.
-        let dest = self
-            .database
-            .store_mut(&self.stack_cur)
-            .addr_mut::<u8>(self.stack_cur.rec, self.stack_cur.pos + base);
+        let dest = self.database.store_mut(&self.stack_cur).addr_span_mut(
+            self.stack_cur.rec,
+            self.stack_cur.pos + base,
+            vs,
+        );
         unsafe {
             std::ptr::copy_nonoverlapping(value_bytes.as_ptr(), dest, vs);
         }
@@ -2221,6 +2229,17 @@ impl State {
         // of an unwritten slot (uninitialised, or a cross-frame stale read whose
         // bytes a prior frame left) hits it — a `DbRef` read trips the
         // `get_stack<DbRef>` OOB guard (store_nr=0xBEEF).  Off by default.
+        // @PLN154 — the frame just reserved holds no values yet.  This is the same region
+        // and the same argument `LOFT_POISON` uses below: above the old TOS, provably dead
+        // by the stack discipline, so clearing its tags cannot lose a live one.  The
+        // difference is that the shadow does not need the slot to hold a distinguishable
+        // byte pattern to say so.
+        if step != 0 && crate::stack_verify::enabled() {
+            let at = (self.stack_cur.rec * 8 + self.stack_cur.pos + base) as usize;
+            self.database
+                .store_mut(&self.stack_cur)
+                .shadow_kill(at, step as usize);
+        }
         if step != 0 && crate::keys::poison_enabled() {
             const POISON: [u8; 4] = [0xEF, 0xBE, 0xAD, 0xDE];
             let rec = self.stack_cur.rec;
@@ -2384,6 +2403,22 @@ impl State {
         self.stack_pos -= self.stack_step(size_of::<T>() as u32);
         #[cfg(feature = "stack_align_guard")]
         self.check_stack_align::<T>(self.stack_cur.pos + self.stack_pos);
+        // @PLN154 — check high.  The pop is also a LIFO consume, so the slot's tags go
+        // with it: the next occupant of this offset inherits nothing from this value, and
+        // a later read there has to be earned by a later write.
+        if crate::stack_verify::enabled() {
+            self.verify_slot(
+                "get_stack",
+                std::any::type_name::<T>(),
+                self.stack_pos,
+                size_of::<T>(),
+            );
+            let at = (self.stack_cur.rec * 8 + self.stack_cur.pos + self.stack_pos) as usize;
+            let step = self.stack_step(size_of::<T>() as u32) as usize;
+            self.database
+                .store_mut(&self.stack_cur)
+                .shadow_kill(at, step);
+        }
         let r = self
             .database
             .store(&self.stack_cur)
@@ -2571,10 +2606,48 @@ impl State {
         );
         #[cfg(feature = "stack_align_guard")]
         self.check_stack_align::<T>(self.stack_cur.pos + self.stack_pos - u32::from(pos));
+        // @PLN154 — a frame read.  No kill: the slot stays live, and a local read twice is
+        // read twice.
+        if crate::stack_verify::enabled() {
+            self.verify_slot(
+                "get_var",
+                std::any::type_name::<T>(),
+                self.stack_pos - u32::from(pos),
+                size_of::<T>(),
+            );
+        }
         self.database.store(&self.stack_cur).addr::<T>(
             self.stack_cur.rec,
             self.stack_cur.pos + self.stack_pos - u32::from(pos),
         )
+    }
+
+    /// @PLN154 — report a read of `width` bytes at frame offset `at` that no write tagged.
+    ///
+    /// Named where the check is made rather than where the tag was set, because the answer
+    /// a reader needs is *which read got a value nobody wrote* — the write that did not
+    /// happen has no site.
+    fn verify_slot(&self, what: &str, ty: &str, at: u32, width: usize) {
+        let abs = (self.stack_cur.rec * 8 + self.stack_cur.pos + at) as usize;
+        let store = self.database.store(&self.stack_cur);
+        if !store.shadow_armed() {
+            return;
+        }
+        match store.shadow_state(abs, width) {
+            crate::stack_verify::SlotState::Written => return,
+            crate::stack_verify::SlotState::Partial => {
+                crate::stack_verify::note_partial();
+                return;
+            }
+            crate::stack_verify::SlotState::Unwritten => {}
+        }
+        let line = self
+            .line_numbers
+            .range(..=self.code_pos)
+            .next_back()
+            .map_or(0, |(_, &v)| v);
+        let (pc, op, _fn_d_nr) = crate::crash_report::last_context();
+        crate::stack_verify::report_uninit(what, ty, at, width, pc, line, u16::from(op));
     }
 
     pub fn mut_var<T>(&mut self, pos: u16) -> &mut T {
@@ -5449,6 +5522,8 @@ impl State {
         // @PLN154 phase 0 — hoisted like `alloc_paths_on` above: one never-taken branch
         // per op when the census is not armed.
         let census_on = crate::stack_census::enabled();
+        // @PLN154 phase 1 — the same hoist for the shadow's one KILL chokepoint.
+        let verify_on = crate::stack_verify::enabled();
         while self.code_pos < bytecode_len {
             if reload_on {
                 reload_tick -= 1;
@@ -5461,6 +5536,12 @@ impl State {
                 }
             }
             let op_pos_rt = self.code_pos;
+            // @PLN154 phase 1 — where the stack top stood before the op.  Every route that
+            // lowers it (a pop, a discard, a return, a work-buffer trim) leaves the span
+            // above dead, and the shadow learns it here rather than at each of the sites:
+            // the ground truth is the pointer, so a route nobody has enumerated is covered
+            // like any other.  Phase 0's lesson, applied to the read side.
+            let verify_sp = if verify_on { self.stack_pos } else { 0 };
             // @PLN105 leak provenance — republish the current op position so any store
             // allocated while executing this op records it as its `created_at` (one u32
             // write per op, alongside the existing crash-report context publish below).
@@ -5530,6 +5611,13 @@ impl State {
                     crate::loft_eprintln!("stack census: op budget spent — stopping here");
                     std::process::exit(0);
                 }
+            }
+            if verify_on && self.stack_pos < verify_sp {
+                let at = (self.stack_cur.rec * 8 + self.stack_cur.pos + self.stack_pos) as usize;
+                let len = (verify_sp - self.stack_pos) as usize;
+                self.database
+                    .store_mut(&self.stack_cur)
+                    .shadow_kill(at, len);
             }
             // @PLN140 arc C — the op just ran; if it took stores, record the path
             // that reached them.
@@ -6444,6 +6532,11 @@ impl State {
     ) -> State {
         let mut db = worker.stores;
         let stack_cur = db.database(1000);
+        // @PLN154 — a worker runs the same bytecode on its own frame, so it gets its own
+        // shadow; without this the detector would be blind to exactly the `par` arms.
+        if crate::stack_verify::enabled() {
+            db.store_mut(&stack_cur).arm_init_shadow();
+        }
         let stack_cap_bytes = db.store(&stack_cur).byte_capacity() as u32;
         State {
             stack_cur,
@@ -6846,10 +6939,11 @@ impl State {
         // byte-identical to `read_tuple_at_wide`'s raw layout the worker reads.
         // Identity when off (step(1) == 1, so the old byte loop was already contiguous).
         self.ensure_stack(input_bytes.len() as u32);
-        let dst = self
-            .database
-            .store_mut(&self.stack_cur)
-            .addr_mut::<u8>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
+        let dst = self.database.store_mut(&self.stack_cur).addr_span_mut(
+            self.stack_cur.rec,
+            self.stack_cur.pos + self.stack_pos,
+            input_bytes.len(),
+        );
         unsafe {
             std::ptr::copy_nonoverlapping(input_bytes.as_ptr(), dst, input_bytes.len());
         }
@@ -7041,10 +7135,11 @@ impl State {
                 let stepped = self.stack_step(size);
                 self.ensure_stack(stepped);
                 let n = size as usize;
-                let dst = self
-                    .database
-                    .store_mut(&self.stack_cur)
-                    .addr_mut::<u8>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
+                let dst = self.database.store_mut(&self.stack_cur).addr_span_mut(
+                    self.stack_cur.rec,
+                    self.stack_cur.pos + self.stack_pos,
+                    n,
+                );
                 unsafe {
                     std::ptr::copy_nonoverlapping(buf.as_ptr(), dst, n);
                 }
@@ -7325,7 +7420,11 @@ impl State {
             // slot (offset 4..8) — replacing the worker's u32::MAX
             // with whatever the parent had there.
             let store = self.database.store_mut(&self.stack_cur);
-            let dst = store.addr_mut::<u8>(self.stack_cur.rec, self.stack_cur.pos + 4);
+            let dst = store.addr_span_mut(
+                self.stack_cur.rec,
+                self.stack_cur.pos + 4,
+                parent_snapshot.len(),
+            );
             unsafe {
                 std::ptr::copy_nonoverlapping(parent_snapshot.as_ptr(), dst, parent_snapshot.len());
             }
