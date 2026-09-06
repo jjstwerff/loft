@@ -182,12 +182,25 @@ Three shapes that read as correct and are not, each measured in this repo's own 
   yourself.
 - **Never wait on a process NAME whose text is inside the waiting script, and never `pkill`
   by name on a shared box.** `until ! pgrep -f "make ci"` never exits: the poller's own
-  `bash -c '…'` command line contains `make ci`, and the `[m]ake` bracket only stops `pgrep`
-  matching ITSELF, not the parent shell. `pkill -f "make ci"` matched — and killed — a sibling
-  checkout's run. Wait on an artefact or a pid file instead (`make ci` records its run in
-  `.ci-running`), stop a run through the tool that started it
+  `bash -c '…'` command line contains `make ci`. `pkill -f "make ci"` matched — and killed — a
+  sibling checkout's run. Wait on an artefact or a pid file instead (`make ci` records its run
+  in `.ci-running`), stop a run through the tool that started it
   (`scripts/find_problems.sh --stop`), and before acting on a "concurrent run" claim read
   the candidates' `readlink /proc/<pid>/cwd`.
+
+  ⚠ **The `[m]ake` bracket works, and that is exactly why it is not a rule you can rely on.**
+  Measured 2026-09-07: a bracketed waiter exits on the first poll, an unbracketed one loops
+  forever. What defeats the bracket is the PLAIN string appearing anywhere else on an ancestor's
+  command line — a second command in the same invocation, an `echo`, a log path — because then
+  the ancestor's argv carries the unbracketed text for the bracketed regex to match. That is
+  invisible and easy: the measurement above read "bracket self-matches" on its first attempt
+  because both forms were in one command. A waiter that is correct today breaks when someone
+  adds an `echo` beside it, so **wait on a recorded PID** — `scripts/ci-run.sh status`, or the
+  pid `find_problems.sh --bg` prints — which has no pattern to defeat.
+
+  `pgrep -x` is not the way round it either: it matches `comm`, which is truncated, and
+  **silently matches nothing when the name exceeds 15 characters** (it warns on a tty and the
+  warning is easy to pipe away). Fine for `pgrep -x make`; not a general answer.
 
 ---
 
