@@ -2472,9 +2472,15 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 728 | 364 | 5 | **359** |
+| 729 | 364 | 5 | **360** |
 
-loft#1389 added one function on the OPAQUE side — `728 | 364 | 5 | 359` — `Parser::change_var`'s
+loft#1403 added one function on the OPAQUE side — `729 | 364 | 5 | 360` — the `snapshot_kind`
+helper that names the three SNAPSHOT-iterating collection kinds (`Type::Hash | Type::Trie |
+Type::Radix`) so the `#remove` refusal can say which one the author actually wrote.  Opaque is
+the right column: the receiver it classifies is a collection the parser has already resolved,
+so a `τ?` cannot arrive there, and peeling would only add a step that never fires.
+
+loft#1389 added one function on the OPAQUE side — `Parser::change_var`'s
 self-dep strip, which now names `Type::Reference | Type::Enum(_, true, _)` where it used to
 name one of them.  Opaque is the right column and the right answer: the strip is stated over
 the two RECORD kinds deliberately, and the collection kinds it does not name carry the @P302

@@ -6,7 +6,9 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — D-bind-23 OPENED AND CLOSED 2026-09-06 (loft#1399: a branch arm projecting a COLLECTION got no copy, so `--interpret` read the reassigned container where `--native` was right; below); D-bind-22 OPENED AND CLOSED 2026-09-06 (loft#1396: a binding whose value is a
+OPEN: **0** — D-bind-24 OPENED AND CLOSED 2026-09-06 (loft#1401: a projection discharged
+with `??` was not a view the materialise walk could see, so it kept aliasing an element
+position a `remove` had renumbered; below).  D-bind-23 OPENED AND CLOSED 2026-09-06 (loft#1399: a branch arm projecting a COLLECTION got no copy, so `--interpret` read the reassigned container where `--native` was right; below); D-bind-22 OPENED AND CLOSED 2026-09-06 (loft#1396: a binding whose value is a
 BRANCH with a projecting arm was named by nothing, so it never materialised — closed by naming
 it through the branch and giving the projecting ARM its own temp, below); D-bind-21 OPENED AND CLOSED 2026-09-06 (loft#1394: a view BOUND INSIDE a
 branch arm whose container is reassigned in the SAME arm was never materialised, because
@@ -19,6 +21,61 @@ reference review.
 B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
 opened and closed 2026-08-05); B-Ref-AnnotationOnly is enforced in every position, not
 only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
+
+> **D-bind-24 — OPENED AND CLOSED (2026-09-06, loft#1401) — a projection discharged with
+> `??` was not a view the materialise walk could see.**  `(B-View)` and [heap.md](heap.md)
+> `(H-Materialise)` say a projection live across a disturbance of its container MATERIALISES —
+> a fresh store, the `(H-Copy)` step, "and the author is told".  The plain spelling did exactly
+> that; the `??` spelling did neither, so `c = v[1] ?? Box{n:0}; v.remove(0)` left `c` aliasing
+> POSITION 1, which `(Col-RemoveDense)` had just renumbered: it read the value that shifted in
+> (3 where its element held 2) and a write through it still reached the container.  Both
+> backends, in silence.  Not an exotic spelling — `(N-Index)` types `v[i]` as `τ?`, so `??` is
+> the discharge the language REQUIRES for a non-null binding.
+>
+> **Filed as one hole; it was four, and all four had to close together.**  That is the entry's
+> lesson: each one alone reads as the whole cause, and each one alone leaves the defect
+> standing.
+>
+>   1. NAMING.  A `??` lowers to a value block that hoists its subject into a temp and hands
+>      that temp back from the tail, so the walk saw a bare `Var` naming nothing.  It now
+>      resolves a tail through the block's OWN bindings — the notion (a name standing for a
+>      value computed here) rather than any one lowering's spelling of it, so `??`,
+>      `?? return` and a `match` subject are one step.
+>   2. COPY.  Supplied per ARM, as loft#1396/#1399 supply it for a branch-valued binding:
+>      `arm_bind` gives the discharge hoist its own `__lift_N`, gated on the walk having named
+>      the binding.  The issue recorded naming-without-copy as measured WORSE, and it is —
+>      the advice then asserts a guarantee the emitters do not deliver.
+>   3. `?? return`.  Its absent path leaves by an early return, so the block's tail is an
+>      unconditional `Var` and not an `if`.  `is_value_branch` read that as "not a branch" and
+>      the arm never reached the copy at all.  One arm is still a path.
+>   4. SPELLING.  A discharged `v[i]` arrives as `OpGetVectorNullable`, which is a projection
+>      by every structural test and is deliberately OFF `is_projection_op` because the deps
+>      PROXY strands a store on it (that function's own doc says so at length).  The hazard
+>      belongs to the proxy, not to the notion, so `view_source_place` is the reading for a
+>      walk that only NAMES a place; the strict list is unchanged for the readers that trigger
+>      the proxy.
+>
+> A binding assigned MORE THAN ONCE was the fifth cell and needed the `multi_assigned` bail
+> lifted for a NAMED binding only: `@FR-O-Latest` is about the type-level dep list, which
+> `lift_join_arm_tails` already declines to rewrite for such a binding, while the copy itself
+> is a fact about this assignment.  The PROJECTION arm never asked the question, so the two
+> arms disagreed about the same binding.
+>
+> ⚠ **The first cut regressed loft#1399, and the mechanism is worth keeping.**  Letting a block
+> tail resolve through its own bindings also let a `[]` MINT arm name the hidden `__vdb_N` it
+> reads its own store out of — a projection by every structural test — and two arms naming
+> DIFFERENT containers name none, so the whole binding stopped being a view.  A place inside a
+> compiler-generated container is not a place any disturbance can name; `resolve_view_root`
+> already stopped at one for that reason, and the namer now does too.  The guard caught it, no
+> targeted suite did.
+>
+> Guarded by `a-discharged-projection-materialises-like-its-plain-twin` (15 cells, falsified at
+> 2f471b15 on both backends).  Three of its cells are ALIAS controls — an undisturbed
+> discharge, a use before the disturbance, and a disturbance of another member — because
+> over-materialising is not the smaller error: it silently loses a write that lands today.
+> Unblocks [collections.md](collections.md) `D-col-2` (loft#1402), which could not release a
+> removed element's children while such a binding still viewed it.  Found in the
+> `@FR-Col-Remove` walk (QUALITY.md B8f).
 
 > **D-bind-23 — OPENED AND CLOSED (2026-09-06, loft#1399) — a branch arm projecting a
 > COLLECTION got no copy.**  loft#1396 gave a projecting arm its own temp and matched

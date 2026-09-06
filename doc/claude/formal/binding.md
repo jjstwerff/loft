@@ -370,52 +370,7 @@ behind a link, at the nine sites that each asked the link's inner type bare.  Th
 carry the wrapper on both backends; before the refusal the local bind was a silent copy.*
 
 The record of the closed ones is in
-
-> **D-bind-21 — OPEN (2026-09-06, loft#1401) — a projection discharged with `??` is not a
-> view the materialise walk can see.**  `(B-View)` and [heap.md](heap.md) `(H-Materialise)`
-> say a struct projection live across a disturbance of its container MATERIALISES — a fresh
-> store, the `(H-Copy)` step, "and the author is told".  The plain spelling does exactly that;
-> the `??` spelling does not, and says nothing.  So `c = v[1] ?? Box{n:0}; v.remove(0)` leaves
-> `c` aliasing POSITION 1, which `(Col-RemoveDense)` has just renumbered — it reads the value
-> that shifted into it (3 where its element held 2) — and a write through it still reaches the
-> container.  Both backends.  This is not an exotic spelling: `(N-Index)` types `v[i]` as
-> `τ?`, so `??` is the discharge the language REQUIRES for a non-null binding.
->
-> `ViewWalk::record_target` registers a view only where `value_view_container` names a
-> container, and a `??` lowers to a value BLOCK whose tail is the `if` the discharge became,
-> whose two arms name the `ncc` temp and a freshly minted default — different names, so the
-> branch clause answers `None`.  Naming it (from the block's own result type, which already
-> carries the container) is measured INERT, and naming it AND stripping the deps is measured
-> WORSE: the advice then asserts a guarantee the emitters do not deliver, because none of them
-> has a copy for a block-valued right-hand side.  Naming and copy land together — the same
-> reading loft#1396/#1399 reached for a branch-valued RHS, one node kind over.
-> Blocks [collections.md](collections.md) `D-col-2` (loft#1402), which cannot release a
-> removed element's children while such a binding still views it.  Found in the
-> `@FR-Col-Remove` walk (QUALITY.md B8f).
-
 [binding-history.md](binding-history.md).
-
-> **D-bind-20 — OPEN (2026-09-06, loft#1401) — a projection discharged with `??` is not a
-> view the materialise walk can see.**  `(B-View)` and [heap.md](heap.md) `(H-Materialise)`
-> say a struct projection live across a disturbance of its container MATERIALISES — a fresh
-> store, the `(H-Copy)` step, "and the author is told".  The plain spelling does exactly that;
-> the `??` spelling does not, and says nothing.  So `c = v[1] ?? Box{n:0}; v.remove(0)` leaves
-> `c` aliasing POSITION 1, which `(Col-RemoveDense)` has just renumbered — it reads the value
-> that shifted into it (3 where its element held 2) — and a write through it still reaches the
-> container.  Both backends.  This is not an exotic spelling: `(N-Index)` types `v[i]` as
-> `τ?`, so `??` is the discharge the language REQUIRES for a non-null binding.
->
-> `ViewWalk::record_target` registers a view only where `value_view_container` names a
-> container, and a `??` lowers to a value BLOCK whose tail is the `if` the discharge became,
-> whose two arms name the `ncc` temp and a freshly minted default — different names, so the
-> branch clause answers `None`.  Naming it (from the block's own result type, which already
-> carries the container) is measured INERT, and naming it AND stripping the deps is measured
-> WORSE: the advice then asserts a guarantee the emitters do not deliver, because none of them
-> has a copy for a block-valued right-hand side.  Naming and copy land together — the same
-> reading `D-bind-19`/loft#1396 reached for a branch-valued RHS, one node kind over.
-> Blocks [collections.md](collections.md) `D-col-2` (loft#1402), which cannot release a
-> removed element's children while such a binding still views it.  Found in the
-> `@FR-Col-Remove` walk (QUALITY.md B8f).
 
 > **A zero here is a claim to re-measure, and this is what the oracle covers.** The `&`
 > ladder (`pln87_link_l*`), the const quadrants (`40-const-fields`), the copy-vs-view boundary

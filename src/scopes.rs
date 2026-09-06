@@ -269,8 +269,9 @@ fn same_place(view: (u16, u32), disturbed: (u16, u32)) -> bool {
         && (view.1 == disturbed.1 || view.1 == ANY_FIELD || disturbed.1 == ANY_FIELD)
 }
 
-/// The container the value of a `Set` VIEWS — [`base_container_var`] for a plain projection,
-/// and through a BRANCH to the container its arms project from.
+/// The PLACE the value of a `Set` VIEWS — the container variable and the field offset inside
+/// it — for a plain projection ([`base_container_place`]), through a BRANCH to the place its
+/// arms project from, and through a value BLOCK to the place its tail names.
 ///
 /// `x = if k > 0 { h.inner } else { mk(0) }` is a view of `h` on the arm that projects and a
 /// fresh value on the other, and asked only of the whole `If` it named no container at all — so
@@ -279,39 +280,157 @@ fn same_place(view: (u16, u32), disturbed: (u16, u32)) -> bool {
 ///
 /// Arms that MINT are ignored rather than disqualifying: one arm viewing is enough for the
 /// binding to be a view on some run, and this is a per-binding fact.  Two arms viewing
-/// DIFFERENT containers name none — there is no single place to be disturbed.
+/// DIFFERENT containers name none — there is no single place to be disturbed.  Two arms viewing
+/// different FIELDS of one container name the whole variable, since either place can be the
+/// one a disturbance ends.
+///
+/// **A block's tail may NAME a temp the block itself bound**, and that name views nothing on
+/// its own.  A `??` discharge is the shape that matters: it hoists a non-trivial subject into a
+/// temp and its tail `if` hands that temp back on the present path, so `c = v[1] ?? Box{n:0}`
+/// reached this as an `if` whose arms are a bare `Var` and a fresh mint — two names, neither a
+/// projection, so no container at all.  The binding stayed a live alias of position 1 across a
+/// `remove` that renumbered it, reading another element's value and writing back into the
+/// container, where the plain spelling materialises and says so (loft#1401, both backends).
+/// Resolving a tail name through the block's OWN bindings covers `??`, `?? return` and a
+/// `match` subject in one step, because it matches the notion — a name standing for a value
+/// computed here — rather than any one lowering's spelling of it.
+///
+/// Only a binding the block MAKES is resolved, never a bare variable the block merely mentions:
+/// a discharge whose subject is already a variable lowers to a plain `if` with a `Var` arm and
+/// no hoist, and reading that as a projection base is the misreading
+/// [`crate::use_analysis::variant_check_subject`] documents at length.
 ///
 /// ⚠ Read ONLY by the walk that NAMES the views to materialise, never by the deps strip.  The
-/// strip makes a binding an owner, and for a branch-valued right-hand side the emitters have no
-/// copy to pair with that — `container_element_base` answers `None` for an `If` — so a binding
-/// stripped here would own a store it only views and free the CONTAINER's at scope exit
-/// (loft#778's class, measured).  What supplies the copy instead is per ARM:
-/// [`Scopes::arm_bind`] gives a projection arm its own temp once this has named the binding,
-/// which is `(O-Complete)`'s per-path fact rather than one verdict for the whole `Set`.
+/// strip makes a binding an owner, and for a branch- or block-valued right-hand side the
+/// emitters have no copy to pair with that — `container_element_base` answers `None` for an
+/// `If` — so a binding stripped here would own a store it only views and free the CONTAINER's
+/// at scope exit (loft#778's class, measured; and measured again for the discharge block, where
+/// the advice then asserts a guarantee the emitters do not deliver).  What supplies the copy
+/// instead is per ARM: [`Scopes::arm_bind`] gives a projecting arm — and a discharge hoist the
+/// arm hands back — its own temp once this has named the binding, which is `(O-Complete)`'s
+/// per-path fact rather than one verdict for the whole `Set`.
 ///
-/// Deliberately NOT folded into [`crate::use_analysis::projection_container_var`], which the
+/// Deliberately NOT folded into [`crate::use_analysis::projection_container_place`], which the
 /// ownership oracle and both emitters read: peeling an arbitrary `if` there would claim `a?` on
 /// a nullable parameter, whose lowering is an `if` with a `Var` arm, and answer `Borrowed` for
 /// a value the callee minted.
-fn value_view_container(value: &Value, data: &Data) -> Option<u16> {
-    let tail = |ops: &[Value]| -> Option<u16> {
-        ops.iter()
-            .rev()
-            .find(|o| !matches!(o.unspan(), Value::Line(_)))
-            .and_then(|t| value_view_container(t, data))
-    };
-    match value.unspan() {
-        Value::If(_, t, e) => {
-            match (value_view_container(t, data), value_view_container(e, data)) {
-                (Some(a), Some(b)) if a == b => Some(a),
-                (Some(a), None) | (None, Some(a)) => Some(a),
-                _ => None,
-            }
-        }
-        Value::Block(b) => tail(&b.operators),
-        Value::Insert(ops) => tail(ops),
-        other => base_container_var(other, data),
+fn value_view_place(value: &Value, data: &Data, function: &Function) -> Option<(u16, u32)> {
+    view_place_in(value, data, function, &[], 0)
+}
+
+/// [`value_view_place`] with the bindings a surrounding value block made in scope, and a depth
+/// bound so a self-referential binding (`Set(x, Var(x))`) cannot walk forever.
+///
+/// The fallback is [`crate::use_analysis::view_source_place`] — [`base_container_place`]
+/// counting a NULLABLE element read as the projection it is, which is what a discharged `v[i]`
+/// arrives as.  Its own `None` means *"this value is not read out of a place a disturbance can
+/// name"* — a literal, a mint, a call.  That is the safe answer here in both directions: an
+/// unnamed value is not materialised, so a shape this cannot read keeps the aliasing it has
+/// today rather than gaining a copy nothing asked for.
+fn view_place_in<'a>(
+    value: &'a Value,
+    data: &Data,
+    function: &Function,
+    env: &[(u16, &'a Value)],
+    depth: u32,
+) -> Option<(u16, u32)> {
+    if depth > 16 {
+        return None;
     }
+    match value.unspan() {
+        Value::If(_, t, e) => match (
+            view_place_in(t, data, function, env, depth + 1),
+            view_place_in(e, data, function, env, depth + 1),
+        ) {
+            (Some((a, fa)), Some((b, fb))) if a == b => {
+                Some((a, if fa == fb { fa } else { ANY_FIELD }))
+            }
+            (Some(p), None) | (None, Some(p)) => Some(p),
+            _ => None,
+        },
+        Value::Block(b) => block_tail_place(&b.operators, data, function, env, depth),
+        Value::Insert(ops) => block_tail_place(ops, data, function, env, depth),
+        Value::Var(x) => env
+            .iter()
+            .rev()
+            .find(|(v, _)| v == x)
+            .and_then(|(_, bound)| view_place_in(bound, data, function, env, depth + 1)),
+        // A place inside a COMPILER-GENERATED container is not a place any disturbance can
+        // name, so it is a MINT for this question rather than a view.  A vector literal is
+        // the shape that matters: it lowers to a hidden `__vdb_N` backing local and reads its
+        // own store back out of it (`vv = OpGetField(__vdb_2, 0, …)`), which is a projection
+        // by every structural test.  Counted as a view it made the `[]` arm of
+        // `b = if … { d.tiles.proto } else { [] }` name a SECOND container, and two arms
+        // naming different containers name none — so the whole binding stopped being a view
+        // and loft#1399 came back.  `(B-Disturb)` is about places the author can disturb, and
+        // nothing in the program can reassign a `__vdb_N`; `Self::resolve_view_root` stops at
+        // one for the same reason and says so.
+        other => crate::use_analysis::view_source_place(data, other)
+            .filter(|(c, _)| !function.is_compiler_generated(*c)),
+    }
+}
+
+/// The place a value block's TAIL views, with the block's own `Set`s added to `env` so a tail
+/// that names one of them resolves to the value it was bound to.
+fn block_tail_place<'a>(
+    ops: &'a [Value],
+    data: &Data,
+    function: &Function,
+    env: &[(u16, &'a Value)],
+    depth: u32,
+) -> Option<(u16, u32)> {
+    let tail = ops
+        .iter()
+        .rev()
+        .find(|o| !matches!(o.unspan(), Value::Line(_)))?;
+    let mut inner: Vec<(u16, &'a Value)> = env.to_vec();
+    for op in ops {
+        if let Value::Set(v, val) = op.unspan() {
+            inner.push((*v, val.as_ref()));
+        }
+    }
+    view_place_in(tail, data, function, &inner, depth + 1)
+}
+
+/// Tell the author that a view was COPIED out of its container, in the sentence its cause
+/// earns.
+///
+/// One home for the three sentences, because the copy itself has two mechanisms and the report
+/// must not differ between them: the deps STRIP materialises a plain projection bind, and the
+/// per-ARM lift materialises a branch- or discharge-valued one.  A reader cannot tell which
+/// route their binding took, and `(H-Materialise)`'s promise — "the author is told" — is about
+/// the copy, not about how it was arranged.
+fn report_materialised_view(cause: ViewCause, vname: &str, cname: &str, fname: &str) {
+    match cause {
+        ViewCause::Reshaped => {
+            crate::copy_manifest::note_materialised_view(vname, cname, fname);
+        }
+        // loft#1373 — the fourth invalidator: the container GREW, so the elements may
+        // have moved to a larger record. Same materialise, different sentence: a
+        // reader told "removing an element renumbers the others" goes looking for a
+        // `remove` that is not in the function.
+        ViewCause::Grown => {
+            crate::copy_manifest::note_grown_view(vname, cname, fname);
+        }
+        // @PLN130 F8 — the third invalidator: the container VARIABLE is reassigned,
+        // so the dep still names `bx` while the store it named is gone. Different
+        // cause, different way out, so a distinct advice line.
+        ViewCause::Reassigned => {
+            crate::copy_manifest::note_reassigned_view(vname, cname, fname);
+        }
+    }
+}
+
+/// Is `v` the temp a null DISCHARGE hoists its SUBJECT into?
+///
+/// `e ?? d` and `e ?? return` bind a non-trivial subject to a temp of their own and hand that
+/// temp back from the tail `if`'s present arm, so it is the subject's value wearing a compiler
+/// name.  Two questions read it — what the join BORROWS on that path
+/// ([`Scopes::lift_arm_tails_into`]), and whether that arm needs a store of its own
+/// ([`Scopes::arm_bind`]) — and one home keeps them from drifting apart.
+fn is_discharge_hoist(function: &Function, v: u16) -> bool {
+    let name = function.name(v);
+    name.starts_with("__ncc_") || name.starts_with("_ncr_")
 }
 
 /// What an argument LIFTED into a `__lift_N` temp borrows — the deps its type must carry.
@@ -1076,8 +1195,8 @@ impl ViewWalk<'_> {
             // `pw = &w[0]` names `w`.  That is the in-versus-to distinction `(B-Ref-Alias)`
             // needs, and it lives in one place.
             // ⚠ THESE TWO TESTS ANSWER DIFFERENT QUESTIONS, AND BOTH ARE LOAD-BEARING.  The
-            // type list says WHICH BINDINGS CAN BE VIEWS AT ALL; `value_view_container` says
-            // WHICH CONTAINER a value views.  They were widened for different defects, on
+            // type list says WHICH BINDINGS CAN BE VIEWS AT ALL; `value_view_place` says
+            // WHICH PLACE a value views.  They were widened for different defects, on
             // different branches, and met here at a cherry-pick — so the pairing reads as an
             // accident of adjacency in the history and is not one.  Narrowing either silently
             // un-fixes a shipped defect, and none of them fails loudly:
@@ -1086,9 +1205,10 @@ impl ViewWalk<'_> {
             //     COLLECTION view is never named, which is loft#1377 and loft#1399 — the
             //     latter answers correctly on `--native` either way, so the interpreter goes
             //     quietly wrong on one backend only;
-            //   * drop `value_view_container` back to `base_container_var` and a BRANCH-valued
+            //   * drop `value_view_place` back to `base_container_place` and a BRANCH-valued
             //     binding names no container — which costs loft#1396 AND loft#1399, since the
-            //     latter's binding is branch-valued too.
+            //     latter's binding is branch-valued too, and a `??`-DISCHARGED projection names
+            //     none either, which is loft#1401.
             //
             // Both narrowings were MEASURED rather than reasoned, by making each one and
             // running the guards: dropping `Type::Vector` fails
@@ -1105,7 +1225,7 @@ impl ViewWalk<'_> {
             if matches!(
                 self.function.tp(*v).base(),
                 Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
-            ) && let Some(container) = value_view_container(rhs, self.data)
+            ) && let Some((container, field)) = value_view_place(rhs, self.data, self.function)
             {
                 // The view belongs to the frame that owns its VARIABLE. Re-binding an outer
                 // local inside a nested block gives a view that outlives the block, and
@@ -1113,8 +1233,6 @@ impl ViewWalk<'_> {
                 // w.inner` in a loop body, `w = Outer{inner: a}` on the next turn.
                 let depth = self.bound_at.get(v).copied().unwrap_or(self.open.len());
                 let idx = depth.min(self.open.len()).saturating_sub(1);
-                let field =
-                    base_container_place(rhs.unspan(), self.data).map_or(ANY_FIELD, |(_, f)| f);
                 // `(B-Disturb)` ends the place a view names when its CONTAINER is disturbed,
                 // and a chain of views names one place however many statements it is spelled
                 // over.  `base_container_place` resolves a chain inside ONE expression
@@ -6512,24 +6630,7 @@ impl Scopes<'_> {
                 }
             }
             let fname = data.def(self.d_nr).original_name();
-            match cause {
-                ViewCause::Reshaped => {
-                    crate::copy_manifest::note_materialised_view(&vname, &cname, &fname);
-                }
-                // loft#1373 — the fourth invalidator: the container GREW, so the elements may
-                // have moved to a larger record. Same materialise, different sentence: a
-                // reader told "removing an element renumbers the others" goes looking for a
-                // `remove` that is not in the function.
-                ViewCause::Grown => {
-                    crate::copy_manifest::note_grown_view(&vname, &cname, &fname);
-                }
-                // @PLN130 F8 — the third invalidator: the container VARIABLE is reassigned,
-                // so the dep still names `bx` while the store it named is gone. Different
-                // cause, different way out, so a distinct advice line.
-                ViewCause::Reassigned => {
-                    crate::copy_manifest::note_reassigned_view(&vname, &cname, &fname);
-                }
-            }
+            report_materialised_view(cause, &vname, &cname, &fname);
         }
         // Companion to the !adopts_fresh_store (deep-copy) branch above for the
         // var-to-var deep-copy path.  When `Set(v, Var(src))` and
@@ -6594,7 +6695,24 @@ impl Scopes<'_> {
             // re-Set inside it still names the arm's store after the loop, so a temp scoped
             // to the statement would be freed under it.
             let home = self.var_scope.get(&v).copied().unwrap_or(self.scope);
-            self.lift_join_arm_tails(&mut rw, home, v, function, data);
+            // `(H-Materialise)` promises the author is TOLD when a view is copied out of its
+            // container, and for a branch- or discharge-valued right-hand side the copy is
+            // made here rather than by the deps strip above — so the report is owed here too.
+            // Keyed on the lift actually TAKEN under the walk's gate, never on the walk's
+            // answer alone: a sentence that asserts "writes through `c` no longer reach `v`"
+            // over a binding that still aliases is worse than the silence it replaces, which
+            // is the measured reason loft#1401's second cure was backed out.
+            if self.lift_join_arm_tails(&mut rw, home, v, function, data)
+                && let Some(cause) = self.views_to_materialise.get(&v).copied()
+                && let Some((container, _)) = value_view_place(value, data, function)
+            {
+                report_materialised_view(
+                    cause,
+                    function.name(v),
+                    function.name(container),
+                    &data.def(self.d_nr).original_name(),
+                );
+            }
             rewritten_arms = rw;
             &rewritten_arms
         } else {
@@ -9264,7 +9382,7 @@ impl Scopes<'_> {
             {
                 let mut rw = a.clone();
                 let home = self.scope;
-                self.lift_join_arm_tails(&mut rw, home, u16::MAX, function, data);
+                let _ = self.lift_join_arm_tails(&mut rw, home, u16::MAX, function, data);
                 rewritten_branch_arg = rw;
                 &rewritten_branch_arg
             } else {
@@ -9901,7 +10019,7 @@ impl Scopes<'_> {
         }
         let home = self.var_scope.get(target).copied().unwrap_or(self.scope);
         let mut branch = args[0].clone();
-        self.lift_join_arm_tails(&mut branch, home, *target, function, data);
+        let _ = self.lift_join_arm_tails(&mut branch, home, *target, function, data);
         let mut new_args = args.clone();
         new_args[0] = branch;
         let call = Value::Call(*d, new_args);
@@ -10021,11 +10139,28 @@ impl Scopes<'_> {
         Some(out)
     }
 
+    /// Is this value produced by a BRANCH — one whose paths may each need a binding of their
+    /// own ([`Self::lift_join_arm_tails`])?
+    ///
+    /// A value block counts through its TAIL, and the tail is not always an `if`.  A
+    /// `?? return` discharge leaves the absent path by an early return, so what remains is a
+    /// statement `if` that diverges and then a bare `Var` naming the temp the block hoisted its
+    /// subject into — one surviving arm, spelled without a join.  Read as "not a branch" that
+    /// arm never reached [`Self::arm_bind`], so a discharged projection kept aliasing a
+    /// container across a `remove` that renumbered it while the `??`-with-default spelling of
+    /// the very same read materialised (loft#1401).  One arm is still a path.
+    ///
+    /// Only a tail naming a local the block ITSELF bound qualifies, never an arbitrary
+    /// variable: the value has to be one computed here for a per-path binding to mean anything.
     fn is_value_branch(node: &Value) -> bool {
         match node.unspan() {
             Value::If(_, _, _) => true,
             Value::Block(bl) if !matches!(bl.result, Type::Void | Type::Null) => {
-                bl.operators.last().is_some_and(Self::is_value_branch)
+                let tail = bl.operators.last();
+                tail.is_some_and(Self::is_value_branch)
+                    || matches!(tail.map(Value::unspan), Some(Value::Var(x))
+                        if bl.operators.iter().any(|o|
+                            matches!(o.unspan(), Value::Set(s, _) if s == x)))
             }
             _ => false,
         }
@@ -10055,9 +10190,9 @@ impl Scopes<'_> {
             Value::Insert(ops) => ops
                 .last()
                 .is_some_and(|l| self.arm_tails_need_binding(l, bound, data, function)),
-            Value::CallRef(_, _) | Value::Call(_, _) | Value::Var(_) => {
-                self.arm_bind(node, bound, data, function).is_some()
-            }
+            Value::CallRef(_, _) | Value::Call(_, _) | Value::Var(_) => self
+                .arm_bind(node, bound, data, function, &mut false)
+                .is_some(),
             _ => false,
         }
     }
@@ -10076,10 +10211,20 @@ impl Scopes<'_> {
         bound: u16,
         function: &mut Function,
         data: &Data,
-    ) {
+    ) -> bool {
         let mut copied: Vec<(u16, u16)> = Vec::new();
         let mut viewed: Vec<u16> = Vec::new();
-        self.lift_arm_tails_into(node, home, bound, function, data, &mut copied, &mut viewed);
+        let mut materialised = false;
+        self.lift_arm_tails_into(
+            node,
+            home,
+            bound,
+            function,
+            data,
+            &mut copied,
+            &mut viewed,
+            &mut materialised,
+        );
         // Each `__lift_N = a` is a whole-value copy the collector never saw (the lift is built
         // after it ran), so the drop moves here by the same rule: the arm's variable stops
         // dropping, the temp — and through the join, the binding — owns the resource.
@@ -10089,12 +10234,12 @@ impl Scopes<'_> {
             }
         }
         if bound == u16::MAX || (copied.is_empty() && viewed.is_empty()) {
-            return;
+            return materialised;
         }
         // A binding assigned elsewhere keeps the parser's fact: the runtime join bind copies
         // its arms there, and naming a hoist here would make it a borrow at every Set it has.
         if self.multi_assigned.contains(&bound) {
-            return;
+            return materialised;
         }
         let mut deps: Vec<u16> = function.tp(bound).depend().clone();
         // A `??` hoist the join hands back as an arm is a binding the join BORROWS on that
@@ -10117,6 +10262,7 @@ impl Scopes<'_> {
             }
         }
         function.depend_on_all(bound, &deps);
+        materialised
     }
 
     /// The walk behind [`Self::lift_join_arm_tails`]; `copied` collects `(source, temp)` for
@@ -10132,23 +10278,69 @@ impl Scopes<'_> {
         data: &Data,
         copied: &mut Vec<(u16, u16)>,
         viewed: &mut Vec<u16>,
+        materialised: &mut bool,
     ) {
         match node {
             Value::Span(b) => {
-                self.lift_arm_tails_into(&mut b.1, home, bound, function, data, copied, viewed);
+                self.lift_arm_tails_into(
+                    &mut b.1,
+                    home,
+                    bound,
+                    function,
+                    data,
+                    copied,
+                    viewed,
+                    materialised,
+                );
             }
             Value::If(_, t, f) => {
-                self.lift_arm_tails_into(t, home, bound, function, data, copied, viewed);
-                self.lift_arm_tails_into(f, home, bound, function, data, copied, viewed);
+                self.lift_arm_tails_into(
+                    t,
+                    home,
+                    bound,
+                    function,
+                    data,
+                    copied,
+                    viewed,
+                    materialised,
+                );
+                self.lift_arm_tails_into(
+                    f,
+                    home,
+                    bound,
+                    function,
+                    data,
+                    copied,
+                    viewed,
+                    materialised,
+                );
             }
             Value::Block(bl) if !matches!(bl.result, Type::Void | Type::Null) => {
                 if let Some(last) = bl.operators.last_mut() {
-                    self.lift_arm_tails_into(last, home, bound, function, data, copied, viewed);
+                    self.lift_arm_tails_into(
+                        last,
+                        home,
+                        bound,
+                        function,
+                        data,
+                        copied,
+                        viewed,
+                        materialised,
+                    );
                 }
             }
             Value::Insert(ops) => {
                 if let Some(last) = ops.last_mut() {
-                    self.lift_arm_tails_into(last, home, bound, function, data, copied, viewed);
+                    self.lift_arm_tails_into(
+                        last,
+                        home,
+                        bound,
+                        function,
+                        data,
+                        copied,
+                        viewed,
+                        materialised,
+                    );
                 }
             }
             Value::CallRef(_, _) | Value::Call(_, _) | Value::Var(_) => {
@@ -10158,12 +10350,12 @@ impl Scopes<'_> {
                     None
                 };
                 if let Some(x) = src
-                    && function.name(x).starts_with("__ncc_")
+                    && is_discharge_hoist(function, x)
                     && crate::data::is_dbref(function.tp(x).base())
                 {
                     viewed.push(x);
                 }
-                match self.arm_bind(node, bound, data, function) {
+                match self.arm_bind(node, bound, data, function, materialised) {
                     Some(ArmBind::Bind(tp)) => {
                         let tmp = self.new_lift_var(function, &tp);
                         self.var_scope.insert(tmp, home);
@@ -10206,10 +10398,11 @@ impl Scopes<'_> {
     ///     caller-side `__ref_N` buffer, a per-site owner, so those arms stay;
     ///   * a plain VARIABLE, which a plain bind COPIES (`@FR-B-Copy`) — a record temp bound
     ///     from it (codegen copies a same-struct `Var` bind on its first and every later
-    ///     Set), or a vector buffer refilled from it (`OpReplaceVector`).  Not a compiler temp:
-    ///     a `??` hoist (`__ncc_N`) is a view of a projection (`@FR-B-View-Depth`) or an owner
-    ///     in its own right, a `__lift_N` is this rewrite's own product, an `_elm_N` a slot
-    ///     inside a container.  Not the binding itself (`r = if c { r } else { … }`), whose
+    ///     Set), or a vector buffer refilled from it (`OpReplaceVector`).  Not a compiler temp
+    ///     — a `__lift_N` is this rewrite's own product, an `_elm_N` a slot inside a container
+    ///     — except a null-discharge HOIST on a binding the walk has NAMED: there the temp
+    ///     holds the subject projection (`@FR-B-View-Depth`) and copies exactly as the inline
+    ///     spelling of it does.  Not the binding itself (`r = if c { r } else { … }`), whose
     ///     transition free already reads that it is read.  Not a keyed collection, which
     ///     `OpReplaceKeyed` copies whatever the arm.  Not a `&` binding, which has no
     ///     `Var`-copy lowering to hand the temp to.  A struct-`Enum` variable IS one: it is
@@ -10226,6 +10419,7 @@ impl Scopes<'_> {
         bound: u16,
         data: &Data,
         function: &Function,
+        materialised: &mut bool,
     ) -> Option<ArmBind> {
         match tail.unspan() {
             Value::CallRef(_, _) => self
@@ -10247,6 +10441,7 @@ impl Scopes<'_> {
                     && bound != u16::MAX
                     && self.views_to_materialise.contains_key(&bound) =>
             {
+                *materialised = true;
                 let (base, opt) = function.tp(bound).peel_optional();
                 match base {
                     Type::Reference(r, _) => Some(ArmBind::Bind(Self::reopt(
@@ -10302,8 +10497,28 @@ impl Scopes<'_> {
                 // argument back must hand back that variable's store, not a temp's.  Copying
                 // the arm there gave D-own-16's `c = maybe_b(c ?? M {}, i)` a temp that died
                 // at the statement while `c` still named it.
-                if bound == u16::MAX || *x == bound || function.is_compiler_generated(*x) {
+                if bound == u16::MAX || *x == bound {
                     return None;
+                }
+                // A compiler temp is not a plain variable a bind may copy: a `__lift_N` is
+                // this rewrite's own product and an `_elm_N` is a slot inside a container.
+                // The ONE exception is a null-discharge HOIST on a binding the walk has named
+                // as a view to materialise.  There the arm is the subject PROJECTION wearing
+                // the temp the lowering hoisted it into — the arm right above copies that same
+                // projection when it is spelled inline — and `(H-Materialise)` gives the path
+                // a store of its own, which is what makes `c = v[1] ?? d` agree with `c = v[1]`
+                // across a disturbance of `v` (loft#1401).
+                //
+                // Gated on the walk's answer and not on the shape, for the reason the
+                // projection arm states: a discharge whose container is NEVER disturbed must
+                // keep aliasing, and copying it would lose a write that lands today.
+                if function.is_compiler_generated(*x) {
+                    if !(is_discharge_hoist(function, *x)
+                        && self.views_to_materialise.contains_key(&bound))
+                    {
+                        return None;
+                    }
+                    *materialised = true;
                 }
                 // Only for a binding the join is the ONE assignment of.  A binding assigned
                 // elsewhere as an owner — first bound by a plain copy and re-bound from the
@@ -10312,7 +10527,19 @@ impl Scopes<'_> {
                 // there would turn one binding's fact into a borrow at every one of its Sets
                 // and orphan the copies the others made (`@FR-O-Latest`: the fact belongs to
                 // the assignment, and a type-level list cannot carry two).
-                if self.multi_assigned.contains(&bound) {
+                //
+                // Unless the walk has NAMED this binding, which is a fact about THIS
+                // assignment and not about the type: the arm needs a store of its own or the
+                // binding aliases a container that has been disturbed under it.  Nothing
+                // type-level is claimed either way — `lift_join_arm_tails` skips the dep
+                // rewrite for a multi-assigned binding on its own, so the copy lands and the
+                // other Sets keep the fact they had.  The PROJECTION arm above never asked
+                // this question, so a `c = Box{…}; c = v[1] ?? Box{…}` differed from its
+                // inline twin only in which of the two arms the projection was spelled in
+                // (loft#1401).
+                if self.multi_assigned.contains(&bound)
+                    && !self.views_to_materialise.contains_key(&bound)
+                {
                     return None;
                 }
                 let (base, opt) = function.tp(*x).peel_optional();
