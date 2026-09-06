@@ -9,7 +9,11 @@ Tracker: [@PLN154](https://github.com/loft-lang/plans/issues/154).
 
 ## Status
 
-**Future — designed, nothing built.**  A third of the machinery is already in the tree:
+**Phase 0 shipped 2026-09-06 and came back RED in the sense it was cut to allow: the tag
+moves off the accessor and down to `Store::addr_mut::<T>` before phases 1-3 are built.
+Findings: [phase0-census.md](phase0-census.md).  Phases 1-5 open.**
+
+A third of the machinery is already in the tree:
 `LOFT_UAF_GEN` ([`src/keys.rs:1335`](../../../../src/keys.rs)) keeps an offset-keyed shadow
 of the operand stack, stamping each pushed `DbRef` with its store's generation and comparing
 at the pop.  [DEBUG.md](../../DEBUG.md) records its ceiling — *"only the window between a
@@ -60,22 +64,22 @@ odd-size adjacency matrix"* — which is the same question asked from the layout
 
 | Item | Source | Verify | Status |
 |---|---|---|---|
-| **0** — the bypass census | this README | A byte count per corpus script (`put_stack` vs. raw store writes) + the site list.  RED if the bypass fraction makes accessor-keyed shadowing untenable, which re-routes the shadow to the store write path before anything is built on it | Open |
-| **1** — `uninit` | @PLN154 | Silent corpus-wide at HEAD on `--interpret`; REPORTS under `make falsify GUARD=<loft#1386's guard> REF=964bab93`.  Ships `LOFT_VERIFY_STACK_INJECT=1` in the same commit | Open |
-| **2** — `width + kind` | @PLN154 | Reports on `tests/scripts/1070-generic-arm-local-type-row.loft`, `1028-generic-null-typed-per-monomorph.loft` and `1016-generic-null-default-instantiation.loft` at the parent of each fixing commit; silent corpus-wide at HEAD | Open |
+| **0** — the bypass census | [phase0-census.md](phase0-census.md) | 1106 corpus programs: `put_stack` carries 74.5 % of the bytes, is 1 of 33 write sites, and **no program** is covered by it alone | **Shipped 2026-09-06 — RED** |
+| **1** — `uninit` | @PLN154 | Silent corpus-wide at HEAD on `--interpret`; REPORTS under `make falsify GUARD=<loft#1386's guard> REF=964bab93`.  Ships `LOFT_VERIFY_STACK_INJECT=1` in the same commit | Open — tag at `Store::addr_mut::<T>`, check at `get_stack` / `get_var` (phase 0) |
+| **2** — `width + kind` | @PLN154 | Reports on `tests/scripts/1070-generic-arm-local-type-row.loft`, `1028-generic-null-typed-per-monomorph.loft` and `1016-generic-null-default-instantiation.loft` at the parent of each fixing commit; silent corpus-wide at HEAD | Open — shares phase 1's hook, which already carries `T` |
 | **3** — `stale-on-grow` | @PLN154 | Reports on the guards for loft#1373 / #1377 / #1384 at their recorded `@falsified-at:` refs; silent corpus-wide at HEAD | Open |
 | **4** — yield vs. the falsification corpus | this README | The 277 guards carrying a real `@falsified-at:` ref, each run under the shadow on the build it was written to catch.  The yield is the REPORT; the gate is the other direction — a shadow report on a build its guard calls clean is a false positive, and is red | Open |
 | **5** — arm it in the nightly | [CI_BUDGET.md](../../CI_BUDGET.md) | The sweep itself: it goes red on a false positive phase 4 did not cover | Open |
 
 ## Phase ordering
 
-1. **Phase 0 before anything.**  The bypasses are the whole engineering problem and the repo
-   has paid for this lesson once already: the comment at `state/mod.rs:2249` records that an
-   untracked `copy_block` slide *was* `LOFT_UAF_GEN`'s residual false positive — *"a loop
-   calling a struct-returning function reported `gen 0 at push` on every backend, on programs
-   with no stale read at all"*.  A census of which bytes reach the stack outside
-   `put_stack` either confirms two chokepoints are enough or moves the shadow to the store
-   write path, and it costs a compile.
+1. **Phase 0 ran first, and moved the hook.**  It asked whether the two accessors are where
+   the bytes arrive, and the answer is no: `put_stack` is 1 of 33 write sites and no corpus
+   program is covered by it alone, so a phase-1 `uninit` check keyed there would have
+   reported `OpPutInt` — the language's commonest assignment — as a read of an unwritten
+   slot.  The tag goes to `Store::addr_mut::<T>`, which 32 of the 33 sites already call and
+   which carries the type phase 2 needs.  Details and what it cannot see:
+   [phase0-census.md](phase0-census.md).
 2. **1 → 2 are one mechanism widened**, each validated on its own: `uninit` is the absence of
    a tag, `width + kind` is the tag.  The tag is free at the write — `put_stack` is generic
    over `T`, and `LOFT_UAF_GEN` already reads `TypeId::of::<T>()` there.

@@ -11709,6 +11709,11 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
     // often exactly what is being asked. Both are silent unless armed.
     state.report_alloc_sites(&p.data);
     state.report_profile(&p.data);
+    // @PLN154 phase 0 — the stack-write census, on the same terms: it measured the run
+    // that happened, fault or not.  Silent unless `LOFT_STACK_CENSUS` armed it.
+    if loft::stack_census::enabled() {
+        loft::stack_census::report(Some(&p.data));
+    }
     // loft#1088 — the network summary was BUILT and never printed: `LOFT_NET_PROFILE=1`
     // accumulated every event and nothing called `report`, so only `=trace` (which
     // prints per event) produced output at all.  Beside the other two because it is the
