@@ -46,13 +46,36 @@ list=$(grep -H -o '@falsified-at: *[0-9a-f]\{7,\}' tests/scripts/*.loft \
 # Refs by how many guards they cover, most first: a partial run then buys the most evidence.
 refs=$(printf '%s\n' "$list" | cut -f2 | sort | uniq -c | sort -rn | awk '{print $2}')
 [ "$MAX" -gt 0 ] && refs=$(printf '%s\n' "$refs" | head -n "$MAX")
+# The CALIBRATION ref goes in whatever the cut: `64437246` is the build @PLN154 phase 1 was
+# falsified against, so a run that scores it anything but CAUGHT is a broken harness rather
+# than a clean corpus.  Prepended, so a partial run learns that first.
+CAL="${LOFT_YIELD_CALIBRATION:-64437246}"
+printf '%s\n' "$refs" | grep -qx "$CAL" || refs=$(printf '%s\n%s\n' "$CAL" "$refs")
 
+# THE ENTRY POINT IS DERIVED, NOT PASSED — `falsify.sh`'s first lesson, and the one that
+# costs a sweep its verdicts: the corpus runner runs `main` when the file has one and every
+# zero-parameter function otherwise, so a `main`-less guard run as a plain program executes
+# almost nothing.  Measured: `a-nullable-local-…` runs 19 test functions under `--tests` and
+# exits 0 having run none of them under a bare `--interpret`.
 run_guard() { # <binary> <stdlib-path-or-empty> <guard> ; echoes the report count
-  local bin="$1" path="$2" g="$3" p=""
+  local bin="$1" path="$2" g="$3" p="" mode="--interpret" args=""
   [ -n "$path" ] && p="--path $path"
+  grep -q '^fn main()' "$g" || mode="--tests"
+  # `// @ARGS: --lib <dir>` is how a guard says where its fixtures are.  Without it the file
+  # does not COMPILE, which prints no report line and scores `silent` — the same vacuity as
+  # the wrong entry point, wearing different clothes.
+  args=$(sed -n 's|^// @ARGS:||p' "$g" | head -1)
   # shellcheck disable=SC2086
-  LOFT_TIMEOUT=45 LOFT_VERIFY_STACK=1 timeout 60 $bin $p --interpret "$g" 2>&1 >/dev/null \
-    | grep -c '^stack verify: get' || true
+  local err
+  # shellcheck disable=SC2086
+  err=$(LOFT_TIMEOUT=45 LOFT_VERIFY_STACK=1 timeout 60 $bin $p $args $mode "$g" 2>&1 >/dev/null)
+  # A run that could not even LOAD is not a silent run.  This is the failure a sweep cannot
+  # see from its own output: the binary exits 1, prints nothing the grep matches, and the
+  # zero reads as evidence.
+  case "$err" in
+    *"cannot load standard library"*) echo VACUOUS; return;;
+  esac
+  printf '%s\n' "$err" | grep -c '^stack verify: get' || true
 }
 
 for ref in $refs; do
@@ -67,7 +90,8 @@ for ref in $refs; do
   printf '%s\n' "$list" | awk -F'\t' -v r="$ref" '$2==r {print $1}' | while read -r g; do
     c=$(run_guard "$bin" "$path" "$g")
     h=$(run_guard "$HEAD_BIN" "$HEAD_PATH" "$g")
-    if [ "${h:-0}" -gt 0 ]; then v=FALSE-POSITIVE
+    if [ "$c" = VACUOUS ] || [ "$h" = VACUOUS ]; then v=VACUOUS
+    elif [ "${h:-0}" -gt 0 ]; then v=FALSE-POSITIVE
     elif [ "${c:-0}" -gt 0 ]; then v=CAUGHT
     else v=silent; fi
     printf '%s\t%s\t%s\t%s\t%s\n' "$ref" "$g" "${c:-0}" "${h:-0}" "$v" >> "$OUT/yield.tsv"

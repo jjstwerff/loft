@@ -9,7 +9,7 @@ Tracker: [@PLN154](https://github.com/loft-lang/plans/issues/154).
 
 ## Status
 
-**Phases 0, 1 and 2 shipped 2026-09-06.  Phase 0 came back RED in the sense it was cut to
+**All six phases shipped 2026-09-06.  Phase 0 came back RED in the sense it was cut to
 allow — the tag moved off the accessor and down to `Store::addr_mut::<T>` before phases 1-3
 were built ([phase0-census.md](phase0-census.md)).  Phase 1 shipped `LOFT_VERIFY_STACK=1`
 GREEN on its gate and moved its own falsification target: neither loft#1386 nor loft#1254 is
@@ -20,7 +20,10 @@ was given up for a measured reason, and loft#1070 is out of a stack shadow's rea
 its defect is a heap record's layout ([phase2-width-kind.md](phase2-width-kind.md)).
 Phase 3 shipped the stale-on-grow half GREEN: all three open issues in the class report
 exactly one site, the view, and a five-probe matrix with a no-relocation negative control
-finds no false positive ([phase3-stale.md](phase3-stale.md)).  Phases 4-5 open.**
+finds no false positive ([phase3-stale.md](phase3-stale.md)).  Phase 4 shipped its DRIVER
+(200 distinct control builds is machine time, not a session) and phase 5 armed the gate in
+the nightly at ~2x the in-process corpus, calibrated both ways
+([phase5-nightly.md](phase5-nightly.md)).**
 
 A third of the machinery is already in the tree:
 `LOFT_UAF_GEN` ([`src/keys.rs:1335`](../../../../src/keys.rs)) keeps an offset-keyed shadow
@@ -74,7 +77,7 @@ odd-size adjacency matrix"* — which is the same question asked from the layout
 | Item | Source | Verify | Status |
 |---|---|---|---|
 | **0** — the bypass census | [phase0-census.md](phase0-census.md) | 1106 corpus programs: `put_stack` carries 74.5 % of the bytes, is 1 of 33 write sites, and **no program** is covered by it alone | **Shipped 2026-09-06 — RED** |
-| **1** — `uninit` | [phase1-uninit.md](phase1-uninit.md) | 1103 of 1103 runnable corpus programs silent at HEAD on `--interpret`; four distinct sites REPORTED on `64437246` (the nullable-local pre-init control), where loft#1386's control is silent and loft#1254's control moves the `Partial` counter instead.  Ships `LOFT_VERIFY_STACK_INJECT=1` in the same commit | **Shipped 2026-09-06 — GREEN, target moved** |
+| **1** — `uninit` | [phase1-uninit.md](phase1-uninit.md) | 1106 of 1106 runnable corpus programs silent at HEAD on `--interpret`; four distinct sites REPORTED on `64437246` (the nullable-local pre-init control), where loft#1386's control is silent and loft#1254's control moves the `Partial` counter instead.  Ships `LOFT_VERIFY_STACK_INJECT=1` in the same commit | **Shipped 2026-09-06 — GREEN, target moved** |
 | **2** — `width + kind` | [phase2-width-kind.md](phase2-width-kind.md) | 1106 corpus programs silent at HEAD on `--interpret`; loft#1028's control reports `handle 12` read as `i64` (and answers `65535`), loft#1016's reports four sites (and answers `4294967198`).  loft#1070's control reproduces and the shadow is silent — its record has the type variable's LAYOUT, so the defect is in a store, not in a frame slot | **Shipped 2026-09-06 — GREEN on 2 of 3; the third is out of scope, measured** |
 | **3** — `stale-on-grow` | [phase3-stale.md](phase3-stale.md) | All three issues are OPEN, so HEAD *is* the broken build: loft#1373, #1377 and #1384 each report exactly ONE site, the stale view.  Silent corpus-wide, and a five-probe matrix ([probes/](probes/README.md)) with a no-relocation negative control | **Shipped 2026-09-06 — GREEN** |
 | **4** — yield vs. the falsification corpus | [phase4-yield.sh](phase4-yield.sh) | 264 guards carry a real `@falsified-at:` ref across **200 distinct** builds, so the full run is hours of machine time rather than a session: the driver takes the refs covering the most guards first, shares one target directory and removes each worktree as it goes, and a partial run states its own sampling.  The yield is the REPORT; the gate is the other direction — a shadow report on a build its guard calls clean is a false positive, and is red (loft#1373 / #1377 / #1384 excepted: they are still OPEN, so HEAD is a broken build for those) | Driver shipped 2026-09-06; the run is machine time |

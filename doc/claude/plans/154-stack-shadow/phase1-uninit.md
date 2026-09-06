@@ -10,7 +10,7 @@ path wrote — silent across the corpus, and reporting on the build a guard was 
 catch?
 
 **Verdict — yes, and the falsification target had to be found rather than assumed.**  The
-detector is silent on all 1103 runnable corpus programs and reports four distinct sites on
+detector is silent on all 1106 runnable corpus programs and reports four distinct sites on
 the build that motivated the nullable-local pre-init fix.  But **neither** of the two
 defects the issue named as `uninit`'s evidence is in this state, and both were measured on
 their own control builds rather than argued from the issue text.
@@ -148,5 +148,5 @@ LOFT_VERIFY_STACK=1 LOFT_VERIFY_STACK_INJECT=1 loft …       # the positive con
 bash doc/claude/plans/154-stack-shadow/verify-run.sh <outdir> [binary] [stdlib-path]
 ```
 
-Corpus at HEAD: **1103 clean, 0 reports**, 71 programs with no verdict (refusal tests that
+Corpus at HEAD: **1106 clean, 0 reports**, 71 programs with no verdict (refusal tests that
 exit before an operator runs, and one that aborts).

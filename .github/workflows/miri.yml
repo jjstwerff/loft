@@ -559,6 +559,67 @@ jobs:
           --lib --test issues --test wrap --test strings --test frame_vars
           -E 'not test(library_suite)'
 
+  stack-shadow:
+    name: LOFT_VERIFY_STACK gate (a frame slot nobody wrote, mistyped, or stale)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-stack-shadow-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-stack-shadow-cargo-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      # @PLN154 — `LOFT_VERIFY_STACK=1` shadows the interpreter's frame: one tag word per
+      # stack byte, written where the bytes arrive (`Store::addr_mut::<T>`, which phase 0
+      # measured carries 32 of the 33 routes) and checked where they are read
+      # (`get_stack` / `get_var`, never the low-level `Store::addr` the debugger and the
+      # frame renderer use to read stale slots on purpose).  Three findings: a span no
+      # write reached, a `DbRef` read as a value or the reverse, and a handle whose record
+      # a container growth relocated.
+      #
+      # It sits beside the poison job for the same reason poison sits beside Miri: it needs
+      # no sanitizer and no nightly, so it runs the whole in-process interpreter corpus at
+      # ~2x — the frame is exactly the residence poison cannot describe, because poison
+      # needs the slot to hold a distinguishable byte pattern and a recycled frame slot
+      # holds a plausible one.
+      #
+      # The gate is the harness's per-script check (`tests/wrap.rs::stack_verify_gate`),
+      # not a grep of stderr: the corpus runs in-process, so `main.rs`'s non-zero exit
+      # never fires for it, and a sweep that has to read output goes green when the format
+      # changes.  Calibrated both ways — green over the corpus today, and every script
+      # fails under `LOFT_VERIFY_STACK_INJECT=1`, which suppresses the write tag so each
+      # checked read reports.
+      #
+      # Same lean surface as the poison job, and for the same reasons: native / wasm / html
+      # tests spawn separate binaries that never reach this path, and `library_suite` needs
+      # cdylibs a cached `target/` did not build.
+      - name: Rebuild the native cdylibs against this libloft.rlib
+        run: make rebuild-native-cdylibs
+
+      - name: Stack-shadow sweep (LOFT_VERIFY_STACK=1, interpreter corpus)
+        env:
+          LOFT_VERIFY_STACK: '1'
+        run: >
+          cargo nextest run --profile ci --release
+          --lib --test issues --test wrap --test strings --test frame_vars
+          -E 'not test(library_suite)'
+
   tsan:
     name: ThreadSanitizer (par/threading data-race gate)
     runs-on: ubuntu-latest
@@ -1082,7 +1143,7 @@ jobs:
     # for THIS list: a gate absent from `needs` is invisible here, and its silence
     # reads as green and AUTO-CLOSES the issue.  When you add a gate that means
     # "the language is broken", add it here in the same commit.
-    needs: [miri, asan, poison, debug-asserts]
+    needs: [miri, asan, poison, stack-shadow, debug-asserts]
     # Never from a PR: a pull request must not be able to open an issue on the repo.
     # Never from the release gate either: its run is evidence for a candidate, and a
     # green candidate must not auto-CLOSE an issue main's nightly opened.
@@ -1160,7 +1221,7 @@ jobs:
   # without opening anything.
   daily-status:
     name: Daily status (the one place to look)
-    needs: [miri, asan, asan-leak-gate, poison, tsan, native-asan, debug-asserts, toolchain-matrix, index-hygiene, library-health]
+    needs: [miri, asan, asan-leak-gate, poison, stack-shadow, tsan, native-asan, debug-asserts, toolchain-matrix, index-hygiene, library-health]
     if: always() && github.event_name != 'pull_request' && !inputs.from_gate
     runs-on: ubuntu-latest
     permissions:
