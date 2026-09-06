@@ -198,9 +198,18 @@ Three shapes that read as correct and are not, each measured in this repo's own 
   adds an `echo` beside it, so **wait on a recorded PID** — `scripts/ci-run.sh status`, or the
   pid `find_problems.sh --bg` prints — which has no pattern to defeat.
 
-  `pgrep -x` is not the way round it either: it matches `comm`, which is truncated, and
-  **silently matches nothing when the name exceeds 15 characters** (it warns on a tty and the
-  warning is easy to pipe away). Fine for `pgrep -x make`; not a general answer.
+  `pgrep -x` is not the way round it either, and it is WORSE rather than merely inadequate. It
+  matches `comm`, which the kernel truncates to `TASK_COMM_LEN` — 16 bytes including the NUL —
+  so a name past 15 characters can never match and the check silently always passes. Measured
+  from both ends: `pgrep -x` on a 23-character name finds nothing while the same `-x` against
+  its truncated `comm` matches, and `pgrep` itself warns — on a tty, which is exactly where a
+  scripted waiter is not.
+
+  **The failure MODES are what rank the two.** `-f` self-matching fails LOUD: the loop blocks
+  and you go looking. `-x` past 15 characters fails silent and closed — a liveness check that
+  reports "finished" the whole time. Reaching for `-x` after being burned by `-f` is reaching
+  for the next pattern instead of stopping using patterns, which is the actual lesson: use the
+  recorded pid.
 
 ---
 
