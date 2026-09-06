@@ -13014,6 +13014,11 @@ impl Parser {
                 // (it aliases the subject `e`); freeing its deps would over-free `e`
                 // (@PLN85 match_return). The append already copied its elements into `w`.
                 if !self.vars.skip_free(local) {
+                    // @FR-O-Proxy asks free — the arm's own backing store is released here.
+                    // @FR-O-Override is consulted by the enclosing test, which is where the
+                    // borrowed-view case (a `_mv_` match-field binding) is turned away; the
+                    // veto has to be read for a free on the proxy, and reading it once for
+                    // the whole block is what that test is.
                     if deps.is_empty()
                         && self.vars.is_work_ref(local)
                         && !self.vars.is_argument(local)

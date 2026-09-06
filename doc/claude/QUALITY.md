@@ -6041,6 +6041,42 @@ different layer — the emitters — rather than a fourth namer.  Three of the f
 across B8b and B8c are shapes the RULES settle and the code does not yet reach; one
 (loft#1397) is a rule that settles the value and a diagnostic that does not exist.
 
+#### B8d — `@FR-O-Proxy` walked: the rule whose split was already enforced, and the spelling its checker could not see (2026-09-06)
+
+The most scattered rule left — 50 citations across twelve files — and the one whose walk looks
+finished before it starts: `scripts/o_proxy_check.py` already classifies every site by WHICH of
+four questions it asks (alloc / copy / free / oracle), gates that a site freeing on the proxy
+consults `@FR-O-Override`, and reports clean.  Step 2 of the walk is done and enforced, which
+moves the whole yield to the method's own warning: *a rule's own CHECKER can have a classifier
+hole, and it reports that as compliance.*
+
+**The hole.**  The checker matched one spelling, `depend().is_empty()` on a single expression —
+41 of them in `src/`.  The same read written across two statements (`let deps = <…>.depend();`
+… `deps.is_empty()`) was invisible, and the tree uses that form twice: `ownership_cfg.rs`'s
+Check B and `control.rs`'s arm-return free.  **Both are compliant**, so the hole had cost
+nothing yet — which is exactly what makes it worth closing before it does, and is the negative
+result this walk mostly produced.
+
+**Three changes, each measured in both directions.**  The checker learns the aliased spelling
+(function-scoped, because a name means nothing outside the function that bound it — file-scoped
+first, which read unrelated `xs.is_empty()` calls as ownership questions and inflated the census
+from 40 sites to 74).  It learns to read ENCLOSING guards: the newly-visible `control.rs` site
+does consult the override, from an `if !skip_free(local) {` wrapping its whole block, and
+reading only the statement reported that correct code as a violation — a false positive the
+widening created and the same widening had to fix.  And the site now declares its question,
+which is the checker doing its job on a site it could not previously see.
+
+**The true-positive direction, on the new spelling.**  Removing the enclosing veto makes the
+widened checker fire on exactly that line; restoring it (by the inverse edit, from a copy — never
+`git checkout`) returns it to clean.  A gate that has only ever been green is a claim about its
+classifier, and this one is now measured in both directions on the form it just learned.
+
+**What the walk did NOT find.**  No site reads the proxy by a third spelling: `depend().len()
+== 0`, `borrow_deps().is_none()`, `deps.first().is_none()` and the rest return nothing across
+`src/`.  The one `heap_dep().is_none()` read (`protectable_ref_args`) is a different question —
+*does this TYPE carry a store* — and is not an ownership proxy at all.  The four-way split
+holds: 28 positive sites, 9 reaching a free, every one of those consulting the override.
+
 #### B2 — open, and the owner's call
 
 | decision | evidence | why it is not mine to take |
