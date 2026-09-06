@@ -76,6 +76,16 @@ fn test_the_unbranched_bind_is_unchanged() {
 
 // CONTROL — an UNDISTURBED projection arm still ALIASES, which is what `(B-View)` is for.  A
 // fix that copied every projection arm would pass every cell above and fail this one.
+//
+// ⚠ THIS CONTROL IS TAIL-SPECIFIC, and adding a collection cell to it in this form would
+// assert the opposite of the language.  `(B-View)` makes a STRUCT-typed projection a view that
+// aliases without `&` — the one place aliasing is the default — while `(B-View-Base)` puts a
+// COLLECTION projection off an owned base on `(B-Copy)`, which COPIES: `p = t.proto; p += [9]`
+// leaves `t.proto` at its old length, in this branch spelling exactly as in the plain one.  So
+// for a vector tail the write reaching nothing IS the documented answer, and a control written
+// the other way reports a correct fix as over-wide — which is what it did to loft#1399's fix,
+// from a cell list of mine that did not qualify the tail.  The comparison that settles which
+// kind a tail is: the PLAIN spelling of the SAME tail on the SAME build.
 fn test_an_undisturbed_projection_arm_still_aliases() {
   h = Hold{inner: mk(1), t: "h"};
   k = 1;

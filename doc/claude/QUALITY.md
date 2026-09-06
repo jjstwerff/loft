@@ -6114,6 +6114,18 @@ above.
 (6 cells, two controls: an UNDISTURBED arm that must still alias, and a loop whose every pass
 reads the container as it then stands), falsified at bd629983.
 
+⚠ **The alias control is TAIL-SPECIFIC, and stating it without that qualification cost a
+correct fix its credibility.**  Every cell in that guard has a RECORD tail, where `(B-View)`
+makes a projection a view that aliases.  A COLLECTION tail is the opposite — `(B-View-Base)`
+puts it on `(B-Copy)`, so the write reaching nothing is the documented answer, in the branch
+spelling exactly as in the plain one (measured here, both backends, on a branch carrying
+neither half of the joined tree's collection work).  A cell list of mine for loft#1399 said
+*"an undisturbed arm must still alias"* with no tail named, the sibling checkout read it as
+written, and a correct fix looked over-wide for several minutes.  The general form, now in
+TESTING.md: the control for *"did this fix copy too much?"* is not the same cell for every
+element type, because what a PLAIN bind already does differs by type — so the comparison that
+settles it is the plain spelling of the SAME tail on the SAME build.
+
 **Not closed, and not this.**  The chained spelling — `t = dv.tiles;
 prev = if … { t.proto } … ; dv = …` — stays wrong, and the control that says so is that the
 SAME chain without a branch is equally wrong: that is loft#1393's view-of-a-view, which the
