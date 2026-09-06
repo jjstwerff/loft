@@ -26,6 +26,14 @@
 // everything else in this walk — bounded, and stopping at the first container that is not an
 // open view.
 //
+// The resolution stops at a COMPILER-GENERATED container, and that boundary is not cosmetic:
+// a vector local is bound to its own backing store (`v = OpGetField(__vdb_1, 0, …)`), so it is
+// an open "view" of a local nothing in the program can disturb.  Following it moved
+// `c = &v[0]` off `v` and onto `__vdb_1`, and the `(B-Ref-Reshape)` refusal for `v.remove(2)`
+// under a live link stopped firing — caught by `tests/parse_errors.rs`'"'"'s three
+// `b_ref_reshape_*` removal tests, which are this file's refusal-side control.  A place is
+// only inside a container the author can reassign.
+//
 // The CONTROLS pin what must not move, and all three were measured green on the build this
 // guard was written to catch: the one-expression spelling; a struct-typed tail one step deep,
 // whose container is the local itself; and a SCALAR tail, which is copied by value, names no

@@ -1045,7 +1045,13 @@ impl ViewWalk<'_> {
             else {
                 return (container, field);
             };
-            if outer == container {
+            // Stop at a COMPILER-GENERATED container.  A vector local is bound to its own
+            // backing store — `v = OpGetField(__vdb_1, 0, …)` — so it is an open "view" of a
+            // local nothing in the program can disturb, and following it moved `c = &v[0]`
+            // off `v` and onto `__vdb_1`: the `(B-Ref-Reshape)` refusal for `v.remove(2)`
+            // under a live link then had no container to match and stopped firing.  A place
+            // is only inside a container the author can reassign.
+            if outer == container || self.function.is_compiler_generated(outer) {
                 return (container, field);
             }
             container = outer;
