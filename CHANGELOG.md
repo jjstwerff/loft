@@ -135,6 +135,21 @@ named every variable `65535` with a `-` where its slot number and span belong �
 the same command on the same file did not print the same thing.  `introspect` now always
 parses; ordinary runs keep the cache.
 
+**A `match` or `if` arm may hand back the enum it is choosing over.**  `e = match e {
+Circle{r} => Circle{r: r + 1}, _ => e }` — replace one variant, keep everything else — was
+refused with *"expected Circle, got Sh"*, as was its `if` spelling, where the same value
+returned through a function typed as the enum was accepted.  A variant and its enum join to
+the enum, and now they do.  The same change closes the other half of it: a `match` whose arms
+answer in different variants used to keep the FIRST arm's variant, so `v: Circle = match e {
+… Square{…} }` was accepted and read a `Square`'s bytes through `Circle`'s fields with nothing
+said.  It is refused now, as the `if` spelling always was.  (loft#1390)
+
+**A struct-enum local declared with its enum no longer leaks when you replace it.**  `e: Sh =
+Circle{r: 1}` followed by `e = if … { circle(2) } else { e }` kept the record it replaced —
+one per pass of a loop, on both backends, with the right answer printed and only the exit
+warning to say so.  Writing the same local from a call, or leaving the annotation off, was
+always clean.  (loft#1389)
+
 **A vector literal that reads the vector it replaces reads what that vector held.**  `v =
 [v[1], v[0]]` now reverses `v`, `v += [len(v), len(v)]` appends the length twice, and a struct
 element, a struct field, a parameter or a loop reads the value from before the statement —

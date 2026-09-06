@@ -1473,12 +1473,26 @@ impl Parser {
             // any) still carry the real borrow sources.  The pre-Set free
             // stays safe: codegen's S1 guard skips it whenever the RHS
             // reads `v` itself.
+            //
+            // Both RECORD kinds, and only those.  A struct-enum is a record reached
+            // through a `DbRef` exactly as a struct is (`data::is_dbref` names the two
+            // together), and `Type::Enum` was outside the pattern: `e: Sh = Circle{r: 1}`
+            // gave `e` the dep `[e]`, `owns_displaced_store` read the non-empty list as
+            // BORROWED (`@FR-O-Proxy`), and a later join reassignment never freed the store
+            // it displaced — one leak per execution on both backends (loft#1389).  The
+            // COLLECTION kinds are deliberately not here: for a `vector` or a `text` the
+            // self-dep is the @P302 re-init-in-place ownership marker that
+            // `formal/ownership.md` (g) reads as `Owned` (`t = "{t}x"`), not a degenerate
+            // borrow — 6418 of them in the corpus against no `Enum` at all.  `retain`
+            // rather than `Deps::frame`, so a list keeps the dep SPACE it arrived in.
             let stripped: Type;
-            let tp = if let Type::Reference(d, deps) = tp
+            let tp = if let Some(deps) = tp.borrow_deps()
+                && matches!(tp, Type::Reference(_, _) | Type::Enum(_, true, _))
                 && deps.contains(v_nr)
             {
-                let kept: Vec<u16> = deps.iter().copied().filter(|d2| d2 != v_nr).collect();
-                stripped = Type::Reference(*d, Deps::frame(kept));
+                let mut kept = deps.clone();
+                kept.retain(|d2| d2 != v_nr);
+                stripped = tp.with_deps(&kept);
                 &stripped
             } else {
                 tp

@@ -6,7 +6,7 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — D-own-36 OPENED AND CLOSED 2026-09-06 (the `@FR-O-Detach` walk: a collection literal's detach ran before its reads on every destination, and `--native` declined a value-`if`'s displaced free, below); D-own-35 OPENED AND CLOSED 2026-09-05 (loft#1370: the per-path fact had no home for a VECTOR local — every value-branch bind aliased the chosen arm — closed at the parser's selector, below); D-own-34 OPENED AND CLOSED 2026-09-05 (the owner witness did not survive the cache, and a nullable bind from a borrow-returning call aliased); D-own-33 OPENED AND CLOSED 2026-09-05 (the per-path fact was short of four homes, every one a nullable local not treated as the heap local it is: a literal buffer adopted inside a loop, the branch pre-init, the loop hoist, a keyed `match` bind, below; a fifth face is loft#1367, owned by @PLN153); D-own-32 OPENED AND CLOSED 2026-09-05 (the oracle called a minted variable Owned regardless of its other definitions, and its shadow re-derived the base translation, below); D-own-31 OPENED AND CLOSED 2026-09-05 (the never-free contract named one spelling of five and forbade a release the language ships, below); D-own-30 OPENED AND CLOSED 2026-09-05 (a nullable local holding a projection VIEW freed the store it displaced, below), after D-own-29 2026-09-04 (loft#1346, below) and D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
+OPEN: **0** — D-own-37 OPENED AND CLOSED 2026-09-06 (loft#1389: the degenerate self-dep was stripped for one of the two RECORD kinds, so an annotated struct-enum local read as borrowed and never freed what a join displaced, below); D-own-36 OPENED AND CLOSED 2026-09-06 (the `@FR-O-Detach` walk: a collection literal's detach ran before its reads on every destination, and `--native` declined a value-`if`'s displaced free, below); D-own-35 OPENED AND CLOSED 2026-09-05 (loft#1370: the per-path fact had no home for a VECTOR local — every value-branch bind aliased the chosen arm — closed at the parser's selector, below); D-own-34 OPENED AND CLOSED 2026-09-05 (the owner witness did not survive the cache, and a nullable bind from a borrow-returning call aliased); D-own-33 OPENED AND CLOSED 2026-09-05 (the per-path fact was short of four homes, every one a nullable local not treated as the heap local it is: a literal buffer adopted inside a loop, the branch pre-init, the loop hoist, a keyed `match` bind, below; a fifth face is loft#1367, owned by @PLN153); D-own-32 OPENED AND CLOSED 2026-09-05 (the oracle called a minted variable Owned regardless of its other definitions, and its shadow re-derived the base translation, below); D-own-31 OPENED AND CLOSED 2026-09-05 (the never-free contract named one spelling of five and forbade a release the language ships, below); D-own-30 OPENED AND CLOSED 2026-09-05 (a nullable local holding a projection VIEW freed the store it displaced, below), after D-own-29 2026-09-04 (loft#1346, below) and D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
 single cell, its Face B CLOSED the same day, that cell's one known SYMPTOM closed 2026-08-26
 with the FACT still wrong, loft#1098, and the fact itself closed by giving every path of a
 value branch its own binding — below).  D-own-26 CLOSED 2026-09-03: its gate existed all
@@ -38,6 +38,45 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-37 — OPENED AND CLOSED (2026-09-06, loft#1389): the degenerate self-dep was stripped for one RECORD kind of two
+
+`(O-Proxy)` reads a binding's dep list to answer *does this local own the store a reassignment
+displaces?*, and #328 established that a dep on the binding ITSELF is not a borrow at all — it is
+a degenerate edge that flips the variable into the dependent-view codegen class.  `Parser::change_var`
+strips it, and it read `Type::Reference` alone:
+
+```loft
+e: Sh = Circle{r: 1};                              // deps=[e] — a dep on itself
+e = if e is Circle { circle(2) } else { e };       // the minting arm runs
+// Warning: 1 stores not freed at program exit: kt=82 Circle×1
+```
+
+A struct-enum is a record reached through a `DbRef` exactly as a struct is — `data::is_dbref`
+names `Reference` and `Enum(_, true, _)` together — so the annotated literal bind kept `[e]`,
+`owns_displaced_store` read the non-empty list as BORROWED, the join's displaced free was never
+emitted, and one store leaked per execution on BOTH backends, growing 1:1 with a loop.  Values
+were right throughout; the leak announced itself only at exit.  The un-annotated form, the same
+local bound from a CALL, and the plain struct twin were all clean, which is what located the
+gap at the type kind rather than at the join.
+
+**Closed by stating the strip over both record kinds** — `Reference | Enum(_, true, _)` — and by
+reading the deps through the generic accessors, so the stripped list keeps the dep SPACE it
+arrived in rather than being rebuilt as `Frame`.
+
+The COLLECTION kinds stay outside it, and that boundary is measured rather than assumed.  For a
+`vector` or a `text` the self-dep is the @P302 re-init-in-place ownership marker that `(g)` in
+[ownership.md](ownership.md) reads as `Owned` (`t = "{t}x"`), not a degenerate borrow.  An
+env-gated probe over `tests/scripts`, `tests/docs` and `default/` counted **6418** self-deps
+reaching this site on a collection kind — 3760 `Vector`, 2658 `Text`, 42 keyed/optional — and
+**zero** on `Enum`.  So widening past the two record kinds would re-answer a question that is
+already right, at the cost of every one of those readings.
+
+Guard `an-annotated-struct-enum-local-owns-what-it-mints` (7 cells: the `if` join, the `match`
+join, a 4-pass loop, the hand-back arm, the annotated-from-a-call, un-annotated and plain-struct
+controls), falsified at 32e36462 — `kt=82 Circle×6` -> clean on both backends.  It carries a
+`main` that calls every cell because `--tests` does not leak-check, so a `main`-less leak guard
+reads INERT on the build it was written to catch (`scripts/falsify.sh` § ONE CHANNEL IS BLIND).
 
 ### D-own-36 — OPENED AND CLOSED (2026-09-06, the `@FR-O-Detach` walk): a collection literal's detach ran before its reads, and `--native` declined a value-`if`'s displaced free
 

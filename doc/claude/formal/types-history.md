@@ -6,12 +6,62 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — `D-Decl-Sev` was opened and closed 2026-09-05 (below); `D-Narrow-Res`, `D-Narrow-Asgn` and `D-Null-Elem` were all opened and closed 2026-08-31 (below); `D-Chk-Yield` was opened and closed 2026-08-28 (below); `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
+OPEN: **0** — `D-Var-Enum` was opened and closed 2026-09-06 (loft#1390, below); `D-Decl-Sev` was opened and closed 2026-09-05 (below); `D-Narrow-Res`, `D-Narrow-Asgn` and `D-Null-Elem` were all opened and closed 2026-08-31 (below); `D-Chk-Yield` was opened and closed 2026-08-28 (below); `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
 fix/reconciliation.  The **@PLN102 DN3-Float extension** (below) is also CLOSED — SHIPPED
 default-on 2026-07-11 (#559): float `/`/`%` and the domain-partial float functions type `τ?`
 exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, retained as the
 record.  Per-situation mitigation catalogue:
 [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
+
+### D-Var-Enum — OPENED AND CLOSED (2026-09-06, loft#1390): an arm answering in the ENUM was asked to convert to its sibling's VARIANT, and the `match` join never widened
+
+`(C-Var)` licenses `Reference(S) ⤳ Enum(E)` for `S ∈ variants(E)` and licenses nothing between
+two variants.  So wherever the arms of a branch have settled on ONE variant, "does this arm
+convert to that?" is the wrong question for exactly two kinds of later arm — another variant of
+the same enum, and the ENUM itself — because both join to `E`, which is WIDER than what the arms
+had settled on.  loft#1117 closed the variant half in 2026-08.  The enum half was still asked, and
+answered *"expected Circle, got Sh"*:
+
+```loft
+e: Sh = Circle{r: 1};
+e = match e { Circle{r} => Circle{r: r + 1}, _ => e };   // refused: expected Circle, got Sh
+e = if e is Circle { Circle{r: 2} } else { e };          // refused: expected Circle, got Sh on else
+```
+
+`_ => e` hands back the very binding the statement assigns, which is the ordinary shape of
+"replace it when …" over an enum.  Both backends agreed (it is a typing refusal), the wildcard
+and the named-arm spelling both failed, and the recorded workaround — returning the new variant
+through a function typed as the enum — worked only because a CALL arm already types as `E`.
+
+**And the acceptance was only half the deviation.**  The `match` join kept the FIRST arm's type
+however many arms widened it, so the variant-typed destination `(C-Var)` exists to refuse was
+admitted:
+
+```loft
+e: Sh = Square{s: 7, extra: "hello"};
+v: Circle = match e { Circle{r} => Circle{r: r + 1}, Square{s} => Square{s: s, extra: "x"} };
+println("v.r={v.r}");                                    // 7 — a Square's `s` read at Circle's `r`
+```
+
+That is loft#980's class (a field read at another variant's offsets, tag never consulted), silent
+on both backends, and the `if` twin has refused it throughout — `parse_if` widens to the enum
+before the destination is checked.
+
+**Closed by giving the acceptance and the join ONE predicate.**  `Parser::joins_to_enum` is the
+home; `arm_joins_to_enum` asks it at the two acceptance sites (`block_result`'s `else`/chain arm
+and `parse_match_arm_body`), and `join_arm_into` asks it at the six `match` arm sites, where the
+settled type and the new arm are both in hand.  An arm the acceptance waves past is therefore
+exactly an arm the join widens for — the invariant that was missing, and the reason the two
+halves could disagree.  The predicate itself gained the check its new callers need: a
+`Reference` arm must really be a variant of THIS enum, not merely a different def, since an
+acceptance site sees types a join site only saw after `convert` had already refused them.  The
+cross-arm gate reads the same rule (`match_arms_unify`), because an arm keeps its own variant
+type on purpose so the join can still see the two differ.
+
+Guards `a-variant-arm-joins-with-its-enum` (7 cells: wildcard, named arm, the `if` twin,
+enum-first, variant × variant, the same variant twice, a call arm) and
+`a-variant-typed-destination-refuses-a-widened-match` (the refusal), both falsified at
+32e36462 — exit 1 -> 0 on both backends, and the refusal guard's expectation FAIL -> matched.
 
 ### D-Decl-Sev — OPENED AND CLOSED (2026-09-05, @PLN153 phase 3b): the declared LOCAL was refused at every width where `(N-Store)` warns, and the inferred one was refused where `(N-Join)` widens
 

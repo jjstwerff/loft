@@ -9,6 +9,44 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A variant arm and an enum arm join, and the `match` join widens like the `if` join (2026-09-06, loft#1390 + loft#1389)
+
+`formal/types.md` `(C-Var)` licenses `Reference(S) ⤳ Enum(E)` and nothing between two variants,
+so once a branch's arms have settled on ONE variant, `convert` is being asked the wrong question
+for both kinds of arm that JOIN to the enum instead: another variant (loft#1117, closed 2026-08)
+and the enum itself.  The second was still asked and answered *"expected Circle, got Sh"* — for
+`match`, for the `if` twin, through a wildcard and through a named arm.  `_ => e` hands back the
+binding the statement assigns, which is the ordinary "replace it when …" shape over an enum.
+
+The acceptance was half of it.  The `match` join (`join_arm_into`) kept the FIRST arm's type
+however many arms widened it, so `v: Circle = match e { Circle{r} => …, Square{s} => Square{…} }`
+was ACCEPTED and read a `Square` at `Circle`'s offsets — loft#980's class, silent, where the `if`
+twin has refused it throughout because `parse_if` widens before the destination is checked.
+
+One home: `Parser::joins_to_enum`.  `arm_joins_to_enum` asks it at the two acceptance sites
+(`block_result`'s sibling arm, `parse_match_arm_body`), `join_arm_into` at the six `match` arm
+sites, `parse_if` at its two join sites, and `match_arms_unify` at the cross-arm gate — so an arm
+the acceptance waves past is exactly an arm the join widens for.  The predicate gained the check
+its new callers need: a `Reference` arm must be a variant of THIS enum, since an acceptance site
+sees pairs a join site only saw after `convert` had refused them.  Guards
+`a-variant-arm-joins-with-its-enum` (7 cells) and
+`a-variant-typed-destination-refuses-a-widened-match`, both falsified at 32e36462.
+formal: types-history.md D-Var-Enum.
+
+Beside it, loft#1389: `Parser::change_var` strips the degenerate #328 self-dep — *"x borrows from
+x"*, which no ownership rule defines — and read `Type::Reference` alone.  A struct-enum is the
+other RECORD kind (`data::is_dbref` names the two together), so `e: Sh = Circle{r: 1}` kept
+`deps=[e]`, `owns_displaced_store` read it as BORROWED (`@FR-O-Proxy`), and a join reassignment
+never freed the store it displaced — one per execution on both backends, values right throughout.
+Stated over `Reference | Enum(_, true, _)` and read through the generic dep accessors, so the
+stripped list keeps its dep SPACE.  The COLLECTION kinds stay out by measurement, not by
+assumption: an env-gated probe over the corpus counted 6418 self-deps reaching this site on a
+collection kind (3760 `Vector`, 2658 `Text`, 42 keyed/optional) — every one the @P302
+re-init-in-place ownership marker `ownership.md` (g) reads as `Owned` — and ZERO on `Enum`.
+Guard `an-annotated-struct-enum-local-owns-what-it-mints` (7 cells), falsified at 32e36462
+(`kt=82 Circle×6` -> clean, both backends); it carries a `main` because `--tests` does not
+leak-check.  formal: ownership-history.md D-own-37.
+
 ### A collection literal reads what its destination held, and a native join reassignment frees what it displaces and compiles (2026-09-06, the `@FR-O-Detach` walk)
 
 `Parser::snapshot_read_destination` (`src/parser/vectors.rs`) is the one home for *a build
