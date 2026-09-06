@@ -88,19 +88,22 @@ and both are answered today by a static fact about the BINDING:
   overwritten with a different `DbRef` gives up what it held.
 
   **The obvious cure was BUILT and measured WRONG, which is why it is not here.**  Freeing the
-  record before the rebuild (`OpFreeRef(w)` ahead of the build's `OpDatabase`) closes every
-  loop cell — the struct 5-pass loop and the vector one both go clean, values unchanged — and
-  the escape argument holds: a capturing closure may not be stored in a collection, a fn-ref
-  struct field takes one capture shape, and a factory's record escapes by RETURNING, which
-  leaves the loop.  What it collides with is the fix ABOVE.  `free_named`'s cascade releases an
-  ADOPTED capture, and the frame now frees the same local's store for a local reassigned after
-  its build — so the two free one store between them.  Measured on `v = build_v(|i| { v[0] + i
-  })` in a 3-pass loop: `--native` answered `1,2` on the third pass where `4,5` is right, the
-  interpreter still answered `4,5`, and the leak was gone on both.  That is the trade this
-  project refuses, and it is `get_free_vars`' own note said out loud: *suppress without adopting
-  and the store is never freed at all, adopt without suppressing and it is freed twice.*  The
-  release is admissible only together with `record_adopts_capture` reading the same verdict
-  `capture_adoption_owns_free` now reads — one decision, as that note requires.
+  record before the rebuild (`OpFreeRef(w)` ahead of the build's `OpDatabase`) clears the leak
+  in every loop cell, and the escape argument holds: a capturing closure may not be stored in a
+  collection, a fn-ref struct field takes one capture shape, and a factory's record escapes by
+  RETURNING, which leaves the loop.  The struct 5-pass loop went clean with its values
+  unchanged.  The VECTOR loop went clean and its values did NOT hold: `v = build_v(|i| { (v[0]
+  ?? 0) + i })` over three passes answered `4,5` on the interpreter and `1,2` on `--native`,
+  where `4,5` is right and both backends agreed on it before.
+
+  What it collides with is the fix ABOVE.  `free_named`'s cascade releases an ADOPTED capture,
+  and the frame now frees the same local's store for a local reassigned after its build — so
+  the two free one store between them.  A leak traded for a backend split and a wrong answer is
+  the trade this project refuses, and it is what `get_free_vars`' own note says out loud:
+  *suppress without adopting and the store is never freed at all, adopt without suppressing and
+  it is freed twice.*  The release is admissible only together with `record_adopts_capture`
+  reading the same verdict `capture_adoption_owns_free` now reads — one decision, as that note
+  requires.
 
 Neither is reachable from a per-binding fact, which is why they are recorded rather than
 patched: a static answer that is right at one of the two sites is wrong at the other.
