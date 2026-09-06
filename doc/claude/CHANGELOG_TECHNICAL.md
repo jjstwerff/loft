@@ -10,6 +10,72 @@ All notable changes to the loft language and interpreter.
 ## [Unreleased]
 
 ### A linked group's members must share one element layout (2026-09-06, loft#1385, D-col-2, C117)
+### loft#1386: a value-position `match` needs a value from every arm (2026-09-06)
+
+`@FR-F-Block` discards a block's value *"only where the BLOCK itself is a statement — a
+`;`-terminated one"*.  A `match` used as a VALUE is not that, so every arm has to produce one.
+
+A void arm is exempt from the arm-type unification — right in STATEMENT position, which is
+loft#1382's half — and in VALUE position that exemption let the whole `match` take the OTHER
+arms' type and answer `null`: a value the program never wrote and the type never declared, with
+no diagnostic on `--interpret` and a raw rustc E0308 naming a generated `.rs` file on
+`--native`.  The `if` twin was refused in the parser all along, so one construct answered where
+the other refused, for the same program.
+
+It refuses now, in the parser, so the rustc error is no longer reachable.  Of the two available
+answers the accepting one is silent-wrong, which is what the freeze axis picks.
+
+Two things the fix needed beyond the rule:
+
+* **Statement position, from loft#1382's flag.**  `parse_match` takes and clears
+  `stmt_if_pending` exactly as `parse_if` does, so the same one-token peek in `parse_block`'s
+  loop serves both constructs.
+* **"An arm was void" is not "the running result is void".**  The result starts `Void` before
+  any arm and is promoted by the first one, so the fact is carried in its own scoped flag,
+  set as the arms are joined and read once at the end of the construct.  There are SIX arm-join
+  sites — the enum arms, the wildcard, and the scalar, vector and tuple forms — and a fix at one
+  is a fix for one form.
+
+Eight cells on both backends: both arm orders in value position, a three-arm case with the void
+one in the middle, the statement cells in both orders, all-void, all-value, and the `if` twin.
+
+
+### loft#1382: a statement `if` discards EITHER arm's value (2026-09-06)
+
+`@FR-F-Block` discards a block's value *"only where the BLOCK itself is a statement — a
+`;`-terminated one"*, and `@FR-F-Drop` adds that the work still runs.  Neither says which SIDE
+of an `if` the discarded value sits on, so both orders are statements.  Only one compiled: a
+void THEN arm makes the expected type `void`, which accepts any else arm, while a void ELSE
+arm reached the arm-agreement gate as `void ⤳ integer`, licensed by nothing.
+
+Position is knowable only by the caller — `parse_block`'s statement loop is what sees the `;`
+— so it is handed down: a one-token peek marks a statement that BEGINS with `if`/`match`,
+`parse_if` takes and clears it (an `else if` chain recurses through `parse_if_expecting` and
+keeps it; a value-`if` nested in a statement one does not inherit it), and the gate reads it.
+
+Three things constrain it, each found by the suite rather than by reasoning:
+
+* A leading `if` does not prove statement position — a function TAIL begins its statement too,
+  and there the arms must still agree (`parse_errors::wrong_if`).  Looking AHEAD for the `;`
+  is the obvious answer and is wrong: scanning to the end of the construct re-lexes it, and
+  reverting left the parser mis-positioned on 250 tests.  So the gate RECORDS the mismatch and
+  the statement loop reports it unless a `;` followed.  Recording TYPES rather than a rendered
+  message keeps `validate_convert`'s two-defs-one-name case (loft#1094) intact.
+* Only a VOID arm.  The corpus pins `if c { 2 } else { "a" };` as a refusal — two VALUES of
+  different types is a mistake wherever it sits.
+* Position AND a void arm together.  Keying on the arm type ALONE breaks twenty tests:
+  `Type::Void` on an arm is also what a block reports when its value travels through a BUFFER.
+
+The arm keeps its OWN type in statement position, which the native side needs: loft#1381's
+discard gate fires on exactly one arm being void, and handing it the then arm's type made both
+read non-void.  `arm_result` also learned to type a nested chain-`if` — `infer_type` does not
+answer for one, so the outer gate declined while the inner had already discarded, leaving a
+value arm beside a `()` one.
+
+Nine cells on both backends.  It also restores the statement `else if` chain that
+loft#1379/#1380's arm conversion had narrowed.
+
+
 ### loft#1368: a return that may borrow one of two sources is FRESH (2026-09-06)
 
 `@FR-F-Ret` — a returned whole heap value is FRESH, never a view of a parameter; the only

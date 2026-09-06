@@ -20,6 +20,12 @@ record alive when `maybe` turned out to be nothing — once per time it happened
 programs only.  A long-running loop that reassigned such a variable grew for as long as it
 ran.
 
+**A `match` used for its value now says so when an arm gives none.**
+`v = match k { 1 => { 5 }, _ => { println("one") } }` quietly set `v` to null when the second
+arm ran, and on compiled programs it failed with an error from the Rust compiler instead. It
+is now refused where you wrote it, with a message saying to give the arm a value or end the
+`match` with `;` to make it a statement.
+
 **Writing an `if` statement the other way round now works.**
 `if k == 1 { println("one") } else { 5 };` compiled, while the mirror
 `if k == 1 { 5 } else { println("one") };` was rejected — the same statement with its arms
