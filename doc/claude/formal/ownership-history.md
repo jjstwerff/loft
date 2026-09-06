@@ -169,17 +169,38 @@ every store after it.  Three parts, and each answers one of the failures above:
   frame, so the cascade and the frame would free one store between them.  `(O-Derived)` — one
   decision, one home.
 
-Every row of the issue's matrix is clean on both backends with its value unchanged, including
-the two that stayed open at 3360fb93 (a stored closure called twice, and either spelling in a
-loop), plus a three-call and a three-step cell it did not carry.
+Eleven cells, both backends, all clean with their values unchanged — every row of the issue's
+matrix including the two that stayed open at 3360fb93 (a stored closure called twice, and
+either spelling in a loop), plus a three-call cell, a vector capture in a loop, and the
+never-reassigned control the whole thing must not disturb.
 
-**Residual, and it is a mechanism limit with a measured boundary.**  A closure capturing a
-VECTOR inside a loop keeps one store.  The witness is record-typed — `heap_def_nr` is `None`
-for a vector — so such a local cannot hold one, and the record's release is therefore gated off
-for it.  A vector-typed witness was BUILT and measured WRONG: the leak goes, and `--native`
-answers `1,2` where `4,5` is right, because the witness then releases a store the record still
-holds.  A leak is the better trade, so it stays until the release the record owes is decided
-per SLOT rather than per local.  Values are right on both backends throughout.
+**The COLLECTION half needed the same sentence, and finding it was the last step.**  A closure
+capturing a VECTOR inside a loop kept one store, and `2026.9.0` did not — so this was a
+REGRESSION from the more accurate backing map above, not a residual: resolving a build against
+the map as it stood BEFORE the assignment gave `backing[v] = __vdb_1` where the pre-order walk
+had previously given nothing, and `backs_an_adopted_capture` then suppressed `__vdb_1`'s free
+on the strength of the FIRST pass's adoption while the record's slot had been rewritten twice
+since.  `(O-Latest)` says exactly that: the record holds what the capture named at the build,
+and a build that RE-RUNS holds only its last.  So the backing's suppression is declined where
+the build sits inside a LOOP.
+
+**And the narrowing is loft#1324's guard, not a precaution.**  The first cut declined on
+"the capture was reassigned after its build", which is also true of #323's escaping factory —
+a build that runs ONCE, whose record outlives the frame and must keep its suppression however
+often the capture is reassigned afterwards.  Declining there frees the store the escaped
+closure still reads:
+`1324-a-reassigned-capture-suppresses-the-store-the-record-holds` failed with `null(oob)` on
+the first run of the `scopes` subject.  A build that re-runs and a build that escapes are
+opposite cases, and only the loop test separates them.
+
+The instrument that caught it was the shipped binary: `2026.9.0` frees `#2 #3 #4 #5` here and
+the branch freed `#2 #3 #5`, which named the missing free before any reasoning about why.
+
+**A vector-typed WITNESS was built and measured wrong on the way**, and is recorded because it
+is the obvious next idea: admitting a vector local to `owner_witness_locals` with a
+`Vector`-typed `__own_` handle removes the leak and makes `--native` answer `1,2` where `4,5`
+is right, because the witness then releases a store the record still holds.  The witness stays
+record-typed; the collection half is answered by the suppression clause instead.
 
 Guard `a-captured-local-reassigned-after-the-build-frees-its-own-store` (7 cells: both build
 spellings, the struct and vector captures, and the two controls that must NOT move — a capture

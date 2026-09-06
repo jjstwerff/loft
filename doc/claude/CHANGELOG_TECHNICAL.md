@@ -179,8 +179,11 @@ Measured over 9 cells on both backends: 7 clean where 6 leaked, values unchanged
 `a-captured-local-reassigned-after-the-build-frees-its-own-store`, falsified at ac412a96.
 Both residual cells were CLOSED the same day by `(O-Witness)` — release by store identity, with
 the hand-off at the closure build ahead of it and the record's own release gated on every
-capture in the build having a witness.  See the entry below and `formal/ownership-history.md`
-D-own-38 for what the gate is protecting against and for the one shape that keeps a store.
+capture in the build having a witness — and the COLLECTION half by the same suppression clause
+that declines the direct capture's, since a capture assigned again after its build no longer
+names the backing the record adopted.  Eleven cells, both backends, all clean.  See
+`formal/ownership-history.md` D-own-38 for what the gate protects against, and for the
+vector-typed witness that was built and measured wrong on the way.
 
 ### A variant arm and an enum arm join, and the `match` join widens like the `if` join (2026-09-06, loft#1390 + loft#1389)
 

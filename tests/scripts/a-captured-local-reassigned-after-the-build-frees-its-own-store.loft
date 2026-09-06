@@ -36,9 +36,9 @@
 // closure build is what keeps the witness from releasing one the record has taken.
 //
 // @falsified-at: ac412a96 — interpret and native both leaked `kt=81 S×3, kt=25
-//   main_vector<integer>×1` -> clean.  Every control unmoved.  With the three witness cells
-//   added, the whole file re-falsifies at cb2dca92: `kt=81 S×9` -> clean on BOTH backends,
-//   values already right there — the leak was the entire symptom.
+//   main_vector<integer>×1` -> clean.  Every control unmoved.  With the four witness cells
+//   added, the whole file re-falsifies at cb2dca92: `kt=81 S×9, kt=25 main_vector<integer>×1`
+//   -> clean on BOTH backends, values already right there — the leak was the entire symptom.
 
 struct S { a: integer, b: text }
 
@@ -113,6 +113,15 @@ fn test_an_inline_closure_in_a_loop() {
   assert(s.a == 6, "inline loop: got {s.a}, want 6");
 }
 
+// The COLLECTION half of the same sentence: the record adopts the backing its capture named
+// at the FIRST build and its slot is rewritten on every pass after, so a suppression aimed at
+// that first backing hands the free to an adoption two passes stale.
+fn test_a_vector_capture_in_a_loop() {
+  v = [1, 2];
+  for k in 0..3 { v = build_v(|i| { (v[0] ?? 0) + i }); }
+  assert((v[0] ?? 0) == 4 && (v[1] ?? 0) == 5, "vector loop: got {v[0] ?? 0},{v[1] ?? 0}, want 4,5");
+}
+
 fn test_a_stored_closure_in_a_loop() {
   s = S{a: 1, b: "x"};
   h: fn(integer) -> integer = |i| { s.a + i };
@@ -123,6 +132,7 @@ fn test_a_stored_closure_in_a_loop() {
 fn main() {
   test_a_stored_closure_called_twice();
   test_an_inline_closure_in_a_loop();
+  test_a_vector_capture_in_a_loop();
   test_a_stored_closure_in_a_loop();
   test_an_inline_closure_argument();
   test_an_inline_closure_argument_twice();

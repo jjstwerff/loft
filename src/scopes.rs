@@ -4824,8 +4824,7 @@ pub(crate) fn capture_adoption_owns_free(
     // s = build(h)` leaked the store `s` ends up holding, on both backends, once per
     // reassignment and once per pass of a loop (loft#1388).
     !built_with.reassigned_after_build.contains(&v)
-        && (function.is_captured(v)
-            || backs_an_adopted_capture(data, function, &built_with.backing, v))
+        && (function.is_captured(v) || backs_an_adopted_capture(data, function, built_with, v))
         && crate::data::is_dbref(function.tp(v).base())
 }
 
@@ -4857,6 +4856,7 @@ pub(crate) fn capture_build_backings(
     let set_dbref = data.def_nr("OpSetDbRef");
     let mut latest: HashMap<u16, u16> = HashMap::new();
     let mut out = CaptureBuilds::default();
+    captures_built_in_a_loop(code, set_dbref, false, &mut out.rebuilt_in_loop);
     let mut built: HashSet<u16> = HashSet::new();
     // Capture vars already resolved at their enclosing statement, waiting for the walk to
     // reach the build node itself.  See the `Value::Set` arm.
@@ -4962,6 +4962,9 @@ pub(crate) struct CaptureBuilds {
     /// Locals whose store the record adopted and which were ASSIGNED AGAIN afterwards, so the
     /// local no longer names the adopted store and the frame still owes its own free.
     pub(crate) reassigned_after_build: HashSet<u16>,
+    /// Captures whose closure BUILD sits inside a loop, so the record's slot is rewritten on
+    /// every pass and only the LAST adoption is the one it still holds.
+    pub(crate) rebuilt_in_loop: HashSet<u16>,
 }
 
 /// Is `v` the store behind a capture whose closure record ADOPTS it?
@@ -4982,14 +4985,25 @@ pub(crate) struct CaptureBuilds {
 pub(crate) fn backs_an_adopted_capture(
     data: &Data,
     function: &Function,
-    built_with: &HashMap<u16, u16>,
+    built_with: &CaptureBuilds,
     v: u16,
 ) -> bool {
     (0..function.next_var()).any(|c| {
         c != v
             && function.is_captured(c)
+            // @FR-O-Latest, the collection half of the same sentence — and only where the
+            // record REBUILDS.  A build inside a loop rewrites its capture slot on every pass,
+            // so the backing the FIRST pass adopted is not what the record holds at the end
+            // and suppressing its free hands the store to an adoption two passes stale
+            // (measured: `__vdb_1` never freed in a vector-capture loop).  A build that runs
+            // ONCE is the opposite case and must keep its suppression however often the
+            // capture is reassigned afterwards — that is #323's escaping factory, whose
+            // record outlives the frame; declining there frees the store the escaped closure
+            // still reads, which `1324-a-reassigned-capture-suppresses-the-store-the-record-\
+            // holds` catches as `null(oob)`.
+            && !built_with.rebuilt_in_loop.contains(&c)
             && capture_is_adopted(data, function, c)
-            && match built_with.get(&c) {
+            && match built_with.backing.get(&c) {
                 // @FR-O-Latest — the record holds the store this capture named AT THE BUILD, so
                 // that is the one local whose free it takes over.  Reading the type dep instead
                 // aims the suppression at whatever the local names LAST, which for a capture
@@ -11824,6 +11838,24 @@ fn witness_set_kind(
     } else {
         WitnessSet::Mint
     }
+}
+
+/// The captures whose closure build sits inside a LOOP.
+///
+/// A build that runs once adopts one store and keeps it; a build in a loop rewrites its
+/// record's capture slot on every pass, so only the LAST adoption is the one the record still
+/// holds and every earlier backing is the frame's to free again.
+fn captures_built_in_a_loop(node: &Value, set_dbref: u32, in_loop: bool, out: &mut HashSet<u16>) {
+    let inner = in_loop || matches!(node.unspan(), Value::Loop(_));
+    if in_loop
+        && let Value::Call(d, args) = node.unspan()
+        && *d == set_dbref
+        && let Some(Value::Var(c)) = args.get(2).map(Value::unspan)
+    {
+        out.insert(*c);
+    }
+    node.unspan()
+        .for_each_child(&mut |ch| captures_built_in_a_loop(ch, set_dbref, inner, out));
 }
 
 /// The capture variables a value's closure BUILDS write into their record.
