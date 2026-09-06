@@ -481,7 +481,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 409 | 385 | **24** |
+| 410 | 386 | **24** |
 
 The `@FR-O-Complete` walk (B7u) added one peeling site — `scopes::adopted_work_refs` reads a
 right-hand side's `If` arms, `Block` and `Insert` tails through their `Span` to find the
@@ -1496,7 +1496,7 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 44 | **12** | 32 |
+| 46 | **12** | 34 |
 
 (`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
 so the row cannot go stale — the same arrangement the `unspan` table has.)
@@ -2460,7 +2460,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 724 | 362 | 5 | **357** |
+| 725 | 363 | 5 | **357** |
 
 The `@FR-O-Complete` walk (B7u) moved one function from opaque to seeing-through:
 `scopes::needs_pre_init`, which names the locals that get a null before a branch and the
