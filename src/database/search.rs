@@ -869,7 +869,11 @@ impl Stores {
     /// answer to which of the two layouts the container has:
     ///
     /// * not linked — a `vector`/`sorted` holds its elements INLINE, so a slot is
-    ///   as wide as an element and there is no separate record to free;
+    ///   as wide as an element and there is no separate record to free.  What the
+    ///   element OWNED is still its own — a `text`, a nested collection, a child
+    ///   struct all live in records of their own — and the slot going away does
+    ///   not release them, so the claims are walked here before the shift
+    ///   overwrites the bytes that name them (loft#1402);
     /// * linked — an `array`/`ordered` (what a `vector`/`sorted` becomes as soon
     ///   as any keyed collection over the element type exists) holds 4-byte
     ///   record ids, so a slot is FOUR bytes and the record each one names is the
@@ -881,13 +885,31 @@ impl Stores {
     ///
     /// @FR-Col-Remove — one of the two homes for "delete one element": this is the
     /// by-INDEX form (`v.remove(i)`, `e#remove`), [`Stores::remove_owned`] the by-RECORD
-    /// one (`c[key] = null`).  Both owe the same two things, and only the second is shared:
-    /// the container is UNLINKED here (@FR-Col-RemoveDense renumbers it), and releasing what
-    /// the element owned is loft#1402 — the inline layout does not, and cannot until
-    /// loft#1401 stops a `??`-discharged binding staying a live view of the removed element.
+    /// one (`c[key] = null`).  Both owe the same two things, and both now do them: the
+    /// container is UNLINKED (@FR-Col-RemoveDense renumbers it) and what the element OWNED
+    /// is released, at either layout.
+    ///
+    /// The inline layout could not do the second until loft#1401: a `??`-discharged binding
+    /// stayed a live view of the removed element, so releasing its children emptied a value
+    /// the program was still reading (`445-generic-tree-walk` is the cell that showed it).
+    /// Now such a binding materialises, and the release is safe.
     pub fn remove_vector_at(&mut self, data: &DbRef, elem_tp: u16, index: i64) -> bool {
         if !self.is_linked(elem_tp) {
             let size = u32::from(self.size(elem_tp));
+            // Release before the shift: an inline element IS the slot, so once
+            // `remove_vector` has moved its successors down there is nothing left to
+            // read the claims out of.  The linked branch below can unlink first only
+            // because the record it names survives the unlink.
+            //
+            // `get_vector` is the same index→element map `remove_vector` walks, and it
+            // answers `rec == 0` for exactly the indices that one removes nothing for —
+            // a null container, `i64::MIN`, and out of range after the same negative
+            // normalisation — so the guard and the removal cannot disagree about which
+            // indices name an element.
+            let elem = vector::get_vector(data, size, index, &self.allocations);
+            if elem.rec != 0 {
+                self.remove_claims(&elem, elem_tp);
+            }
             return vector::remove_vector(data, size, index, &mut self.allocations);
         }
         if data.is_null() || index < 0 {

@@ -355,7 +355,9 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 
 ## Deviations
 
-**OPEN: 1** — one open, below; the closed ones: D-bind-20 CLOSED 2026-09-06 (loft#1393): a view whose container is itself a
+**OPEN: 0** — the closed ones: D-bind-24 CLOSED 2026-09-06 (loft#1401): a projection
+discharged with `??` is the view its plain spelling is, so it materialises where that one does;
+D-bind-20 CLOSED 2026-09-06 (loft#1393): a view whose container is itself a
 view is a place inside the OUTER container, so a disturbance of that one ends it; D-bind-19
 CLOSED 2026-09-06 (the `@FR-O-Owner` walk): a struct-ENUM PAYLOAD view is a view like any
 other, and `(B-View)` materialises it; D-bind-18 CLOSED 2026-09-06 (loft#1392): a VECTOR link

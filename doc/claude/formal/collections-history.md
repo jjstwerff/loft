@@ -6,6 +6,39 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
+> **D-col-2 — OPENED AND CLOSED (2026-09-06, loft#1402) — a by-INDEX removal kept what the
+> element OWNED.**  `(Col-Remove)` deletes one element and LOFT.md says `v#remove` "removes
+> exactly one element, releases what that element owned".  `Stores::remove_vector_at`'s UNLINKED
+> branch shifted the bytes and released nothing, so `v.remove(i)` and `e#remove` retained one
+> record per removal: a constant population cost a record count that grew with the number of
+> removals, without bound, on both backends.  The by-RECORD twin (`remove_owned`, reached by
+> `c[key] = null`) released them and so did the LINKED layout, so one `sorted` leaked through
+> `#remove` and not through `[key] = null`.
+>
+> The branch's own doc said why it thought it needn't: *"a `vector`/`sorted` holds its elements
+> INLINE, so a slot is as wide as an element and there is no separate record to free"* — true of
+> the element's own record, and false of its CLAIMS, which each live in a record of their own.
+> Closed by walking them before the shift, through `get_vector` — the same index→element map
+> `remove_vector` walks, answering `rec == 0` for exactly the indices that one removes nothing
+> for, so the guard and the removal cannot disagree about which indices name an element.
+> Release BEFORE the shift, because an inline element IS the slot; the linked branch can unlink
+> first only because the record it names survives the unlink.
+>
+> **It could not close alone, and that is the entry's lesson.**  While a `??`-discharged binding
+> stayed a live view of the removed element ([binding.md](binding.md) `D-bind-24` / loft#1401),
+> releasing the element's children emptied a value the program was still reading —
+> `445-generic-tree-walk.loft` measured it, and it was RIGHT to fail.  A leak that is
+> load-bearing for a correctness bug is not an independent defect, and ordering the two was the
+> whole of the work.
+>
+> Guarded by `a-vector-removal-releases-what-the-element-owned` (10 cells, both backends,
+> falsified at 6609b01b — loft#1401's fix, i.e. this tree with only the release missing, which
+> is the honest control since at any earlier commit its interaction cell would fail for the
+> other reason).  Its oracle is FLATNESS, not a count: the absolute record count differs between
+> the backends, so each cell runs one workload at two sizes and asserts the two agree.
+> `collect_store_leaks` cannot see this at all — the records are retained inside a LIVE store,
+> so nothing is unfreed at exit.  Found in the `@FR-Col-Remove` walk (QUALITY.md B8f).
+
 - **`C-Order`** (hash bucket-walk) — already a decided edge in concurrency.md; `Col-Order` references it.
 - **`D-key-1`** (keyed slice = iterator) — a shipped decided edge (the value-position crash was fixed to a
   clean diagnostic, RELEASE.md 2026-07-04); formalized as `INV-KeyedSlice`, not an open deviation.
