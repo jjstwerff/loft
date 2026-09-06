@@ -1572,10 +1572,11 @@ fn run() -> integer {
     .result(loft::data::Value::Int(0));
 }
 
-/// C60 Step 9: `#remove` must be rejected on hash iteration — the
-/// iteration walks a pre-sorted snapshot, and `#remove` would not
-/// actually remove from the underlying hash.  Users should
-/// `h[key] = null` to remove.
+/// C60 Step 9: `#remove` must be rejected where the loop walks a SNAPSHOT — the
+/// iteration reads a pre-sorted copy of the records, so `#remove` would not reach
+/// the collection.  Three kinds take that substitution (`hash`, `trie`, `spatial`)
+/// and the refusal names whichever one the author wrote; removal is by key
+/// (`h[key] = null`).
 #[test]
 fn c60_hash_iter_remove_rejected() {
     // Parse error expected; format matches other parse-error tests.
@@ -1588,9 +1589,50 @@ fn test() {
 }"
     )
     .error(
-        "#remove is not supported on hash iteration — the iterated \
-         vector is a sorted snapshot; use `hash[key] = null` to \
-         remove from the hash at c60_hash_iter_remove_rejected:5:32",
+        "#remove is not supported when iterating a `hash` — the loop walks a \
+         snapshot of the records, so the removal would not reach the collection; \
+         remove by key instead (`hash[key] = null`) at \
+         c60_hash_iter_remove_rejected:5:32",
+    );
+}
+
+/// loft#1403 — the refusal names the kind the AUTHOR wrote.
+///
+/// `hash`, `trie` and `spatial` all take the snapshot substitution and all reach the one
+/// scratch variable, so a message spelled for the hash told a `trie` author their loop was
+/// "hash iteration" and prescribed `hash[key] = null` for a collection they never wrote.
+/// A `spatial` is keyed by its coordinate axes, so it gets its own cure spelling too.
+#[test]
+fn remove_refusal_names_a_trie_not_a_hash() {
+    code!(
+        "struct Ent { k: text, v: integer }
+fn test() {
+    c: trie<Ent[k]> = [Ent{k:\"a\",v:1}];
+    for e in c { e#remove; }
+}"
+    )
+    .error(
+        "#remove is not supported when iterating a `trie` — the loop walks a \
+         snapshot of the records, so the removal would not reach the collection; \
+         remove by key instead (`trie[key] = null`) at \
+         remove_refusal_names_a_trie_not_a_hash:4:27",
+    );
+}
+
+#[test]
+fn remove_refusal_names_a_spatial_and_its_axes() {
+    code!(
+        "struct Ent { x: integer, y: integer, v: integer }
+fn test() {
+    c: spatial<Ent[x,y]> = [Ent{x:1,y:1,v:1}];
+    for e in c { e#remove; }
+}"
+    )
+    .error(
+        "#remove is not supported when iterating a `spatial` — the loop walks a \
+         snapshot of the records, so the removal would not reach the collection; \
+         remove by key instead (`spatial[x, y] = null`) at \
+         remove_refusal_names_a_spatial_and_its_axes:4:27",
     );
 }
 

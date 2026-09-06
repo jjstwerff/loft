@@ -1955,20 +1955,80 @@ use #count instead"
                 *t = Type::Void;
                 return;
             }
-            // C60 Step 9: reject #remove on hash iteration.  The parser
-            // substitutes hash iteration with a scratch rec-nr vector
-            // (see parse_for, the `{id}#hash_scratch` variable), so
-            // #remove would remove from the snapshot, not the hash —
-            // silently diverging from the user's intent.
+            // C60 Step 9: reject #remove on a SNAPSHOT walk.  The parser substitutes such
+            // iteration with a scratch rec-nr vector (see parse_for, the
+            // `{id}#hash_scratch` variable), so #remove would remove from the snapshot and
+            // not from the collection — silently diverging from what was written.
+            //
+            // Three kinds take that substitution — `hash`, `trie` and `spatial`
+            // (`Type::Hash | Type::Trie | Type::Radix` at the scratch's creation) — and they
+            // share the one scratch NAME, so a message spelled for the hash told a `trie`
+            // author their loop was "hash iteration" and prescribed `hash[key] = null` for a
+            // collection they never wrote.  The kind is recovered from the scratch's own
+            // deps, which name the source collection; where it cannot be
+            // (a field, a call result — nothing to name), the wording stays kind-neutral
+            // rather than guessing, and the cure is right either way.
             if !self.first_pass {
                 let coll = self.vars.loop_coll_var(index_var);
                 if coll != u16::MAX && self.vars.name(coll).contains("hash_scratch") {
+                    fn snapshot_kind(tp: &Type) -> Option<&'static str> {
+                        match tp {
+                            Type::Hash(_, _, _) => Some("hash"),
+                            Type::Trie(_, _, _) => Some("trie"),
+                            Type::Radix(_, _, _) => Some("spatial"),
+                            _ => None,
+                        }
+                    }
+                    let source = self
+                        .vars
+                        .tp(coll)
+                        .depend()
+                        .first()
+                        .map(|d| self.vars.tp(*d).clone());
+                    let kind = match &source {
+                        // A local: the dep names it and its type IS the collection.
+                        Some(tp) if snapshot_kind(tp).is_some() => snapshot_kind(tp),
+                        // A FIELD (`for e in b.data`): the dep names the STRUCT, so the kind
+                        // is the one snapshot-walked field it declares.  Named only when
+                        // there is exactly one — with two the loop's own field is not
+                        // decidable from here, and a guess in a refusal is worse than the
+                        // kind-neutral wording below.
+                        Some(Type::Reference(d, _)) => {
+                            let mut found = self
+                                .data
+                                .def(*d)
+                                .attributes
+                                .iter()
+                                .filter_map(|a| snapshot_kind(&a.typedef));
+                            match (found.next(), found.next()) {
+                                (Some(k), None) => Some(k),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    };
+                    let what =
+                        kind.map_or_else(|| "this collection".to_string(), |k| format!("a `{k}`"));
+                    // A `spatial` is keyed by its 1-3 coordinate AXES, so `[key]` is not a
+                    // spelling its author can copy; the other two are keyed by one value.
+                    let cure = match kind {
+                        Some("spatial") => "spatial[x, y]",
+                        Some(k) => {
+                            if k == "trie" {
+                                "trie[key]"
+                            } else {
+                                "hash[key]"
+                            }
+                        }
+                        None => "collection[key]",
+                    };
                     diagnostic!(
                         self.lexer,
                         Level::Error,
-                        "#remove is not supported on hash iteration — the \
-                         iterated vector is a sorted snapshot; use \
-                         `hash[key] = null` to remove from the hash"
+                        "#remove is not supported when iterating {what} — the loop walks a \
+                         snapshot of the records, so the removal would not reach the \
+                         collection; remove by key instead (`{} = null`)",
+                        cure
                     );
                     *t = Type::Void;
                     return;
