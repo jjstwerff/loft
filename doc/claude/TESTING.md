@@ -2921,6 +2921,23 @@ is checked. `make falsify` catches the commonest case — a guard that never fai
 build it was written to catch — but it only answers for the commit you name. These are the
 shapes that survive it, each one measured here rather than imagined.
 
+**A "did this copy too much?" control is not the same cell for every element type, and the
+wrong one argues for reverting a correct fix.**  The natural control for an over-wide copy is
+*an undisturbed view must still ALIAS — a write through it reaches the container*.  That is
+right for a RECORD tail and INVERTED for a COLLECTION one: `(B-Copy)` makes a whole-value
+vector bind a copy, so a write through it reaching nothing is the documented answer, in the
+branch spelling exactly as in the plain one.  Read the record way, loft#1399's fix looked like
+the over-wide version it had been warned against — a shipped release answered 3 where the
+branch answered 2 — and the next step would have been to revert something correct.
+
+What settles it is the PLAIN spelling of the SAME tail on the SAME build, not the same shape on
+an older build.  The release turned out to be the inconsistent side: it aliases a collection
+projection in the branch spelling while copying it in the plain one.  Two habits fall out of
+that.  When the shipped binary is the thing under suspicion, isolate by inverse-editing your
+own change out and rebuilding rather than trusting it as the only oracle — that is what showed
+the difference predated the edit entirely.  And pin BOTH boundaries as cells, so the next
+reader does not have to re-derive which kind aliases.
+
 **A one-of-a-kind fixture makes a positional read look right.**  Reading a tuple member's
 backing work-ref off the element type's dep list, `deps.first()` passed every cell of a matrix
 whose tuples had ONE droppable member — and the lists are UNIONED across a tuple's heap

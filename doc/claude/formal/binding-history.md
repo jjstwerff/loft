@@ -42,7 +42,20 @@ only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
 > fix looks over-wide when it is not.**  For a RECORD tail an undisturbed projection ALIASES
 > and must keep doing so.  For a COLLECTION tail it does not: `(B-Copy)` makes a whole-value
 > vector bind a copy, so a write through it reaching nothing is the documented answer in the
-> branch spelling exactly as in the plain one.  Measured on both, in both spellings.
+> branch spelling exactly as in the plain one.
+>
+> That is a LANGUAGE fact and not a property of this tree, which matters here because the ROOT
+> above was tree-dependent and the two could be confused.  It was measured independently on the
+> sibling branch, which carries neither half of the collection work: a record tail aliases in
+> both spellings there too, a collection tail copies in both.  The BRANCH was never the axis
+> for either kind — what the shipped 2026.9.0 shows is that release being inconsistent between
+> the two spellings for a collection, aliasing the branch form while copying the plain one.
+>
+> **The general form, worth more than this cell.**  The control for *"did this fix copy too
+> much?"* is not the same cell for every element type, because what a plain bind already does
+> differs BY type.  The comparison that settles it is the PLAIN spelling of the SAME tail on
+> the SAME build — not the same shape on an older build, which is what made the release look
+> like the authority when it was the thing under suspicion.
 >
 > Guard `a-collection-projection-arm-of-a-branch-materialises` (9 cells), falsified at
 > c22c318f: interpret one assertion failure -> 0, native INERT — which is the right verdict for
