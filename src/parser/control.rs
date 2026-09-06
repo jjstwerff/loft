@@ -875,7 +875,33 @@ impl Parser {
             // it at each statement boundary; the within-statement `?? d` / `== null` tracking is
             // untouched (both operand and consumer parse inside this one `self.expression`).
             self.expr_not_null = false;
+            // loft#1382 — statement position, decided by the ONE reader that knows it.  A
+            // statement beginning with `if` or `match` has its value discarded
+            // (`@FR-F-Block`), so its arms need not agree with each other; a value-position
+            // one never starts its statement (`v = if …` starts with `v`), which is what
+            // makes a single peek sufficient.  `parse_if` consumes the flag, so a nested
+            // value-`if` inside a statement one does not inherit it.
+            let saved_stmt_if = self.stmt_if_pending;
+            self.stmt_if_pending = self.lexer.peek_token("if") || self.lexer.peek_token("match");
+            let pending_before = self.pending_arm_mismatch.take();
             t = self.expression(&mut n);
+            self.stmt_if_pending = saved_stmt_if;
+            // …and CONFIRM it here, where the `;` is finally visible.  `@FR-F-Block` discards
+            // a block's value *"only where the BLOCK itself is a statement — a `;`-terminated
+            // one"*, and a leading `if` does not prove that: a function TAIL also begins its
+            // statement, and there the value is the function's, so its arms must still agree
+            // (`fn t() { if c { 2 } else { "a" } }` is a real error, `parse_errors::wrong_if`).
+            // The gate below therefore RECORDS the mismatch instead of reporting it, and this
+            // is where it is either dropped — the construct was a statement — or reported.
+            // Deciding here rather than by looking ahead is what keeps the lexer untouched:
+            // a scan to the end of the construct has to re-lex it, and reverting that left
+            // the parser mis-positioned on 250 tests.
+            if let Some(m) = self.pending_arm_mismatch.take()
+                && !self.lexer.peek_token(";")
+            {
+                self.arm_mismatch_report(&m);
+            }
+            self.pending_arm_mismatch = pending_before;
             self.expected = saved_expected;
             // Track unconditional terminators at block scope.
             // if/else/loop/match contain terminators inside branches — not unconditional.
@@ -1975,6 +2001,27 @@ impl Parser {
             // *"expected A, got B on else"* for a join `match` accepts (loft#1117).  The
             // arm keeps its own type and `parse_if` joins the two to their enum.
             let sibling_variant = context == "else" && self.sibling_variants(t, result);
+            // @FR-F-Block — the arms of a STATEMENT `if` yield nothing anybody reads, so
+            // their types need not agree.  Only one order used to compile: a void THEN arm
+            // makes the expected type `void`, which accepts any else arm, while a void ELSE
+            // arm arrived as a conversion `void ⤳ integer` that nothing licenses — so
+            // `{ println } else { 5 }` was accepted and its mirror refused (loft#1382),
+            // both backends, where `match` accepted both.
+            //
+            // Gated on POSITION, not on the arms' types: `Type::Void` on an arm is not one
+            // fact — it is also what a block reports when its value travels through a
+            // BUFFER — so keying on it dropped the retbuf delivery of twenty other tests.
+            // …and only where one arm yields NOTHING.  `@FR-F-Block` discards the value of a
+            // `;`-terminated construct, but the corpus pins `if c { 2 } else { "a" };` as a
+            // refusal — two VALUES of different types is a mistake worth reporting wherever it
+            // sits, and widening that is not what loft#1382 asks.  What it asks is narrower: a
+            // void arm beside a value arm, which is not a type mistake at all, since there is
+            // no value for the two to disagree about.  Only one ORDER of it used to compile —
+            // a void THEN arm makes the expected type `void`, which accepts any else arm,
+            // while a void ELSE arm arrived as `void ⤳ integer`, licensed by nothing.
+            let stmt_arm = context == "else"
+                && self.arms_of_statement_construct
+                && (matches!(t, Type::Void) || matches!(result, Type::Void));
             let needs_convert = !tuple_rewritten
                 && !if_unified
                 && !vec_match_candidate
@@ -2039,6 +2086,18 @@ impl Parser {
                             concept_ref: "@F16",
                         });
                     }
+                } else if stmt_arm {
+                    // Deferred: the construct BEGAN its statement, but a function TAIL does
+                    // that too and there the arms must still agree.  `parse_block`'s loop
+                    // drops this when a `;` follows and reports it otherwise.  Recording the
+                    // TYPES rather than a rendered string keeps `validate_convert`'s
+                    // same-name-two-defs case (loft#1094) intact.
+                    self.pending_arm_mismatch = Some(crate::parser::ArmMismatch {
+                        test: t.clone(),
+                        should: result.clone(),
+                        context: context.to_string(),
+                        at: tail_pos.clone(),
+                    });
                 } else {
                     self.validate_convert(context, t, result, tail_pos);
                 }
@@ -3764,6 +3823,19 @@ impl Parser {
     }
 
     pub(crate) fn parse_if(&mut self, code: &mut Value) -> Type {
+        // loft#1382 — take statement position from the caller and CLEAR it, so a value-`if`
+        // nested inside a statement one (`if c { v = if d { 1 } else { 2 } }`) does not
+        // inherit it.  Held across the arms in `arms_of_statement_construct`, which is what
+        // the arm-agreement gate reads; restored at every exit so a sibling construct in the
+        // same statement is unaffected.
+        let is_stmt = std::mem::replace(&mut self.stmt_if_pending, false);
+        let outer_arms = std::mem::replace(&mut self.arms_of_statement_construct, is_stmt);
+        let r = self.parse_if_inner(code);
+        self.arms_of_statement_construct = outer_arms;
+        r
+    }
+
+    fn parse_if_inner(&mut self, code: &mut Value) -> Type {
         let mut test = Value::Null;
         // loft#986 — the `{` after this condition opens a BLOCK; an empty `{ }` must not
         // read as a struct literal here.

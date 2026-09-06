@@ -181,6 +181,15 @@ pub(crate) struct StoreCtx {
     pub never_error: bool,
 }
 
+/// loft#1382 — a recorded arm-agreement mismatch, reported only if the construct that
+/// produced it turns out NOT to be a `;`-terminated statement.
+pub struct ArmMismatch {
+    pub test: Type,
+    pub should: Type,
+    pub context: String,
+    pub at: Position,
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct Parser {
     pub todo_files: Vec<(String, u16)>,
@@ -374,6 +383,31 @@ pub struct Parser {
     /// `parse_assign_op` to lower a SCALAR reference to `OpCreateStack`. Cleared per
     /// binding so it never leaks into the next statement.
     pub(crate) amp_pending: bool,
+    /// loft#1382 — the statement about to be parsed BEGINS with `if` or `match`, so whatever
+    /// that construct yields is discarded (`@FR-F-Block`: a `;`-terminated block's value is
+    /// dropped, and `@FR-F-Drop` still runs the work).
+    ///
+    /// Statement position is decidable only by the caller: `parse_block`'s loop is what knows
+    /// the `;`, and a construct cannot infer it from its own arms.  A one-token peek is enough
+    /// because a value-position `if` never STARTS its statement — `v = if …` starts with `v`.
+    /// Read once by `parse_if`, which clears it so a nested value-`if` inside a statement one
+    /// does not inherit it.
+    pub(crate) stmt_if_pending: bool,
+    /// loft#1382 — an arm-agreement mismatch found while parsing a construct that BEGAN its
+    /// statement, held until the `;` after it is visible.
+    ///
+    /// A leading `if` does not prove statement position — a function TAIL begins its statement
+    /// too — and `@FR-F-Block` keys on the `;`.  The gate records here and `parse_block`'s loop
+    /// either drops it (a `;` followed: the value is discarded, so the arms need not agree) or
+    /// reports it.
+    pub(crate) pending_arm_mismatch: Option<ArmMismatch>,
+    /// loft#1382 — the arms currently being parsed belong to a construct in STATEMENT
+    /// position, so their types need not agree with each other.
+    ///
+    /// Set by `parse_if` from [`Self::stmt_if_pending`] for the duration of its arms and read
+    /// at the arm-agreement gate.  Separate from `stmt_if_pending` because that one is
+    /// consumed at the construct and this one has to survive into the arms.
+    pub(crate) arms_of_statement_construct: bool,
     /// @PLN87 B-Ref-AnnotationOnly — true while the parser is positioned at the HEAD
     /// of a place where `&` may legally appear: the whole right-hand side of a plain
     /// `=` binding, or the start of a statement (where the D-bind-7 guard reports a
@@ -1298,6 +1332,9 @@ impl Parser {
             pending_param_locks: Vec::new(),
             pending_param_positions: Vec::new(),
             amp_pending: false,
+            stmt_if_pending: false,
+            pending_arm_mismatch: None,
+            arms_of_statement_construct: false,
             amp_head: AmpHead::default(),
             assign_target: u16::MAX,
             assign_replaces: false,
@@ -5529,6 +5566,17 @@ impl Parser {
         } else {
             true
         }
+    }
+
+    /// loft#1382 — an arm-agreement mismatch deferred until statement position is known.
+    pub(crate) fn arm_mismatch_report(&mut self, m: &ArmMismatch) {
+        let (test, should, context, at) = (
+            m.test.clone(),
+            m.should.clone(),
+            m.context.clone(),
+            m.at.clone(),
+        );
+        self.validate_convert(&context, &test, &should, &at);
     }
 
     fn validate_convert(&mut self, context: &str, test_type: &Type, should: &Type, pos: &Position) {
