@@ -231,6 +231,12 @@ pub struct State {
     pub stack_high: u32,
     pub stack_pos: u32,
     /// @PLAN53 cluster 2 / S4 — when true (`LOFT_ALIGN=1`), the eval-TOS
+    /// @PLN154 — is the stack shadow armed?  A field rather than
+    /// [`stack_verify::enabled`](crate::stack_verify::enabled) at each site: the check sits
+    /// in `get_stack` and `get_var`, which run for every operand of every operator, and
+    /// reading the `OnceLock` there cost 2.4 % of the interpreter's instructions on a
+    /// field-write loop.  Set once, at construction.
+    pub(crate) verify_on: bool,
     /// @P294: cached byte-capacity of the value-stack store (`stack_cur`).
     /// The stack store is allocated once and never re-`claim`s, so its
     /// buffer only grows through `ensure_stack`; this cache lets the hot
@@ -638,6 +644,7 @@ impl State {
             stack_pos: 4,
             stack_high: 4,
             stack_cap_bytes,
+            verify_on: crate::stack_verify::enabled(),
             code_pos: 0,
             def_pos: 0,
             source: u16::MAX,
@@ -2234,7 +2241,7 @@ impl State {
         // by the stack discipline, so clearing its tags cannot lose a live one.  The
         // difference is that the shadow does not need the slot to hold a distinguishable
         // byte pattern to say so.
-        if step != 0 && crate::stack_verify::enabled() {
+        if step != 0 && self.verify_on {
             let at = (self.stack_cur.rec * 8 + self.stack_cur.pos + base) as usize;
             self.database
                 .store_mut(&self.stack_cur)
@@ -2406,7 +2413,7 @@ impl State {
         // @PLN154 — check high.  The pop is also a LIFO consume, so the slot's tags go
         // with it: the next occupant of this offset inherits nothing from this value, and
         // a later read there has to be earned by a later write.
-        if crate::stack_verify::enabled() {
+        if self.verify_on {
             self.verify_slot::<T>("get_stack", self.stack_pos);
             let at = (self.stack_cur.rec * 8 + self.stack_cur.pos + self.stack_pos) as usize;
             let step = self.stack_step(size_of::<T>() as u32) as usize;
@@ -2603,7 +2610,7 @@ impl State {
         self.check_stack_align::<T>(self.stack_cur.pos + self.stack_pos - u32::from(pos));
         // @PLN154 — a frame read.  No kill: the slot stays live, and a local read twice is
         // read twice.
-        if crate::stack_verify::enabled() {
+        if self.verify_on {
             self.verify_slot::<T>("get_var", self.stack_pos - u32::from(pos));
         }
         self.database.store(&self.stack_cur).addr::<T>(
@@ -2617,6 +2624,8 @@ impl State {
     /// Named where the check is made rather than where the tag was set, because the answer
     /// a reader needs is *which read got a value nobody wrote* — the write that did not
     /// happen has no site.
+    #[cold]
+    #[inline(never)]
     fn verify_slot<T: 'static>(&self, what: &str, at: u32) {
         use crate::stack_verify::SlotState;
         let width = size_of::<T>();
@@ -5535,7 +5544,7 @@ impl State {
         // per op when the census is not armed.
         let census_on = crate::stack_census::enabled();
         // @PLN154 phase 1 — the same hoist for the shadow's one KILL chokepoint.
-        let verify_on = crate::stack_verify::enabled();
+        let verify_on = self.verify_on;
         while self.code_pos < bytecode_len {
             if reload_on {
                 reload_tick -= 1;
@@ -6555,6 +6564,7 @@ impl State {
             stack_pos: 4,
             stack_high: 4,
             stack_cap_bytes,
+            verify_on: crate::stack_verify::enabled(),
             code_pos: 0,
             def_pos: 0,
             source: u16::MAX,

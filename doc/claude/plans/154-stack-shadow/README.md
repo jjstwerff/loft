@@ -9,13 +9,16 @@ Tracker: [@PLN154](https://github.com/loft-lang/plans/issues/154).
 
 ## Status
 
-**Phases 0 and 1 shipped 2026-09-06.  Phase 0 came back RED in the sense it was cut to
+**Phases 0, 1 and 2 shipped 2026-09-06.  Phase 0 came back RED in the sense it was cut to
 allow — the tag moved off the accessor and down to `Store::addr_mut::<T>` before phases 1-3
 were built ([phase0-census.md](phase0-census.md)).  Phase 1 shipped `LOFT_VERIFY_STACK=1`
-GREEN on its gate, and moved its own falsification target: neither loft#1386 nor loft#1254
-is in the `uninit` state, and the witness is the nullable-local pre-init defect instead
-([phase1-uninit.md](phase1-uninit.md)).  Phases 2-5 open, and phase 2 is where the named
-evidence lives.**
+GREEN on its gate and moved its own falsification target: neither loft#1386 nor loft#1254 is
+in the `uninit` state, and the witness is the nullable-local pre-init defect instead
+([phase1-uninit.md](phase1-uninit.md)).  Phase 2 shipped the tag GREEN on two of its three
+named guards, on the HANDLE axis — the width axis reports the frame's own composite slots and
+was given up for a measured reason, and loft#1070 is out of a stack shadow's reach because
+its defect is a heap record's layout ([phase2-width-kind.md](phase2-width-kind.md)).
+Phases 3-5 open.**
 
 A third of the machinery is already in the tree:
 `LOFT_UAF_GEN` ([`src/keys.rs:1335`](../../../../src/keys.rs)) keeps an offset-keyed shadow
@@ -70,7 +73,7 @@ odd-size adjacency matrix"* — which is the same question asked from the layout
 |---|---|---|---|
 | **0** — the bypass census | [phase0-census.md](phase0-census.md) | 1106 corpus programs: `put_stack` carries 74.5 % of the bytes, is 1 of 33 write sites, and **no program** is covered by it alone | **Shipped 2026-09-06 — RED** |
 | **1** — `uninit` | [phase1-uninit.md](phase1-uninit.md) | 1103 of 1103 runnable corpus programs silent at HEAD on `--interpret`; four distinct sites REPORTED on `64437246` (the nullable-local pre-init control), where loft#1386's control is silent and loft#1254's control moves the `Partial` counter instead.  Ships `LOFT_VERIFY_STACK_INJECT=1` in the same commit | **Shipped 2026-09-06 — GREEN, target moved** |
-| **2** — `width + kind` | @PLN154 | Reports on `tests/scripts/1070-generic-arm-local-type-row.loft`, `1028-generic-null-typed-per-monomorph.loft` and `1016-generic-null-default-instantiation.loft` at the parent of each fixing commit; silent corpus-wide at HEAD.  Phase 1 hands it a measured queue: the `Partial` counter is 1 on loft#1254's control and 0 at HEAD, and non-zero on three corpus programs that are the language's own stepped slots | Open — shares phase 1's hook, which already carries `T`; the legal-pun list is what separates the two |
+| **2** — `width + kind` | [phase2-width-kind.md](phase2-width-kind.md) | 1106 corpus programs silent at HEAD on `--interpret`; loft#1028's control reports `handle 12` read as `i64` (and answers `65535`), loft#1016's reports four sites (and answers `4294967198`).  loft#1070's control reproduces and the shadow is silent — its record has the type variable's LAYOUT, so the defect is in a store, not in a frame slot | **Shipped 2026-09-06 — GREEN on 2 of 3; the third is out of scope, measured** |
 | **3** — `stale-on-grow` | @PLN154 | Reports on the guards for loft#1373 / #1377 / #1384 at their recorded `@falsified-at:` refs; silent corpus-wide at HEAD | Open |
 | **4** — yield vs. the falsification corpus | this README | The 277 guards carrying a real `@falsified-at:` ref, each run under the shadow on the build it was written to catch.  The yield is the REPORT; the gate is the other direction — a shadow report on a build its guard calls clean is a false positive, and is red | Open |
 | **5** — arm it in the nightly | [CI_BUDGET.md](../../CI_BUDGET.md) | The sweep itself: it goes red on a false positive phase 4 did not cover | Open |
@@ -111,12 +114,16 @@ native is silent too and #1070 is wrong on both backends.
 
 ## Open design questions
 
-1. **The legal-pun list (phase 2).**  loft puns on purpose — `__nullable<S>` sentinels, enum
-   variants sharing one slot ([DESIGN_DECISIONS.md](../../DESIGN_DECISIONS.md) C89), tuple
-   packing, `LOFT_ALIGN`'s stepped slots — so a strict *types must match* rule reports the
-   language's own idioms.  The admitted set has to be written down as a `@FR-` rule
-   ([formal/layout.md](../../formal/layout.md) is its home); no rule states it today, which
-   is worth something independently of this plan.
+1. **The legal-pun list (phase 2) — ANSWERED, by dropping the question.**  The list would
+   have been *"every composite slot in the interpreter"*: a strict *types must match* rule
+   reported 43 of the first 180 corpus programs, and every class was the frame's own layout
+   (the 20-byte fn-ref slot read as an `i64` and a `DbRef`, the iterator state `OpStep` reads
+   as two `u32`s, a `boolean` consumed at its stepped eight-byte slot, a null sentinel read
+   as the type it stands for).  What phase 2 reports instead is a **handle crossing a
+   value**, which needs no list because a slot the compiler typed as a reference is a
+   reference on every path.  The width disagreements are counted, so the pun population stays
+   measurable for a phase that has the compiler's slot types rather than the accessor's.
+   Details: [phase2-width-kind.md](phase2-width-kind.md).
 2. **Zone-1 slot reuse.**  A reused slot must have its tag cleared by whatever reuses it, and
    `assign_slots` — not the runtime — is the authority on when that happens
    ([SLOTS.md](../../SLOTS.md)).  Whether the clear belongs at the reuse site or at scope
@@ -130,6 +137,10 @@ native is silent too and #1070 is wrong on both backends.
 
 - [phase1-uninit.md](phase1-uninit.md) — what `uninit` witnesses, measured on three control
   builds: the one guard that is in the state, and the two issue-named defects that are not.
+- [phase2-width-kind.md](phase2-width-kind.md) — the tag, why the width axis is counted rather
+  than reported, and the boundary loft#1070 marks.
+- [shadow-control.sh](shadow-control.sh) — build a control tree WITH the shadow on it, which
+  is what phase 4 needs and what `make falsify` cannot do.
 - [DEBUG.md](../../DEBUG.md) § the detector table — every existing lever this one sits beside,
   and the `LOFT_UAF_GEN` / `LOFT_STRICT_STORES` / `LOFT_POISON` division of labour.
 - [SLOTS.md](../../SLOTS.md) — the frame layout the shadow mirrors.

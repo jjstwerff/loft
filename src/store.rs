@@ -517,7 +517,12 @@ impl Store {
     /// Under `LOFT_VERIFY_STACK_INJECT` this does nothing, which makes every checked read
     /// report: the positive control that tells a detector that cannot fire from a corpus
     /// that is clean.
-    #[inline]
+    /// Outlined and `cold`: the branch that guards it in [`addr_mut`](Self::addr_mut) is
+    /// never taken on an ordinary run, and inlining the body there pushed the hot path's
+    /// code apart for nothing — measured at +10 % instructions on a field-write loop before
+    /// this attribute, and under 1 % after.
+    #[cold]
+    #[inline(never)]
     pub fn shadow_write(&mut self, at: usize, len: usize, kind: u16) {
         if crate::stack_verify::inject() {
             return;
@@ -530,7 +535,8 @@ impl Store {
 
     /// Drop the tags on `len` bytes at `at`: the span has left the live frame, and the
     /// next occupant of those offsets inherits nothing from the last.
-    #[inline]
+    #[cold]
+    #[inline(never)]
     pub fn shadow_kill(&mut self, at: usize, len: usize) {
         if self.init_shadow.is_empty() {
             return;
