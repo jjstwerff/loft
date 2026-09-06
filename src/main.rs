@@ -11714,6 +11714,12 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
     if loft::stack_census::enabled() {
         loft::stack_census::report(Some(&p.data));
     }
+    // @PLN154 phase 1 — the stack shadow's verdict.  It prints on a CLEAN run too: silence
+    // is the result this instrument exists to make trustworthy, and a detector that says
+    // nothing when it found nothing reads exactly like one that never ran.
+    if loft::stack_verify::enabled() {
+        loft::stack_verify::report();
+    }
     // loft#1088 — the network summary was BUILT and never printed: `LOFT_NET_PROFILE=1`
     // accumulated every event and nothing called `report`, so only `=trace` (which
     // prints per event) produced output at all.  Beside the other two because it is the

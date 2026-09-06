@@ -1743,6 +1743,21 @@ impl Stores {
                 len as usize,
             );
         }
+        // @PLN154 — this is the return-value slide, the one untyped byte move on the
+        // interpreter stack, and the tags have to travel with the bytes: the destination
+        // otherwise keeps whatever its previous occupant left, and a callee that returned
+        // nothing would read as a value at the caller.  A source with no shadow is real
+        // heap data, so it arrives WRITTEN.
+        if self.store(to).shadow_armed() {
+            let at = (to.rec as isize * 8 + to.pos as isize) as usize;
+            let src = (from.rec as isize * 8 + from.pos as isize) as usize;
+            let tags = if self.store(from).shadow_armed() {
+                self.store(from).shadow_tags(src, len as usize)
+            } else {
+                vec![1u8; len as usize]
+            };
+            self.store_mut(to).shadow_set_tags(at, &tags);
+        }
     }
 }
 
