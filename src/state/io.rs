@@ -1643,6 +1643,16 @@ impl State {
         if data.store_nr == u16::MAX {
             return;
         }
+        // @FR-L-Null, the DESTINATION half of the same question (loft#1374's boundary).  A
+        // read naming no record answers `nullref`, so an out-of-range element write
+        // (`w.es[9] = e` on a one-element vector) hands this a null PLACE.  There is nothing
+        // to write into, so the write is dropped — which is what the language already says
+        // such a write does.  Without it `store_mut` indexes `allocations[65535]` and the
+        // process dies on a program the compiler accepted.  The source half above and this
+        // one are one rule read from its two ends.
+        if to.store_nr == u16::MAX {
+            return;
+        }
         // @PLN90 phase 1 — make the copy visible. A real record deep-copy is about to
         // run (the no-op-alias and null cases returned above). LOFT_COPY_DUMP prints one
         // line per executed structure copy so we can inventory every copy + map it to its

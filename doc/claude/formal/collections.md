@@ -341,6 +341,15 @@ shared), the write, and — for a replace — `OpLinkRecord`, which is `Stores::
 sibling half on its own (`link_record_siblings`).  The temporary is typed as the element PLACE
 resolves, deps included: without them the native emitter reads the bind as owning and copies.
 
+The walk that finds the holder is a walk over the READ, so it inherits whatever spelling the
+read has.  A group one level inside a `vector<R?>` element (`rooms[0].items.remove(0)`) arrives
+as `if <present> { payload } else { nullref }` — `(L-Null)`'s non-slot spelling — which is not a
+vector read, so the holder resolved to nothing and the sibling unlinks were never emitted: the
+removed record stayed findable under its key, silently, on both backends.  `keyed_field_site`,
+`holder_type` and `vector_element_type` peel that read through `use_analysis::through_null_arm`,
+which is the one home for *"what does a null-arm read answer?"*.  The DENSE twin was never
+broken, which is what says the tag is the axis.
+
 *Anchors:* `Stores::field` (`src/database/types.rs`, the pairing test + `other_indexes`);
 `Parser::collection_groups` (`src/parser/objects.rs`, the parser's derivation of the same
 question — measured agreeing with `Stores::field` on nine shapes: a forward-declared element,

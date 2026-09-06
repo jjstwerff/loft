@@ -209,7 +209,13 @@ The rule wants splitting rather than weakening, and the split is decidable from 
                HOLDER has no record, not an absent value, and only the total `rec` tests
                (`OpEqRef`, `OpConvBoolFromRef`, `is_absent_collection`) read it.  Handed up
                instead, that shape was present to the handle test and garbage to the copy
-               (loft#1374).
+               (loft#1374).  Read from the DESTINATION end the same clause says a write to a
+               place naming no record is DROPPED: `v[i] = e` past the end changes nothing and
+               raises nothing, so the record copy answers `nullref` on both sides and returns
+               (`State::do_copy_record` and `codegen_runtime::OpCopyRecord`, which guarded a
+               null SOURCE for @PLN25 and needed the twin once an absent read began answering
+               `nullref` — without it the copy indexed `allocations[65535]` and the process
+               died on a program the compiler accepts).
   (L-Null-Text) `text` reserves TWO spellings of absence and they are ONE value: an UNSET
                handle (str_rec 0 — the `nullref` above) and an ALLOCATED record holding the
                `STRING_NULL` (`"\0"`) bytes.  A reader tests the CONTENT, never the handle

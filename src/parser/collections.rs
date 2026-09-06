@@ -1011,7 +1011,9 @@ impl Parser {
     /// bare `x.by_k` — stopping at the bare form is what left loft#898's nested case
     /// on the unsafe path until its guard row a7 caught it.
     fn keyed_field_site(&self, coll: &Value) -> Option<(u16, u16)> {
-        let Value::Call(gf_nr, gf_args) = coll.unspan() else {
+        let Value::Call(gf_nr, gf_args) =
+            crate::use_analysis::through_null_arm(&self.data, coll).unspan()
+        else {
             return None;
         };
         if self.data.def(*gf_nr).name() != "OpGetField" {
@@ -1025,7 +1027,13 @@ impl Parser {
 
     /// The database type of the struct a field-access BASE evaluates to.
     fn holder_type(&self, base: &Value) -> Option<u16> {
-        match base.unspan() {
+        // An element of a `vector<S?>` is READ as `if <present> { payload } else { nullref }`
+        // (loft#1367), so the walk meets an `If` where the schema names a record.  The read
+        // answers as its present arm — `use_analysis::through_null_arm` is that question's one
+        // home — and without the peel `rooms[0].items.remove(0)` resolved no holder, so the
+        // group's sibling unlinks were never emitted and the removed record stayed findable
+        // under its key.
+        match crate::use_analysis::through_null_arm(&self.data, base).unspan() {
             Value::Var(v) => {
                 let d_nr = match self.vars.tp(*v).base() {
                     Type::Reference(d, _) => *d,
@@ -1073,7 +1081,7 @@ impl Parser {
     /// The database type of the ELEMENT of a vector expression — a local, or a struct field
     /// reached through [`Self::holder_type`].
     fn vector_element_type(&self, vec: &Value) -> Option<u16> {
-        match vec.unspan() {
+        match crate::use_analysis::through_null_arm(&self.data, vec).unspan() {
             Value::Var(v) => {
                 let Type::Vector(inner, _) = self.vars.tp(*v).base() else {
                     return None;

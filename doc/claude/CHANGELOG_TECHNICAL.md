@@ -9,6 +9,45 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The seam between the store-lifetime and group-walk streams: two rules that had never met (2026-09-06)
+
+Neither defect below exists in either stream alone.  `@FR-Col-Group`'s element-level write
+route was measured against a store where an absent read answered the SLOT spelling and a
+nullable element was read as a plain projection; `@FR-L-Null` then made an absent read answer
+`nullref` (loft#1374) and a tagged element read as `if <present> { payload } else { nullref }`
+(loft#1367).  Two rules, each right on its own tree, whose implementations met for the first
+time when the streams were joined.
+
+* **The group walk could not reach through a nullable element.**  `keyed_field_site` walks the
+  `OpGetField` chain to find a field's holder; a `vector<R?>` element arrives as that `if`,
+  which is not a vector read, so `rooms[0].items.remove(0)` resolved no holder and the sibling
+  unlinks were never emitted — the removed record stayed findable under its key with no
+  diagnostic, on both backends.  The three walk entries (`keyed_field_site`, `holder_type`,
+  `vector_element_type`) peel the read through `use_analysis::through_null_arm`, which is that
+  question's one home.  The DENSE twin was never broken, which is what says the tag is the axis.
+* **A record copy had no null DESTINATION guard.**  `w.es[9] = e` on a shorter vector names no
+  element, so the write is dropped — `(L-Null)` read from the destination end.  With the absent
+  read answering `nullref` the destination store is `u16::MAX`, and the copy indexed
+  `allocations[65535]` and killed the process on a program the compiler accepts.
+  `do_copy_record` guarded a null SOURCE for @PLN25 and not a null destination; it now guards
+  both, and so does its native twin `OpCopyRecord`.
+
+`(L-Null)` in `formal/layout.md` now states the destination half beside the read half, and
+`(Col-Group)`'s prose names the peel.  Guard:
+`a-group-walk-reaches-through-a-nullable-element-and-drops-a-null-write` (7 rows incl. the
+dense control and a negative index, which names a REAL element and must still be written),
+`@falsified-at: 96ef2467` — the joined tree with all six picks and neither fix.  Branch-internal:
+neither shape reproduces on `main`, so neither is filed.
+
+### loft#1378: a generic at a self-referential struct parses (2026-09-06)
+
+Picked from the quality stream (`667983e5`).  A generic instantiated at a struct that holds a
+collection of its own type, with a nullable return, recursed without a base case while resolving
+the instance and took the process down on both backends.  The same commit writes and reads a
+generic's NARROW vector elements at their declared width rather than at `integer`'s.
+
+Guard: `1378-a-generic-at-a-self-referential-struct-parses`.  `Fixes #1378`.
+
 ### A linked group's members must share one element layout (2026-09-06, loft#1385, D-col-2, C117)
 
 A struct holding BOTH a dense `vector<E>` and a `vector<E?>` beside a keyed member split into

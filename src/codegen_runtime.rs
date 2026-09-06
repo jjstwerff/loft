@@ -945,6 +945,12 @@ pub fn OpCopyRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, to: DbRef
     if data.store_nr == u16::MAX {
         return;
     }
+    // @FR-L-Null, the DESTINATION half — the twin of `state/io.rs::do_copy_record`'s.  An
+    // out-of-range element write hands this a null PLACE (loft#1374 made an absent read
+    // answer `nullref`); there is nothing to write into, so the write is dropped.
+    if to.store_nr == u16::MAX {
+        return;
+    }
     // mirror `state/io.rs::copy_record`'s tag handling and
     // cleanup.  The bytecode form masks the high bit of `tp` before
     // indexing into `stores.types` (0x8000 marks "free source after

@@ -14,6 +14,17 @@ invariants, internal phase numbers)?  See
 
 ## 2026-09
 
+**Removing an item from a collection inside an optional record now updates its index.**  A
+struct held inside a `vector<Room?>` has collections of its own; removing an item from one of
+them left the removed item findable through the sibling lookup, so a search still returned
+something that was no longer there.  The same shape one level up, and the same shape without
+the `?`, always worked.
+
+**Writing past the end of a vector no longer stops the program.**  `items[9] = thing` on a
+shorter vector does nothing, which is what it has always meant; on compiled and interpreted
+programs alike it had begun ending the run instead.  A negative index still counts from the
+end and writes a real element.
+
 **A value that turns out to be absent no longer costs you memory.**  Assigning a
 may-be-missing value over one a variable already held (`x = maybe`) quietly kept the old
 record alive when `maybe` turned out to be nothing — once per time it happened, on compiled
