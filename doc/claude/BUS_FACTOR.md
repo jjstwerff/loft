@@ -50,6 +50,43 @@ in the public repo, in a form a machine can act on:
 Put together: an agent that clones this repo has the source, the reasons, the method,
 and the instruments. That is the whole job.
 
+**And the instruments answer independently of whoever is reasoning, which is what bounds
+the cost of being wrong.** That is the load-bearing half, because an agent working fast on
+unfamiliar machinery *will* form wrong beliefs about which mechanism causes which symptom —
+that is the normal rate, not a lapse. Measured on 2026-09-06, when two checkouts worked the
+same subsystem in parallel for a day (on a branch, with no PR — nothing here reached `main`):
+**six** such attributions were made between them, three each. Every one was caught, none by the other agent's opinion — `loft introspect` showed the
+pass being blamed does not run in that program; `make falsify` showed a case a fix was credited
+with was already passing at the control commit; running the plain spelling of a shape beside
+the branched one showed the shipped release inconsistent where a correct fix had looked
+over-wide; building each narrowing showed one issue lost by both, where the prediction said one
+each.
+
+**Several of those wrong claims were COMMITTED before they were caught**, and saying so is the
+point rather than an embarrassment: a *"values unchanged"* line went in two sentences before the
+measurement that contradicted it, and a comment mapping each narrowing to one broken guard went
+in before anyone built the narrowings. Each was corrected within the hour, because an instrument
+contradicted it. **None survived into the record** — which is a stronger claim than "nothing
+wrong was ever written down", and the only one that is true. A standard that forbade committing
+a claim until it was certain would stop the work; what actually holds the line is that a wrong
+claim is cheap to catch and normal to fix.
+
+⚠ **Cures built, measured and withdrawn are NOT in that count, and confusing the two teaches the
+wrong lesson.** Three were backed out that day — a closure-record release, a vector-typed
+witness, a naming widening — and each was a hypothesis tested and rejected, which is the method
+working exactly as `engineering-rigor` describes. One of them turned out to be the CORRECT fix
+on the other checkout once a separate change landed, and was recovered from its own write-up
+rather than re-derived. An attribution asserted without measuring is the error; building
+something, measuring it and taking it out again is the cure.
+
+Two agents checking each other would not have produced that. Each was confident, each was
+sometimes wrong, and their disagreements were settled by re-running an instrument rather than
+by whoever argued better. **A reviewer can be persuaded; `make falsify` cannot** — which is why
+the recipes below name a command at every step where a judgement would otherwise go, and why
+`doc/claude/` records what was *measured* rather than what was concluded. The bus factor is not
+that a second agent can read the code. It is that a wrong agent is caught by something that
+does not share its reasoning.
+
 ## The design choice behind it
 
 This did not happen by accident. The owner **prioritized documentation and tooling

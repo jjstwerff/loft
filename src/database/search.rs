@@ -920,7 +920,19 @@ impl Stores {
     When not in a structure.
     */
     pub fn remove(&mut self, data: &DbRef, rec: &DbRef, db: u16) {
-        match self.types[db as usize].parts.clone() {
+        let parts = self.types[db as usize].parts.clone();
+        // A NULL element is in no keyed view, so it leaves none — the LEAVE half of the
+        // test `link_siblings` already applies on the ENTER half, through the same home
+        // (`@FR-Col-Group`).  Only the keyed kinds ask: a by-value `vector<E?>` holds its
+        // null slots as elements and removes them by position like any other.
+        if matches!(
+            parts,
+            Parts::Hash(..) | Parts::Index(..) | Parts::Trie(..) | Parts::Radix(..)
+        ) && self.absent_nullable_record(self.content(db), rec)
+        {
+            return;
+        }
+        match parts {
             // BY-VALUE: elements sit inline in the container, so the element's
             // byte position IS its index.
             Parts::Sorted(c, _) | Parts::Vector(c) => {

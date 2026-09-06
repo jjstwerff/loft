@@ -134,6 +134,8 @@ pub(crate) struct VarSnapshot<'a> {
     pub skip_free: bool,
     pub captured: bool,
     pub caller_hidden_buf: bool,
+    /// The owner witness of a mixed-ownership local (`@FR-O-Witness`), `u16::MAX` for none.
+    pub owner_witness: u16,
 }
 
 /// @PLAN28 C4 — owned codegen-read fields of one `Variable`, consumed by
@@ -149,6 +151,7 @@ pub(crate) struct RestoredVar {
     pub skip_free: bool,
     pub captured: bool,
     pub caller_hidden_buf: bool,
+    pub owner_witness: u16,
 }
 
 // This is created for every variable instance, even if those are of the same name.
@@ -543,7 +546,10 @@ impl Function {
         self.variables.len()
     }
 
-    /// The nine codegen-read fields of variable `i`, for the snapshot encoder.
+    /// The ten codegen-read fields of variable `i`, for the snapshot encoder.  A fact the
+    /// EMITTERS read belongs here whatever map carries it at parse time: `owner_witness`
+    /// was maintained in the IR and restored nowhere, so a warm program-cache run copied
+    /// into the record a witnessed local was viewing (`@FR-O-Witness`).
     #[must_use]
     pub(crate) fn snapshot_var(&self, i: usize) -> VarSnapshot<'_> {
         let v = &self.variables[i];
@@ -557,6 +563,7 @@ impl Function {
             skip_free: v.skip_free,
             captured: v.captured,
             caller_hidden_buf: v.caller_hidden_buf,
+            owner_witness: self.owner_witness(i as u16).unwrap_or(u16::MAX),
         }
     }
 
@@ -597,6 +604,11 @@ impl Function {
         inline_refs: Vec<u16>,
     ) -> Function {
         let mut f = Function::new(name, file);
+        for (i, r) in vars.iter().enumerate() {
+            if r.owner_witness != u16::MAX {
+                f.owner_witness.insert(i as u16, r.owner_witness);
+            }
+        }
         f.variables = vars
             .into_iter()
             .map(|r| Variable {
@@ -697,6 +709,20 @@ impl Function {
         self.owner_witness.clone_from(&other.owner_witness);
     }
 
+    /// The highest `N` among this table's `<prefix><N>` names — the number a work counter must
+    /// start past so a new mint cannot re-claim a name something already depends on.  Matches
+    /// `<prefix>` followed by digits ONLY, so `__ref_` does not read `__ref_p2_1` as its own.
+    fn highest_minted(table: &Function, prefix: &str) -> u16 {
+        table
+            .names
+            .keys()
+            .filter_map(|n| n.strip_prefix(prefix))
+            .filter(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+            .filter_map(|rest| rest.parse::<u16>().ok())
+            .max()
+            .unwrap_or(0)
+    }
+
     pub fn copy(other: &Function) -> Self {
         Function {
             name: other.name.clone(),
@@ -717,14 +743,27 @@ impl Function {
             variables: other.variables.clone(),
             annotated: other.annotated.clone(),
             arm_consumed: other.arm_consumed.clone(),
-            work_text: 0,
-            work_ctext: 0,
-            work_text_p2: 0,
-            work_ref: 0,
-            work_ref_p2: 0,
-            work_vdb: 0,
-            work_kvb: 0,
-            work_fmt: 0,
+            // Every work COUNTER starts past the names the table already carries — derived from
+            // the NAMES, not copied, because the stored number is not trustworthy at every
+            // instantiation (a monomorph built from a pass-1 body, a reset between the passes).
+            // The live sets below do not carry.
+            // A monomorph is this table plus passes that MINT (a boxed tuple return, a text
+            // return buffer, a par lowering), and a name is a SITE only within one pass:
+            // `work_refs` reuses an existing `__ref_N` by name when the counter is behind it.
+            // Starting at 0 here handed `promote_monomorph_tuple_return` the `__ref_1` the
+            // template's tuple-member copy had already claimed, retyping the member's backing
+            // into the return record while `t` still depended on it — the caller read zeroes
+            // (the join of loft#1361 and the @FR-F-Ret walk, 2026-09-05).  Past the carried
+            // names, a monomorph-time mint is always new; the empty sets keep the before/after
+            // snapshots the passes take (`work_texts()`) meaning "minted here".
+            work_text: Self::highest_minted(other, "__work_"),
+            work_ctext: Self::highest_minted(other, "__work_c"),
+            work_text_p2: Self::highest_minted(other, "__work_p2_"),
+            work_ref: Self::highest_minted(other, "__ref_"),
+            work_ref_p2: Self::highest_minted(other, "__ref_p2_"),
+            work_vdb: Self::highest_minted(other, "__vdb_"),
+            work_kvb: Self::highest_minted(other, "__kvb_"),
+            work_fmt: Self::highest_minted(other, "__fmt_"),
             work_texts: BTreeSet::new(),
             work_refs: BTreeSet::new(),
             inline_ref_vars: other.inline_ref_vars.clone(),
@@ -1251,9 +1290,8 @@ impl Function {
             Type::Rewritten(inner) => {
                 Self::rewrite_unknown(inner, stub, target).map(|new| Type::Rewritten(Box::new(new)))
             }
-            Type::Optional(inner) => {
-                Self::rewrite_unknown(inner, stub, target).map(|new| Type::Optional(Box::new(new)))
-            }
+            // The idempotent former, for the reason `Data::rewrite_type_opt` gives (@FR-N-Idem).
+            Type::Optional(inner) => Self::rewrite_unknown(inner, stub, target).map(Type::optional),
             Type::Tuple(elems) => {
                 let mut changed = false;
                 let new_elems: Vec<Type> = elems
@@ -1363,6 +1401,95 @@ impl Function {
         {
             to.remove(pos);
         }
+    }
+
+    /// Is `incoming` the placeholder `declared` with its stubs RESOLVED — the same shape at
+    /// every constructor, where a stub in `declared` accepts whatever `incoming` has there?
+    ///
+    /// The question the declared-placeholder arm of [`Self::change_var_type`] asks: a
+    /// declaration still carrying a forward stub must be kept against an ASSIGNMENT that would
+    /// overwrite it with an unrelated type (`x: Maybe? = 5` must not become `integer`), and
+    /// must be REPLACED by pass 2's re-declaration of the same type with the name resolved
+    /// (`c: (integer, Q)` over `(integer, Unknown)`).  Shape, not identity: `Optional(Unknown)`
+    /// against `Integer` is not a refinement; `Tuple[Int, Unknown]` against
+    /// `Tuple[Int, Reference]` is.  Walks the same variant families
+    /// [`crate::data::Type::for_each_child`] names; a leaf compares by `is_equal`.
+    fn refines(declared: &Type, incoming: &Type) -> bool {
+        use crate::data::Type as T;
+        if declared.is_unknown() {
+            return true;
+        }
+        match (declared, incoming) {
+            (T::Optional(a), T::Optional(b))
+            | (T::RefVar(a), T::RefVar(b))
+            | (T::Rewritten(a), T::Rewritten(b))
+            | (T::Vector(a, _), T::Vector(b, _)) => Self::refines(a, b),
+            (T::Tuple(xs), T::Tuple(ys)) => {
+                xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| Self::refines(x, y))
+            }
+            (T::Function(xa, xr, _), T::Function(ya, yr, _)) => {
+                xa.len() == ya.len()
+                    && xa.iter().zip(ya).all(|(x, y)| Self::refines(x, y))
+                    && Self::refines(xr, yr)
+            }
+            (T::Iterator(a1, a2), T::Iterator(b1, b2)) => {
+                Self::refines(a1, b1) && Self::refines(a2, b2)
+            }
+            _ => declared.is_equal(incoming),
+        }
+    }
+
+    /// [`Self::make_independent`] one level down: strip `remove` from the deps of each
+    /// ELEMENT of a tuple-typed variable, and say whether anything moved.
+    ///
+    /// A tuple carries no deps of its own — each element carries its own backing — so
+    /// `make_independent` cannot reach them: `deps_mut` on a `Type::Tuple` is `None`, and
+    /// asking it would quietly do nothing.  The caller is loft#1365's monomorph pass, which
+    /// removes a tuple-member copy the instantiation does not need and has to take the
+    /// element's dep on that copy's backing with it; a dep left naming a backing nothing
+    /// fills makes the element look owned by an empty variable, and the store the member
+    /// really holds is then freed by nobody.
+    pub fn make_tuple_members_independent(&mut self, var_nr: u16, remove: &[u16]) -> bool {
+        self.retarget_tuple_member_deps(var_nr, remove, None)
+    }
+
+    /// [`Self::make_tuple_members_independent`] with a destination: every dep on a member of
+    /// `remove` is replaced by a dep on `to` when given, or dropped when not.  The replacement
+    /// is what a collapsed copy needs — a member unwrapped to a plain LOCAL is a VIEW of that
+    /// local (`(B-View)`), and a tuple whose element depends on nothing is read as OWNING it,
+    /// which freed the aliased argument's store at the callee's exit (the keyed tuple-via-local
+    /// cell of the @FR-F-Ret guard, both backends, 2026-09-05).
+    pub fn retarget_tuple_member_deps(
+        &mut self,
+        var_nr: u16,
+        remove: &[u16],
+        to: Option<u16>,
+    ) -> bool {
+        let mut tp = self.variables[var_nr as usize].type_def.clone();
+        let crate::data::Type::Tuple(elems) = &mut tp else {
+            return false;
+        };
+        let mut moved = false;
+        for e in elems.iter_mut() {
+            let Some(deps) = e.deps_mut() else { continue };
+            for d in remove {
+                while let Some(pos) = deps.iter().position(|x| x == d) {
+                    deps.remove(pos);
+                    moved = true;
+                }
+            }
+            if moved
+                && let Some(t) = to
+                && !deps.contains(&t)
+            {
+                deps.push(t);
+            }
+        }
+        if moved {
+            self.trace_type_change(var_nr, &tp, "retarget_tuple_member_deps");
+            self.variables[var_nr as usize].type_def = tp;
+        }
+        moved
     }
 
     /// Give `var_nr` EVERY dep the incoming type carries.
@@ -1718,7 +1845,7 @@ impl Function {
         let Some(v) = self.variables.get(var_nr as usize) else {
             return false;
         };
-        if v.argument || self.annotated.contains(&var_nr) {
+        if self.is_declared(var_nr) {
             // An explicitly ANNOTATED local's type is a contract the author wrote down, and
             // a parameter's belongs to the signature.  Neither is a candidate for a silent
             // rebind, whatever the loop structure says.
@@ -1828,6 +1955,21 @@ impl Function {
     #[must_use]
     pub fn is_annotated(&self, var_nr: u16) -> bool {
         self.annotated.contains(&var_nr)
+    }
+
+    /// Is this binding's type a COMMITMENT the author wrote down — an explicit `: τ`
+    /// annotation, or a parameter, whose type belongs to the signature?
+    ///
+    /// The one home for the declared / inferred split the storage rules turn on: a declared
+    /// slot keeps its type and a wider write is `@FR-N-Decl`'s (and `@FR-N-Store`'s)
+    /// question, where an inferred one widens to the join of its writes (`@FR-N-Join`,
+    /// `(I-Join)`).  Every site that asks "may this binding's type move?" reads this rather
+    /// than spelling `argument || annotated` for itself.
+    #[must_use]
+    pub fn is_declared(&self, var_nr: u16) -> bool {
+        self.variables
+            .get(var_nr as usize)
+            .is_some_and(|v| v.argument || self.annotated.contains(&var_nr))
     }
 
     /// Widen an INFERRED integer variable's type directly to `type_def` (the `(I-Join)`
@@ -2110,6 +2252,28 @@ impl Function {
             self.depend_all(var_nr, type_def);
             return self.is_new(var_nr);
         }
+        // The mirror once more, now for the DECLARED side (@PLN153 phase 0): a declared type
+        // still carrying a stub under a wrapper — `x: Maybe? = 5` with `type Maybe = integer?`
+        // declared below — is a placeholder pass 1 has not resolved, not a baseline the
+        // assignment's type may overwrite.  Overwriting it dropped the annotation's `?`: the
+        // slot read `integer`, `resolve_unknown_stub` found no stub left to fill, and pass 2's
+        // `integer?` was refused as a type change.  Kept instead; the stub rewrite fills it
+        // once the declaration adopts the stub, and pass 2 re-derives the value's type.
+        // A BARE `Unknown` declaration is not this case — `is_unknown()` — and keeps the
+        // pass-1 inference it always had.
+        // …unless the incoming type is the placeholder RESOLVED — pass 2 re-declaring
+        // `c: (integer, Q)` as `(integer, Reference(Q))` over pass 1's `(integer, Unknown)` is
+        // exactly the write this must let through (loft#944's own guard, c1: keeping the
+        // placeholder there left the member unresolved for good).  `refines` tells the two
+        // apart by SHAPE: same constructors down to the stubs, and a stub accepts anything.
+        if !var_tp.is_unknown()
+            && crate::data::Data::type_has_unresolved(var_tp)
+            && !crate::data::Data::type_has_unresolved(type_def)
+            && !Self::refines(var_tp, type_def)
+        {
+            self.depend_all(var_nr, type_def);
+            return self.is_new(var_nr);
+        }
         // @PLN25 (N-Decl): `Optional(τ)` and `τ` share sentinel storage, so storing a
         // non-null `τ` into a nullable `τ?` slot is NOT a type change — accept and KEEP the
         // nullable slot type (do not narrow it to non-null). This is what makes nullable
@@ -2162,6 +2326,8 @@ impl Function {
             self.depend_all(var_nr, type_def);
             return self.is_new(var_nr);
         }
+        // @FR-N-Join — an inferred local's type is the JOIN of its assignments, made optional
+        // when any of them may be null; a declared one is @FR-N-Decl's and never widens.
         // @PLN25 DN6 (N-Join): an INFERRED local first assigned a bare `null`, then a
         // non-null INLINE scalar `τ`, widens to `Null ⊔ τ = τ?` instead of erroring — the
         // ergonomic escape valve for `a = null; a = 5` (a now `integer?`, so a later
@@ -2181,14 +2347,16 @@ impl Function {
         // underflow / native E0308).  A text null-start must annotate `s: text? = null` so the
         // slot is heap from the start; `s = null; s = "hi"` falls through to the case-1
         // nullable-mix error, which already says "declare it `text?`".
+        // The source may itself be nullable — `a = null; a = v[i]` — and the join is the
+        // same `τ?` over the same inline slot, so the arm reads the source through `base()`.
         if crate::keys::pln25_dn1_enabled()
             && matches!(var_tp, Type::Null)
             && matches!(
-                type_def,
+                type_def.base(),
                 Type::Integer(_) | Type::Boolean | Type::Float | Type::Single | Type::Character
             )
         {
-            let widened = Type::optional(type_def.clone());
+            let widened = Type::optional(type_def.base().clone());
             self.trace_type_change(var_nr, &widened, "change_var_type(N-Join)");
             self.variables[var_nr as usize].type_def = widened;
             self.depend_all(var_nr, type_def);
@@ -2210,6 +2378,36 @@ impl Function {
         if data.same_nullable_struct(var_tp, type_def).is_some() {
             self.trace_type_change(var_nr, type_def, "change_var_type(nullable-synth)");
             self.variables[var_nr as usize].type_def = type_def.clone();
+            self.depend_all(var_nr, type_def);
+            return self.is_new(var_nr);
+        }
+        // @FR-N-Join — the nullable half of the join: an INFERRED local whose next write may
+        // be null widens to `τ?` — `a = 2; a = v[i]` makes `a` an `integer?` — exactly as
+        // `(I-Join)` widens an inferred narrow integer.  A DECLARED binding never takes this
+        // arm: its type is a commitment (`@FR-N-Decl`), so the nullable write is
+        // `@FR-N-Store`'s question and the assignment seam asks it through the store face
+        // BEFORE the retype ever reaches here (`parse_assign_op_inner`).
+        //
+        // Sound for the same reason `(N-Decl)`'s arm above is: `Optional(τ)` shares `τ`'s
+        // slot, so the binding's frame layout is unchanged and only the type record moves.
+        // The join of two integer widths is the WIDER one, so `a = 2 as u8; a = v[i]` widens
+        // to `integer?`, not `u8?` — a narrower slot would spend a value on the null.  A
+        // `RefVar` binding is a link to another place and keeps its own peel below.
+        if !self.is_declared(var_nr)
+            && !matches!(var_tp, Type::Optional(_) | Type::Null | Type::RefVar(_))
+            && let Type::Optional(inner) = type_def
+            && inner.is_equal(var_tp)
+        {
+            let wider_source = matches!((var_tp, &**inner), (Type::Integer(cur), Type::Integer(new))
+                if new.byte_width(true) > cur.byte_width(true));
+            let base = if wider_source {
+                (**inner).clone()
+            } else {
+                var_tp.clone()
+            };
+            let widened = Type::optional(base);
+            self.trace_type_change(var_nr, &widened, "change_var_type(N-Join nullable)");
+            self.variables[var_nr as usize].type_def = widened;
             self.depend_all(var_nr, type_def);
             return self.is_new(var_nr);
         }
@@ -2257,8 +2455,17 @@ impl Function {
             // work-buffer local (control.rs return-deps hoist) re-assigned from a
             // nullable call result; `Optional(τ)` shares `τ`'s sentinel storage, so the
             // buffer carries the null (`STRING_NULL`) without a type change.
+            // loft#1372 — and the other direction, `&τ? ← τ`: the link's SLOT is what a write
+            // through it has to fit, and whether that slot may be absent is `@FR-N-Store`'s
+            // question, asked where the value lands, not a RETYPE of the link.  Both sides
+            // peel, so `&integer? = 7` and `&integer? = null` are admitted exactly as
+            // `x: integer? = 7` and `= null` are on the slot itself; unpeeled, the write
+            // through a nullable link was refused as *"cannot change type from `&integer?`
+            // to `integer`"*, which is @FR-B-Ref-Intro's `&τ` for every τ not holding.
             if let Type::RefVar(in_tp) = var_tp
-                && in_tp.is_equal(type_def.base())
+                && (in_tp.is_equal(type_def.base())
+                    || in_tp.base().is_equal(type_def.base())
+                    || (matches!(**in_tp, Type::Optional(_)) && matches!(type_def, Type::Null)))
             {
                 return self.is_new(var_nr);
             }
@@ -2493,6 +2700,24 @@ impl Function {
         self.variables[var_nr as usize].argument = false;
     }
 
+    /// May the record bind `var = src` carry ABSENCE — is either side typed `τ?`?
+    ///
+    /// The one question both backends' record-bind emitters ask before choosing the
+    /// null-aware bind over the plain allocate-then-copy (`state/codegen.rs`
+    /// `gen_set_first_ref_var_copy`, `generation/dispatch.rs` the whole-value record bind).
+    /// A copy of an absent value is absent: `OpCopyRecord` from `nullref` reads nothing
+    /// and leaves the destination holding the record allocated for it, PRESENT where its
+    /// source was absent.  The destination's type is asked as well as the source's because
+    /// a source typed non-null can hold `nullref` — a keyed lookup and an element read
+    /// trusted by contract are typed bare views, and a miss or an overrun answers the one
+    /// value spelling of absence (`DbRef::or_null`, @FR-L-Null); asked of the source alone,
+    /// `x = t.h[k]; y: S? = x` on a miss read `y == null` false where `x == null` read
+    /// true, on both backends.  A dense destination keeps the plain copy: `(N-Store)` has
+    /// already reported that it cannot hold absence.
+    #[must_use]
+    pub fn bind_admits_absence(&self, var: u16, src: u16) -> bool {
+        matches!(self.tp(src), Type::Optional(_)) || matches!(self.tp(var), Type::Optional(_))
+    }
     pub fn is_argument(&self, var_nr: u16) -> bool {
         (var_nr as usize) < self.variables.len() && self.variables[var_nr as usize].argument
     }
@@ -3131,7 +3356,8 @@ impl Function {
         }
         // Mark skip_free so get_free_vars does not emit OpFreeRef for this variable.
         // with this explicit flag, keeping the type_def intact for downstream passes.
-        self.variables[v_nr as usize].skip_free = true;
+        // Through the one setter, so `LOFT_SKIPFREE_TRACE` sees this writer like every other.
+        self.set_skip_free(v_nr);
     }
 
     /// A fresh function-scoped work-ref (`__ref_N`), reusing the same variable across
@@ -3353,19 +3579,81 @@ impl Function {
         self.borrow_arm_vars.insert(v);
     }
 
-    /// Is `v` a mixed binding, borrowed on some path?  Read by BOTH backends' displacement
-    /// frees, so neither can free on the proxy where the other declines (@FR-O-NoDiverge).
+    /// Is `v` a mixed binding, borrowed on some path?  Read by ONE site — the fn-ref
+    /// collection-delivery strip in `scopes.rs` (loft#1333), which then leaves the binding's
+    /// dep in place.  Neither backend's displacement free reads this flag: both read the DEPS
+    /// (`Self::owns_displaced_store`), and a dep the strip no longer empties is what keeps them
+    /// from freeing on the proxy — agreeing, as @FR-O-NoDiverge requires, through the one fact
+    /// they share rather than through this one.  A record-typed mixed local is covered by a
+    /// different route again, its owner witness (`owner_witness_locals`, @FR-O-Witness).
     #[must_use]
     pub fn has_borrow_arm(&self, v: u16) -> bool {
         self.borrow_arm_vars.contains(&v)
+    }
+
+    /// Does `v`, a NULLABLE heap local, borrow exactly ONE argument of this function — the
+    /// D-own-16 residual `d: S? = p`, whose single dep names a parameter and nothing else?
+    ///
+    /// Such a local's dep reads as a permanent borrow though a later minting call may hand it
+    /// a store of its own; the displaced free it licenses is the GUARDED one, decided at run
+    /// time by store identity against the argument the dep names (`free_displaced` declines a
+    /// free-protected store, so the caller's argument survives the first round).  The ONE
+    /// spelling of a test three sites carried by hand — the interpreter's pre-`Set` free
+    /// (`state/codegen.rs`), the native reassignment gate (`generation/dispatch.rs`) and the
+    /// scope-exit sweep's borrow witness (`scopes.rs`) — so the two backends cannot drift on it
+    /// (@FR-O-NoDiverge).
+    #[must_use]
+    pub fn borrows_one_argument(&self, v: u16) -> bool {
+        let d = self.tp(v).depend();
+        d.len() == 1
+            && d[0] != v
+            && matches!(self.tp(v), Type::Optional(_))
+            && self.is_argument(d[0])
+            && !self.is_argument(v)
+    }
+
+    /// May the store `v` DISPLACES at `v = value` be freed — the fact-reading half of the
+    /// displacement free, asked identically by both backends?
+    ///
+    /// `v` names a store-backed kind (a record, a record enum, a vector or a keyed collection,
+    /// read through `base()` so the nullable spelling is the same binding); its dep list says it
+    /// OWNS — empty (@FR-O-Proxy) or the one-argument borrow above; it is not never-free
+    /// (@FR-O-Override, the veto the proxy needs) and not captured (a closure holds its
+    /// capture-time `DbRef`, @FR-L-CapHeap); and the assignment is not a DETACH, which
+    /// displaces a store without claiming to have owned it (`is_null_sentinel_detach`).
+    ///
+    /// Enforces @FR-O-NoDiverge: this was two predicates, `state/codegen.rs`'s `owned_ref` and
+    /// `generation/dispatch.rs`'s `owned_ref_reassign`, each carrying the other's list
+    /// "verbatim" by hand — and each time one gained a kind or a veto the other had to be found
+    /// and taught it (the keyed kinds, the vector destination, the override veto, the detach:
+    /// four such rounds are in their history).  What stays per backend is only what IS per
+    /// backend: the interpreter excludes the hidden buffer ARGUMENT (the caller owns that
+    /// store), native asks that the Rust local be already declared, that the right-hand side
+    /// produce a store, and that a retbuf-attr local carry an entry-buffer witness.
+    #[must_use]
+    pub fn owns_displaced_store(&self, v: u16, value: &Value, data: &Data) -> bool {
+        (matches!(
+            self.tp(v).base(),
+            Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
+        ) || crate::parser::vectors::is_keyed(self.tp(v).base()))
+            // @FR-O-Proxy asks free — the displacement free follows on this answer, so the
+            // @FR-O-Override veto is consulted right after it, as every free on the proxy must.
+            && (self.tp(v).depend().is_empty() || self.borrows_one_argument(v))
+            && !self.is_skip_free(v)
+            && !self.is_captured(v)
+            && !crate::data::is_null_sentinel_detach(v, value, data, self)
     }
 
     pub fn is_inline_ref(&self, v: u16) -> bool {
         self.inline_ref_vars.contains(&v)
     }
 
-    /// Must no `OpFreeRef` ever be emitted for `v`?  Its contract is exactly that
-    /// sentence, and nothing weaker.
+    /// Must no ownership-derived free ever be emitted for `v` — in ANY of a free's five
+    /// spellings (`OpSets::frees`), from the scope-exit sweep, a transition free, a pre-`Set`
+    /// free or a move alike?  Its contract is that sentence, and nothing weaker; the one
+    /// admissible free of a marked binding is the release its marking pass PLACES itself, on
+    /// a consumption fact ([`Self::is_staged_text_temp`]), and `ownership_cfg`'s Check D
+    /// reports every other.
     ///
     /// Enforces @FR-O-Override — the never-free veto.
     ///
@@ -3413,13 +3701,45 @@ impl Function {
         self.variables[v as usize].skip_free
     }
 
+    /// Is `v` a text temp that STAGES a value across the statement or the return that reads
+    /// it — a `??` coalesce subject (`__ncc_N`) or a return-delivery stage (`__ret_N`,
+    /// `__ret_text_N`)?
+    ///
+    /// Such a temp is never-free for the scope-exit sweep — its value outlives the block the
+    /// sweep would free it in — and is released by the pass that staged it, at the site that
+    /// pass chose: the ncc-orphan pass right after the consuming statement, the return delivery
+    /// once the bytes have moved into the caller's buffer.  @FR-O-Override names this as the ONE
+    /// admissible free of a never-free binding — a release placed on a CONSUMPTION fact, never
+    /// on the ownership proxy — and `ownership_cfg`'s Check D admits exactly this predicate.
+    /// Both facts are required, as in [`Self::is_overwritten_view`]: the PREFIX says which pass
+    /// staged it, and `skip_free` that the pass did mark it.
+    #[must_use]
+    pub fn is_staged_text_temp(&self, v: u16) -> bool {
+        if !self.is_skip_free(v) || !matches!(self.tp(v).base(), Type::Text(_)) {
+            return false;
+        }
+        let n = self.name(v);
+        n.starts_with("__ncc_") || n.starts_with("__ret_")
+    }
+
     /// Mark a variable so that `get_free_vars` will not emit `OpFreeRef` for it.
     /// Used for borrowed references (e.g. par-loop result variables that point
     /// into the result vector store).
+    /// Lift the never-free mark — the binding has stopped being the borrow it was marked for.
+    ///
+    /// The one caller is `(B-View)`'s materialise: a view live across a disturbance of its
+    /// container is given a store of ITS OWN, and a binding that owns a store must free it.
+    /// Stripping the deps without lifting the mark is what left a materialised `_mv_<field>_N`
+    /// holding a record nothing released.  `@FR-O-Override`'s contract is that a MARKED
+    /// binding is never freed; this retires the marking rather than freeing around it.
+    pub fn clear_skip_free(&mut self, v: u16) {
+        self.variables[v as usize].skip_free = false;
+    }
+
     #[track_caller]
     pub fn set_skip_free(&mut self, v: u16) {
         if let Ok(want) = std::env::var("LOFT_SKIPFREE_TRACE")
-            && self.variables[v as usize].name == want
+            && (want == "*" || self.variables[v as usize].name == want)
         {
             eprintln!(
                 "[skip_free] {} (var={v}) in {} @ {}",

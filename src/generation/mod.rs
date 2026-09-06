@@ -533,6 +533,12 @@ pub struct Output<'a> {
     pub def_nr: u32,
     pub indent: u32,
     pub declared: HashSet<u16>,
+    /// loft#1371 — locals this function bound as a `&struct` link through `OpCreateStack`,
+    /// which native represents as a `*mut DbRef` into the source's slot so a whole-value
+    /// write reaches the source (`@FR-B-Ref-Write`).  A `RefVar` local that merely ALIASES
+    /// another `RefVar` (the #257 shape) is not one of these — it copies the pointer it was
+    /// given — so the read side asks this set rather than the type alone.
+    pub local_record_link: HashSet<u16>,
     /// Hidden return-buffer (retbuf) attribute vars that have an entry-buffer
     /// witness `_rb_w_<name>` emitted in the prologue (capturing the caller's
     /// buffer at function entry).  A CONDITIONAL reassignment of such a
@@ -1013,33 +1019,11 @@ pub(crate) fn returns_owned_string(def: &crate::data::Definition) -> bool {
 
 /// @PLN130 — the container VARIABLE an element/field read ultimately reads out of.
 ///
-/// `OpGetVector` / `OpVectorRef` are `v[i]`, `OpGetField` is `s.f`. All three yield a `DbRef`
-/// sharing `store_nr` with the container, which is what makes binding one a borrow rather
-/// than an owner. The whole chain is peeled, because a view can sit several levels down
-/// (`outs[2].inner`).
-///
-/// `None` when the chain does not bottom out in a plain variable — notably a field of a CALL
-/// result (`return mk().a.b`), whose base is a temporary rather than a container someone
-/// else owns. Materialising there is a different question and answering it here broke
-/// `tests/scripts/85-store-lifetime-return-field-of-local`, so the emitters require a real
-/// base variable. Shared by both generators and mirrored by `scopes::base_container_var`, so
-/// the three cannot disagree about the shape.
+/// One line, because the derivation is [`crate::use_analysis::projection_container_var`]'s,
+/// shared with the walk that NAMES the views to materialise (`scopes::base_container_var`).
 #[must_use]
 pub fn container_element_base(data: &Data, value: &Value) -> Option<u16> {
-    let mut cur = value;
-    loop {
-        let Value::Call(d, args) = cur.unspan() else {
-            return None;
-        };
-        if !crate::use_analysis::is_projection_op(data, *d) {
-            return None;
-        }
-        match args.first().map(Value::unspan) {
-            Some(Value::Var(c)) => return Some(*c),
-            Some(inner) => cur = inner,
-            None => return None,
-        }
-    }
+    crate::use_analysis::projection_container_var(data, value)
 }
 
 /// Use this to map a loft type to the Rust type used in generated code.
@@ -1427,6 +1411,7 @@ impl<'a> Output<'a> {
             def_nr: 0,
             indent: 0,
             declared: HashSet::new(),
+            local_record_link: HashSet::new(),
             retbuf_witness: HashSet::new(),
             witness_vars: HashSet::new(),
             predeclared: HashSet::new(),
@@ -1663,6 +1648,7 @@ impl Output<'_> {
         self.def_nr = def_nr;
         self.indent = 0;
         self.declared.clear();
+        self.local_record_link.clear();
         self.retbuf_witness.clear();
         self.witness_vars.clear();
         self.predeclared.clear();

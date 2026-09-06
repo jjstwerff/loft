@@ -6,12 +6,104 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — `D-Narrow-Res`, `D-Narrow-Asgn` and `D-Null-Elem` were all opened and closed 2026-08-31 (below); `D-Chk-Yield` was opened and closed 2026-08-28 (below); `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
+OPEN: **0** — `D-Var-Enum` was opened and closed 2026-09-06 (loft#1390, below); `D-Decl-Sev` was opened and closed 2026-09-05 (below); `D-Narrow-Res`, `D-Narrow-Asgn` and `D-Null-Elem` were all opened and closed 2026-08-31 (below); `D-Chk-Yield` was opened and closed 2026-08-28 (below); `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
 fix/reconciliation.  The **@PLN102 DN3-Float extension** (below) is also CLOSED — SHIPPED
 default-on 2026-07-11 (#559): float `/`/`%` and the domain-partial float functions type `τ?`
 exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, retained as the
 record.  Per-situation mitigation catalogue:
 [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
+
+### D-Var-Enum — OPENED AND CLOSED (2026-09-06, loft#1390): an arm answering in the ENUM was asked to convert to its sibling's VARIANT, and the `match` join never widened
+
+`(C-Var)` licenses `Reference(S) ⤳ Enum(E)` for `S ∈ variants(E)` and licenses nothing between
+two variants.  So wherever the arms of a branch have settled on ONE variant, "does this arm
+convert to that?" is the wrong question for exactly two kinds of later arm — another variant of
+the same enum, and the ENUM itself — because both join to `E`, which is WIDER than what the arms
+had settled on.  loft#1117 closed the variant half in 2026-08.  The enum half was still asked, and
+answered *"expected Circle, got Sh"*:
+
+```loft
+e: Sh = Circle{r: 1};
+e = match e { Circle{r} => Circle{r: r + 1}, _ => e };   // refused: expected Circle, got Sh
+e = if e is Circle { Circle{r: 2} } else { e };          // refused: expected Circle, got Sh on else
+```
+
+`_ => e` hands back the very binding the statement assigns, which is the ordinary shape of
+"replace it when …" over an enum.  Both backends agreed (it is a typing refusal), the wildcard
+and the named-arm spelling both failed, and the recorded workaround — returning the new variant
+through a function typed as the enum — worked only because a CALL arm already types as `E`.
+
+**And the acceptance was only half the deviation.**  The `match` join kept the FIRST arm's type
+however many arms widened it, so the variant-typed destination `(C-Var)` exists to refuse was
+admitted:
+
+```loft
+e: Sh = Square{s: 7, extra: "hello"};
+v: Circle = match e { Circle{r} => Circle{r: r + 1}, Square{s} => Square{s: s, extra: "x"} };
+println("v.r={v.r}");                                    // 7 — a Square's `s` read at Circle's `r`
+```
+
+That is loft#980's class (a field read at another variant's offsets, tag never consulted), silent
+on both backends, and the `if` twin has refused it throughout — `parse_if` widens to the enum
+before the destination is checked.
+
+**Closed by giving the acceptance and the join ONE predicate.**  `Parser::joins_to_enum` is the
+home; `arm_joins_to_enum` asks it at the two acceptance sites (`block_result`'s `else`/chain arm
+and `parse_match_arm_body`), and `join_arm_into` asks it at the six `match` arm sites, where the
+settled type and the new arm are both in hand.  An arm the acceptance waves past is therefore
+exactly an arm the join widens for — the invariant that was missing, and the reason the two
+halves could disagree.  The predicate itself gained the check its new callers need: a
+`Reference` arm must really be a variant of THIS enum, not merely a different def, since an
+acceptance site sees types a join site only saw after `convert` had already refused them.  The
+cross-arm gate reads the same rule (`match_arms_unify`), because an arm keeps its own variant
+type on purpose so the join can still see the two differ.
+
+Guards `a-variant-arm-joins-with-its-enum` (7 cells: wildcard, named arm, the `if` twin,
+enum-first, variant × variant, the same variant twice, a call arm) and
+`a-variant-typed-destination-refuses-a-widened-match` (the refusal), both falsified at
+32e36462 — exit 1 -> 0 on both backends, and the refusal guard's expectation FAIL -> matched.
+
+### D-Decl-Sev — OPENED AND CLOSED (2026-09-05, @PLN153 phase 3b): the declared LOCAL was refused at every width where `(N-Store)` warns, and the inferred one was refused where `(N-Join)` widens
+
+`(N-Store)` gives one severity for a `τ?` reaching a non-null slot undischarged — *"a WARNING for
+most τ … a hard ERROR only for narrow widths"* — and `(N-Decl)` says a declared `x: τ` makes such
+a write `(N-Store)`-illegal, which is that severity, not a stricter one.  The worked table under
+the rules said otherwise (`a: integer = 2; a = v[i]` → *"type error"*), the pre-cutover reading
+that was never updated when @PLN102 shipped the split, and the code did what the table said: a
+DECLARED local was refused by `change_var_type`'s "cannot change type from `τ` to `τ?`" at every
+width — the twelfth home of the refusal, and the only one that erred where the eleven others
+warned.  The Stage A matrix made it exact: of the 102 cells the `local` row was the one row that
+read ERROR for every full-width kind while `element`, `argument` and `return` read WARN.
+
+The second half was hidden by a vacuous guard.  `(N-Join)` says an INFERRED `a = 2; a = v[i]`
+widens `a` to `integer?`; the phase-1 hold cell wrote exactly that and passed — with a CONSTANT
+index, which @PLN102 D1 trusts by contract and types non-null, so nothing was ever widened and the
+assert read the in-band sentinel.  With a variable index the same program was REFUSED with the
+declared local's message: the inferred local had no arm at all.
+
+```loft
+fn d(v: vector<integer>, i: integer) -> integer { x: integer = v[i]; return x; }   // was ERROR; the rule: WARNING, x holds null
+fn j(v: vector<integer>, i: integer) -> integer { a = 2; a = v[i]; return a; }     // was ERROR; the rule: a: integer?, the RETURN warns
+```
+
+Closed by giving each half its home.  A declared local (a parameter too — its type is the
+signature's — and a write-back `&τ` parameter, which is the caller's slot one link away) is asked
+through the one store face (`convert_store`, "the local `x`" / "the parameter `x`") BEFORE the
+retype, at the assignment seam and at the tuple-destructure site, so the arm reports with the
+rule's split and the retype sees the peeled type; an inferred local takes `change_var_type`'s
+`(N-Join)` arm, which widens to `Optional(the wider width)` and stays silent — the widen is proven
+by the next declared slot it reaches, which warns.  `retype_would_be_refused`, the loft#1145 gate
+that predicts the verdict, already read the two through one predicate (`decl_accepts`) and agreed.
+Stage A: the five full-width `local` cells moved ERROR → WARN, the narrow one stayed ERROR, no
+other cell moved.  Guards: `153-n-store-a-declared-local-warns-at-every-full-width-kind` (nine
+slot shapes, one report each), `153-n-join-an-inferred-local-widens-to-nullable` (seven joins, the
+widen proven by a later declared store), `153-n-store-refused-into-a-narrow-local` (every narrow
+slot the local family reaches, four cells), and the seven phase-1 pair files re-pinned to the
+rule's text; `153-n-rules-hold`'s `(N-Join)` cell now indexes by a variable, which the parent
+build refuses, so its compiling is the receipt.  The `&τ` parameter had never been asked at all
+(the `RefVar` peel carried the null in silence) and reports with the rest.  A documented refusal
+became a warning — `Contract: strained`; a program that compiled yesterday still compiles, and
+`x: integer = find(…)` now runs with a warning where it used to stop.
 
 ### D-Null-Heap — OPENED AND CLOSED (2026-09-03, loft#1313): `(N-Store)` was enforced for the SCALARS only
 
@@ -671,7 +763,7 @@ The rules doc used to carry these beside its `OPEN` line — closure summaries, 
 the times the count read 0 over a live entry.  They are timeline, so they moved here
 unchanged; [types.md](types.md) now states only what is open.
 
-### the two times this register read OPEN: 0 over live entries
+### the times this register read OPEN: 0 over live entries
 
 ⚠ **This line read `OPEN: 0` while D-Narrow-Asgn and D-Narrow-Res were both live, and the
 oracle under it could not have moved either** — `(I-Narrow)` had only two clauses, so a
@@ -688,7 +780,48 @@ if it were the model.  So a register can also be wrong when its rules are comple
 re-measures the code against them — the second failure mode, and the one a reading of this doc
 alone cannot catch.
 
+⚠ **And a third time, over two entries closed the day they were named (2026-09-06, D-If-Coal and
+D-If-Chain below).**  The rules were complete — `(N-Decl)`, `(I-Narrow)` and `(N-Store)` settle
+that a value-`if` and an `else if` chain stored into a declared slot are checked like every other
+spelling — and the enforcement existed for every spelling but those two.  Nothing re-measured the
+code against the rules for the SPELLING axis of a store, so a register at zero sat over a `u8`
+that held `null`, a condition that was silently rewritten, and a float whose bits printed as an
+integer.  The second failure mode again, on the axis the fixes' own guards had held fixed.
+
 ### the status line formal/README.md's area table carried until 2026-09-04
 
 **0 open** — D-Null-Join (loft#1103) opened and closed 2026-08-26: at a branch JOIN a nullable in a LATER arm stored into a non-null slot in silence, whichever arm and however spelled.  @PLN25 value/null model landed (DN1–DN6 + D2 closed); the @PLN102 null-flow generalisation (N-Prop/N-Domain/N-Cast/N-Store incl. call-arg + DN3-Float) SHIPPED default-on and verified both backends — for the DIRECT store, which is the bound on that verification
 
+## Closed after the 2026-09-04 move
+
+### D-If-Coal — CLOSED (2026-09-06, loft#1379): a value-`if` stored into a narrow slot was claimed as a `??` coalesce
+- Was: `Parser::range_guard_inside_discharge` (@PLN152) recognised the bare-variable `??`
+  lowering — a plain `if coalesce_not_null(v) { v } else { d }`, unmarked — by the node alone,
+  so every author's value-`if` stored into a `u8`, `i16`, `u32` or `limit(…)` slot was treated
+  as a discharge: its then arm became a checked cast (`c: u8 = if t { a + b } else { a }` read
+  `null` in a slot with no code for one, and a `limit(10,20)` slot lost `(E-Uncomp-NN)`'s
+  default), the first operand of the author's CONDITION was range-cast (`c: u8 = if k == 1000
+  { a } else { b }` compared `(k as u8?) == 1000` and took the else arm), and the `(N-Decl)` /
+  `(I-Narrow)` refusal every other spelling gets never fired.  Both backends; in 2e6a04ba, so
+  released in 2026.9.0.
+- Rules: `(N-Decl)`, `(I-Narrow)`, `(N-Store)` — settled; no rule moved.
+- Fixed at one home: `Parser::bare_variable_discharge` asks the BUILDER (`coalesce_not_null`)
+  whether the condition is the not-null test of the then arm's variable; an author's `if`, and
+  an author's hand-written `if x != null { x } else { d }`, are not.  Guards
+  `tests/scripts/1379-a-value-if-into-a-narrow-slot-is-not-a-coalesce.loft` and `1379b-…`,
+  falsified at 2b992851 on both backends.
+
+### D-If-Chain — CLOSED (2026-09-06, loft#1380): an `else if` chain was never held to the then arm's type
+- Was: `parse_if` parsed an `else if` chain through a recursive `parse_if` that expected
+  nothing of the chain's then arm and kept the chain's type out of the join (loft#936/#978),
+  so the if-expression reported the then arm's type while an arm of another type sat behind
+  it, never converted or refused: `x: integer = if a { 1 } else if b { 2.5 } else { 3 }`
+  printed the float's bits, `f: float = … else if b { 2 } …` the integer's, and 260 reached a
+  `u8` local, argument and return.  Both backends; pre-existing on b1ccf0e9.
+- Rules: `(N-Decl)`, `(I-Narrow)`, `(C-Var)` — settled; no rule moved.
+- Fixed at one home: `parse_if_expecting` threads the enclosing then arm's type into the chain's
+  then block, so `parse_block`'s tail conversion — the one the plain `else` already takes —
+  covers it; its three `else`-only carve-outs (the loft#1350 tuple boxing, the sibling-variant
+  carve-out, the loft#978/#1103 honest deps) read `arm_of_sibling`.  Guards
+  `tests/scripts/1380-an-else-if-chain-answers-in-its-first-arms-type.loft` and `1380b-…`,
+  falsified at 2b992851 on both backends.

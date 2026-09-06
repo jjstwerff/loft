@@ -1,0 +1,26 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN153 phase 4 — the over-free positive control (08) with the VIEW local declared NULLABLE.
+// `bview: vector<integer>? = h.data` is the same dep-carrying view of the holder's store, behind
+// a nullability marker (`@FR-L-Null`: the same storage).  Check B's "is this a heap local?" filter
+// asked `heap_dep()` of the local's type bare, so the nullable spelling was never a candidate and
+// the injected over-free (`LOFT_OWN_INJECT_FREE_BORROWED=bview`) went unflagged — the oracle read
+// green over the nullable twin of a shape it flags for the dense one.
+struct Holder { data: vector<integer> }
+
+fn sumv(v: vector<integer>?) -> integer {
+    total: integer = 0;
+    for x in v ?? [] { total = total + x; }
+    total
+}
+
+fn peek(h: Holder) -> integer {
+    bview: vector<integer>? = h.data;
+    sumv(bview) + sumv(bview)
+}
+
+fn main() {
+    box: Holder = Holder { data: [7, 8, 9] };
+    print("{peek(box)}\n");
+}

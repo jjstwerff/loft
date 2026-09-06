@@ -73,6 +73,10 @@ jobs:
     outputs:
       packages: ${{ steps.list.outputs.packages }}
     steps:
+      # The step below reads the not-a-library set from `scripts/revalidate_matrix.py`,
+      # which exists only in a checkout — the job used to have none (it fetches the
+      # registry index with curl) and failed on the missing file every run.
+      - uses: actions/checkout@v4
       - name: List registry packages
         id: list
         run: |

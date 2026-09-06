@@ -467,6 +467,24 @@ and never by the container. That is invisible while both die in the same scope,
 and it is a use-after-free the moment the container outlives the source, which is
 what `open_session` above does.
 
+**A reassignment releases what it displaces.** `s = S { h: acquire() }; s = S { h: acquire() }`
+runs the hook on the first record's handle at the second assignment — after the new value
+has been computed, so `s = grow(s)` still finds the old resource live while `grow` runs —
+and so does a rebind from a call, to `null`, or inside a loop of a local declared outside
+it. The hook used to run at scope end only, and the first handle was never closed
+(loft#1362).
+
+**A plain whole-value copy is the same step.** `h2 = h`, `t = s` for a struct or a
+struct-enum holding a droppable, `t: S? = s`, the variable an `if` arm yields, and
+`t = s; return t` all copy the record, and the copy takes the release with it: the
+source stops dropping, the copy (or the caller that adopts the returned copy)
+releases once. A copy taken FROM A PARAMETER runs the other way — the caller owns
+the resource, since the parameter aliases it — so it is the callee's copy that never
+drops. Two shapes keep both releases, deliberately: a source or a copy that is
+assigned more than once (the move belongs to one assignment, and a per-variable fact
+cannot carry two), and two copies of one source, which the `double-move` warning
+names.
+
 A container releases in this order:
 
 1. its own `OpDrop`, if it has one — a wrapper may still need what it wraps, the
@@ -507,9 +525,10 @@ What follows from all of this, and is worth knowing before you reach for it:
 **Three things a drop does NOT do.** Each is a deliberate boundary, not an
 omission:
 
-- **Taking a value OUT of its owner does not release it.** `v.remove(i)` and
-  `v[i] = other` do not release the element that goes away: it leaks, and the
-  program is otherwise correct. Releasing there would mean the runtime's free
+- **Taking a value OUT of its owner does not release it.** `v.remove(i)`,
+  `v[i] = other` and an overwritten FIELD `o.s = other` do not release the value that
+  goes away: it leaks, and the program is otherwise correct. (A reassigned LOCAL is
+  different — its record has one owner, the local, and the release runs there.) Releasing there would mean the runtime's free
   cascade calling back into your loft code, inside the one operation the heap
   invariant rests on, for a hook that by contract can neither fail nor answer. If
   you churn a collection of live resources, release the old element yourself

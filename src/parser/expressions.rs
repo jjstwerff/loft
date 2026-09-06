@@ -227,6 +227,10 @@ fn null_discharge_subject<'a>(v: &'a Value, data: &crate::parser::Data) -> Optio
         // zero-argument null-sentinel ELSE arm is what tells the two apart.  A discharge's else
         // arm is the type's DEFAULT, so the guard is the only `if` this must not claim — its
         // then arm is the receiver, and peeling to it would write through the wrong place.
+        //
+        // ⚠ Sound on a LEFT-hand side only, where no author's `if` can stand.  A reader of a
+        // right-hand side meets every value-`if` an author writes in this same node, and must
+        // ask the builder instead (`Parser::bare_variable_discharge`, loft#1379).
         Value::If(_, then, els)
             if !matches!(els.unspan(), Value::Call(d, a)
                 if a.is_empty() && data.def(*d).name() == "OpNullRefSentinel") =>
@@ -1469,12 +1473,26 @@ impl Parser {
             // any) still carry the real borrow sources.  The pre-Set free
             // stays safe: codegen's S1 guard skips it whenever the RHS
             // reads `v` itself.
+            //
+            // Both RECORD kinds, and only those.  A struct-enum is a record reached
+            // through a `DbRef` exactly as a struct is (`data::is_dbref` names the two
+            // together), and `Type::Enum` was outside the pattern: `e: Sh = Circle{r: 1}`
+            // gave `e` the dep `[e]`, `owns_displaced_store` read the non-empty list as
+            // BORROWED (`@FR-O-Proxy`), and a later join reassignment never freed the store
+            // it displaced — one leak per execution on both backends (loft#1389).  The
+            // COLLECTION kinds are deliberately not here: for a `vector` or a `text` the
+            // self-dep is the @P302 re-init-in-place ownership marker that
+            // `formal/ownership.md` (g) reads as `Owned` (`t = "{t}x"`), not a degenerate
+            // borrow — 6418 of them in the corpus against no `Enum` at all.  `retain`
+            // rather than `Deps::frame`, so a list keeps the dep SPACE it arrived in.
             let stripped: Type;
-            let tp = if let Type::Reference(d, deps) = tp
+            let tp = if let Some(deps) = tp.borrow_deps()
+                && matches!(tp, Type::Reference(_, _) | Type::Enum(_, true, _))
                 && deps.contains(v_nr)
             {
-                let kept: Vec<u16> = deps.iter().copied().filter(|d2| d2 != v_nr).collect();
-                stripped = Type::Reference(*d, Deps::frame(kept));
+                let mut kept = deps.clone();
+                kept.retain(|d2| d2 != v_nr);
+                stripped = tp.with_deps(&kept);
                 &stripped
             } else {
                 tp
@@ -1641,16 +1659,380 @@ use a separate collection or add after the loop"
         } else {
             false
         };
+        // A vector member read off an OWNED tuple local (`a = t.0`) is the same one-level
+        // projection — `@FR-L-Tuple` makes the tuple a struct — and copies for the same
+        // reason (loft#1361); off a parameter or a linked local it stays the view
+        // `@FR-B-View-Base` says.
+        // The base's own member deps name its frame-local backings (a copied member depends
+        // on the store it was copied into), never a borrow of another variable — a `&` link
+        // is a `RefVar`, not a `Tuple` — so ownership here is "a local that is not a parameter".
+        let owned_tuple_member = matches!(code.unspan(), Value::TupleGet(bv, _)
+            if matches!(self.vars.tp(*bv), Type::Tuple(_)) && !self.vars.is_argument(*bv));
         if is_bare_var {
             if matches!(code.unspan(), Value::Var(rhs) if *rhs == var_nr) {
                 return VecBind::SelfAssign;
             }
             return VecBind::CopyVar;
         }
-        if owned_field_read {
+        if owned_field_read || owned_tuple_member {
             return VecBind::CopyOwnedField;
         }
         VecBind::NotABind
+    }
+
+    /// Does the copy refill a FRESH store of the local's own, rather than the one the local
+    /// holds?  `@FR-O-Proxy` answers by ownership (`vector_needs_db`: a local with no deps owns
+    /// the store it holds, so that store is cleared and refilled), and two places cannot ask
+    /// the proxy:
+    ///
+    ///   * an ARM of a value branch, where the local carries the branch's JOIN deps and so
+    ///     reads as a borrower of a store it may not hold at all — a nullable local's
+    ///     sentinel, or the other arm's source — so refilling it in place cleared through a
+    ///     null or into a variable the other arm names;
+    ///   * a PARAMETER's first rebind (calls.md `@FR-F-ParamRebind`): the store it holds is
+    ///     the CALLER's, and a whole-value reassignment rebinds locally rather than writing
+    ///     back — the carve-out that keeps a parameter from allocating a store exists to
+    ///     avoid an allocation, not to let a refill reach the caller.  Once rebound the
+    ///     local names its own `__vdb_N` and the proxy answers again.  A promoted return
+    ///     buffer is the one argument that IS filled in place (F-Ret hands the value up
+    ///     through it), and keeps the carve-out.
+    fn vec_copy_needs_db(&self, var_nr: u16, elm_tp: &Type, in_arm: bool) -> bool {
+        in_arm
+            || self.vector_needs_db(var_nr, elm_tp, true)
+            // @FR-O-Proxy asks alloc — a parameter with no deps still holds the caller's
+            // store; the empty list here decides that its first rebind ALLOCATES, never
+            // that anything is released.
+            || (self.vars.is_argument(var_nr)
+                && !self.is_hidden_param(var_nr)
+                && !matches!(self.vars.tp(var_nr), Type::RefVar(_))
+                && self.vars.tp(var_nr).depend().is_empty())
+    }
+
+    /// The lowering a whole-value vector bind's verdict asks for, applied in place to
+    /// `code`, the source, for the local `to` (`var_nr`): nothing for the identity, else the
+    /// local's own store — allocated when it owns none, cleared when it does — refilled with
+    /// a deep copy of the source's elements.  Fires on BOTH passes (`change_var` types the
+    /// local each pass and the field-read strip advances the `_elm_N` counter on the first,
+    /// so the `__vdb_N` dep is created identically); the ops are emitted on the second.
+    #[allow(clippy::too_many_arguments)] // the copy arm's own inputs, plus where it sits
+    fn lower_vec_copy_bind(
+        &mut self,
+        code: &mut Value,
+        vec_bind: &VecBind,
+        to: &Value,
+        var_nr: u16,
+        s_type: &Type,
+        lhs_parent_tp: &Type,
+        in_arm: bool,
+    ) {
+        let Type::Vector(elm_tp, _) = s_type.base() else {
+            return;
+        };
+
+        // `v = v` self-assign — emit nothing rather than clear+reappend
+        // off the same storage.
+        if matches!(vec_bind, VecBind::SelfAssign) {
+            *code = Value::Insert(Vec::new());
+            return;
+        }
+        let elm_tp_clone = (**elm_tp).clone();
+        let dense = Type::Vector(Box::new(elm_tp_clone.clone()), Deps::none());
+        // The COPY is what the selector decided; whether the value may be ABSENT is the
+        // source's own fact and survives it.  Dropping the marker here would make the
+        // destination non-null and lose the null arm.
+        let vec_tp = if matches!(s_type, Type::Optional(_)) {
+            Type::Optional(Box::new(dense))
+        } else {
+            dense
+        };
+        self.change_var(to, &vec_tp);
+        let field_read = matches!(vec_bind, VecBind::CopyOwnedField);
+        // #426 — a struct vector-FIELD read (`af = bx.v`, `field_read`) must
+        // strip `af`'s inherited base dep on BOTH passes, then consume one
+        // `elm`-name slot on both.  `Function::unique`'s per-prefix counter has
+        // to advance IDENTICALLY across passes: a family created on only one
+        // pass shifts every other family's numbering, so a later `_elm_N`
+        // re-resolves to a pass-1 var backed by a different store — silent
+        // corruption (a nested vector literal `[[…]]` after `af = bx.v` built
+        // its inner element into an orphaned store, reading back len 0).  The
+        // field-read used to take the whole pass-2-only branch below, so on
+        // pass 1 its dep stayed non-empty (`vector_needs_db` false → no `elm`)
+        // while pass 2 stripped it (`vector_needs_db` true → one `elm`): a
+        // one-slot drift.  Stripping + advancing the counter on pass 1 too
+        // removes the drift.  The var-copy case (`b = a`) is untouched here —
+        // its strip stays pass-2-only (line below), since it never had the
+        // pass-1 dep-mismatch (the RHS var already owns an independent store).
+        if field_read && self.first_pass {
+            let inherited = self.vars.tp(var_nr).depend();
+            for d in inherited {
+                self.vars.make_independent(var_nr, d);
+            }
+            if self.vec_copy_needs_db(var_nr, &elm_tp_clone, in_arm) {
+                self.unique_elm_var(lhs_parent_tp, &elm_tp_clone, var_nr);
+            }
+            return;
+        }
+        if !self.first_pass {
+            // Break the alias.  The standard type-inference copied the RHS
+            // var's store dep onto v (making v *borrow* rhs's storage — the
+            // dangling-on-scope-exit @P292 hazard, and the no-own-store @P394
+            // crash on first assignment).  Strip rhs's deps from v so v gets
+            // its OWN store.  This is a no-op when v already owns an
+            // independent store (`v = [9]; v = a` reassignment), so that case
+            // still takes the clear+refill path below.  (Mirrors the @P295
+            // Var-to-var deep-copy dep-strip.)
+            if let Value::Var(rhs_var) = code.unspan() {
+                self.vars.make_independent(var_nr, *rhs_var);
+                for d in self.vars.tp(*rhs_var).depend() {
+                    self.vars.make_independent(var_nr, d);
+                }
+            } else {
+                // #415 — field-read RHS (`af = bx.v`): there is no rhs_var,
+                // but `af` inherited the base's dep ({bx}) during type
+                // resolution.  Strip af's own inherited deps so
+                // `vector_needs_db` below sees an empty dep and allocates af
+                // its OWN store; otherwise it takes the reassignment/clear arm,
+                // af never owns a store, and the alias to bx's field persists.
+                // The OpAppendVector then deep-copies the field's elements in.
+                let inherited = self.vars.tp(var_nr).depend();
+                for d in inherited {
+                    self.vars.make_independent(var_nr, d);
+                }
+            }
+            // @P314 — narrow-aware element type (see `append_elem_tp`).
+            let rec_tp = Value::Int(self.append_elem_tp(&elm_tp_clone));
+            let mut stmts = Vec::new();
+            if self.vec_copy_needs_db(var_nr, &elm_tp_clone, in_arm) {
+                // First assignment: v owns no store yet — allocate one.
+                let elm_var = self.unique_elm_var(lhs_parent_tp, &elm_tp_clone, var_nr);
+                let db = self.insert_new(var_nr, elm_var, &elm_tp_clone, &mut stmts);
+                self.vars.depend(var_nr, db);
+            } else {
+                // Reassignment: v already owns a store — clear, then refill.
+                stmts.push(self.cl("OpClearVector", std::slice::from_ref(to)));
+            }
+            // A NULLABLE destination takes the whole-value REPLACE rather than the
+            // append, for the one thing the append cannot express: an ABSENT source
+            // must leave the destination absent, not holding the empty store the alloc
+            // above just gave it.  `Stores::vector_replace` carries that rule, the same
+            // one `replace_keyed` carries for the keyed kinds — which is why the keyed
+            // sibling of this bind has been answering `b == null` correctly all along.
+            // A dense destination cannot be absent, so it keeps the append and its IR is
+            // unchanged.
+            let op = if matches!(self.vars.tp(var_nr), Type::Optional(_)) {
+                "OpReplaceVector"
+            } else {
+                "OpAppendVector"
+            };
+            stmts.push(self.cl(op, &[to.clone(), code.clone(), rec_tp]));
+            *code = Value::Insert(stmts);
+        }
+    }
+
+    /// `@FR-O-Complete` — a vector local bound from a value branch: write the bind out per
+    /// arm, so every path binds the local the way a single bind of that arm's tail would.
+    /// `true` when the rewrite happened; `false` where the branch has no arm a plain bind
+    /// would copy (every arm keeps the value it has, and the value form is that already) or
+    /// an arm cannot be written out as a bind at all.
+    fn sink_vec_bind_into_arms(
+        &mut self,
+        code: &mut Value,
+        to: &Value,
+        var_nr: u16,
+        f_type: &Type,
+        s_type: &Type,
+        lhs_parent_tp: &Type,
+    ) -> bool {
+        let mut hoists = Vec::new();
+        if !matches!(
+            code.unspan(),
+            Value::If(_, _, _) | Value::Block(_) | Value::Insert(_)
+        ) || self.vec_arm_copies(code, var_nr, f_type, s_type, &mut hoists) != Some(true)
+        {
+            return false;
+        }
+        let mut hoists = Vec::new();
+        self.sink_vec_arms(code, to, var_nr, f_type, s_type, lhs_parent_tp, &mut hoists);
+        self.branch_sunk_vectors
+            .insert((self.context, self.vars.name(var_nr).to_string()));
+        // A wrapper BLOCK opens a scope — a `??` hoist's, a `match` subject's — and a local
+        // whose first `Set` now sits inside it would be homed there, out of reach of the
+        // statement's own scope where its next use is.  The bind is made at the statement:
+        // a null `Set` ahead of the block declares the local here, which is the pre-init
+        // the post-parse scan writes for a local first assigned in sibling arms, and which
+        // that scan elides on a local already in scope (a reassignment).  A parameter is
+        // never first-bound here and holds the caller's value on a self arm.
+        if matches!(code.unspan(), Value::Block(_)) && !self.vars.is_argument(var_nr) {
+            let sunk = std::mem::replace(code, Value::Null);
+            *code = Value::Insert(vec![Value::Set(var_nr, Box::new(Value::Null)), sunk]);
+        }
+        true
+    }
+
+    /// The compiler temps the operators AHEAD of a branch bind, with what each was bound
+    /// from — a `??` hoist (`__ncc_N = s.v`) is the one this serves.  Pushed onto `hoists`,
+    /// which the arm verdict reads.
+    fn note_hoists(&self, ops: &[Value], hoists: &mut Vec<(u16, Value)>) {
+        for op in ops {
+            if let Value::Set(t, src) = op.unspan()
+                && self.vars.is_compiler_generated(*t)
+                // A collection's own buffer is bound from the store it minted
+                // (`_vec_N = OpGetField(__vdb_N, 0, …)`, a comprehension's result the same):
+                // a read rooted at a compiler temp is nothing the author wrote, and nothing
+                // the selector copies.
+                && !self
+                    .field_place(src)
+                    .is_some_and(|(root, _)| self.vars.is_compiler_generated(root))
+            {
+                hoists.push((*t, (**src).clone()));
+            }
+        }
+    }
+
+    /// Does any arm of this value branch end in a tail a plain bind would COPY?  `Some(true)`
+    /// if one does, `Some(false)` where every arm keeps the value it has, `None` where an arm
+    /// cannot be written out as a bind: a bare `null` (which the post-parse scan elides on a
+    /// local already in scope), a block that yields nothing (a diverging arm), an empty one.
+    /// A value branch is seen through its wrappers — a `Span`, a value block (a plain arm, or a
+    /// `match` behind its subject binding), an `Insert` — each yielding its LAST operator.
+    fn vec_arm_copies(
+        &self,
+        node: &Value,
+        var_nr: u16,
+        f_type: &Type,
+        s_type: &Type,
+        hoists: &mut Vec<(u16, Value)>,
+    ) -> Option<bool> {
+        match node.unspan() {
+            Value::If(_, t, f) => {
+                let then_copies = self.vec_arm_copies(t, var_nr, f_type, s_type, hoists)?;
+                let else_copies = self.vec_arm_copies(f, var_nr, f_type, s_type, hoists)?;
+                Some(then_copies || else_copies)
+            }
+            Value::Block(bl) => {
+                if matches!(bl.result, Type::Void | Type::Null) {
+                    return None;
+                }
+                let (last, ahead) = bl.operators.split_last()?;
+                self.note_hoists(ahead, hoists);
+                self.vec_arm_copies(last, var_nr, f_type, s_type, hoists)
+            }
+            Value::Insert(ops) => {
+                let (last, ahead) = ops.split_last()?;
+                self.note_hoists(ahead, hoists);
+                self.vec_arm_copies(last, var_nr, f_type, s_type, hoists)
+            }
+            Value::Null => None,
+            tail => Some(matches!(
+                self.vec_arm_verdict(tail, var_nr, f_type, s_type, hoists),
+                VecBind::CopyVar | VecBind::CopyOwnedField
+            )),
+        }
+    }
+
+    /// The selector's verdict for one arm tail.  A compiler temp is judged by what it was
+    /// bound FROM: a `??` hoist of a projection (`__ncc_N = s.v`) stands for that read, so
+    /// the arm copies from the temp exactly where `x = s.v` copies (`@FR-B-Copy`: off an
+    /// owned base a collection projection copies) and views where it views; a temp bound
+    /// from nothing the selector copies — a literal's `_vec_N`, the arm's own buffer — keeps
+    /// the value it has.
+    fn vec_arm_verdict(
+        &self,
+        tail: &Value,
+        var_nr: u16,
+        f_type: &Type,
+        s_type: &Type,
+        hoists: &[(u16, Value)],
+    ) -> VecBind {
+        let tail = tail.unspan();
+        if let Value::Var(x) = tail
+            && self.vars.is_compiler_generated(*x)
+        {
+            let copies_source = hoists.iter().any(|(t, src)| {
+                *t == *x
+                    && matches!(
+                        self.classify_vec_bind(src.unspan(), "=", var_nr, f_type, s_type),
+                        VecBind::CopyVar | VecBind::CopyOwnedField
+                    )
+            });
+            return if copies_source {
+                VecBind::CopyVar
+            } else {
+                VecBind::NotABind
+            };
+        }
+        self.classify_vec_bind(tail, "=", var_nr, f_type, s_type)
+    }
+
+    /// The statement form of a vector local's value-branch bind: every arm tail becomes the
+    /// bind of that tail — the copy lowering where the selector says copy, a plain `Set`
+    /// otherwise — and the arms stop yielding a value.
+    #[allow(clippy::too_many_arguments)] // the bind's inputs, threaded to every arm
+    fn sink_vec_arms(
+        &mut self,
+        node: &mut Value,
+        to: &Value,
+        var_nr: u16,
+        f_type: &Type,
+        s_type: &Type,
+        lhs_parent_tp: &Type,
+        hoists: &mut Vec<(u16, Value)>,
+    ) {
+        match node {
+            Value::Span(b) => {
+                self.sink_vec_arms(&mut b.1, to, var_nr, f_type, s_type, lhs_parent_tp, hoists);
+            }
+            Value::If(_, t, f) => {
+                self.sink_vec_arms(t, to, var_nr, f_type, s_type, lhs_parent_tp, hoists);
+                self.sink_vec_arms(f, to, var_nr, f_type, s_type, lhs_parent_tp, hoists);
+            }
+            // A block that yields its OWN buffer — a literal's `_vec_N`, a comprehension's
+            // result — is the arm's value as it stands: bound whole, so the buffer stays
+            // homed with the binding (a void block would take it, and free it at the
+            // block's end while the local still names it).
+            Value::Block(bl)
+                if bl.operators.last().is_some_and(|last| {
+                    matches!(last.unspan(), Value::Var(x) if self.vars.is_compiler_generated(*x))
+                        && matches!(
+                            self.vec_arm_verdict(last, var_nr, f_type, s_type, hoists),
+                            VecBind::NotABind
+                        )
+                }) =>
+            {
+                let t = std::mem::replace(node, Value::Null);
+                *node = Value::Set(var_nr, Box::new(t));
+            }
+            Value::Block(bl) => {
+                if let Some((last, ahead)) = bl.operators.split_last_mut() {
+                    self.note_hoists(ahead, hoists);
+                    self.sink_vec_arms(last, to, var_nr, f_type, s_type, lhs_parent_tp, hoists);
+                }
+                bl.result = Type::Void;
+            }
+            Value::Insert(ops) => {
+                if let Some((last, ahead)) = ops.split_last_mut() {
+                    self.note_hoists(ahead, hoists);
+                    self.sink_vec_arms(last, to, var_nr, f_type, s_type, lhs_parent_tp, hoists);
+                }
+            }
+            tail => {
+                let verdict = self.vec_arm_verdict(tail, var_nr, f_type, s_type, hoists);
+                if matches!(verdict, VecBind::NotABind) {
+                    let t = std::mem::replace(tail, Value::Null);
+                    *tail = Value::Set(var_nr, Box::new(t));
+                } else {
+                    self.lower_vec_copy_bind(
+                        tail,
+                        &verdict,
+                        to,
+                        var_nr,
+                        s_type,
+                        lhs_parent_tp,
+                        true,
+                    );
+                }
+            }
+        }
     }
 
     /// Is the next thing in the source the struct literal `<name> { … }`, without
@@ -1741,7 +2123,9 @@ use a separate collection or add after the loop"
             return false;
         }
         let saved_owned = self.conv_owned_result.take();
-        let accepted = self.convert(&mut Value::Null, s_type, f_type);
+        // A TRIAL of the fit, on a placeholder — @FR-N-Store is asked where the value is
+        // actually stored, not here.
+        let accepted = self.convert_admitting(&mut Value::Null, s_type, f_type);
         self.conv_owned_result = saved_owned;
         !accepted
     }
@@ -2642,7 +3026,50 @@ use a separate collection or add after the loop"
         // because the RHS may contain assignments of its own.
         let prev_target = std::mem::replace(&mut self.assign_target, var_nr);
         let prev_replaces = std::mem::replace(&mut self.assign_replaces, op == "=");
+        let prev_snapshot_len = std::mem::take(&mut self.build_snapshot_len);
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
+        // `@FR-L-Null-Which` — a LOCAL spells `S?` as the POINTER (`Optional(Reference(S))`,
+        // `nullref` for absence); the tagged `__nullable<S>` is a SLOT's spelling — an embedded
+        // field, a vector element, a tuple member.  A projection of such a slot bound to a
+        // local is therefore read THROUGH THE TAG here, at the bind, so the local's IR type is
+        // the pointer in both passes (pass 1 types the field read as `Optional(Reference(S))`
+        // already; the synth arrives in pass 2, after `fill_all`).  Left as the slot's
+        // spelling, the binding took whichever spelling parsed LAST and the other assignment's
+        // value went in unconverted: `x = y; x = o.opt` read the pointer `y` as a tagged record
+        // and freed its store, `x = o.opt; x = y` wrote `x.n` onto the tag byte (loft#1367).
+        // A `&` link keeps the slot (it IS the slot), and a field or element TARGET is a
+        // slot-to-slot copy with its own lowering — a plain local target only.
+        if op == "=" && !self.amp_pending && matches!(to.unspan(), Value::Var(_)) {
+            self.read_through_tag(code, &mut s_type);
+        }
+        // `@FR-B-Copy` (with `@FR-T-Cons`) — a whole-tuple bind `u = t` COPIES every heap
+        // member.  It is lowered onto the literal's own per-member copy: the source
+        // becomes the tuple of its member reads and `tuple_member_owned_copy` gives each heap
+        // member a frame-local backing, so both backends bind an INDEPENDENT value.  A bind
+        // used to copy the tuple's stack words, and a heap member's word is a handle, so
+        // `u = t; t.0 += [9]` grew `u.0` too (loft#1361).  A local TARGET only (a field or
+        // element write has its own lowering), never a `&` link, and a parameter source copies
+        // like every plain bind off a parameter does.
+        if op == "="
+            && !self.amp_pending
+            && matches!(to, Value::Var(_))
+            && let Value::Var(src) = code.unspan()
+            && let Type::Tuple(elems) = self.vars.tp(*src).clone()
+            && elems.iter().any(|e| !crate::data::is_scalar(e.base()))
+        {
+            let src = *src;
+            let mut types = elems.clone();
+            let mut members: Vec<Value> = Vec::with_capacity(elems.len());
+            for (i, t) in elems.iter().enumerate() {
+                let mut m = Value::TupleGet(src, i as u16);
+                if let Some(owned) = self.tuple_member_owned_copy(&mut m, t) {
+                    types[i] = owned;
+                }
+                members.push(m);
+            }
+            *code = Value::Tuple(members);
+            s_type = Type::Tuple(types);
+        }
         // tuples.md T-Ref — a tuple LITERAL bound to a local that is the SOURCE OF A `&` LINK
         // (recorded in pass 1 at the link or the call) and carries a heap element is built as
         // the `__tuple<…>` RECORD a heap-tuple return and a loop variable already are, so the
@@ -2674,6 +3101,8 @@ use a separate collection or add after the loop"
         }
         self.assign_target = prev_target;
         self.assign_replaces = prev_replaces;
+        // The count the right-hand side's literal recorded, for the detach sites below.
+        let snapshot_len = std::mem::replace(&mut self.build_snapshot_len, prev_snapshot_len);
         self.amp_head = AmpHead::No;
         self.expected = prev_read_target;
         // A `& vector` bind (`d = &v` / `d = &self.data`): the source is a vector lvalue
@@ -2683,7 +3112,65 @@ use a separate collection or add after the loop"
         // classifier is told to SHARE instead — `d` binds to the source's DbRef with no
         // deep copy and is NON-OWNING (its dep names the source, so `owns = dep.is_empty()`
         // is false and it never frees the source's store).  `d[i] = x` then writes THROUGH.
-        let amp_vector_bind = op == "=" && self.amp_pending && matches!(s_type, Type::Vector(_, _));
+        // Asked through the `RefVar` wrapper: the ANNOTATED spelling (`pe: &vector<T> = e`)
+        // arrives with `s_type` already coerced to the annotation's target, so an unpeeled
+        // test saw no vector, took the whole vector COPY lowering, and still left the
+        // variable carrying the annotation's `RefVar` over a value — the interpreter then
+        // read the vector's buffer as a stack ref and panicked (loft#1371).
+        let amp_vector_source = match &s_type {
+            Type::RefVar(inner) => inner.base(),
+            other => other.base(),
+        };
+        let amp_vector_bind =
+            op == "=" && self.amp_pending && matches!(amp_vector_source, Type::Vector(_, _));
+        // loft#1371 — the share aliases element writes and appends, but a WHOLE-VALUE write
+        // (`pe = [2, 2]`) would mint a fresh store and re-point `pe` at it, leaving the
+        // source untouched with nothing said.  Name the local here so `create_vector` clears
+        // the SHARED store and refills it in place instead — `@FR-B-Ref-Write`, and the
+        // lowering a `&vector` PARAMETER already takes.
+        if amp_vector_bind && var_nr != u16::MAX && !self.first_pass {
+            let name = self.vars.name(var_nr).to_string();
+            self.amp_vector_locals.insert((self.context, name));
+            // @FR-B-Ref-Alias — the link is live in BOTH directions, so the SOURCE's own
+            // whole-value write is the same question as the link's.  A vector link shares the
+            // source's `DbRef`, and a fresh backing on either side re-points one of them: with
+            // only the link registered, `q = &v; v = [7, 8, 9]` left `q` on the store `v` held
+            // AT THE BIND — `len(q)` answered 2 where `v` answered 3, on both backends and
+            // with nothing said (loft#1392).  Registering the source makes its rebuild clear
+            // and refill the shared store in place, which is what every other spelling of the
+            // link already does: a `&` to a struct or a text local follows a rebind through
+            // `OpCreateStack`, and a link to a FIELD follows one because a field rebuild is
+            // in place already.  Only a plain local source needs it — a field or an element
+            // source is that in-place case.
+            if let Value::Var(src) = code.unspan() {
+                let src_name = self.vars.name(*src).to_string();
+                self.amp_vector_locals
+                    .insert((self.context, src_name.clone()));
+                // The pair is one place, so record it both ways: `(I-Comp)` asks whether a
+                // build reads its destination, and under `r = &a` the build `a = [for i in
+                // 0..r.len() { r[i] }]` reads it without naming it.
+                let link_name = self.vars.name(var_nr).to_string();
+                self.amp_vector_link_partners
+                    .entry((self.context, link_name.clone()))
+                    .or_default()
+                    .push(src_name.clone());
+                self.amp_vector_link_partners
+                    .entry((self.context, src_name))
+                    .or_default()
+                    .push(link_name);
+            }
+            // `pe: &vector<T> = e` IS `pe = &e` (@PLN87 #2), and a vector link is the SHARED
+            // `DbRef` rather than a stack deref — so both spellings give the variable the
+            // same vector type.  Kept as `RefVar(vector<T>)` the annotation described a link
+            // the bind never built, and every read went through a deref that had nothing
+            // behind it.
+            if let Type::RefVar(inner) = self.vars.tp(var_nr).clone() {
+                self.change_var_type(var_nr, &inner);
+            }
+            if let Type::RefVar(inner) = s_type.clone() {
+                s_type = *inner;
+            }
+        }
         // @PLN130 F9 step 2 — track whether the `&` finds a lowering below.  A STRUCT-typed
         // projection (`c = &v[0]`, `c = &o.inner`) finds none: it is already a VIEW under
         // B-View, so both spellings emit byte-identical IR and the `&` was dropped as
@@ -2699,9 +3186,14 @@ use a separate collection or add after the loop"
         // is coerced to the RefVar target in the annotated form).  A non-scalar source
         // keeps the single-indirect view from P1; a non-`Var` source is a later rung.
         if op == "=" && self.amp_pending {
+            // Through `base()`: a nullable source reaches the `&` lowering like its non-null
+            // twin — and is then DECLINED there (`ref_var_type`), loudly.  Asked bare, the `?`
+            // fell past every arm below and the `&` was silently a copy: `p = 7` left
+            // `x: integer?` unchanged on both backends (`@FR-B-Ref-Reshape`: loft declines a
+            // link it cannot honour, it never downgrades it to a copy).
             let is_scalar = |t: &Type| {
                 matches!(
-                    t,
+                    t.base(),
                     Type::Integer(..)
                         | Type::Float
                         | Type::Single
@@ -2725,10 +3217,24 @@ use a separate collection or add after the loop"
             // it must LINK), and `b: &(integer, integer) = a` typed `b` as a reference
             // over a value, so the interpreter read an element as a store index and
             // `--native` handed the user a raw `E0308` (D-tup-2).
+            // @FR-B-Ref-Uniform — the link is carried by the TYPE, and the source's type
+            // kind does not narrow which sources may have one: a `&` local bind takes the
+            // SAME `RefVar(τ)` + `OpCreateStack(src)` form for every τ the `&` PARAMETER
+            // channel already carries (calls.md F-ParamRef), TEXT and VECTOR included.
+            // Asked for `Reference | Tuple` alone, a TEXT source reached no lowering at
+            // all: the `&` was dropped and the bind COPIED, so neither a read nor a write
+            // crossed the link, and the annotated spelling (`pc: &text = c`) typed the
+            // variable as a link over a value and read the buffer as a stack ref
+            // (loft#1371).  A VECTOR source keeps the DbRef share below — it aliases the
+            // element writes and the appends already — and only its whole-value write
+            // needs the link.
             let stack_src = match *code.unspan() {
                 Value::Var(src)
                     if is_scalar(self.vars.tp(src))
-                        || matches!(self.vars.tp(src), Type::Reference(..) | Type::Tuple(_)) =>
+                        || matches!(
+                            self.vars.tp(src).base(),
+                            Type::Reference(..) | Type::Tuple(_) | Type::Text(_)
+                        ) =>
                 {
                     Some(src)
                 }
@@ -2787,7 +3293,11 @@ use a separate collection or add after the loop"
                         inner = Type::Reference(d, Deps::none());
                     }
                 }
-                let is_ref = matches!(inner, Type::Reference(..));
+                // Every HEAP inner — a record, a text buffer, a vector — makes the link
+                // NON-OWNING: the borrow fact rides `deps` (@FR-O-Borrow), so the source
+                // frees its store and the link frees nothing.  A scalar inner carries no
+                // `Deps` slot and owns no store, so there is no free decision to derive.
+                let is_ref = matches!(inner, Type::Reference(..) | Type::Text(_));
                 *code = self.cl("OpCreateStack", &[Value::Var(src)]);
                 // @PLN85 D-own-5 — the borrow fact rides `deps` (O-Borrow), not a
                 // side-flag: a heap whole-value alias (`p = &o`, L5) is NON-OWNING
@@ -2803,8 +3313,14 @@ use a separate collection or add after the loop"
                 // and that is the site that has to hold it, because a `&(…) = <not a
                 // variable>` never reaches this lowering at all.  Here the gate covers the
                 // other spelling, `b = &a`, whose element types nothing has looked at yet.
+                // …and a declined annotation (`r: &integer? = x`) left the binding PLAIN, so
+                // the seam keeps it plain too rather than reporting the same link twice.
                 s_type = if var_nr != u16::MAX && self.vars.is_annotated(var_nr) {
-                    Type::RefVar(Box::new(linked))
+                    if matches!(self.vars.tp(var_nr), Type::RefVar(_)) {
+                        Type::RefVar(Box::new(linked))
+                    } else {
+                        linked
+                    }
                 } else {
                     self.ref_var_type(linked)
                 };
@@ -2814,6 +3330,10 @@ use a separate collection or add after the loop"
                 // uniform RefVar deref (`OpGet*/OpSet*(c,0)`), and native keys its
                 // pointer construction off this `OpGetField`/`OpGetVector` value — so no
                 // per-variable flag is needed and the link survives an IR snapshot.
+                // loft#1372 — a NULLABLE scalar place links like its non-null twin:
+                // `Optional(τ)` shares `τ`'s storage, so the same `OpGet*/OpSet*(c, 0)`
+                // deref serves it and the null rides the slot's own sentinel.  This site
+                // used to decline it (D-bind-17).
                 *code = eref;
                 s_type = Type::RefVar(Box::new(s_type));
             }
@@ -2921,19 +3441,13 @@ use a separate collection or add after the loop"
             self.vars.track_write(var_nr, &mut self.lexer);
         }
         // Convert untyped null to typed null for scalar assignments (not collections).
-        if s_type == Type::Null
-            && op == "="
-            && !matches!(
-                f_type,
-                Type::Reference(_, _)
-                    | Type::Enum(_, true, _)
-                    | Type::Vector(_, _)
-                    | Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-            )
-        {
-            self.convert(code, &Type::Null, f_type);
+        // `is_dbref`, not a spelled list: the list this used to carry named six heap kinds
+        // and not `spatial` or `trie`, so `g.sp = null` took the SCALAR sentinel path —
+        // found when @FR-N-Store's one home started asking here (the drifted-deny-list
+        // shape QUALITY.md § Design P8 records).  The store face asks the bare-null half
+        // for the scalar slot; a heap slot's `= null` is its clear, asked where it lowers.
+        if s_type == Type::Null && op == "=" && !crate::data::is_dbref(f_type) {
+            self.convert_store(code, &Type::Null, f_type, "the assignment target", None);
         }
         if var_nr == u16::MAX && !skip_validate {
             // Use the LHS target's parent type saved BEFORE the RHS parse — the RHS
@@ -3261,7 +3775,8 @@ use a separate collection or add after the loop"
             // keyed destination took it quietly.  Peeling here is what `convert` already does
             // for `=`, so both operators reach the same reading of the same value.
             let peeled = s_type.base().clone();
-            self.convert(code, &s_type, &peeled);
+            // Asked just above; this peel is the store proceeding, not a second store.
+            self.convert_admitting(code, &s_type, &peeled);
             s_type = peeled;
         }
         // loft#1215 — the append routes below are a partial list, and nothing said so.  A
@@ -3744,6 +4259,48 @@ use a separate collection or add after the loop"
                 (false, None) => {}
             }
         }
+        // @FR-N-Decl / @FR-N-Store — a DECLARED local (or a parameter) written a nullable
+        // value keeps its type and the store is asked, here, through the one store face: a
+        // WARNING at full width (the store proceeds and the slot holds the null sentinel),
+        // an ERROR at a narrow one.  Converted BEFORE `change_var` for the reason the tuple
+        // coercion above gives — a retype decided first would refuse the program outright,
+        // and "cannot change type from integer to integer?" was a third spelling of the rule
+        // that erred where the rule warns.  Both passes, so pass 1's retype never sees the
+        // `τ?` either.  An INFERRED local takes the other arm: `change_var_type` widens it to
+        // the join (`@FR-N-Join`), and nothing is asked until that `τ?` reaches a non-null slot.
+        // A write-back `&τ` parameter is the same slot one link away — `x = v[i]` through
+        // `x: &integer` lands in the caller's non-null `integer` — so it is asked against the
+        // type it links to.
+        let slot_tp: &Type = match f_type {
+            Type::RefVar(inner) => inner,
+            other => other,
+        };
+        let declared_nullable_write = op == "="
+            && var_nr != u16::MAX
+            && matches!(to.unspan(), Value::Var(vn) if *vn == var_nr)
+            && self.author_declared(var_nr)
+            && matches!(s_type, Type::Optional(_))
+            && !matches!(slot_tp, Type::Optional(_) | Type::RefVar(_))
+            && !slot_tp.is_unknown()
+            && slot_tp.is_equal(s_type.base());
+        let s_type = if declared_nullable_write {
+            let what = format!(
+                "{} `{}`",
+                if self.vars.is_argument(var_nr) {
+                    "the parameter"
+                } else {
+                    "the local"
+                },
+                self.vars.name(var_nr)
+            );
+            if self.convert_store(code, &s_type, slot_tp, &what, None) {
+                slot_tp.clone()
+            } else {
+                s_type
+            }
+        } else {
+            s_type
+        };
         self.change_var(to, &s_type);
         // @PLN110 3a — track `n = len(s)` so `for i in 0..n` keeps the strict-index
         // bound.  Any OTHER assignment to `n` drops the entry: a miss is the right
@@ -3892,7 +4449,7 @@ use a separate collection or add after the loop"
         // still emits the `Set(out, …)` that transfers it (loft#775).
         self.assign_refvar_reference(code, f_type, op, var_nr);
         self.assign_refvar_keyed(code, f_type, op, var_nr);
-        if var_nr != u16::MAX && self.create_vector(code, f_type, op, var_nr) {
+        if var_nr != u16::MAX && self.create_vector(code, f_type, op, var_nr, snapshot_len) {
             return Type::Void;
         }
         // P193: rewrite `local: keyed_collection<T> = []` to
@@ -4001,16 +4558,34 @@ use a separate collection or add after the loop"
             if is_nonempty_literal {
                 let clear = self.clear_vector_field(to, &lhs_parent_tp);
                 if let Value::Insert(ls) = code {
+                    // After the literal's snapshot of this field, when it took one
+                    // (`snapshot_read_destination`): the clear is the detach it precedes.
+                    let at = snapshot_len;
                     for (i, op) in clear.into_iter().enumerate() {
-                        ls.insert(i, op);
+                        ls.insert(at + i, op);
                     }
                 }
                 return Type::Void;
             }
             if literal_builds_into_dest {
-                let mut ops = self.clear_vector_field(to, &lhs_parent_tp);
-                ops.push(code.clone());
-                *code = Value::Insert(ops);
+                let clear = self.clear_vector_field(to, &lhs_parent_tp);
+                // After the literal's snapshot of this destination, when it took one: the
+                // clear is the detach the snapshot must precede (`@FR-O-Detach`).  Put it
+                // INSIDE the block at the snapshot's end rather than ahead of the whole
+                // block, or the snapshot copies an already-emptied destination and the build
+                // reads its own result — which is what a CAPTURED collection did, the one
+                // destination that reaches this arm and reads itself (loft#1391).
+                if snapshot_len > 0
+                    && let Value::Block(bl) = code
+                {
+                    for (i, op) in clear.into_iter().enumerate() {
+                        bl.operators.insert(snapshot_len + i, op);
+                    }
+                } else {
+                    let mut ops = clear;
+                    ops.push(code.clone());
+                    *code = Value::Insert(ops);
+                }
                 return Type::Void;
             }
             if !is_nonempty_literal
@@ -4226,112 +4801,36 @@ use a separate collection or add after the loop"
         // A `& vector` bind opts into aliasing (B-Ref-Write): SKIP the C86 deep-copy so
         // the plain-assign path shares the source's DbRef and marks `d` non-owning (its
         // dep names the source).  Plain `d = v` (no `&`) still classifies + copies.
+        // `@FR-B-Copy` / `@FR-O-Complete` — a vector local bound from a VALUE BRANCH
+        // (`x = if c { a } else { b }`, a `match`, a `??`) is written out per arm, so each
+        // arm's tail gets the lowering a single bind of that tail has: a whole variable and
+        // an owned field read are COPIED through the selector below, and every other arm
+        // keeps the value it has (a literal's or a call's own buffer, an index read's view).
+        // Bound as one value, the branch handed the local the chosen arm's STORE — a write
+        // through `x` reached `a` — on every spelling, whether or not `x` held a value
+        // before.  The vector copy has its one home in this routine, which is why the
+        // rewrite happens here and not in the post-parse per-arm lift that serves records.
+        if !amp_vector_bind
+            && op == "="
+            && var_nr != u16::MAX
+            && matches!(to.unspan(), Value::Var(v) if *v == var_nr)
+            && matches!(f_type.base(), Type::Unknown(_) | Type::Vector(_, _))
+            && matches!(s_type.base(), Type::Vector(_, _))
+            // Not a promoted return buffer (calls.md F-Ret): the caller receives the value
+            // THROUGH it, so every arm fills it in place and the return adopts or
+            // materialises the join — the value form is that mechanism.
+            && !self.is_hidden_param(var_nr)
+            && self.sink_vec_bind_into_arms(code, to, var_nr, f_type, &s_type, &lhs_parent_tp)
+        {
+            return Type::Void;
+        }
         let vec_bind = if amp_vector_bind {
             VecBind::NotABind
         } else {
             self.classify_vec_bind(code, op, var_nr, f_type, &s_type)
         };
-        if !matches!(vec_bind, VecBind::NotABind)
-            && let Type::Vector(elm_tp, _) = s_type.base()
-        {
-            // `v = v` self-assign — emit nothing rather than clear+reappend
-            // off the same storage.
-            if matches!(vec_bind, VecBind::SelfAssign) {
-                *code = Value::Insert(Vec::new());
-                return Type::Void;
-            }
-            let elm_tp_clone = (**elm_tp).clone();
-            let dense = Type::Vector(Box::new(elm_tp_clone.clone()), Deps::none());
-            // The COPY is what the selector decided; whether the value may be ABSENT is the
-            // source's own fact and survives it.  Dropping the marker here would make the
-            // destination non-null and lose the null arm.
-            let vec_tp = if matches!(s_type, Type::Optional(_)) {
-                Type::Optional(Box::new(dense))
-            } else {
-                dense
-            };
-            self.change_var(to, &vec_tp);
-            let field_read = matches!(vec_bind, VecBind::CopyOwnedField);
-            // #426 — a struct vector-FIELD read (`af = bx.v`, `field_read`) must
-            // strip `af`'s inherited base dep on BOTH passes, then consume one
-            // `elm`-name slot on both.  `Function::unique`'s per-prefix counter has
-            // to advance IDENTICALLY across passes: a family created on only one
-            // pass shifts every other family's numbering, so a later `_elm_N`
-            // re-resolves to a pass-1 var backed by a different store — silent
-            // corruption (a nested vector literal `[[…]]` after `af = bx.v` built
-            // its inner element into an orphaned store, reading back len 0).  The
-            // field-read used to take the whole pass-2-only branch below, so on
-            // pass 1 its dep stayed non-empty (`vector_needs_db` false → no `elm`)
-            // while pass 2 stripped it (`vector_needs_db` true → one `elm`): a
-            // one-slot drift.  Stripping + advancing the counter on pass 1 too
-            // removes the drift.  The var-copy case (`b = a`) is untouched here —
-            // its strip stays pass-2-only (line below), since it never had the
-            // pass-1 dep-mismatch (the RHS var already owns an independent store).
-            if field_read && self.first_pass {
-                let inherited = self.vars.tp(var_nr).depend();
-                for d in inherited {
-                    self.vars.make_independent(var_nr, d);
-                }
-                if self.vector_needs_db(var_nr, &elm_tp_clone, true) {
-                    self.unique_elm_var(&lhs_parent_tp, &elm_tp_clone, var_nr);
-                }
-                return Type::Void;
-            }
-            if !self.first_pass {
-                // Break the alias.  The standard type-inference copied the RHS
-                // var's store dep onto v (making v *borrow* rhs's storage — the
-                // dangling-on-scope-exit @P292 hazard, and the no-own-store @P394
-                // crash on first assignment).  Strip rhs's deps from v so v gets
-                // its OWN store.  This is a no-op when v already owns an
-                // independent store (`v = [9]; v = a` reassignment), so that case
-                // still takes the clear+refill path below.  (Mirrors the @P295
-                // Var-to-var deep-copy dep-strip.)
-                if let Value::Var(rhs_var) = code.unspan() {
-                    self.vars.make_independent(var_nr, *rhs_var);
-                    for d in self.vars.tp(*rhs_var).depend() {
-                        self.vars.make_independent(var_nr, d);
-                    }
-                } else {
-                    // #415 — field-read RHS (`af = bx.v`): there is no rhs_var,
-                    // but `af` inherited the base's dep ({bx}) during type
-                    // resolution.  Strip af's own inherited deps so
-                    // `vector_needs_db` below sees an empty dep and allocates af
-                    // its OWN store; otherwise it takes the reassignment/clear arm,
-                    // af never owns a store, and the alias to bx's field persists.
-                    // The OpAppendVector then deep-copies the field's elements in.
-                    let inherited = self.vars.tp(var_nr).depend();
-                    for d in inherited {
-                        self.vars.make_independent(var_nr, d);
-                    }
-                }
-                // @P314 — narrow-aware element type (see `append_elem_tp`).
-                let rec_tp = Value::Int(self.append_elem_tp(&elm_tp_clone));
-                let mut stmts = Vec::new();
-                if self.vector_needs_db(var_nr, &elm_tp_clone, true) {
-                    // First assignment: v owns no store yet — allocate one.
-                    let elm_var = self.unique_elm_var(&lhs_parent_tp, &elm_tp_clone, var_nr);
-                    let db = self.insert_new(var_nr, elm_var, &elm_tp_clone, &mut stmts);
-                    self.vars.depend(var_nr, db);
-                } else {
-                    // Reassignment: v already owns a store — clear, then refill.
-                    stmts.push(self.cl("OpClearVector", std::slice::from_ref(to)));
-                }
-                // A NULLABLE destination takes the whole-value REPLACE rather than the
-                // append, for the one thing the append cannot express: an ABSENT source
-                // must leave the destination absent, not holding the empty store the alloc
-                // above just gave it.  `Stores::vector_replace` carries that rule, the same
-                // one `replace_keyed` carries for the keyed kinds — which is why the keyed
-                // sibling of this bind has been answering `b == null` correctly all along.
-                // A dense destination cannot be absent, so it keeps the append and its IR is
-                // unchanged.
-                let op = if matches!(self.vars.tp(var_nr), Type::Optional(_)) {
-                    "OpReplaceVector"
-                } else {
-                    "OpAppendVector"
-                };
-                stmts.push(self.cl(op, &[to.clone(), code.clone(), rec_tp]));
-                *code = Value::Insert(stmts);
-            }
+        if !matches!(vec_bind, VecBind::NotABind) && matches!(s_type.base(), Type::Vector(_, _)) {
+            self.lower_vec_copy_bind(code, &vec_bind, to, var_nr, &s_type, &lhs_parent_tp, false);
             return Type::Void;
         }
         // @P295 — `local_s = keyed_expr` where the LHS is a KEYED-collection
@@ -4828,13 +5327,12 @@ use a separate collection or add after the loop"
             && !self.first_pass
             && !f_type.is_unknown()
             && !s_type.is_unknown();
-        if typed_scalar_store {
-            self.n_store_violation(&s_type, f_type, "the assignment target", None);
-        }
+        // @FR-N-Store: a bare `null` is asked where its sentinel conversion lowers, a few
+        // lines down; a value is asked by the store face where it converts.
         if typed_scalar_store
             && !matches!(s_type, Type::Null)
             && !f_type.is_equal(&s_type)
-            && !self.convert(code, &s_type, f_type)
+            && !self.convert_store(code, &s_type, f_type, "the assignment target", None)
         {
             diagnostic!(
                 self.lexer,
@@ -5434,10 +5932,24 @@ use a separate collection or add after the loop"
                 // `vector` arm), so a `vector<S>` annotation already arrives
                 // rewritten; no per-site hook here.
                 let tp = if is_ref {
-                    // D-tup-2 — the SAME admitted-element gate the signature uses; before it
-                    // was shared, a `&(text, text)` LOCAL sailed past the refusal a `&(text,
-                    // text)` PARAMETER got and reached codegen as an internal compiler error.
-                    self.ref_var_type(tp)
+                    // A `&`-linked vector LOCAL is the SHARED `DbRef`, not a stack link:
+                    // `pe = &e` gives the variable the plain vector type and aliases
+                    // through it, so the annotated spelling gives it the same type rather
+                    // than a `RefVar` the bind never builds.  Wrapped, the annotation
+                    // described a link that was not there and every read of `pe` derefed a
+                    // vector buffer as a stack ref — an interpreter panic (loft#1371).  A
+                    // `&vector` PARAMETER keeps its `RefVar`: there the link IS the call
+                    // ABI.  `vector<T>?` is deliberately not matched here, so it still
+                    // reaches the nullable-link refusal below (loft#1372).
+                    if matches!(tp, Type::Vector(_, _)) {
+                        tp
+                    } else {
+                        // D-tup-2 — the SAME admitted-element gate the signature uses;
+                        // before it was shared, a `&(text, text)` LOCAL sailed past the
+                        // refusal a `&(text, text)` PARAMETER got and reached codegen as
+                        // an internal compiler error.
+                        self.ref_var_type(tp)
+                    }
                 } else {
                     tp
                 };
@@ -5550,6 +6062,13 @@ use a separate collection or add after the loop"
                         rhs_elems.len()
                     );
                 }
+                // `@FR-B-Copy` / `@FR-B-View-Base` — a COLLECTION member read off an OWNED
+                // tuple local COPIES (`a = t.0` is `af = bx.v`, one level off an owned base), a
+                // struct member VIEWS (`@FR-B-View`), and off a BORROWED base — a parameter, a
+                // linked local — every member views.  Decided on the source before the temp
+                // takes its place: the temp is never an argument. (loft#1361)
+                let owned_base = matches!(rhs.unspan(), Value::Var(s)
+                    if !self.vars.is_argument(*s) && matches!(self.vars.tp(*s), Type::Tuple(_)));
                 // T1.4: create a temp variable for the RHS tuple, then read elements.
                 let tmp_tp = rhs_type.clone();
                 let tmp = self.vars.work_refs(&tmp_tp, &mut self.lexer);
@@ -5575,12 +6094,65 @@ use a separate collection or add after the loop"
                     if i >= rhs_elems.len() {
                         break;
                     }
+                    // @FR-N-Decl / @FR-N-Store — a DECLARED name in the pattern keeps its
+                    // type, and a member that may be null is asked through the store face on
+                    // the member's read, exactly as the assignment seam asks for a plain
+                    // local (`parse_assign_op_inner`): a WARNING at full width, an ERROR at a
+                    // narrow one.  The retype below sees the peeled type, so it never refuses
+                    // what the rule only warns about; an inferred name widens to the join.
+                    // `@FR-L-Null-Which` — a tagged `__nullable<S>` member is read through the tag
+                    // into the local, as the plain bind in `parse_assign_op_inner` does: the
+                    // local's spelling is the pointer.
+                    let tagged_member = self.tagged_pointer_type(&rhs_elems[i]);
+                    let elem_tp = match &tagged_member {
+                        Some((_, pointer)) => pointer.clone(),
+                        None => rhs_elems[i].clone(),
+                    };
+                    let declared_nullable_member = self.vars.exists(v_nr)
+                        && self.author_declared(v_nr)
+                        && matches!(elem_tp, Type::Optional(_))
+                        && !matches!(self.vars.tp(v_nr), Type::Optional(_) | Type::RefVar(_))
+                        && !self.vars.tp(v_nr).is_unknown()
+                        && self.vars.tp(v_nr).is_equal(elem_tp.base());
+                    let member_tp = if declared_nullable_member {
+                        elem_tp.base().clone()
+                    } else {
+                        elem_tp.clone()
+                    };
+                    let member_what = if declared_nullable_member {
+                        format!(
+                            "{} `{}`",
+                            if self.vars.is_argument(v_nr) {
+                                "the parameter"
+                            } else {
+                                "the local"
+                            },
+                            self.vars.name(v_nr)
+                        )
+                    } else {
+                        String::new()
+                    };
                     if self.vars.exists(v_nr) {
                         self.vars.defined(v_nr);
-                        self.change_var_type(v_nr, &rhs_elems[i]);
+                        self.change_var_type(v_nr, &member_tp);
                     }
                     let step = if ref_def_nr == u32::MAX {
-                        Value::Set(v_nr, Box::new(Value::TupleGet(tmp, i as u16)))
+                        let mut read = Value::TupleGet(tmp, i as u16);
+                        if let Some((syn, _)) = tagged_member {
+                            read = self.emit_nullable_slot_read(syn, read, &rhs_elems[i]);
+                        }
+                        if declared_nullable_member {
+                            self.convert_store(&mut read, &elem_tp, &member_tp, &member_what, None);
+                        }
+                        if owned_base
+                            && Self::is_collection_type(rhs_elems[i].base())
+                            && let Some(owned) =
+                                self.tuple_member_owned_copy(&mut read, &rhs_elems[i])
+                            && self.vars.exists(v_nr)
+                        {
+                            self.change_var_type(v_nr, &owned);
+                        }
+                        Value::Set(v_nr, Box::new(read))
                     } else {
                         let elem_offset = if let Some(offs) =
                             crate::data::stored_tuple_offsets_for_def(
@@ -5599,14 +6171,20 @@ use a separate collection or add after the loop"
                         // answers a DbRef sharing tmp's store_nr and rec.  That view
                         // must not become the binding, because tmp belongs to the CALL
                         // SITE, not to the binding — see `materialize_tuple_element`.
-                        let view = self.get_val(
+                        let mut view = self.get_val(
                             &rhs_elems[i],
                             false,
                             elem_offset,
                             Value::Var(tmp),
                             u32::MAX,
                         );
-                        self.materialize_tuple_element(v_nr, tmp, &rhs_elems[i], view)
+                        if let Some((syn, _)) = tagged_member {
+                            view = self.emit_nullable_slot_read(syn, view, &rhs_elems[i]);
+                        }
+                        if declared_nullable_member {
+                            self.convert_store(&mut view, &elem_tp, &member_tp, &member_what, None);
+                        }
+                        self.materialize_tuple_element(v_nr, tmp, &elem_tp, view)
                     };
                     steps.push(step);
                 }
@@ -6413,9 +6991,19 @@ use a separate collection or add after the loop"
                 Some(Value::Set(_, subject)) => vec![(**subject).clone()],
                 _ => return false,
             },
+            // The bare-variable spelling, and ONLY that: the `if` is asked whether it is the
+            // lowering of `v ?? d` (`bare_variable_discharge`), never assumed to be one for
+            // being an `if`.  Every value-`if` an author writes reaches this seam in the same
+            // node, and claiming it guarded the then arm — a checked cast, so a `u8` local
+            // read null and a `limit(…)` slot lost its default — and range-cast the first
+            // operand of the author's own CONDITION, so `c: u8 = if k == 1000 { a } else { b }`
+            // took the else arm (loft#1379).  For the coalesce itself both reads of the
+            // subject are guarded: the condition `coalesce_not_null` built, and the then arm.
             Value::If(cond, then, _) => {
+                if self.bare_variable_discharge(cond, then).is_none() {
+                    return false;
+                }
                 let mut v = vec![(**then).clone()];
-                // the condition is `OpConvBoolFromInt(subject)` — guard the read inside it too
                 if let Value::Call(_, args) = cond.unspan()
                     && let Some(first) = args.first()
                 {
@@ -6458,6 +7046,40 @@ use a separate collection or add after the loop"
             _ => return false,
         }
         true
+    }
+
+    /// `@FR-N-Coal` — the variable `v` when this `if` is the lowering of `v ?? d` for a BARE
+    /// variable, and `None` for every other `if`.
+    ///
+    /// The `??` lowering reads a bare variable twice for free, so it builds a plain
+    /// `if coalesce_not_null(v) { v } else { d }` and leaves no marker on it — the same node
+    /// an author's value-`if` is.  So the shape is asked of the BUILDER rather than read off
+    /// the node: the then arm must be a plain read of `v`, and the condition must be exactly
+    /// what `coalesce_not_null` builds for `v`'s type.  An author's `if` fails one or the
+    /// other — its condition is its own, or its then arm is an expression — and an author's
+    /// `if x != null { x } else { d }` fails too, because `!= null` lowers to `OpNeInt(x, null)`
+    /// where the builder spells `OpConvBoolFromInt(x)`: that spelling asked for no coalesce
+    /// and is judged as the narrowing it is.
+    ///
+    /// Only an integer subject is asked, because only a narrow integer TARGET reaches the one
+    /// caller; the builder's other arms (a collection, a tagged enum, a type variable) are
+    /// not re-run here.  The LEFT-hand-side readers of a discharge ([`null_discharge_subject`])
+    /// keep a looser test, and that is sound where they read: no author's `if` can stand on
+    /// the left of `=`.
+    fn bare_variable_discharge(&mut self, cond: &Value, then: &Value) -> Option<u16> {
+        let Value::Var(v) = then.unspan() else {
+            return None;
+        };
+        let v = *v;
+        if v >= self.vars.count() {
+            return None;
+        }
+        let tp = self.vars.tp(v).clone();
+        if !matches!(tp.base(), Type::Integer(_)) {
+            return None;
+        }
+        let expected = self.coalesce_not_null(&Value::Var(v), &tp);
+        (*cond.unspan() == expected).then_some(v)
     }
 
     pub(crate) fn guard_declared_range(

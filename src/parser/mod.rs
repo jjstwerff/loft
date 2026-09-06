@@ -169,6 +169,27 @@ pub(crate) enum AmpHead {
     StoredRefField,
 }
 
+/// The slot a store-flavoured [`Parser::convert`] writes into — what `(N-Store)`'s diagnostic
+/// names, where it anchors, and whether this seam may escalate to an ERROR at a narrow width
+/// (`never_error`: loft#1232's collection-literal seam warns at every width, and so does every
+/// seam this phase covers for the first time — reporting where there was silence is a gain,
+/// refusing what compiled yesterday is the break the freeze forbids).
+#[derive(Clone, Debug)]
+pub(crate) struct StoreCtx {
+    pub what: String,
+    pub at: Option<Position>,
+    pub never_error: bool,
+}
+
+/// loft#1382 — a recorded arm-agreement mismatch, reported only if the construct that
+/// produced it turns out NOT to be a `;`-terminated statement.
+pub struct ArmMismatch {
+    pub test: Type,
+    pub should: Type,
+    pub context: String,
+    pub at: Position,
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct Parser {
     pub todo_files: Vec<(String, u16)>,
@@ -362,6 +383,46 @@ pub struct Parser {
     /// `parse_assign_op` to lower a SCALAR reference to `OpCreateStack`. Cleared per
     /// binding so it never leaks into the next statement.
     pub(crate) amp_pending: bool,
+    /// loft#1382 — the statement about to be parsed BEGINS with `if` or `match`, so whatever
+    /// that construct yields is discarded (`@FR-F-Block`: a `;`-terminated block's value is
+    /// dropped, and `@FR-F-Drop` still runs the work).
+    ///
+    /// Statement position is decidable only by the caller: `parse_block`'s loop is what knows
+    /// the `;`, and a construct cannot infer it from its own arms.  A one-token peek is enough
+    /// because a value-position `if` never STARTS its statement — `v = if …` starts with `v`.
+    /// Read once by `parse_if`, which clears it so a nested value-`if` inside a statement one
+    /// does not inherit it.
+    pub(crate) stmt_if_pending: bool,
+    /// loft#1382 — an arm-agreement mismatch found while parsing a construct that BEGAN its
+    /// statement, held until the `;` after it is visible.
+    ///
+    /// A leading `if` does not prove statement position — a function TAIL begins its statement
+    /// too — and `@FR-F-Block` keys on the `;`.  The gate records here and `parse_block`'s loop
+    /// either drops it (a `;` followed: the value is discarded, so the arms need not agree) or
+    /// reports it.
+    pub(crate) pending_arm_mismatch: Option<ArmMismatch>,
+    /// Set when `parse_match_arm_body` has already reported an arm whose value its
+    /// siblings' type cannot hold.  The cross-arm `match_arm_types_unify` gate asks the
+    /// same question less precisely (`is_same` collapses every `Integer(_)`, so it cannot
+    /// see a narrowing), so it stays silent for an arm the conversion already named
+    /// rather than reporting the same mistake twice.
+    pub(crate) arm_convert_reported: bool,
+    /// loft#1382 — the arms currently being parsed belong to a construct in STATEMENT
+    /// position, so their types need not agree with each other.
+    ///
+    /// Set by `parse_if` from [`Self::stmt_if_pending`] for the duration of its arms and read
+    /// at the arm-agreement gate.  Separate from `stmt_if_pending` because that one is
+    /// consumed at the construct and this one has to survive into the arms.
+    pub(crate) arms_of_statement_construct: bool,
+    /// loft#1386 — some arm of the `match` being parsed yields NOTHING.
+    ///
+    /// A void arm is exempt from the arm-type unification on purpose: in STATEMENT position
+    /// `@FR-F-Block` discards what any arm yields, so the arms need not agree.  In VALUE
+    /// position there is no value on that path at all, and the exemption made the whole match
+    /// take the other arms' type and answer `null` — a value the program never wrote.  Set as
+    /// the arms are joined and read once at the end, because "the running result is void" and
+    /// "an arm was void" are different facts: the result starts void before any arm.
+    pub(crate) match_void_arm: bool,
     /// @PLN87 B-Ref-AnnotationOnly — true while the parser is positioned at the HEAD
     /// of a place where `&` may legally appear: the whole right-hand side of a plain
     /// `=` binding, or the start of a statement (where the D-bind-7 guard reports a
@@ -383,6 +444,13 @@ pub struct Parser {
     /// Whether [`Parser::assign_target`] is being REPLACED (`=`) rather than appended to.
     /// Meaningless while `assign_target` is `u16::MAX`.
     pub(crate) assign_replaces: bool,
+    /// How many ops at the HEAD of the right-hand side's build are the snapshot a literal took
+    /// of the destination it reads ([`Parser::snapshot_read_destination`]); `0` when it took
+    /// none.  `parse_assign_op_inner` takes it once the right-hand side has parsed and hands
+    /// it to the site that inserts the destination's detach — the `=` repoint in
+    /// `create_vector`, the field clear — as that site's insertion point, so the detach lands
+    /// after the snapshot.  Reset per assignment beside [`Parser::assign_target`].
+    pub(crate) build_snapshot_len: usize,
     /// The user-visible heap PARAMETER whose whole-binding reassignment already carried its
     /// own `(F-ParamRebind)` lowering; `u16::MAX` otherwise.  Read and cleared by
     /// [`Parser::parse_assign_op`], which supplies that lowering for every OTHER right-hand
@@ -629,6 +697,24 @@ pub struct Parser {
     /// T-Ref); every other tuple local keeps its stack form.  Recorded in pass 1 at the link
     /// and consulted at the bind in pass 2, the same shape as `adopted_ret_defs`.
     ref_linked_tuple_locals: std::collections::HashSet<(u32, String)>,
+    /// loft#1371 — vector LOCALS bound by a `&` link (`pe = &e`, `pe: &vector<T> = e`),
+    /// keyed `(function, name)`.  The bind SHARES the source's `DbRef`, which already
+    /// aliases every element write and every append; a WHOLE-VALUE write is the one
+    /// operation that would re-point the local at a fresh store instead of reaching the
+    /// source, so `create_vector` clears the shared store and refills it in place for
+    /// these — the lowering a `&vector` PARAMETER already takes (`@FR-B-Ref-Write`).
+    /// Recorded at the link and consulted at the literal, the same shape as
+    /// `ref_linked_tuple_locals`.
+    amp_vector_locals: std::collections::HashSet<(u32, String)>,
+    /// The other member of each `&`-linked vector pair, both ways round — `q = &v` records
+    /// `q -> v` and `v -> q`.
+    ///
+    /// A vector link SHARES the source's store, so the two names are one place: a read of
+    /// either is a read of the other, which is what `(I-Comp)`'s *"a build reads what its
+    /// destination held when the statement began"* has to be asked about.  `Value::reads_var`
+    /// answers for one name, and `a = [for i in 0..r.len() { r[i] }]` under `r = &a` reads the
+    /// destination without naming it.
+    amp_vector_link_partners: std::collections::HashMap<(u32, String), Vec<String>>,
     /// loft#945 — every `(function, variable)` whose vector LITERAL turned out to be the
     /// RECEIVER of a `.map`/`.filter`/`.reduce` chain (`d = [1, 2, 3].map(…)`).
     ///
@@ -808,6 +894,15 @@ pub struct Parser {
     /// Accumulates captured variable names and types during lambda body parsing.
     /// Reset at the start of each lambda; read after parsing to synthesize the closure record.
     pub(crate) captured_names: Vec<(String, Type)>,
+    /// The vector locals whose value-branch bind was written out per arm
+    /// (`sink_vec_bind_into_arms`), by defining function and name.  The return-promotion
+    /// ladder reads "bound to a branch" off the body's `Set(v, If)`, a shape the rewrite
+    /// removes, and this carries the fact instead: such a local keeps its own store and is
+    /// copied into the return buffer at the return (`Bind`), exactly as the value form was.
+    /// Renamed onto the buffer it would be filled by neither pass — the rewrite declines a
+    /// hidden parameter, and the value form assigns the arms' temps into the buffer var.
+    /// Keyed by name because a pass rebuilds the variable table; recorded on both passes.
+    pub(crate) branch_sunk_vectors: std::collections::HashSet<(u32, String)>,
     /// Variable number of the __closure parameter inside a lambda body (second pass).
     /// `u16::MAX` when not inside a capturing lambda.
     pub(crate) closure_param: u16,
@@ -904,6 +999,15 @@ pub struct Parser {
     /// every `f += (i as i32)` besides.  An explicit cast keeps the range-containment
     /// rule alone; DN4 is what governs it.
     pub(crate) in_explicit_cast: bool,
+    /// @FR-N-Store — the slot a `convert` is storing into, pushed by [`Parser::convert_store`]
+    /// for the duration of that one conversion (a stack: a nested literal converts inside an
+    /// outer one).  `convert`'s `τ? ⤳ τ` arm reads the top for its wording; an EMPTY stack
+    /// still asks, worded generically — a site that forgot to name its slot degrades the
+    /// message, never the rule.
+    pub(crate) store_ctx: Vec<StoreCtx>,
+    /// @FR-N-Store — depth of [`Parser::convert_admitting`]: a null TEST, a condition or an
+    /// overload trial converts `τ?` to `τ` without storing anything, and says so here.
+    pub(crate) admit_unwrap: u32,
     /// @PLN116 `x?` — a pre-built default RHS for the postfix default-fallback
     /// operator.  `x?` desugars to `x ?? construct_default(T)`; rather than parse a
     /// `??` right operand from source, the postfix-`?` site builds the type's default
@@ -1259,9 +1363,15 @@ impl Parser {
             pending_param_locks: Vec::new(),
             pending_param_positions: Vec::new(),
             amp_pending: false,
+            stmt_if_pending: false,
+            pending_arm_mismatch: None,
+            arm_convert_reported: false,
+            arms_of_statement_construct: false,
+            match_void_arm: false,
             amp_head: AmpHead::default(),
             assign_target: u16::MAX,
             assign_replaces: false,
+            build_snapshot_len: 0,
             rebind_lowered: u16::MAX,
             in_sandbox: false,
             parse_depth: 0,
@@ -1280,6 +1390,8 @@ impl Parser {
             infer_ret_defs: std::collections::HashSet::new(),
             adopted_ret_defs: std::collections::HashSet::new(),
             ref_linked_tuple_locals: std::collections::HashSet::new(),
+            amp_vector_locals: std::collections::HashSet::new(),
+            amp_vector_link_partners: std::collections::HashMap::new(),
             literal_chain_lhs: std::collections::HashSet::new(),
             bound_method_stubs: Vec::new(),
             stub_origin: std::collections::HashMap::new(),
@@ -1331,6 +1443,7 @@ impl Parser {
             capture_owner: std::collections::HashMap::new(),
             rebound_captures: std::collections::HashMap::new(),
             captured_names: Vec::new(),
+            branch_sunk_vectors: std::collections::HashSet::new(),
             fn_lambdas: std::collections::HashMap::new(),
             closure_param: u16::MAX,
             cur_type_var: u32::MAX,
@@ -1350,6 +1463,8 @@ impl Parser {
             last_cast_alias: u32::MAX,
             dn4_checked_narrow: None,
             in_explicit_cast: false,
+            store_ctx: Vec::new(),
+            admit_unwrap: 0,
             pending_default_rhs: None,
             pending_default_src: None,
             ncc_default_end: None,
@@ -4174,50 +4289,33 @@ impl Parser {
             }
             return hit;
         }
-        // DN3: an un-discharged nullable `τ?` (Optional value) into a non-null target.
-        if crate::keys::pln25_dn3_enabled()
-            && let Type::Optional(inner) = value_tp
-            && !matches!(
-                target_tp,
-                Type::Optional(_) | Type::Void | Type::Never | Type::Null
-            )
-            // `τ?` has a second spelling: an INLINE slot holds an absent `S` as the synthetic
-            // `__nullable<S>` enum, which is not a `Type::Optional` and is exactly as nullable.
-            // A tuple ELEMENT is such a slot, so recursing into a promoted tuple return reaches
-            // one — and reading it as non-null made the check warn that a `W2?` becomes null in
-            // `__nullable<W2>` (loft#1123).
-            && !self.data.is_nullable_wrapper(target_tp)
-        {
-            let nm = inner.name(&self.data);
-            // @PLN102 (N-Store) Phase 1 — the warn/error split (types.md § Null-flow, (N-Store)).
-            // WARN (a nudge; the store PROCEEDS — `convert` peels the Optional and the slot holds
-            // the null sentinel) where τ reserves its null DISTINCTLY even in the non-null form
-            // (full `integer`, `float`, `single`, `boolean`, `character`, `text`, refs, aggregates).
-            // Keep the hard ERROR only for a NARROW width (`byte_width < 8`), whose non-null form
-            // spends the whole width on real values, so a null there would silently corrupt.
-            // Gate OFF → the current uniform hard error (this branch stays byte-identical).
-            let narrow =
-                !never_error && matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
-            if crate::keys::nullflow_enabled() && !narrow {
-                let msg = diagnostic_format(
-                    Level::Warning,
-                    format_args!(
-                        "a nullable `{nm}?` is stored into {what} of the non-null type `{}` — it becomes null there; discharge with `?` (the type's default), `?? <default>`, or `match` if that is not intended",
-                        target_tp.name(&self.data)
-                    ),
-                );
-                self.nstore_diag(at, Level::Warning, &msg);
-                return false; // store proceeds — `convert` peels the Optional and stores the sentinel
-            }
-            let msg = diagnostic_format(
-                Level::Error,
-                format_args!(
-                    "a nullable `{nm}?` cannot be stored into {what} of the non-null type `{}` — discharge it first with `?` (the type's default), `?? <default>`, or `match`",
-                    target_tp.name(&self.data)
-                ),
-            );
-            self.nstore_diag(at, Level::Error, &msg);
-            return true;
+        // The τ? half — one body, [`Parser::nstore_unwrap_report`], shared with `convert`'s
+        // `τ? ⤳ τ` arm.  This entry is for the lowerings that never reach `convert` (the
+        // if-join accumulator, the append routes, a struct literal's vector-field deep copy).
+        if let Type::Optional(inner) = value_tp {
+            return self.nstore_unwrap_report(inner, target_tp, what, at, never_error);
+        }
+        if matches!(value_tp, Type::Null) {
+            return self.nstore_null_report(target_tp, what, at, never_error);
+        }
+        false
+    }
+
+    /// @FR-N-Store's bare-`null` half (@PLN25 DN1 + loft#1313's heap gate), the ONE body:
+    /// `null` written into a slot whose type does not hold it.  A full-width scalar and every
+    /// heap target WARN (the slot holds null; a heap target never escalates, loft#1232), a
+    /// narrow width ERRORS.  Answers whether the store was REFUSED.  Asked from
+    /// [`Parser::convert`]'s entry for every store it lowers, and from
+    /// [`Parser::n_store_violation`] for the lowerings that bypass it.
+    fn nstore_null_report(
+        &mut self,
+        target_tp: &Type,
+        what: &str,
+        at: Option<&Position>,
+        never_error: bool,
+    ) -> bool {
+        if self.first_pass {
+            return false;
         }
         // DN1 (the default flip): under DN1 a plain scalar is NON-null, so a bare `null` cannot be
         // stored into a non-Optional scalar target — declare the target `τ?` to allow null.
@@ -4243,24 +4341,21 @@ impl Parser {
         // back to silence.  Letting it fall through to that error instead would hand the opt-out
         // a refusal this branch never had — the one outcome the freeze forbids here.
         let heap_target = crate::keys::heap_nstore_enabled()
-            && crate::keys::nullflow_enabled()
+            && crate::keys::nstore_softens(false)
             && crate::data::is_dbref(target_tp)
             && !self.data.is_nullable_wrapper(target_tp);
-        if crate::keys::pln25_dn1_enabled()
-            && matches!(value_tp, Type::Null)
-            && (Self::is_non_null_scalar(target_tp) || heap_target)
+        if crate::keys::pln25_dn1_enabled() && (Self::is_non_null_scalar(target_tp) || heap_target)
         {
             let nm = self.cure_spelling(target_tp);
             // @PLN102 (N-Store) Phase 1 — same warn/error split as the DN3 branch: a bare `null`
             // into a NON-narrow scalar target warns (the slot reserves its null distinctly, so it
             // holds null and reads back null); a NARROW width keeps the hard error (no room).
-            let narrow =
-                !never_error && matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
+            let narrow = Self::nstore_narrow(target_tp, never_error);
             // A heap target never escalates.  There is no narrow heap width to run out of room
             // the way a `u8` does, and loft#1232 settled the rest: reporting where there was
             // silence is a strict gain, while refusing what a shipped package already compiles is
             // the break the freeze forbids.  Raising the tier later is COMPATIBILITY.md's process.
-            if heap_target || (crate::keys::nullflow_enabled() && !narrow) {
+            if heap_target || crate::keys::nstore_softens(narrow) {
                 // The scalar wording is unchanged to the byte — `scalar ` is what the heap half
                 // drops, not a second message.  Two spellings of one diagnostic is how the
                 // fixtures that pin this text would start disagreeing with the rule behind it.
@@ -4284,6 +4379,80 @@ impl Parser {
             return true;
         }
         false
+    }
+
+    /// @FR-N-Store's τ? half, the ONE body: an un-discharged `τ?` reaching a non-null `τ`
+    /// slot is reported with the rule's split — a WARNING where τ's non-null form reserves
+    /// its null distinctly (the store proceeds and the slot holds the sentinel), an ERROR for a
+    /// narrow width (`nstore_narrow`).  Answers whether the store was REFUSED.
+    ///
+    /// Two askers and no third: [`Parser::convert`]'s `τ? ⤳ τ` arm, which every peel passes
+    /// (measured over the whole corpus, @PLN153 phase 3), and [`Parser::n_store_violation`]
+    /// for the few lowerings that store without converting.
+    fn nstore_unwrap_report(
+        &mut self,
+        inner: &Type,
+        target_tp: &Type,
+        what: &str,
+        at: Option<&Position>,
+        never_error: bool,
+    ) -> bool {
+        if self.first_pass
+            || !crate::keys::pln25_dn3_enabled()
+            || matches!(
+                target_tp,
+                Type::Optional(_) | Type::Void | Type::Never | Type::Null
+            )
+            // `τ?` has a second spelling: an INLINE slot holds an absent `S` as the synthetic
+            // `__nullable<S>` enum, which is not a `Type::Optional` and is exactly as nullable.
+            // A tuple ELEMENT is such a slot, so recursing into a promoted tuple return reaches
+            // one — and reading it as non-null made the check warn that a `W2?` becomes null in
+            // `__nullable<W2>` (loft#1123).
+            || self.data.is_nullable_wrapper(target_tp)
+        {
+            return false;
+        }
+        let nm = inner.name(&self.data);
+        // @FR-N-Decl — a DECLARED `x: τ` is a commitment, so a later nullable write is
+        // @FR-N-Store's refusal; this split is where a declared slot's promise is kept.
+        // @PLN102 (N-Store) Phase 1 — the warn/error split (types.md § Null-flow, (N-Store)).
+        // WARN (a nudge; the store PROCEEDS — `convert` peels the Optional and the slot holds
+        // the null sentinel) where τ reserves its null DISTINCTLY even in the non-null form
+        // (full `integer`, `float`, `single`, `boolean`, `character`, `text`, refs, aggregates).
+        // Keep the hard ERROR only for a NARROW width (`byte_width < 8`), whose non-null form
+        // spends the whole width on real values, so a null there would silently corrupt.
+        // Gate OFF → the current uniform hard error (this branch stays byte-identical).
+        let narrow = Self::nstore_narrow(target_tp, never_error);
+        if crate::keys::nstore_softens(narrow) {
+            let msg = diagnostic_format(
+                Level::Warning,
+                format_args!(
+                    "a nullable `{nm}?` is stored into {what} of the non-null type `{}` — it becomes null there; discharge with `?` (the type's default), `?? <default>`, or `match` if that is not intended",
+                    target_tp.name(&self.data)
+                ),
+            );
+            self.nstore_diag(at, Level::Warning, &msg);
+            return false; // store proceeds — `convert` peels the Optional and stores the sentinel
+        }
+        let msg = diagnostic_format(
+            Level::Error,
+            format_args!(
+                "a nullable `{nm}?` cannot be stored into {what} of the non-null type `{}` — discharge it first with `?` (the type's default), `?? <default>`, or `match`",
+                target_tp.name(&self.data)
+            ),
+        );
+        self.nstore_diag(at, Level::Error, &msg);
+        true
+    }
+
+    /// The WIDTH half of @FR-N-Store's warn/error split: a slot whose non-null form spends
+    /// the whole width on real values (`u8`…`u32`, `byte_width < 8`) has no bit pattern left
+    /// for null, so a nullable stored into it is an ERROR; a full-width slot reserves its null
+    /// distinctly and WARNS instead (`keys::nstore_softens` is the flag half).  `never_error`
+    /// is the caller's "this site never escalates" — a null literal into a heap target.  Two
+    /// branches spelled this test by hand and could only agree by accident; this is the one.
+    fn nstore_narrow(target_tp: &Type, never_error: bool) -> bool {
+        !never_error && matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8)
     }
 
     /// @PLN25 DN1 — the scalar types whose default flips to NON-null (a bare `null` needs `τ?`).
@@ -4383,9 +4552,117 @@ impl Parser {
             }
             return true;
         }
-        self.convert(code, tp, &Type::Boolean)
+        self.convert_admitting(code, tp, &Type::Boolean)
     }
 
+    /// The STORE face of [`convert`](Parser::convert) — @FR-N-Store's home for every store
+    /// that converts: `what` names the slot for the diagnostic ("the field", "parameter 2 of
+    /// `f`", "the return value"), `at` anchors it (a block tail reports at the tail, not the
+    /// `}`), and the rule's two halves are asked inside `convert` where the value meets the
+    /// slot: a bare `null` at the entry, a `τ?` at the one arm that peels it.  Returns what
+    /// `convert` returns; after a REFUSAL (a narrow width) it returns `true`, because the
+    /// refusal has been reported and the caller's generic "cannot assign" would be a second
+    /// diagnostic for one store.
+    pub(crate) fn convert_store(
+        &mut self,
+        code: &mut Value,
+        is_type: &Type,
+        should: &Type,
+        what: &str,
+        at: Option<&Position>,
+    ) -> bool {
+        self.convert_store_as(code, is_type, should, what, at, false)
+    }
+
+    /// [`convert_store`](Parser::convert_store) for a seam that warns at EVERY width — the
+    /// collection-literal element (loft#1232) and every seam first covered by @PLN153 phase 3
+    /// (a tuple literal's member, an index): where there was silence yesterday an ERROR
+    /// today refuses a program that compiled, which the freeze forbids; a warning is the
+    /// strict gain, and raising the tier is COMPATIBILITY.md's process.
+    pub(crate) fn convert_store_lenient(
+        &mut self,
+        code: &mut Value,
+        is_type: &Type,
+        should: &Type,
+        what: &str,
+        at: Option<&Position>,
+    ) -> bool {
+        self.convert_store_as(code, is_type, should, what, at, true)
+    }
+
+    fn convert_store_as(
+        &mut self,
+        code: &mut Value,
+        is_type: &Type,
+        should: &Type,
+        what: &str,
+        at: Option<&Position>,
+        never_error: bool,
+    ) -> bool {
+        self.store_ctx.push(StoreCtx {
+            what: what.to_string(),
+            at: at.cloned(),
+            never_error,
+        });
+        let accepted = self.convert(code, is_type, should);
+        self.store_ctx.pop();
+        accepted
+    }
+
+    /// The TEST face of [`convert`](Parser::convert): the caller reads a `τ?` as a `τ` (or a
+    /// `null` as a value) without STORING it anywhere — a null test (`x != null`, `valid`), a
+    /// condition, an overload trial, `&&`/`||` operands — so @FR-N-Store has nothing to say
+    /// and is not asked.  Every admitting caller is one of those and is named at its site; a
+    /// caller that should admit and does not gets a spurious warning, which the corpus shows.
+    pub(crate) fn convert_admitting(
+        &mut self,
+        code: &mut Value,
+        is_type: &Type,
+        should: &Type,
+    ) -> bool {
+        self.admit_unwrap += 1;
+        let accepted = self.convert(code, is_type, should);
+        self.admit_unwrap -= 1;
+        accepted
+    }
+
+    /// Is this binding's type a commitment the AUTHOR wrote — an explicit `: τ` annotation,
+    /// or a parameter of the signature?  The declared / inferred split the storage rules
+    /// turn on (`@FR-N-Decl` keeps a declared slot's type and asks `@FR-N-Store`;
+    /// `@FR-N-Join` widens an inferred one), refined past the variable table's own
+    /// [`Function::is_declared`](crate::variables::Function::is_declared): a local the
+    /// compiler PROMOTED to a hidden out-parameter — the text return buffer `text_return`
+    /// hoists, `__work_ret` — carries `argument` too, but its type is the compiler's, not
+    /// the author's, so for every rule that reads this split it is still the inferred local
+    /// the author wrote.  Read off the definition (the attribute is `hidden`) rather than
+    /// declared per hoist site, so a new promotion is covered by existing.
+    pub(crate) fn author_declared(&self, var_nr: u16) -> bool {
+        if !self.vars.is_declared(var_nr) {
+            return false;
+        }
+        if !self.vars.is_argument(var_nr) {
+            return true;
+        }
+        let name = self.vars.name(var_nr);
+        !self
+            .data
+            .def(self.context)
+            .attributes()
+            .iter()
+            .any(|a| a.hidden && a.name == name)
+    }
+
+    /// The slot the current store names, for @FR-N-Store's wording: the top of the context
+    /// stack, or the generic spelling when a bare `convert` stores (lenient, so a seam nobody
+    /// has classified yet can only warn).
+    fn store_slot(&self) -> (String, Option<Position>, bool) {
+        match self.store_ctx.last() {
+            Some(c) => (c.what.clone(), c.at.clone(), c.never_error),
+            None => ("a slot".to_string(), None, true),
+        }
+    }
+
+    #[track_caller]
     fn convert(&mut self, code: &mut Value, is_type: &Type, should: &Type) -> bool {
         // @PLAN48 P2: implicitly narrowing a loft `integer` to a smaller explicit
         // width (e.g. `integer` → `i32`) loses data and must be an explicit `as`.
@@ -4432,6 +4709,27 @@ impl Parser {
             let holds_null = matches!(should, Type::Optional(_));
             self.guard_declared_range(code, should, is_type, holds_null);
         }
+        // @FR-N-Store, the bare-`null` half, asked where every converting store passes.  An
+        // explicit cast (`null as integer?`) is the author naming the type, not a store.
+        if !self.first_pass
+            && self.admit_unwrap == 0
+            && !self.in_explicit_cast
+            && matches!(is_type, Type::Null)
+        {
+            if std::env::var_os("LOFT_TRACE_UNWRAP").is_some() {
+                let (what, _, _) = self.store_slot();
+                eprintln!(
+                    "[null] -> {} what={} at {}",
+                    should.name(&self.data),
+                    what.replace(' ', "_"),
+                    std::panic::Location::caller()
+                );
+            }
+            let (what, at, lenient) = self.store_slot();
+            if self.nstore_null_report(should, &what, at.as_ref(), lenient) {
+                return true;
+            }
+        }
         if is_type.is_equal(should) {
             return true;
         }
@@ -4453,13 +4751,21 @@ impl Parser {
         // a bare `null`; a nullable SOURCE still implicitly unwraps to its base (DN2 removes
         // that unwrap later). Both arms converge: `Optional==Optional` is caught by `is_equal`
         // above, and a differing pair peels each side once.
+        // @FR-N-Intro — `τ ⤳ τ?` is the ONE null-direction conversion the rules admit, and
+        // this arm is it: a nullable TARGET accepts the base.  The arm below it (a nullable
+        // SOURCE recursing on its base) is the implicit unwrap the rules say does not exist;
+        // it stands because `convert` also services comparisons, and @FR-N-Store's teeth
+        // refuse it at the store sites instead (the scattered shape @PLN153 phase 3 folds).
         if let Type::Optional(inner) = should {
             if matches!(is_type, Type::Null) {
                 // null into a nullable target: run the base's null→typed-null coercion so
                 // `code` becomes the base sentinel op (e.g. `OpConvIntFromNull`, not a bare
                 // `null` that natively renders `()`), but a nullable target ALWAYS accepts
-                // null regardless of the base's own nullability.
-                self.convert(code, is_type, inner);
+                // null regardless of the base's own nullability.  The recursion is the
+                // base's null→sentinel coercion, not a second store: the OUTER target holds
+                // null, so @FR-N-Store's bare-null ask at the entry must not see the peeled
+                // base (`File { ref: null }` on an `i32?` field read as a narrow refusal).
+                self.convert_admitting(code, is_type, inner);
                 return true;
             }
             // Implicit CHECKED narrowing into a nullable narrow target — see
@@ -4495,11 +4801,33 @@ impl Parser {
             return self.convert(code, is_type, inner);
         }
         if let Type::Optional(inner) = is_type {
-            // @PLN25 slice (b): the behaviour-preserving implicit unwrap. The `(N-Store)` teeth
-            // (DN3) do NOT belong here — `convert` also services COMPARISONS (`x == null`), so
-            // rejecting an Optional source here wrongly flags the very null-CHECKS that are how
-            // you test nullability. (N-Store) must live at the STORE / decl / index sites (the
-            // design's per-site checks), exempting null-compare. See RESUME.md § Step 3 slice c.
+            // @FR-N-Store — THE junction: every `τ? ⤳ τ` peel in the compiler passes this arm
+            // (measured over the whole corpus, @PLN153 phase 3 — no peel happens anywhere
+            // else), so the rule's τ? half is asked HERE and at no store site.  A caller that
+            // TESTS nullability rather than storing (`x == null`, a condition, an overload
+            // trial) admits the peel through `convert_admitting`; a store names its slot
+            // through `convert_store`; a bare `convert` is asked with generic wording.  The
+            // one-time census instrument stays: `LOFT_TRACE_UNWRAP=1` names every peel's
+            // caller, face and slot.
+            if !self.first_pass && !matches!(should, Type::Optional(_)) {
+                if std::env::var_os("LOFT_TRACE_UNWRAP").is_some() {
+                    let (what, _, _) = self.store_slot();
+                    eprintln!(
+                        "[unwrap] {} -> {} admit={} what={} at {}",
+                        is_type.name(&self.data),
+                        should.name(&self.data),
+                        self.admit_unwrap,
+                        what.replace(' ', "_"),
+                        std::panic::Location::caller()
+                    );
+                }
+                if self.admit_unwrap == 0 && !self.in_explicit_cast {
+                    let (what, at, lenient) = self.store_slot();
+                    if self.nstore_unwrap_report(inner, should, &what, at.as_ref(), lenient) {
+                        return true;
+                    }
+                }
+            }
             return self.convert(code, inner, should);
         }
         // Plan-06 phase 4d: tuple-to-tuple convert is element-wise.
@@ -4527,10 +4855,24 @@ impl Parser {
                 _ => Vec::new(),
             };
             let mut all_compatible = true;
+            // @FR-N-Store — a tuple stores ELEMENT-WISE, so each member is its own slot and
+            // the diagnostic names which (`element 0 of the field`); the six tuple-literal
+            // cells loft#1366 lists were silent because nothing named them.
+            let (what, at, lenient) = match self.store_ctx.last() {
+                Some(c) => (c.what.clone(), c.at.clone(), c.never_error),
+                None => ("this tuple".to_string(), None, true),
+            };
             for (i, (s, d)) in src_elems.iter().zip(dst_elems.iter()).enumerate() {
                 let mut placeholder = Value::Null;
                 let elem = items.get_mut(i).unwrap_or(&mut placeholder);
-                if !self.convert(elem, s, d) {
+                self.store_ctx.push(StoreCtx {
+                    what: format!("element {i} of {what}"),
+                    at: at.clone(),
+                    never_error: lenient,
+                });
+                let ok = self.convert(elem, s, d);
+                self.store_ctx.pop();
+                if !ok {
                     all_compatible = false;
                     break;
                 }
@@ -4729,8 +5071,15 @@ impl Parser {
             }
             return true;
         }
+        // loft#1372 — matched through the SLOT.  A `&τ?` parameter's referent is
+        // `Optional(τ)` while the argument expression reads as plain `τ` (`Optional(τ)`
+        // shares `τ`'s storage, and the read yields the base), so an exact comparison
+        // answered no and the argument was passed BY VALUE with no `OpCreateStack` — the
+        // callee then deref'd a plain integer as a stack ref and the store accessor went out
+        // of bounds.  Nullability is @FR-N-Store's question, asked where a value lands, not
+        // what decides whether this argument is a LINK.
         if let Type::RefVar(ref_tp) = should
-            && ref_tp.is_equal(is_type)
+            && (ref_tp.is_equal(is_type) || ref_tp.base().is_equal(is_type.base()))
         {
             // #266: a receiver/argument that is ITSELF an already-borrowed
             // reference (its declared var type is `RefVar(_)`, e.g. a `&self`
@@ -4925,6 +5274,17 @@ impl Parser {
         // second is the defect loft#1014 was.  The wrapped sentinel keeps the template's
         // own IR as well-formed as it was — a template is type-checked and slot-allocated
         // even though it never runs — and the rewrite discards it.
+        // loft#1372 — a bare `null` written THROUGH a `&` link is a null value of the SLOT
+        // (`@FR-C-Ref` on the write side: a `&τ` reads and writes as its referent).  Asked
+        // against the LINK type, no `OpConv…FromNull` returns a `&integer?`, the conversion
+        // failed, and the whole store was dropped in silence — `q = null` through a link
+        // left the source holding its old value on both backends, with nothing said.
+        if *is_type == Type::Null
+            && let Type::RefVar(inner) = should
+        {
+            let inner = inner.as_ref().clone();
+            return self.convert(code, is_type, &inner);
+        }
         if *is_type == Type::Null
             && let Type::Reference(target, _) = should.base()
             && self.data.is_type_var_placeholder(*target)
@@ -5243,7 +5603,27 @@ impl Parser {
         }
     }
 
+    /// loft#1382 — an arm-agreement mismatch deferred until statement position is known.
+    pub(crate) fn arm_mismatch_report(&mut self, m: &ArmMismatch) {
+        let (test, should, context, at) = (
+            m.test.clone(),
+            m.should.clone(),
+            m.context.clone(),
+            m.at.clone(),
+        );
+        self.validate_convert(&context, &test, &should, &at);
+    }
+
     fn validate_convert(&mut self, context: &str, test_type: &Type, should: &Type, pos: &Position) {
+        // The block CONTEXT doubles as the internal name `parse_block` and `block_result`
+        // key on, so the one that reads as a token gets a reader's spelling here — the
+        // message says *"on a match arm"* beside the twin's *"on else"*, and the keying
+        // stays untouched.
+        let context = if context == "match_arm" {
+            "a match arm"
+        } else {
+            context
+        };
         if !self.first_pass && !self.can_convert(test_type, should) {
             // Plan-07 phase 6 (partial) — "expected E, got G on context"
             // reads the same direction as English ("we expected this,
@@ -5582,13 +5962,13 @@ impl Parser {
             // math fn with a provably in-domain CONSTANT argument cannot be null (`sqrt(4.0)`,
             // `pow(2.0, 3.0)`, `ln(2.0)`), so peel the `τ?` its decl carries. Only under
             // LOFT_NULLFLOW, and only the constant subset (variable-arg range-tracking is deferred).
-            if crate::keys::nullflow_enabled()
+            if crate::keys::ndomain_enabled()
                 && matches!(ret, Type::Optional(_))
                 && self.math_arg_in_domain(name, list)
             {
                 // Phase 3.5 elision: a provably-in-domain constant arg peels the `τ?`.
                 ret.base().clone()
-            } else if (matches!(name, "min" | "max" | "clamp") || crate::keys::nullflow_enabled())
+            } else if (matches!(name, "min" | "max" | "clamp") || crate::keys::nprop_enabled())
                 && Self::is_null_transparent(name)
                 && !matches!(ret, Type::Optional(_))
                 && Self::is_non_null_scalar(&ret)
@@ -6321,19 +6701,33 @@ impl Parser {
     }
 
     fn tuple_return_rewrite(&mut self, returned: Type, from_type_var: bool) -> Type {
-        // Only the `-> T` shape needs this.  When the template return type IS the
-        // bare type variable, the body delivers T as a DbRef (the template compiled
-        // T as a `Reference` dummy), so a tuple substitution must wrap it in the
-        // synthetic struct.  A return type that is a LITERAL tuple in the signature
-        // (e.g. `-> (integer, integer)`) is constructed BY VALUE in the body and
-        // correctly uses the bare-tuple ABI — rewriting it would break the
-        // value-tuple generic returns (p329/p330/p240/plan17).
-        if !from_type_var {
-            return returned;
-        }
         let Type::Tuple(elems) = &returned else {
             return returned;
         };
+        // When the template return type IS the bare type variable (`-> T`), the body
+        // delivers T as a DbRef (the template compiled T as a `Reference` dummy), so a
+        // tuple substitution must wrap it in the synthetic struct — the arm below.
+        //
+        // A LITERAL tuple in the signature whose SHAPE depends on `T` (`-> (T, integer)`) is
+        // the case the declaration DEFERRED to instantiation
+        // (`return_shape_depends_on_type_var`), and this is the instantiation — reached from
+        // the pass-1 prediction and the pass-2 signature alike, so the two agree.  A
+        // pure-value shape (`-> (integer, integer)`) is constructed BY VALUE in the body and
+        // keeps the bare tuple ABI, which is what the old unconditional gate protected
+        // (p329/p330/p240/plan17); a lifetime-bearing one is boxed exactly as
+        // `boxed_tuple_return` boxes a concrete declaration, and
+        // `promote_monomorph_tuple_return` rewrites the body's tuple tails to match.  Left
+        // bare, the instance handed up a stack tuple whose heap member was the ARGUMENT's own
+        // store, on both backends (QUALITY.md B7t; loft#1365's collection half,
+        // `formal/tuples.md` D-tup-9).
+        if !from_type_var {
+            if !elems.iter().any(crate::data::has_lifetime_concern) {
+                return returned;
+            }
+            let elems_clone = elems.clone();
+            let synth = self.data.tuple_def(&mut self.lexer, &elems_clone);
+            return Type::Reference(synth, crate::data::Deps::none());
+        }
         let wide = u32::from(crate::variables::size(
             &returned,
             &crate::data::Context::Argument,
@@ -6550,14 +6944,30 @@ impl Parser {
             // and never reached generic resolution.  Order-dependent, and the message
             // named the innocent second call site.
             //
-            // Non-collection concretes are unchanged: a struct's, an integer's and a
-            // text's type-def name IS their own name.
-            let base = if Self::is_collection_type(concrete.base()) {
+            // loft#1383 — an INTEGER keys on its own name for the same reason a collection
+            // does: its type DEF erases the WIDTH.  Every `Integer(_)` resolves to the one
+            // `integer` def, so `T = u8` and `T = u16` both mangled to `t_7integer_id` and
+            // the second call was checked against the FIRST instantiation — narrow first
+            // refused the wider call outright, wide first admitted the narrower one by
+            // widening, so the program's meaning depended on the ORDER of two statements.
+            // `Type::name` carries the range (`integer(0, 255)` vs `integer(0, 65535)`),
+            // which is the identity `@FR-G-Mono` wants: ONE copy per DISTINCT instantiation.
+            // Collapsing the width is right for CONVERSION (`(C-Int)` admits a widening) and
+            // wrong for identity, which is why one predicate could not serve both.
+            //
+            // Non-collection, non-integer concretes are unchanged: a struct's, a float's and
+            // a text's type-def name IS their own name.
+            let base = if Self::is_collection_type(concrete.base())
+                || matches!(concrete.base(), Type::Integer(_))
+            {
                 concrete.name(&self.data)
             } else {
                 self.data.def(type_nr).name().to_string()
             };
-            let safe = base.replace(['<', '>', ',', ' '], "_");
+            // The parentheses come from an integer's range spelling; the replacement stays
+            // 1:1 so the LEN prefix `original_name` / `find_method_receivers` parse back is
+            // still correct.
+            let safe = base.replace(['<', '>', ',', ' ', '(', ')'], "_");
             format!("t_{}{}_{name}", safe.len(), safe)
         };
         // Return existing instantiation if already created.
@@ -6618,8 +7028,23 @@ impl Parser {
         // `predict_generic_return_type`, so the second-pass instantiated return type
         // matches the first-pass prediction (the cross-pass H5 contract).
         let from_tv = matches!(&tmpl_returned, Type::Reference(d, _) if *d == tv_nr);
-        let new_returned =
+        let tmpl_ret_deps: Vec<u16> = tmpl_returned.depend();
+        let mut new_returned =
             self.tuple_return_rewrite(Self::substitute_all(tmpl_returned, &bindings), from_tv);
+        // @FR-F-Ret — the template's RETURN DEPS come along.  `substitute_all` replaces the
+        // type variable and drops the deps it carried, and those deps are what say *this
+        // result borrows argument N*: without them a `fn g<T>(x: T) -> T { x }` instance
+        // reads as a fresh owner, the caller binds the raw argument store, and mutating
+        // the result mutated the argument on both backends (QUALITY.md B7t) — where the
+        // concrete twin, whose `-> Ctr["x"]` says so, is copied by the caller.  Attribute
+        // indices are frame-independent and the instance copies the template's parameters
+        // in order, so re-attaching is exact; `expand_deferred_par` does the same for a
+        // par worker's return.  A tuple carries no dep list of its own and is boxed below.
+        if !matches!(new_returned.base(), Type::Tuple(_)) {
+            for d in tmpl_ret_deps {
+                new_returned = new_returned.depending(d);
+            }
+        }
         // Register the new definition.
         let d_nr = self.data.add_def(&mangled, &tmpl_pos, DefType::Function);
         for a in &tmpl_attrs {
@@ -6643,6 +7068,44 @@ impl Parser {
             new_returned,
         );
         self.fill_monomorph_body(d_nr, new_code, &tmpl_vars, &bindings, &concrete);
+        // @FR-F-Ret / @FR-O-Oracle — a template's `-> T` record return carries NO deps: its
+        // `ref_return` is skipped (the promotion is deferred to instantiation), so the
+        // `MergeAttr` that writes `-> Ctr["x"]` on a concrete twin never ran, and the instance
+        // read as a fresh owner while its body hands the ARGUMENT up.  The caller then bound
+        // the argument's own store and a write through the result wrote the argument, on both
+        // backends (QUALITY.md B7t: struct/vector, whole/local/early/arm).  Ask the ONE
+        // derivation the body itself answers to — the oracle's return summary — and let the
+        // instance's declared return say what its twin's says, so the caller copies a
+        // borrowed return exactly as it does for a named function (loft#1346).
+        //
+        // A pure BORROW only.  A `Join` — a mint on one arm and the argument on the other —
+        // is delivered through a return buffer on a named function (`ref_return`'s per-arm
+        // leg), which a monomorph does not have yet; a dep alone would make the caller copy
+        // the mint arm and orphan the minted store.  That shape stays as it is, named in
+        // QUALITY.md B7t as the residual with its cure.
+        //
+        // And only where every return LEAF is the parameter itself.  A local bound from it
+        // (`y: T = x; y`) COPIES at codegen for a record (@FR-B-Copy) — a copy the IR does
+        // not show, so the oracle reads the local as a borrow of `x` — and declaring that a
+        // borrow made the caller decline its lift and free nothing: three corpus generics
+        // leaked one record per call under `LOFT_STRICT_STORES`.  What comes back through a
+        // local is owned, and the caller adopts it as before.
+        if new_returned.depend().is_empty() && crate::data::has_lifetime_concern(&new_returned) {
+            let attrs_n = self.data.def(d_nr).attributes().len();
+            if let crate::use_analysis::Own::Borrowed { base } =
+                crate::use_analysis::return_ownership(&self.data, d_nr)
+                && (base as usize) < attrs_n
+                && !self.data.def(d_nr).attributes()[base as usize].hidden
+                && matches!(&self.data.def(d_nr).code, Value::Block(bl)
+                    if Self::every_return_leaf_is_var(&bl.operators, base))
+            {
+                // Written directly: `set_returned` refuses a second write on purpose (a return
+                // type must not change), and this does not change it — it adds the deps the
+                // type was declared without.
+                let with_dep = self.data.def(d_nr).returned().clone().depending(base);
+                self.data.definitions[d_nr as usize].returned = with_dep;
+            }
+        }
         // loft#1023 — a template declared BELOW its caller has not had its pass-2 body
         // parsed yet when the call instantiates, so the monomorph above was built from the
         // PASS-1 body.  Record it and re-derive once the whole file is through.
@@ -6737,6 +7200,18 @@ impl Parser {
         // delivers through a hidden `&text` buffer (no orphaned owned String).
         // Runs BEFORE returning `d_nr` so the call site sees the promoted ABI.
         self.promote_monomorph_text_return(d_nr);
+        // @FR-F-Ret — and its tuple twin: a `-> (T, …)` whose shape the declaration deferred
+        // is boxed by `tuple_return_rewrite` above, and the body's tuple tails are rewritten
+        // into that synthetic record here, so signature and body agree on both passes.
+        self.promote_monomorph_tuple_return(d_nr);
+        // @FR-F-Ret / @FR-B-Copy — and the vector twin: a `T`-typed local bound from another
+        // vector COPIES, and a `-> T` that hands a vector argument up returns a copy of it.
+        let holders: Vec<u32> = bindings.iter().map(|(h, _)| *h).collect();
+        self.promote_monomorph_vector_return(d_nr, tmpl_vars, &holders);
+        // loft#1387 — and the two-source join twin: a return whose tail is a value branch
+        // over two parameters is FRESH (`@FR-F-Ret`), which the non-generic path gets in
+        // `parse_block` and a monomorph can only get here.
+        self.bind_monomorph_join_return(d_nr);
         // loft#845 — a `"{v}"` on a `vector<T>` was emitted against the row the TEMPLATE
         // could see, which is a vector over the type variable's own storage.  Substitution
         // replaces the type and leaves that row behind, so the dump walked a
@@ -6747,6 +7222,10 @@ impl Parser {
         // rewrites types, never the `const u16` schema id an op already carries, so a site
         // that was lowered while the element was still `T` kept pointing at
         // `__typevar_T`'s row.
+        // loft#1365 — and drop the tuple-member copy this instantiation does not need,
+        // BEFORE the rows are retargeted: a scalar binding contributes no row mapping, so
+        // the copy left standing would keep the type variable's own row.
+        self.collapse_parametric_tuple_member_copies(d_nr);
         self.retarget_parametric_type_rows(d_nr, bindings);
         // loft#1040 — and lower any `par` clause the template could not: it needs the
         // types this body now carries, so it runs after every substitution above.
@@ -7649,6 +8128,122 @@ impl Parser {
         self.data.definitions[d_nr as usize].code = code;
     }
 
+    /// loft#1365 — drop the tuple-member copy this instantiation must not carry.
+    ///
+    /// `tuples.md (T-Cons)` copies a HEAP member into a tuple literal and leaves a scalar one
+    /// alone, and a record, a vector and a keyed collection are each copied by a DIFFERENT
+    /// step.  Which one a `T`-typed member needs does not exist while the template is parsed
+    /// — only per instantiation — and the template has to guess, because a type variable is
+    /// spelled `Type::Reference` to its placeholder and so looks exactly like a record.  So
+    /// the template emits the RECORD copy, the guess that is right whenever `T` binds a
+    /// record, and this pass removes it wherever that guess does not fit what this monomorph
+    /// bound.
+    ///
+    /// The test is the block's own contents against that type
+    /// ([`Self::tuple_member_copy_shape_fits`]), never "was this member a type variable" —
+    /// which matters because a generic body also builds tuples from CONCRETE members, whose
+    /// copies are already right and must not be touched.  A vector member's copy fits a
+    /// `Type::Vector` and is left alone; a record copy sitting on an integer or on a vector
+    /// is the template's guess, and is unwrapped to the source it was built from
+    /// ([`Self::tuple_member_copy_source`], the matcher the return path shares).
+    ///
+    /// Both wrong answers this replaces were measured, and they are opposite errors.
+    /// Declining the copy in the template left a struct-bound `T` ALIASING the local where
+    /// `(T-Cons)` and `binding.md (B-Copy)` both say copy (D-tup-9).  Emitting it
+    /// unconditionally allocated a record with the type variable's own row — the layout
+    /// escape the record-row guard refuses (loft#1070) — for a scalar binding and for a
+    /// collection one alike, an ICE on both backends.
+    ///
+    /// Unwrapping the VALUE is only half of undoing the guess: the template also gave the
+    /// tuple's element type the backing's dep, and a type that still names a backing whose
+    /// copy is gone makes the element look owned by a variable nothing fills — the store the
+    /// member actually holds is then freed by nobody.  So the dep goes with the copy, which
+    /// is what leaves a collapsed member exactly as the pre-guess compiler had it.
+    fn collapse_parametric_tuple_member_copies(&mut self, d_nr: u32) {
+        let mut code = self.data.definitions[d_nr as usize].code.clone();
+        let this = &*self;
+        // (backing the element depended on, the local the member now IS a view of — if any)
+        let mut dropped: Vec<(u16, Option<u16>)> = Vec::new();
+        code.map_nodes(&mut |v| {
+            let Some(src) = this.tuple_member_copy_source(v) else {
+                return;
+            };
+            let Value::Block(b) = v.unspan() else { return };
+            if this.tuple_member_copy_shape_fits(&b.operators, &b.result) {
+                return;
+            }
+            // The block's tail is the backing it filled, and that is the dep the element
+            // type was given.  Unwrapped to a plain local, the member is that local's VIEW
+            // (`(B-View)`): the dep moves to the local rather than vanishing, because an
+            // element with no dep is read as OWNED and freed at scope exit — and here it is
+            // the caller's store.
+            let backing = b.operators.last().and_then(|o| match o.unspan() {
+                Value::Var(x) => Some(*x),
+                _ => None,
+            });
+            let view_of = match src.unspan() {
+                Value::Var(x) => Some(*x),
+                _ => None,
+            };
+            if let Some(backing) = backing {
+                dropped.push((backing, view_of));
+            }
+            *v = src;
+        });
+        if dropped.is_empty() {
+            return;
+        }
+        self.data.definitions[d_nr as usize].code = code;
+        let vars = &mut self.data.definitions[d_nr as usize].variables;
+        for v in 0..vars.count() {
+            for (backing, view_of) in &dropped {
+                vars.retarget_tuple_member_deps(v, &[*backing], *view_of);
+            }
+        }
+    }
+
+    /// Does the copy the TEMPLATE emitted already suit `tp`?
+    ///
+    /// Each member kind is copied by its own step, so the step present in the block names the
+    /// kind the copy was built for: `OpCopyRecord` a record, `OpAppendVector` a vector,
+    /// `OpReplaceKeyed` a keyed collection.  Comparing that against the type this monomorph
+    /// bound is what tells a guess that happened to be right from one that has to be redone —
+    /// and it asks the question of the block's own contents rather than of a flag set
+    /// elsewhere, so a template that stops guessing cannot leave this stale.
+    fn tuple_member_copy_shape_fits(&self, ops: &[Value], tp: &Type) -> bool {
+        let mut fits = false;
+        for op in ops {
+            match op.unspan() {
+                Value::Call(d, _) => match self.data.def(*d).name() {
+                    "OpCopyRecord" => {
+                        fits |= matches!(tp.base(), Type::Reference(_, _) | Type::Enum(_, true, _));
+                    }
+                    "OpAppendVector" => fits |= matches!(tp.base(), Type::Vector(_, _)),
+                    "OpReplaceKeyed" => {
+                        fits |= matches!(
+                            tp.base(),
+                            Type::Sorted(_, _, _)
+                                | Type::Index(_, _, _)
+                                | Type::Hash(_, _, _)
+                                | Type::Radix(_, _, _)
+                                | Type::Trie(_, _, _)
+                        );
+                    }
+                    _ => {}
+                },
+                Value::Block(inner) => {
+                    fits |= self.tuple_member_copy_shape_fits(&inner.operators, tp)
+                }
+                Value::If(_, then, els) => {
+                    fits |= self.tuple_member_copy_shape_fits(std::slice::from_ref(then), tp)
+                        || self.tuple_member_copy_shape_fits(std::slice::from_ref(els), tp);
+                }
+                _ => {}
+            }
+        }
+        fits
+    }
+
     fn retarget_parametric_vector_format(&mut self, d_nr: u32) {
         let ops: Vec<u32> = ["OpFormatDatabase", "OpFormatStackDatabase"]
             .iter()
@@ -8368,7 +8963,9 @@ impl Parser {
             Value::Block(bl) if bl.name == Self::TV_NULL_BLOCK => {
                 let tp = bl.result.clone();
                 let mut null = Value::Null;
-                if self.convert(&mut null, &Type::Null, &tp) {
+                // "What is `τ`'s null?" builds a VALUE; it stores nothing, so @FR-N-Store's
+                // bare-null ask is not for it.
+                if self.convert_admitting(&mut null, &Type::Null, &tp) {
                     null
                 } else {
                     // The conversion the template deferred does not exist for this `T`.
@@ -8517,30 +9114,24 @@ impl Parser {
         let pos = Value::Int(0);
         // Resolve op def_nrs.  Each branch resolves only the ones it needs.
         let op = match concrete {
-            Type::Integer(spec) => {
-                // narrow-int dispatch mirrors `vectors.rs:1576-1586`.
-                // size(N) on an integer alias selects a narrower setter.
-                let alias_nr = data.type_elm(concrete);
-                let forced = data.forced_size(alias_nr);
-                match forced {
-                    Some(1) => {
-                        let m = Value::Int(spec.min);
-                        let d = data.def_nr("OpSetByte");
-                        Value::Call(d, vec![elm, pos, m, src_value])
-                    }
-                    Some(2) => {
-                        let m = Value::Int(spec.min);
-                        let d = data.def_nr("OpSetShortRaw");
-                        Value::Call(d, vec![elm, pos, m, src_value])
-                    }
-                    Some(4) => {
-                        let d = data.def_nr("OpSetInt4");
-                        Value::Call(d, vec![elm, pos, src_value])
-                    }
-                    _ => {
-                        let d = data.def_nr("OpSetInt");
-                        Value::Call(d, vec![elm, pos, src_value])
-                    }
+            Type::Integer(_) => {
+                // The narrow widths through the one home every vector build shares —
+                // `vectors::narrow_elm_write`, the twin of the index read; only the wide
+                // 8-byte element stays on `OpSetInt`.  This arm used to key on the ALIAS
+                // def's `forced_size` (`type_elm(concrete)` resolves every integer to the
+                // one `integer` def, which has none), so it wrote every narrow element of a
+                // generic `vector<T>` eight bytes wide into a one- or two-byte slot
+                // (loft#1378: `200 0` for two `u8`s, `29768 32767` for `-3000, 3000` as i16).
+                if let Some(call) = crate::parser::vectors::narrow_elm_write(
+                    concrete,
+                    elm.clone(),
+                    &src_value,
+                    data,
+                ) {
+                    call
+                } else {
+                    let d = data.def_nr("OpSetInt");
+                    Value::Call(d, vec![elm, pos, src_value])
                 }
             }
             Type::Float => {
@@ -8714,9 +9305,9 @@ impl Parser {
     /// ```
     ///
     /// Where:
-    /// - `elem_size = type_element_size(concrete, data)`
-    /// - `t_concrete_vec = database.vector(database.db_type(concrete, data))`
-    ///   (mirrors the parse-time concrete path at `vectors.rs:1532-1535`).
+    /// - `t_concrete_vec = database.vector(e)` and `elem_size = database.size(e)`, where `e`
+    ///   is `Data::vector_element_type(concrete)` — the one home the concrete `+=` append
+    ///   asks (loft#1378).
     ///
     /// Slice 2 ships only the `Type::Integer` arm.  Slice 3 extends to
     /// Text / Float / Single / Boolean / Character / Enum / Function +
@@ -8761,9 +9352,21 @@ impl Parser {
         // Mirrors `vectors.rs:1532-1535` — `database.vector(content_db_type)`
         // returns the synthetic vector<concrete> type id (registers
         // it on first use; idempotent on subsequent calls).
-        let content_db_type = database.db_type(concrete, data);
+        // The element's STORAGE type from the one home every writer and reader of a vector
+        // element routes through — `Data::vector_element_type`, which the concrete `+=`
+        // append asks too (a narrow integer keeps its width, a struct is its record) — and
+        // the stride from the store that owns the layout, exactly as the concrete path sizes
+        // its `OpPreAllocVector` (`vectors.rs`: `database.size(known)`).  This used to
+        // re-derive the stride from the Type alone (`type_element_size`), summing a struct's
+        // fields and descending into a field of the struct's own type without end, and it
+        // was computed before any triplet was looked for — so EVERY generic instantiated at
+        // a self-referential struct died in the parser with a bare SIGSEGV, `fn id<T>(v: T)
+        // -> T? { v }` at `struct Node { …, next: reference<Node>? }` included (loft#1378).
+        let content_db_type = data
+            .vector_element_type(concrete, database)
+            .unwrap_or_else(|| database.db_type(concrete, data));
         let concrete_vec_tp = i32::from(database.vector(content_db_type));
-        let elem_size = Self::type_element_size(concrete, data);
+        let elem_size = i32::from(database.size(content_db_type));
         // Walk operators looking for the triplet.  Build a new vec
         // with rewrites applied; copy unchanged ops verbatim.
         // Drain `ops` into a deque-like cursor so we can take owned
@@ -9034,49 +9637,6 @@ impl Parser {
         }
     }
 
-    /// I9-vec: compute element store size from the Type alone (no database needed).
-    fn type_element_size(tp: &Type, data: &Data) -> i32 {
-        // @PLN25: `Optional(τ)` stores at its base's width (sentinel storage); peel so a
-        // nullable narrow-int / scalar element gets its real stride, not the `_ => 12` DbRef.
-        let tp = tp.base();
-        // Post-2c: honor size(N) on integer aliases.
-        if matches!(tp, Type::Integer(_)) {
-            let alias_nr = data.type_elm(tp);
-            if let Some(n) = data.forced_size(alias_nr) {
-                return i32::from(n);
-            }
-        }
-        match tp {
-            Type::Single
-            | Type::Boolean
-            | Type::Character
-            | Type::Text(_)
-            | Type::Enum(_, false, _) => 4,
-            Type::Integer(_) | Type::Float => 8,
-            // for Reference(struct_nr), compute the struct's inline field
-            // size from its attributes rather than assuming 12 (DbRef size).
-            // Vector elements of struct type are stored inline, not as pointers.
-            Type::Reference(d_nr, _) => {
-                if (*d_nr as usize) < data.definitions.len()
-                    && data.def(*d_nr).def_type() == DefType::Struct
-                {
-                    let mut total = 0i32;
-                    for attr in data.def(*d_nr).attributes() {
-                        if attr.constant {
-                            continue;
-                        }
-                        total += Self::type_element_size(&attr.typedef, data);
-                    }
-                    if total > 0 {
-                        return total;
-                    }
-                }
-                12 // non-struct reference: DbRef = 12 bytes
-            }
-            _ => 12,
-        }
-    }
-
     /// One `OpConvBoolFrom<X>` call over `args`, or `None` when the op is not registered.
     ///
     /// A helper only so the exhaustive map above reads as a table of decisions rather
@@ -9108,6 +9668,15 @@ impl Parser {
         // @PLN25: peel `Optional(τ)` — a nullable scalar element needs the SAME value-
         // extraction op as its base; without this it fell through with no OpGet
         // and the raw slot was read as a DbRef.
+        // A NARROW integer element is unpacked at the width and encoding its type stores,
+        // through the read twin of the op every vector build writes it with
+        // (`vectors::narrow_elm_read`); only the wide 8-byte element takes `OpGetInt` below.
+        // Reading every integer through `OpGetInt` took eight bytes out of a one- or two-byte
+        // slot, so a generic body's `v[i]` on a `vector<u8>` or `vector<i16>` answered its
+        // neighbours' bytes (loft#1378's in-body read cells).
+        if let Some(read) = crate::parser::vectors::narrow_elm_read(tp, code.clone(), data) {
+            return read;
+        }
         let op_name = match tp.base() {
             Type::Integer(_) => "OpGetInt",
             Type::Float => "OpGetFloat",
@@ -10073,7 +10642,36 @@ impl Parser {
             | Type::Index(_, _, _)
             | Type::Radix(_, _, _)
             | Type::Trie(_, _, _)
-            | Type::Sorted(_, _, _) => self.cl("OpSetInt4", &[ref_code.clone(), pos_v, value]),
+            | Type::Sorted(_, _, _) => {
+                // A KEYED element is a record SET, and the element write COPIES it —
+                // `OpReplaceKeyed`, exactly as `set_field_check` writes a keyed struct field
+                // (loft#698).  Writing the source's 4-byte header with `OpSetInt4` left two
+                // owners of one record set, and on the return path the `__tuple` record then
+                // held the header of a frame-local backing the frame freed: the interpreter
+                // wrote into a released, reused store (`Write to read-only store`, the const
+                // store had taken the slot) and `--native` refused an int for a `DbRef`
+                // (E0308) — an accept/reject split on `s = x; t = (s, 7); return t` with a
+                // keyed `x` (QUALITY.md B7t; the cell D-tup-8's guard did not cross).  A bare
+                // `Int` source is a raw header and keeps the raw write.
+                let keyed_tp = elem_tp.base().clone();
+                if matches!(value.unspan(), Value::Int(_))
+                    || self.keyed_field_kt(&keyed_tp).is_none()
+                {
+                    self.cl("OpSetInt4", &[ref_code.clone(), pos_v, value])
+                } else {
+                    let kt = self.keyed_field_kt(&keyed_tp).unwrap_or(u16::MAX);
+                    let tp_val = if self.is_struct_returning_call(&value) {
+                        i32::from(kt) | 0x8000
+                    } else {
+                        i32::from(kt)
+                    };
+                    let field_ref = self.cl(
+                        "OpGetField",
+                        &[ref_code.clone(), pos_v, Value::Int(i32::from(kt))],
+                    );
+                    self.cl("OpReplaceKeyed", &[value, field_ref, Value::Int(tp_val)])
+                }
+            }
             // Plan-06 phase 4d: nested tuple element — recurse into
             // `emit_tuple_set_ops` with the inner tuple's offsets so
             // each leaf primitive lands at `outer_pos +
@@ -10214,6 +10812,45 @@ impl Parser {
         let not_null = self.cl("OpNot", &[is_null]);
         list.push(v_if(not_null, Value::Insert(present), absent));
         list
+    }
+
+    /// The POINTER spelling a tagged `__nullable<S>` value takes once it leaves its slot:
+    /// `Optional(Reference(S))` carrying the slot's deps — or `None` when `tp` is not a
+    /// tagged nullable.  The type half of [`Self::read_through_tag`], for a site that has
+    /// to know the local's type before the value's read exists (the tuple destructure).
+    pub(crate) fn tagged_pointer_type(&self, tp: &Type) -> Option<(u32, Type)> {
+        let Type::Enum(syn, true, _) = tp else {
+            return None;
+        };
+        let struct_d = self.nullable_payload_struct(*syn)?;
+        let pointer = Type::Optional(Box::new(
+            Type::Reference(struct_d, crate::data::Deps::none()).with_deps_of(tp),
+        ));
+        Some((*syn, pointer))
+    }
+
+    /// `@FR-L-Null-Which` — a tagged `__nullable<S>` is a SLOT's spelling of `S?` (an
+    /// embedded field, a vector element, a tuple member); everywhere else `S?` is the
+    /// pointer, `nullref` for absence.  A tagged value reaching a non-slot position — a
+    /// local's bind, a `??` or `?` subject — is therefore read through its tag HERE, once,
+    /// and both the value and its type become the pointer.  `false` when `tp` was not a
+    /// tagged nullable and nothing moved.  Left in the slot's spelling, a local took
+    /// whichever spelling its LAST assignment parsed and the other assignment's value went
+    /// in unconverted (loft#1367), and a `??` joined a tagged arm with a pointer arm and
+    /// refused the program naming the synthetic (`__nullable<S>?`).
+    ///
+    /// BOTH passes, so the local's type is the pointer on each: a `vector<S?>` element is the
+    /// synthetic from pass 1 (the element type is rewritten where the vector type resolves),
+    /// and converting only on pass 2 typed the local as the slot on pass 1 and refused pass
+    /// 2's pointer as a type change.  The pass-1 VALUE may come back unconverted — the
+    /// emitter declines while the layout has no known type yet — and is rebuilt anyway.
+    pub(crate) fn read_through_tag(&mut self, code: &mut Value, tp: &mut Type) -> bool {
+        let Some((syn, pointer)) = self.tagged_pointer_type(tp) else {
+            return false;
+        };
+        *code = self.emit_nullable_slot_read(syn, code.clone(), tp);
+        *tp = pointer;
+        true
     }
 
     /// Read a tagged `__nullable<S>` slot back as the dense-or-absent value its declared
@@ -11289,7 +11926,10 @@ impl Parser {
         // and found nothing, so there is no resolution left to steer — only a message to
         // hold back.  A genuinely unresolvable operand reaches this same site on pass 2,
         // where the reject fires with the type it really has.
-        if self.first_pass && types.iter().any(Type::is_unknown) {
+        // `has_unknown`, not `is_unknown`: a stub under a wrapper (`Optional(Unknown)` — a
+        // forward alias behind a `?`) is just as undecidable, and reading it as settled emitted
+        // *"No matching operator on 'unknown?'"* on pass 1 for a program pass 2 resolves.
+        if self.first_pass && types.iter().any(Type::has_unknown) {
             return Type::Unknown(0);
         }
         // generic-specific error message for operators on T.
@@ -11669,18 +12309,6 @@ impl Parser {
             // `convert`'s generic diagnostic; otherwise fall through and let `convert` peel it.
             // The position anchors to the argument's own span (nstore-position-fix.md) so a TAIL
             // call reports at the call, not the next line.
-            if report
-                && callarg_nstore
-                && self.n_store_violation(
-                    actual_type,
-                    &tp,
-                    &format!("parameter {} of `{callee_name}`", nr + 1),
-                    actual_code.span_pos(),
-                )
-            {
-                actual.push(actual_code);
-                continue;
-            }
             // loft#1287 — a plain heap PARAMETER handed to a `&` parameter the callee
             // REBINDS.  The write-back installs a store the callee minted and displaces the
             // one this binding named, so BOTH ownership questions land here: a plain heap
@@ -11716,7 +12344,22 @@ impl Parser {
             if amp_rebind_arg != u16::MAX {
                 self.ensure_rebind_witness(amp_rebind_arg);
             }
-            if !self.convert(&mut actual_code, actual_type, &tp) {
+            // @FR-N-Store — the parameter is a slot when this binding is REPORTED and the callee
+            // is not null-transparent; an overload TRIAL (`!report`) and a null-transparent
+            // callee (`abs(x)` propagates the null through a runtime guard) only test the fit.
+            let arg_at = actual_code.span_pos().cloned();
+            let accepted = if report && callarg_nstore {
+                self.convert_store(
+                    &mut actual_code,
+                    actual_type,
+                    &tp,
+                    &format!("parameter {} of `{callee_name}`", nr + 1),
+                    arg_at.as_ref(),
+                )
+            } else {
+                self.convert_admitting(&mut actual_code, actual_type, &tp)
+            };
+            if !accepted {
                 if report {
                     let context = format!(
                         "argument {} of call to {}",

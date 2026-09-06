@@ -765,6 +765,7 @@ fn read_function(stores: &Stores, parent: Record, base: u32) -> Function {
             skip_free: vr.field_bool(stores, ds::VAR_SKIP_FREE),
             captured: vr.field_bool(stores, ds::VAR_CAPTURED),
             caller_hidden_buf: vr.field_bool(stores, ds::VAR_CALLER_HIDDEN_BUF),
+            owner_witness: vr.field_int(stores, ds::VAR_OWNER_WITNESS) as u16,
         });
     }
     let names_vec = parent.field_recvec(base + ds::FN_NAMES, ds::NAMENR_STRIDE);

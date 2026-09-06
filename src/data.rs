@@ -1778,6 +1778,9 @@ impl Type {
     /// @PLN25 — the idempotent `τ?` former. `Optional(Optional(τ)) → Optional(τ)`
     /// (N-Idem); `Optional(Never|Null) → Never|Null` (no junk optional over a non-value).
     /// Everything else becomes `Optional(Box::new(inner))`.
+    /// The one home of @FR-N-Opt and @FR-N-Idem: every `τ` admits `?`, and the former is
+    /// idempotent — a `τ??` cannot be built here, and the phase-0 census of @PLN153
+    /// measured that no other route builds one over the corpus.
     pub fn optional(inner: Type) -> Type {
         match inner {
             Type::Optional(_) | Type::Never | Type::Null => inner,
@@ -2171,6 +2174,10 @@ impl Type {
     }
 
     /// The definition number for struct-like heap types (Reference or struct-enum).
+    ///
+    /// The one home for *"is this a heap RECORD?"* — the shape a plain whole-value bind
+    /// copies (`@FR-B-Copy`), on both backends.  A site that spells `Type::Reference` bare
+    /// instead answers "no" for a struct-enum and lets its bind alias.
     #[must_use]
     pub fn heap_def_nr(&self) -> Option<u32> {
         match self {
@@ -2185,6 +2192,24 @@ impl Type {
             return tp.is_unknown();
         }
         matches!(self, Type::Unknown(_)) || matches!(self, Type::Reference(0, _))
+    }
+
+    /// Does an unresolved stub sit ANYWHERE in this type — under an `Optional`, a `RefVar`, a
+    /// tuple member, a function's parameter?  [`Self::is_unknown`] answers only for the top and
+    /// for a vector's element, which is the right question at a settledness guard (a wrapper
+    /// over a stub is a type that has been WRITTEN, and must not be overwritten by a guess);
+    /// this is the right question wherever a stub anywhere means "not yet decidable" — the
+    /// pass-1 operator deferral, which used to read `Optional(Unknown)` as settled, resolve the
+    /// operator against `unknown?`, and report *"No matching operator"* for a forward-declared
+    /// alias that pass 2 would have resolved (@PLN153 phase 0).  Walks the keystone, so a new
+    /// `Type` variant is covered here by construction.
+    pub fn has_unknown(&self) -> bool {
+        if self.is_unknown() {
+            return true;
+        }
+        let mut found = false;
+        self.for_each_child(&mut |c| found |= c.has_unknown());
+        found
     }
 
     /// The same type with every dep list emptied — an OWNED reading of the shape.
@@ -3164,6 +3189,35 @@ mod dep_faces_agree {
                 "{name}: the CLEAR face did not remove what it reached"
             );
         }
+    }
+
+    /// The two questions are different and both are needed: `is_unknown` is the
+    /// settledness test (a wrapper over a stub is a WRITTEN type), `has_unknown` the
+    /// decidability test (a stub anywhere means "not yet").  Reading `Optional(Unknown)`
+    /// with the first where the second was meant is what refused a forward alias behind a
+    /// `?` on pass 1 (@PLN153 phase 0).
+    #[test]
+    fn a_stub_under_a_wrapper_is_settled_but_not_decidable() {
+        let stub = Type::Unknown(7);
+        assert!(stub.is_unknown() && stub.has_unknown());
+        let wrapped = Type::optional(stub.clone());
+        assert!(!wrapped.is_unknown(), "a written wrapper is settled");
+        assert!(
+            wrapped.has_unknown(),
+            "…but a stub under it is not decidable"
+        );
+        let deep = Type::Tuple(vec![
+            Type::Boolean,
+            Type::Vector(Box::new(wrapped), Deps::none()),
+        ]);
+        assert!(
+            deep.has_unknown(),
+            "found at any depth through the keystone"
+        );
+        assert!(
+            !Type::optional(Type::Boolean).has_unknown(),
+            "and absent when there is none"
+        );
     }
 
     #[test]
@@ -6289,6 +6343,8 @@ impl Data {
     /// Returns `Err(reason)` — a message naming the culprit field/type — when `tp`
     /// has no well-defined default (a bare reference, or a record with a non-null
     /// field whose type has none).
+    /// The side condition of @FR-N-Default: `e?` discharges `τ?` with the type's OWN default,
+    /// and only a type that has one may be discharged that way.
     pub fn has_default(&self, tp: &Type) -> std::result::Result<(), String> {
         match tp {
             Type::Integer(_)
@@ -7884,6 +7940,14 @@ impl Data {
     /// wrappers over a base type and peel. A `Function` does NOT forward: a closure record
     /// is owned by the fn-ref slot's own cascade, not by the type that names it, and
     /// following it would make every fn-ref-holding struct answer for its captures.
+    /// Does a value of this TYPE own a droppable somewhere inside it — a struct through
+    /// its fields, a vector through its elements, at any depth?  The type-level twin of
+    /// [`Self::owns_droppable`], for a container that has no def of its own (a `vector<S>`).
+    #[must_use]
+    pub fn type_owns_droppable_anywhere(&self, t: &Type) -> bool {
+        self.type_owns_droppable(t, &mut HashSet::new())
+    }
+
     fn type_owns_droppable(&self, t: &Type, path: &mut HashSet<u32>) -> bool {
         match t {
             Type::Reference(d, _)
@@ -8623,8 +8687,12 @@ impl Data {
             // `Optional(Unknown(stub))` in place after every other spelling resolved, so a
             // `Roofs?` field failed with the internal type name (`optional(unknown(700))`)
             // where a plain `Roofs` field succeeded (loft#797).
-            Type::Optional(inner) => Self::rewrite_type_opt(inner, stub, target)
-                .map(|new_inner| Type::Optional(Box::new(new_inner))),
+            // Through the idempotent former: the target a stub resolves to can itself be
+            // nullable (`type Maybe = integer?` behind a `Maybe?` field), and a bare re-wrap built
+            // `integer??`, which `@FR-N-Idem` says cannot exist (@PLN153 phase 0).
+            Type::Optional(inner) => {
+                Self::rewrite_type_opt(inner, stub, target).map(Type::optional)
+            }
             Type::Iterator(step, internal) => {
                 let new_step = Self::rewrite_type_opt(step, stub, target);
                 let new_internal = Self::rewrite_type_opt(internal, stub, target);
@@ -8986,6 +9054,21 @@ impl Data {
             Type::Function(_, _, _) => self.def_nr("i32"),
             _ => u32::MAX,
         }
+    }
+
+    /// May a record of def `src` be COPIED into a binding declared as def `dst`?
+    ///
+    /// The same def, or a VARIANT into its own enum: `types.md (C-Var)` licenses
+    /// `Reference(S) ⤳ Enum(E)` for `S ∈ variants(E)`, so `c: E = s` with `s: S` is a
+    /// legal bind, and `@FR-B-Copy` says it is a copy like any other.  One home for the
+    /// three sites that decide the copy — the parser's dep-strip and the interpreter's
+    /// first-bind and rebind arms — so they cannot disagree about which pairs copy; the
+    /// native emitter asks only that both sides be records (`Type::heap_def_nr`), and
+    /// this is the widest pair the checker lets reach it.
+    #[must_use]
+    pub fn copies_as(&self, dst: u32, src: u32) -> bool {
+        dst == src
+            || (matches!(self.def_type(src), DefType::EnumValue) && self.def(src).parent == dst)
     }
 
     #[must_use]

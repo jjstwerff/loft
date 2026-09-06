@@ -109,63 +109,31 @@ impl Parser {
             t = *tp;
         }
         // @PLN25 E2 — a METHOD CALL or an S-level field access on a `__nullable<S>`
-        // receiver (`v[i].method()` / `v[i].struct_method`): unwrap the receiver to
-        // dense `S` (the payload offset-ref, gap 2) so the normal `Reference(S)`
-        // field/method dispatch below resolves it.  Two cases:
+        // receiver (`v[i].method()` / `v[i].struct_method`).  Two cases reach here:
         //  - a trailing `(` is a method call — `find_poly_enum_field` matches the
         //    method's fn-ref entry copied into `Some` and would read it as a FIELD
-        //    (→ "Field access not supported on type fn …"); unwrap takes precedence;
-        //  - no `Some`-variant field of that name — an S-level access; unwrap.
+        //    (→ "Field access not supported on type fn …");
+        //  - no `Some`-variant field of that name — an S-level access.
         // A plain DATA field of `Some` (no `(`) resolves via `find_poly_enum_field`
         // below and is left untouched here.
+        //
+        // `@FR-L-Null-Which` — the receiver is read THROUGH ITS TAG (`read_through_tag`):
+        // the base of a field read or a method call is not a slot, so the tagged value
+        // becomes the pointer `S?` here — the payload's address when the discriminant says
+        // present, `nullref` when it says absent — and the field/method dispatch below
+        // proceeds on that pointer exactly as it does for a `S?` local.  Projecting the
+        // payload's sub-ref without consulting the discriminant read an ABSENT element as
+        // a record of zeroes: `v[i].n ?? -1` answered `0` where `x = v[i]; x.n ?? -1`
+        // beside it answered `-1`, on both backends.
         if let Type::Enum(enum_d, true, _) = &t
             && self.data.def(*enum_d).name.starts_with("__nullable<")
             && (self.lexer.peek_token("(") || self.find_poly_enum_field(*enum_d, &field).is_none())
         {
-            let enum_d = *enum_d;
-            // Resolve the dense `S` def from the `Some` variant's inline `payload` field
-            // TYPE — NOT by re-parsing the enum name via `def_nr("S")`, which returns
-            // `u16::MAX` for a CROSS-LIB struct (its def is source-qualified), the
-            // `Unknown field __nullable<S>.field` regression for a library struct.
-            let some_d = self.data.variant_of(enum_d, "Some");
-            let payload_attr = self.data.attr(some_d, "payload");
-            let struct_d = if payload_attr == usize::MAX {
-                u32::MAX
-            } else {
-                match self.data.attr_type(some_d, payload_attr) {
-                    Type::Reference(d, _) => d,
-                    _ => u32::MAX,
-                }
-            };
-            if struct_d != u32::MAX && self.data.attributes(struct_d) > 0 {
-                if !self.first_pass {
-                    // Single-payload form: the dense `S` lives in the `Some` variant's
-                    // inline `payload` field, so unwrap to a sub-ref at `payload`'s byte
-                    // offset.  That sub-ref IS a valid dense `S` (it shares S's offset
-                    // table), so the field/method access below re-dispatches on dense `S`
-                    // with no copy.
-                    let off = self
-                        .database
-                        .position(self.data.def(some_d).known_type(), "payload");
-                    *code = self.get_val(
-                        &Type::Reference(struct_d, crate::data::Deps::none()),
-                        false,
-                        u32::from(off),
-                        code.clone(),
-                        u32::MAX,
-                    );
-                }
-                let dep = t.depend();
-                let mut new_t = Type::Reference(struct_d, crate::data::Deps::none());
-                for on in dep {
-                    new_t = new_t.depending(on);
-                }
-                t = new_t;
-            }
+            self.read_through_tag(code, &mut t);
         }
         let dnr = self.data.type_def_nr(&t);
-        if matches!(t, Type::Vector(_, _)) && self.vector_operations(code, &field, e_tp) {
-            return Type::Void;
+        if matches!(t, Type::Vector(_, _)) && self.vector_operations(code, &field, e_tp, &t) {
+            return Type::Boolean;
         }
         let fnr = self.data.attr(dnr, &field);
         // @PLN86 P6.4 (F4) — record a sandboxed READ of a host field that carries a
@@ -381,9 +349,16 @@ impl Parser {
             }
             if self.first_pass && self.lexer.has_token("(") {
                 self.skip_remaining_args();
-            } else if let Type::Enum(enum_d_nr, true, _) = &t
+            } else if let Type::Enum(enum_d_nr, true, _) = t.base()
                 && let Some((found_d_nr, found_fnr)) = self.find_poly_enum_field(*enum_d_nr, &field)
             {
+                // Through `base()`: `Sh?` is `Optional(Enum(Sh, true))`, the same record behind
+                // a nullability marker (`@FR-L-Null`), and `type_elm` above already peels it
+                // for the struct path.  Asked bare, `e.n` on an `e: Sh?` fell through — pass 1
+                // returned the receiver's own type, so a WRITE re-typed `e` ("cannot change
+                // type from Sh? to integer") and a READ reported "Unknown field Sh.n" — while
+                // `s.v` on an `s: S?` resolved.  The receiver's nullability reaches the read
+                // the way it does for a struct: `receiver_nullable` clears `expr_not_null`.
                 // For polymorphic enums (incl. @PLN25 `__nullable<S>`), this field
                 // lives in a VARIANT struct, not the enum itself.  Resolve in BOTH
                 // passes: the first pass needs the field TYPE so the receiver var
@@ -952,7 +927,16 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
         None
     }
 
-    pub(crate) fn vector_operations(&mut self, code: &mut Value, field: &str, e_tp: i32) -> bool {
+    /// `v.remove(i)` — answers whether `i` named an element.  On the vector member of a
+    /// linked group the element leaves every keyed sibling first (`group_elem_write`), so the
+    /// removal means the same thing whichever member it is spelled through.
+    pub(crate) fn vector_operations(
+        &mut self,
+        code: &mut Value,
+        field: &str,
+        e_tp: i32,
+        vec_tp: &Type,
+    ) -> bool {
         if field == "remove" {
             self.lexer.token("(");
             let (tps, ls) = self.parse_parameters();
@@ -961,7 +945,27 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
             if tps.len() != 1 || !self.convert(&mut cd, &tps[0], &I32) {
                 diagnostic!(self.lexer, Level::Error, "Invalid index in remove");
             }
-            *code = self.cl("OpRemoveVector", &[code.clone(), Value::Int(e_tp), cd]);
+            let elem = self.cl("OpVectorRef", &[code.clone(), cd.clone()]);
+            // Typed as the element PLACE resolves — deps included — so the temporary that
+            // binds it is a borrow of the vector on both backends; without the deps the
+            // native emitter reads the bind as owning and deep-copies the record, and the
+            // unlinks then run on the copy (@FR-B-Copy, @FR-O-NoDiverge).
+            let mut elem_tp = self.index_type(vec_tp);
+            for on in vec_tp.depend() {
+                elem_tp = elem_tp.depending(on);
+            }
+            let coll = code.clone();
+            if let Some(ops) = self.group_elem_write(&elem, &elem_tp, false, |p, _, place| {
+                let idx = match place.unspan() {
+                    Value::Call(_, a) => a.last().cloned().unwrap_or(Value::Null),
+                    _ => Value::Null,
+                };
+                p.cl("OpRemoveVector", &[coll.clone(), Value::Int(e_tp), idx])
+            }) {
+                *code = v_block(ops, Type::Boolean, "group_elem_remove");
+            } else {
+                *code = self.cl("OpRemoveVector", &[code.clone(), Value::Int(e_tp), cd]);
+            }
             true
         } else {
             false
@@ -1020,7 +1024,17 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
             // `Optional` so `(N-Store)` forces a `?? d` / `τ?` slot / guard at the store site.
             // The F1a landing (deps Optional-transparency + the corpus/lib migrations) cleared the
             // blast radius, so this is now folded into the DN1 default (was DEV-GATED `LOFT_INDEX_DEV`).
-            if crate::keys::pln25_dn1_enabled() && !self.last_index_fit {
+            // A tagged `__nullable<S>` element is ALREADY the slot's spelling of `S?`
+            // (`@FR-L-Null-Tag`), and its absence is read through the tag when the value
+            // leaves the slot; wrapping it here built `Optional(__nullable<S>)` — the `τ??`
+            // `@FR-N-Idem` forbids, which `Type::optional` cannot see because the synthetic
+            // is an `Enum` to it — and a `vector<S?>` read by a variable index then typed
+            // its local `S?` on one pass and `__nullable<S>?` on the other and refused the
+            // program as a type change.
+            if crate::keys::pln25_dn1_enabled()
+                && !self.last_index_fit
+                && self.tagged_pointer_type(&elm_type).is_none()
+            {
                 elm_type = Type::optional(elm_type);
             }
         } else if matches!(t, Type::Text(_)) {
@@ -1643,7 +1657,11 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
                 concept_ref: "@F6",
             });
         }
-        if !self.first_pass && !self.convert(&mut p, &index_t, &I32) {
+        // @FR-N-Store — an index is a slot: `v[i]` with `i: integer?` reads null on a null
+        // index, and nothing said so (the eighth hole of @PLN153 phase 3's census).
+        if !self.first_pass
+            && !self.convert_store_lenient(&mut p, &index_t, &I32, "the index", None)
+        {
             diagnostic!(
                 self.lexer,
                 Level::Error,
@@ -2041,7 +2059,8 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
         // for two releases.  Pass 2 sees the real type and still refuses a genuinely
         // non-integer index, which is the case this message is for.
         let deferred = self.first_pass && index_t.is_unknown();
-        if !self.convert(p, index_t, &I32) && !deferred {
+        // @FR-N-Store — the index is a slot (see the vector index above).
+        if !self.convert_store_lenient(p, index_t, &I32, "the index", None) && !deferred {
             // Name the offending type: the bare "invalid index" this used to
             // print reads as "indexing text is unsupported" and sent a consumer
             // hunting for a missing feature instead of at their index expression.
@@ -2087,7 +2106,9 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
                 // unresolved, which is why guarding only the start left the shape still
                 // refused — with a different message, from four lines down.
                 let end_deferred = self.first_pass && ot_type.is_unknown();
-                if !self.convert(&mut other, &ot_type, &I32) && !end_deferred {
+                if !self.convert_store_lenient(&mut other, &ot_type, &I32, "the index", None)
+                    && !end_deferred
+                {
                     diagnostic!(
                         self.lexer,
                         Level::Error,
@@ -2511,7 +2532,10 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
             Type::Null // from=[] → no lower bound
         } else {
             let t = self.expression(&mut p);
-            if !self.convert(&mut p, &t, &key_types[0]) && !self.first_pass {
+            // @FR-N-Store — a lookup KEY is a slot like an index: a null key reads null.
+            if !self.convert_store_lenient(&mut p, &t, &key_types[0], "the key", None)
+                && !self.first_pass
+            {
                 // A tuple key is the one place the arity is worth naming: `h[(1, 2, 3)]` on
                 // a `(integer, integer)` key is a plain miscount, and "Invalid index key"
                 // leaves the reader comparing the two spellings by eye.
@@ -2551,7 +2575,9 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
                 }
                 let mut ex = Value::Null;
                 let ex_t = self.expression(&mut ex);
-                if !self.convert(&mut ex, &ex_t, &key_types[nr]) && !self.first_pass {
+                if !self.convert_store_lenient(&mut ex, &ex_t, &key_types[nr], "the key", None)
+                    && !self.first_pass
+                {
                     diagnostic!(self.lexer, Level::Error, "Invalid index key");
                 }
                 key.push(ex);
@@ -2626,7 +2652,9 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
             if !open_end {
                 let mut n = Value::Null;
                 let n_t = self.expression(&mut n);
-                if !self.convert(&mut n, &n_t, &key_types[0]) && !self.first_pass {
+                if !self.convert_store_lenient(&mut n, &n_t, &key_types[0], "the key", None)
+                    && !self.first_pass
+                {
                     diagnostic!(self.lexer, Level::Error, "Invalid index key");
                 }
                 key.push(n);
@@ -2640,7 +2668,9 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
                     }
                     let mut ex = Value::Null;
                     let ex_t = self.expression(&mut ex);
-                    if !self.convert(&mut ex, &ex_t, &key_types[nr]) && !self.first_pass {
+                    if !self.convert_store_lenient(&mut ex, &ex_t, &key_types[nr], "the key", None)
+                        && !self.first_pass
+                    {
                         diagnostic!(self.lexer, Level::Error, "Invalid index key");
                     }
                     key.push(ex);

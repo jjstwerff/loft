@@ -108,6 +108,10 @@ HITS_VALIDATOR_WARN=0
 red()    { [ $QUIET -eq 0 ] && printf '\033[31m%s\033[0m\n' "$*"; }
 yellow() { [ $QUIET -eq 0 ] && printf '\033[33m%s\033[0m\n' "$*"; }
 green()  { [ $QUIET -eq 0 ] && printf '\033[32m%s\033[0m\n' "$*"; }
+# Is `$1` a git checkout?  Asked of git, not the filesystem: a linked worktree's `.git` is a
+# FILE, so a `-d "$1/.git"` test reads a worktree as "not a checkout" and every step that
+# archives a ref falls back to something else in silence.
+is_checkout() { git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1; }
 say()    { [ $QUIET -eq 0 ] && echo "$@"; }
 
 # ---- Check 1: broken markdown links to plans ----
@@ -789,7 +793,7 @@ check_examples() {
     key=$(printf '%s@%s' "$root" "$br" | tr '/.@' '___'); cf="$cache/$key"
     if [ ! -f "$cf" ]; then
       ref=""
-      if [ -n "$br" ] && [ -d "$root/.git" ]; then
+      if [ -n "$br" ] && is_checkout "$root"; then
         for cand in "origin/$br" "$br"; do
           if git -C "$root" rev-parse --verify -q "$cand^{commit}" >/dev/null 2>&1; then
             ref="$cand"; break
@@ -804,7 +808,8 @@ check_examples() {
           examples_defs_in_tree "$root" > "$cf" 2>/dev/null
         fi
       else
-        [ -n "$br" ] && yellow "  note: $root has no ref '$br' — indexing its working tree instead"
+        # To stderr: stdout of this function IS the cache path its caller reads.
+        [ -n "$br" ] && yellow "  note: $root has no ref '$br' — indexing its working tree instead" >&2
         examples_defs_in_tree "$root" > "$cf" 2>/dev/null
       fi
     fi
@@ -901,7 +906,7 @@ check_examples() {
       # gate on it blocks this repo on another repo's merge schedule.  A tag carried
       # nowhere is a genuine dangling citation and stays an error.
       pending=""
-      if [ -d "$lpath/.git" ]; then
+      if is_checkout "$lpath"; then
         pending=$(git -C "$lpath" grep -l -- "$t" \
                     $(git -C "$lpath" for-each-ref --format='%(refname)' \
                         refs/heads refs/remotes 2>/dev/null) 2>/dev/null \

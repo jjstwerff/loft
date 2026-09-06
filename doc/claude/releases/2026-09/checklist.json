@@ -27,6 +27,10 @@
     "at": "2026-09-04 22:22",
     "note": "Owner, 2026-09-04: 'acceptable to me when it is documented well enough' \u2014 validated on e77ef442+: 33 #[ignore]s, each in tests/ignored_tests.baseline with a reason naming the run it rides (17 measurements by hand, 13 sweeps nightly or by hand, 2 Windows cfg_attr, 1 maintenance), held by doc_hygiene::{ignored_tests_baseline_is_current, every_ignore_reason_says_how_it_runs}; every suite skip list EMPTY; the four html_wasm platform limits (server, hex_world, imaging, input) each state the missing host facility, which gates still run the package, and what removes it; TESTING.md \u00a7 Every skip says why, how it runs instead, and when it ends is the rule; the record's M-ignores paragraph carries the same"
   },
+  "M-install-live": {
+    "at": "2026-09-05 08:16",
+    "note": "Shipped linux binary, fresh LOFT_HOME, live index after the splice: 'loft install regex' resolved regex 0.3.0 (source build on first use \u2014 no prebuilt for this target), exit 0"
+  },
   "M-install-sh": {
     "at": "2026-09-05 02:32",
     "note": "Ran on this box over a local http.server serving the draft's zips (LOFT_INSTALL_BASE) into a scratch --prefix. FOUND A DEFECT: the script copied bin/ and default/ only, then handed verify-self the manifest of the whole bundle, which counts a missing file as a failure \u2014 'files: 14 missing', 'the installation does not verify', exit 1 \u2014 and the public 2026.8.0 bundle fails the same way, so it shipped broken last month. FIXED in scripts/install.sh (installs the whole bundle, the unit self-update installs): 2026.9.0 draft -> 'files: 22 file(s) match', exit 0; 2026.8.0 public -> 'files: 21 file(s) match', origin matches the signed index. New end-to-end test tests/self_update_swap.rs::install_sh_installs_the_whole_bundle_and_it_verifies (file:// base, Linux x86_64) \u2014 passes on the fix, fails on HEAD's script. The fix is uncommitted on this tree pending a branch"
@@ -55,13 +59,29 @@
     "at": "2026-09-05 02:25",
     "note": "The site is served from main:/docs (a symlink to doc/) and rebuilt on every push to main \u2014 the tag commit b1016d00 built at 23:56Z and the pages show 2026.9.0. Headless Chromium (--dump-dom, 20s budget) loaded gallery.html (no console lines) and brick-buster.html (canvas mounted, inlined wasm, one INFO console line: Chromium's software-WebGL notice). The release job's own Pages leg is dead weight: it pushes doc/ to gh-pages (unserved since April) and has failed at make game \u2014 no binaryen \u2014 on every release since 2026.7.1"
   },
+  "M-publish": {
+    "at": "2026-09-05 08:12",
+    "note": "Published 2026-09-05T06:11Z on the owner's word (gh release edit v2026.9.0 --draft=false): draft=false, 11 assets, the public asset URL answers HTTP 200"
+  },
+  "M-registry-splice": {
+    "at": "2026-09-05 08:16",
+    "note": "gen-toolchain-entry.py --splice-into from the PUBLISHED zips (re-downloaded; sidecars match; bytes identical to the draft copies); entry byte-identical to the CI-attached loft-2026.9.0-registry-entry.json once --published was given (the script's default is a Jan-1 placeholder, not the tag's date \u2014 fix pending); registry-sign.sh --expect loft@2026.9.0: scope exactly that, src zip re-downloaded and sha256 MATCH, trust gate OK, committed + pushed 08d696b to loft-lang/registry"
+  },
   "M-rosetta": {
     "at": "2026-09-05 02:35",
     "note": "Not needed: A-smoke reports the bundle smoke ran (no skip) on all four legs of run 33931351450, the x86_64-apple-darwin bundle included"
   },
+  "M-self-update-win": {
+    "at": "2026-09-05 08:20",
+    "note": "windows-probe.yml run 33949420218 (workflow_dispatch, run input): unzipped the PUBLIC 2026.8.0 windows-msvc bundle, verify-self ok (21 files), then 'loft self-update' from that binary: '2026.9.0 is available', 'downloaded and matches the signed registry index', staged 22 files + stdlib set ok, 'replaced 23 file(s)'; afterwards --version = loft 2026.9.0, verify-self 'matches the release published in the signed registry index', examples/fibonacci.loft runs; probe exit 0"
+  },
   "M-valgrind": {
     "at": "2026-09-04 22:10",
     "note": "TAG CANDIDATE e77ef442: scripts/valgrind-sweep.sh 1195 runs (1159 interpreter, 36 native): 0 invalid accesses, 0 definitely lost, 0 timed out \u2014 GREEN on both backends (logs target/vg-2026-09-candidate/). First cycle this row carries a tick; the morning's 11 red files were #1357, fixed by the sibling checkout (3ece3109)"
+  },
+  "M-verify-anchored": {
+    "at": "2026-09-05 08:16",
+    "note": "Shipped linux binary after self-update --dry-run --refresh: 'origin: matches the signed registry index' / 'matches the release published in the signed registry index', exit 0"
   },
   "M-wasm": {
     "at": "2026-09-04 22:11",

@@ -138,7 +138,10 @@ or take the tuple by value and return a new one. The refusal message says both.
 
 ## Deviations
 
-**OPEN: 0.**
+**OPEN: 0** — D-tup-9 closed 2026-09-05: a tuple literal member typed by a generic's type
+variable is copied for every binding — a record or a scalar by @PLN153 phase 1, a vector or a
+keyed collection by the @FR-F-Ret walk's boxed monomorph return (loft#1365).  The non-generic
+shape is D-tup-8, closed.
 
 The full register — every entry, open and closed, with its dates and issue numbers — is
 the companion [tuples-history.md](tuples-history.md).

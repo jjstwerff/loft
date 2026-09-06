@@ -38,6 +38,17 @@ fn compile(tag: &str, src: &str, domain_on: bool) -> (bool, String) {
     (out.status.success(), combined)
 }
 
+// The channel every cell below reads.  A `float?` argument stored into a DECLARED `x: float`
+// is `(N-Store)`'s WARNING at full width — the program compiles and runs, and the report names
+// the local (@PLN153 phase 3b; it used to be a hard error, and `ok` alone measured it).  So a
+// "stays `float?`" cell asserts the report on its local, and a "softens" cell asserts its
+// ABSENCE — without the second half every softening cell reads green vacuously now.
+const REPORT: &str = " is stored into the local `";
+
+fn reported(diag: &str, v: &str) -> bool {
+    diag.contains(&format!("a nullable `float?`{REPORT}{v}`"))
+}
+
 // Provably in-domain EXPRESSION arguments: square, sum-of-squares, max-with-positive, abs,
 // pow-of-nonneg-base, ln-of-positive.  Forced (float?) by default, softened under the flag.
 const PROVABLE: &str = "\
@@ -69,9 +80,16 @@ fn math_domain_opt_out_keeps_expression_args_forced() {
     // forced back to `float?` (the escape hatch behaves).
     let (ok, diag) = compile("optout", PROVABLE, false);
     assert!(
-        !ok,
-        "under LOFT_NO_MATH_DOMAIN a non-constant fault-op arg must stay float? (forced); diag={diag}"
+        ok,
+        "the reported store proceeds and the program runs; diag={diag}"
     );
+    for v in ["p1", "p2", "p3", "p4", "p5"] {
+        assert!(
+            reported(&diag, v),
+            "under LOFT_NO_MATH_DOMAIN a non-constant fault-op arg must stay float? (forced) — \
+             {v} must be reported; diag={diag}"
+        );
+    }
 }
 
 #[test]
@@ -79,8 +97,8 @@ fn math_domain_softens_provable_args_by_default() {
     // Default (B5 flipped default-on): a provably in-domain arg types non-null, no ?? forced.
     let (ok, diag) = compile("provable", PROVABLE, true);
     assert!(
-        ok,
-        "a provably in-domain arg must type non-null by default (no ?? forced); diag={diag}"
+        ok && !diag.contains(REPORT),
+        "a provably in-domain arg must type non-null by default (no ?? forced, nothing reported); diag={diag}"
     );
 }
 
@@ -88,13 +106,14 @@ fn math_domain_softens_provable_args_by_default() {
 fn math_domain_keeps_unprovable_args_nullable() {
     let (ok, diag) = compile("unprovable", UNPROVABLE, true);
     assert!(
-        !ok,
-        "unprovable args must stay float? even under LOFT_MATH_DOMAIN (soundness); got success"
+        ok,
+        "the reported stores proceed and the program runs; diag={diag}"
     );
     for v in ["n1", "n2", "n3", "n4"] {
         assert!(
-            diag.contains(&format!("Variable '{v}'")),
-            "control {v} must remain forced float?; diag={diag}"
+            reported(&diag, v),
+            "unprovable args must stay float? even under LOFT_MATH_DOMAIN (soundness): control \
+             {v} must be reported; diag={diag}"
         );
     }
 }
@@ -125,18 +144,19 @@ fn main() { }
 fn math_domain_two_sided_asin_acos() {
     let (ok, diag) = compile("asin_pos", TWO_SIDED, true);
     assert!(
-        ok,
-        "provably-in-[-1,1] asin/acos args must soften; diag={diag}"
+        ok && !diag.contains(REPORT),
+        "provably-in-[-1,1] asin/acos args must soften (nothing reported); diag={diag}"
     );
     let (ok2, diag2) = compile("asin_ctrl", TWO_SIDED_CTRL, true);
     assert!(
-        !ok2,
-        "an unbounded / one-sided asin/acos arg must stay float?; got success"
+        ok2,
+        "the reported stores proceed and the program runs; diag={diag2}"
     );
     for v in ["m1", "m2", "m3"] {
         assert!(
-            diag2.contains(&format!("Variable '{v}'")),
-            "asin/acos control {v} must stay forced; diag={diag2}"
+            reported(&diag2, v),
+            "an unbounded / one-sided asin/acos arg must stay float?: control {v} must be \
+             reported; diag={diag2}"
         );
     }
 }
@@ -157,14 +177,17 @@ fn main() { }
 fn math_domain_folds_call_valued_pi_e_consts() {
     let (ok, diag) = compile("pi", PI_CONST, true);
     assert!(
-        ok,
-        "PI/E as a divisor or fault-op arg must const-fold to non-null; diag={diag}"
+        ok && !diag.contains(REPORT),
+        "PI/E as a divisor or fault-op arg must const-fold to non-null (nothing reported); diag={diag}"
     );
-    // control: a genuine variable divisor stays float?
-    let (ok2, _) = compile(
+    // control: a genuine variable divisor stays float? — reported on the local it lands in
+    let (ok2, diag2) = compile(
         "pivar",
         "fn f(x: float, d: float) { z: float = x / d; }\nfn main() { }\n",
         true,
     );
-    assert!(!ok2, "a variable divisor must stay float?");
+    assert!(
+        ok2 && reported(&diag2, "z"),
+        "a variable divisor must stay float? and be reported at `z`; diag={diag2}"
+    );
 }

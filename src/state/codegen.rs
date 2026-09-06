@@ -1867,6 +1867,35 @@ impl State {
         }
     }
 
+    /// The null-init of a NULLABLE vector local (`vector<T>?`): the slot takes the null
+    /// sentinel — ABSENT — never the empty store its dense twin allocates.  What reaches
+    /// here is the pre-init a branch or a loop emits for a local first assigned inside it
+    /// (`scopes::needs_pre_init`): on the path that never assigns, `x != null` must answer
+    /// false, and the assignment that does run installs its own value over the sentinel.
+    /// Routed by `Type`, not by the dense arm's peel: that arm allocates a store and, for a
+    /// borrowed vector, a stack placeholder into the DEP's slot — with `x` itself left
+    /// unwritten, the read on the untaken path was a poisoned frame word (`DbRef store_nr
+    /// 48879 is out of range`).
+    ///
+    /// A KEYED nullable local is NOT routed here: its assignment is `OpReplaceKeyed` INTO
+    /// the local's own store, so the null-init has to allocate that store (`gen_keyed_null`,
+    /// the same answer `--native` gives), and on the untaken path the local reads as present
+    /// and empty on both backends — what absence means for a keyed local is the null model's
+    /// question (@PLN153), not this lowering's.
+    pub(super) fn gen_set_first_nullable_collection_null(&mut self, stack: &mut Stack, v: u16) {
+        let ref_size = size_of::<crate::keys::DbRef>() as u16;
+        let slot_end = stack.function.stack(v).saturating_add(ref_size);
+        if stack.position < slot_end {
+            let bump = stack.step(slot_end) - stack.position;
+            stack.add_op("OpReserveFrame", self);
+            self.code_add(bump);
+            stack.position += bump;
+        }
+        let slot_offset = stack.var_pos(v);
+        stack.add_op("OpInitRefSentinel", self);
+        self.code_add(slot_offset);
+    }
+
     /// P188: first-assignment init for a keyed-collection local
     /// (`sorted<T[key]>`, `hash<T[key]>`, `index<T[key]>`,
     /// `spatial<T[key]>`).  Allocates a fresh store and claims a
@@ -2246,42 +2275,17 @@ impl State {
             // `OWNS` for a local a lambda has CAPTURED, and freeing there is a use-after-free
             // against the closure's capture-time DbRef.  The licence has to come from a
             // per-run witness.
-            // D-own-16 residual — a nullable heap local BOUND FROM A PARAMETER.  Its dep list
-            // names that parameter for the whole frame, so the local reads as a permanent
-            // borrow and every store a later minting call hands it leaks.  @FR-O-Latest is a
-            // per-RUN fact, and the dep list is flow-INsensitive; but the dep NAMES the
-            // variable the local might still be aliasing, so the question is decidable at
-            // runtime by store IDENTITY, with no witness slot.
-            //
-            // The displaced free this licenses is the GUARDED one (`nullable_local` routes it
-            // there), and its two side conditions are exactly what makes this safe on the
-            // FIRST round, where the displaced store is still the caller's: `free_displaced`
-            // declines a free-protected store — @FR-H-Free's other side condition — so the
-            // caller's argument is never released here.  Measured: `LOFT_POISON=1` answers
-            // identically to `LOFT_POISON=0`, which is what says no use-after-free survives.
-            let borrows_one_argument = {
-                let d = stack.function.tp(v).depend().clone();
-                d.len() == 1
-                    && d[0] != v
-                    && matches!(stack.function.tp(v), Type::Optional(_))
-                    && stack.function.is_argument(d[0])
-                    && !stack.function.is_argument(v)
-            };
-            // @FR-O-Proxy asks free — the pre-Set free of the store `v` is displacing.
-            let owned_ref = (matches!(
-                stack.function.tp(v).base(),
-                Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
-            ) || crate::parser::vectors::is_keyed(stack.function.tp(v).base()))
-                && (stack.function.tp(v).depend().is_empty() || borrows_one_argument)
-                && !stack.function.is_skip_free(v)
-                && !stack.function.is_captured(v)
-                // A DETACH displaces a store without claiming to have owned it, so the
-                // pre-Set free below has nothing licensing it.  The native twin
-                // (`generation::dispatch`'s `owned_ref_reassign`) reads the same predicate —
-                // this side has no rhs-shape gate of its own, so without it the two backends
-                // would disagree about one shape (loft#1331, @FR-O-NoDiverge).
-                && !crate::data::is_null_sentinel_detach(v, value, stack.data, &stack.function)
-                && !is_hidden_buf_arg;
+            // @FR-O-Proxy asks free — the pre-Set free of the store `v` is displacing.  The
+            // fact-reading half is `Function::owns_displaced_store`, the ONE spelling both
+            // backends read (@FR-O-NoDiverge; its native twin is `generation/dispatch.rs`'s
+            // `owned_ref_reassign`).  What this side adds is the interpreter's own: the hidden
+            // buffer ARGUMENT is excluded, because the caller owns that store.  The one-argument
+            // borrow the predicate admits (`d: S? = p`, D-own-16's residual) licenses only the
+            // GUARDED free — `nullable_local` below routes it there — and `free_displaced`
+            // declines a free-protected store, so the caller's argument is never released here;
+            // measured: `LOFT_POISON=1` answers identically to `LOFT_POISON=0`.
+            let owned_ref =
+                stack.function.owns_displaced_store(v, value, stack.data) && !is_hidden_buf_arg;
             // An `OpNewRecord` RHS returns an INTERIOR ref into an existing
             // container's backing store (a vector element / nested field), so
             // the new value can land in the SAME store as v's old value —
@@ -2686,11 +2690,15 @@ impl State {
                 // `OpBindOrCopy` with itself as witness, exactly as the first bind does: a
                 // present source is copied into a fresh store, an absent one leaves the
                 // destination null rather than holding a record that reads PRESENT.
-                if let Type::Reference(d_nr, _) = stack.function.tp(v).base().clone()
+                // Through `heap_def_nr()` on BOTH sides too: a struct-enum is the same heap
+                // record shape as a struct (`Type::heap_def_nr` is the one home for that
+                // question), and the bare `Reference` spelling left its rebind on the same
+                // alias its first bind took.
+                if let Some(d_nr) = stack.function.tp(v).base().heap_def_nr()
                     && let Value::Var(src) = value.unspan()
                     && *src != v
-                    && let Type::Reference(src_d, _) = stack.function.tp(*src).base()
-                    && d_nr == *src_d
+                    && let Some(src_d) = stack.function.tp(*src).base().heap_def_nr()
+                    && stack.data.copies_as(d_nr, src_d)
                 {
                     let tp_nr = stack.data.def(d_nr).known_type();
                     let ref_size = size_of::<crate::keys::DbRef>() as u16;
@@ -2906,13 +2914,17 @@ impl State {
             // The first assignment of a Reference variable being copied from another:
             // allocate a fresh store, initialize the struct record, then copy the data.
             self.gen_set_first_ref_copy(stack, v, d_nr, value);
-        } else if let Type::Reference(d_nr, _) = stack.function.tp(v).base().clone()
+        } else if let Some(d_nr) = stack.function.tp(v).base().heap_def_nr()
             && let Value::Var(src) = value
-            && let Type::Reference(src_d_nr, _) = stack.function.tp(*src).base()
-            && d_nr == *src_d_nr
+            && let Some(src_d_nr) = stack.function.tp(*src).base().heap_def_nr()
+            && stack.data.copies_as(d_nr, src_d_nr)
         {
-            // First assignment `d = c` where both are owned References to the same struct:
-            // give d its own independent record by allocating storage and copying c's data.
+            // First assignment `d = c` where both hold the same heap RECORD type — a struct
+            // or a struct-enum, the two shapes `Type::heap_def_nr` names: give d its own
+            // independent record by allocating storage and copying c's data.  Asked as a
+            // bare `Reference`, a struct-enum bind fell through to the plain adopt below and
+            // ALIASED (`e: Sh = Ci {…}; c = e; e.n = 9` read 9 through `c`), while `--native`
+            // reads the same question through `heap_def_nr` and copies.
             //
             // Read through `base()`, the peel the `Text` arm at the top of this function
             // already takes and for the same reason: `S?` is `Optional(Reference(S))`, the
@@ -3083,6 +3095,11 @@ impl State {
             } else {
                 self.gen_set_first_ref_call_copy(stack, v, value, d_nr);
             }
+        } else if *value == Value::Null
+            && matches!(stack.function.tp(v), Type::Optional(_))
+            && matches!(stack.function.tp(v).base(), Type::Vector(_, _))
+        {
+            self.gen_set_first_nullable_collection_null(stack, v);
         } else if matches!(stack.function.tp(v), Type::Vector(_, _)) && *value == Value::Null {
             self.gen_set_first_vector_null(stack, v);
         } else if crate::parser::vectors::is_keyed(stack.function.tp(v)) && *value == Value::Null {
@@ -3355,12 +3372,10 @@ impl State {
         // sentinel and leaves the destination null.  It allocates on the arm that needs it,
         // so no `OpDatabase` is emitted ahead of it.
         //
-        // Not `OpCopyRefOrNull`, which is built for the same shape one read kind over: it
-        // binds `Stores::null()`, whose `store_nr` is a REAL slot with `rec == 0`, while a
-        // `x == null` on a record lowers to `OpRefIsNull` and tests `store_nr == u16::MAX`.
-        // The two spellings of absence agree for the element read it was written for and
-        // not for a bound local.
-        if matches!(stack.function.tp(src), Type::Optional(_)) {
+        // Asked of both sides through the one predicate the native record bind asks
+        // (`Variables::bind_admits_absence`): a source typed non-null can still hold
+        // `nullref`, and a nullable destination has to receive it as absence.
+        if stack.function.bind_admits_absence(v, src) {
             self.generate(&Value::Var(src), stack, false);
             // A PUSH op reads at the PRE-push position, so the witness offset is taken
             // BEFORE `add_op`; the slot the opcode POPS into is taken after, at the
@@ -4468,8 +4483,14 @@ impl State {
         }
         self.code_add(var_pos);
         if let Type::RefVar(tp) = stack.function.tp(variable) {
-            let txt = matches!(**tp, Type::Text(_));
-            match &**tp {
+            // loft#1372 — through `base()`: `Optional(τ)` shares `τ`'s storage exactly, so a
+            // `&τ?` link reads at the same op as its `&τ` twin and the null travels in the
+            // slot's own sentinel.  Asked bare, `Optional` matched no arm and the read fell
+            // through to the panic below, which is why @FR-B-Ref-Intro's `&τ` for every τ
+            // had to be declined (D-bind-17).
+            let tp = tp.base();
+            let txt = matches!(tp, Type::Text(_));
+            match tp {
                 Type::Integer(_) => stack.add_op("OpGetInt", self),
                 Type::Character => stack.add_op("OpGetCharacter", self),
                 Type::Single => stack.add_op("OpGetSingle", self),
@@ -4521,6 +4542,7 @@ impl State {
         let mut tp = Type::Void;
         let mut return_expr = 0;
         let mut has_return = false;
+        let free_ops = stack.data.op_sets();
         for v in ops.iter() {
             let s_pos = self.stack_pos;
             if v.kind() == ValueType::Return {
@@ -4536,13 +4558,11 @@ impl State {
                 return_expr = 0;
                 tp = Type::Void;
             } else {
-                // Preserve return_expr across cleanup ops (FreeRef/FreeText)
-                // that don't produce a return value. These are inserted by
-                // scope analysis between the tail expression and Return(Null).
-                let is_cleanup = v.kind() == ValueType::Call && {
-                    let name = stack.data.def(v.call_to()).name();
-                    name == "OpFreeRef" || name == "OpFreeText"
-                };
+                // Preserve return_expr across cleanup ops — a free in ANY of its spellings,
+                // read off the one free-op home — that don't produce a return value.  These
+                // are inserted by scope analysis between the tail expression and Return(Null).
+                let is_cleanup =
+                    v.kind() == ValueType::Call && free_ops.frees.contains(&v.call_to());
                 if !is_cleanup {
                     has_return = false;
                     return_expr = 0;
@@ -4739,6 +4759,10 @@ impl State {
 
     pub(super) fn set_var(&mut self, stack: &mut Stack, var: u16, value: &Value) {
         if let Type::RefVar(tp) = stack.function.tp(var).clone() {
+            // loft#1372 — the write half of the same peel: `Optional(τ)` stores as `τ`, so
+            // the write op is the slot's, and whether the slot may hold null is
+            // @FR-N-Store's question rather than the op's.
+            let tp = Box::new(tp.base().clone());
             if matches!(*tp, Type::Text(_)) {
                 if value == &Value::Text(String::new()) {
                     // @P346: assigning "" to a RefVar(Text) is NOT a no-op — it
@@ -4828,11 +4852,17 @@ impl State {
             // and a same-store install degrades to a no-op.  Path-sensitive (the
             // ops sit on the write-back branch only).  Heap inner type only; scalar
             // `&` has no store to free.
-            let amp_owned_writeback = stack.function.is_argument(var)
-                && (matches!(
-                    *tp,
-                    Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
-                ) || crate::parser::vectors::is_keyed(&tp))
+            // The question is about the LINK, not about how the link was INTRODUCED:
+            // `@FR-B-Ref-Uniform` says a `&τ` variable is used exactly like a τ variable,
+            // and the native twin (`generation/dispatch.rs`) already asks only the inner
+            // type and the ownership.  Gated on `is_argument`, a `&` LOCAL bind
+            // (`pd = &d; pd = S { n: 2 }`) installed the fresh store through the link and
+            // orphaned the one it displaced — a leak on the interpreter, and one more
+            // reason the two backends answered this shape differently (loft#1371).
+            let amp_owned_writeback = (matches!(
+                *tp,
+                Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
+            ) || crate::parser::vectors::is_keyed(&tp))
                 && matches!(
                     crate::use_analysis::ownership_of(stack.data, stack.def_nr, value),
                     crate::use_analysis::Own::Owned

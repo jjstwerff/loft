@@ -163,6 +163,20 @@ pub fn note_rekeyed_view(var: &str, coll: &str, field: &str, function: &str) {
 /// so is the remedy: nothing about the container's shape changed — the NAME stopped meaning
 /// the store, so the fix at the use site is to bind the whole value (which copies, C86) or
 /// to take the view again after the reassignment.
+/// Note that `var` was copied out of `container` because `container` GROWS while `var` is
+/// live (loft#1373).
+///
+/// Separate message from [`note_materialised_view`] for the reason that rule split the event
+/// in two: a removal renumbers the elements after the one removed, a growth can move all of
+/// them at once, and a reader sent looking for the wrong statement pays for the difference.
+pub fn note_grown_view(var: &str, container: &str, function: &str) {
+    note((
+        format!("{var}\u{0}grow"),
+        container.to_string(),
+        function.to_string(),
+    ));
+}
+
 pub fn note_reassigned_view(var: &str, owner: &str, function: &str) {
     note((
         format!("{var}\u{0}reassign"),
@@ -185,6 +199,13 @@ pub fn report_materialised_views() {
                  `{container}` is reassigned while `{name}` is in use — a view names a place \
                  inside `{container}`, and giving `{container}` a new value leaves nothing for \
                  it to point at. Writes through `{name}` no longer reach `{container}`."
+            );
+        } else if let Some(name) = var.strip_suffix("\u{0}grow") {
+            eprintln!(
+                "advice: in `{function}`, `{name}` was copied out of `{container}` because \
+                 `{container}` grows while `{name}` is in use — a container that outgrows its \
+                 allocation moves every element, so the view could not stay valid. Writes \
+                 through `{name}` no longer reach `{container}`."
             );
         } else if let Some((name, field)) = var.split_once("\u{0}rekey\u{0}") {
             eprintln!(

@@ -219,6 +219,43 @@ every caller (loft#1287, `scopes::scan_args`). Nothing widens: the mark names on
 parameter's ENTRY store, so a REPEATED call still releases the fresh store the previous one
 installed, which the frame does own.
 
+### Drop — the hook a type declares runs once per resource, when the record that owns it dies
+
+```
+  (H-Drop)   a type that declares `OpDrop` releases a RESOURCE the record holds (a handle,
+             a lock, a file), and the hook runs ONCE per resource, at the death of the
+             record that OWNS it:
+               - the owner's scope end (@PLN125 arc B), in reverse declaration order;
+               - a REASSIGNMENT of the owner that displaces the record — a rebuild in
+                 place, a call result, a rebind to null — after the new value has been
+                 computed and before anything after the statement runs (loft#1362);
+               - a CONTAINER's death for what it holds, its own hook first and then its
+                 members, through the synthesized cascade (C111).
+             RESPONSIBILITY moves with a copy (binding.md B-Copy): a plain whole-value copy
+             `t = s`, a copy into a struct field, an enum payload or a vector element, a
+             branch arm's temp, a return buffer — the copy owns, the source stops
+             dropping.  A copy off a PARAMETER moves nothing: the caller owns.
+  (H-Drop-Not) the OLD value of an overwritten FIELD or ELEMENT (`o.s = other`,
+             `v[i] = other`), an element taken OUT (`v.remove(i)`), and a keyed
+             collection's records are NOT released by the language — the author releases
+             them (INTERFACES.md § `OpDrop`, the documented boundary).
+```
+
+**In words.** A drop is not a destructor of loft-side data — the ownership model pays for
+that — it is the release of something outside the program, and such a thing must be
+released exactly once. So the question every site asks is *"which record owns the resource
+now?"*: the owner's death runs the hook, a copy moves the ownership to the copy, and a
+reassignment is a death for the record it displaces. Where two records hold one resource
+by the author's doing — two containers built from one droppable, two copies of one value,
+one hand-off inside a loop body that runs twice — `warning[double-move]` names what it can
+see and the loop shape stays on the author.
+
+**Conformance.** `tests/scripts/139-drop-cascade.loft` (the cascade),
+`a-whole-value-copy-of-a-droppable-releases-once.loft` (the copy moves), and
+`1362-a-rebind-releases-the-droppable-it-displaces.loft` (the reassignment), each measured
+identical on both backends.  Sites: `scopes::displaced_drop`, `scopes::copy_moves_drop_from`,
+`scopes::scope_end_drop`, `scopes::copy_hands_off`.
+
 ### The soundness bridge — a well-typed program never faults a free
 
 ```
@@ -248,7 +285,48 @@ pattern so any surviving `H-FreeTwice` / use-after-free surfaces as a corrupted 
 
 ## Deviations
 
-OPEN: **0** (this doc closes a *rules* gap, not a code deviation).
+OPEN: **1** — `D-heap-1`, below: three shapes release a tuple member's resource TWICE.
+
+### D-heap-1 — OPEN (2026-09-05): a copy of a tuple releases a droppable member twice
+
+`(H-Drop)` runs the hook once per resource and moves the responsibility with a copy.  A
+tuple is a container like any other (`layout.md (L-Tuple)`), so `t = (s, 5); u = t` must
+release once — and since loft#1361 made the whole-tuple bind COPY its heap member, the copy
+is a real second record, which is what puts the question here at all.  Before that bind
+copied, one record wore both names and "released once" was true by accident.
+
+Most of the family holds: the whole-tuple bind, two droppable members, a member at index 1,
+a chain of copies, a struct-enum member, a return buffer, a destructure after the copy and
+the literal itself are each measured at one release on both backends
+(`tests/scripts/a-copy-of-a-tuple-with-a-droppable-member-releases-once.loft`).  Three
+shapes still release twice, both backends, silently:
+
+- a NESTED tuple — `t = ((s, 1), 2); u = t`;
+- a member declared NULLABLE — `t: (S?, integer) = (s, 5); u = t`;
+- a copy off a tuple PARAMETER — `fn f(p: (S, integer)) { u = p; }`, where `(H-Drop)`'s
+  closing clause says the CALLER owns and nothing in the callee should release.
+
+**One cause, read off the IR.**  The hand-off is recognised by resolving a copy's tuple-MEMBER
+source to the work-ref backing it, and the tuple's TYPE is where that pairing lives.  The
+first two shapes have no pairing to read: a nested tuple's element is a `Type::Tuple` whose
+backing sits on the INNER type, and a declared `(S?, integer)` reaches the binding with the
+author's annotation and no backing dep at all (`(ref(S)?, integer)` where the inferred form
+is `(ref(S)["__ref_1"]?, integer)`).  The third is not this frame's to read: a parameter's
+deps are the CALLER's, in another dep space.  So `scopes::tuple_member_backing` DECLINES all
+three rather than naming a work-ref it guessed — declining costs the hand-off and leaves the
+pre-loft#1361 double release, where guessing would suppress the release of whatever local
+wore that number.
+
+**Branch-internal, so no issue.**  None of the three reproduces on `main`, where the member
+is aliased rather than copied and the count is one; they exist only where loft#1361's copy
+has landed.  Per the bug policy that keeps them here rather than in the tracker.
+
+**Closes when** the three shapes above read one release on both backends and the guard's
+`@falsified-at` line covers them.  The cure is to give the tuple's element type its backing
+dep in the two places that lose it — the declared-type path in the binding conversion, and
+the nested tuple's outer element — after which the existing `TupleGet` arm reaches them
+unchanged; the parameter shape wants the argument rule instead, not a member pairing.
+
 
 Writing these rules **shrinks** [operational.md](operational.md)'s D-op-1 — the heap/store
 steps it named as *"unwritten … the interpreter remains their spec"* now have a written

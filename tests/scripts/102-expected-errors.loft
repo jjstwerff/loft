@@ -90,7 +90,7 @@ fn test_struct_missing_arm() {
   };
 }
 
-// @EXPECT_ERROR: cannot unify: text and integer
+// @EXPECT_ERROR: expected text, got integer on a match arm
 fn test_match_type_mismatch() {
   d = Direction.North;
   match d { North => "text", _ => 42 };

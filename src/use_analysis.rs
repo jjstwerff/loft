@@ -226,6 +226,23 @@ pub(crate) struct OpSets {
     pub(crate) write_first_arg: std::sync::Arc<HashSet<u32>>,
     /// Collection `len` methods — see [`is_length_op_name`].
     pub(crate) lengths: std::sync::Arc<HashSet<u32>>,
+    /// The ops that RELEASE their first argument — one notion, five spellings: the plain
+    /// reference free, its tag-checked twin, the text free, and the two witness-guarded
+    /// conditional frees.  Every matcher that asks *"is this a free?"* reads THIS set, because
+    /// a hand-spelled name list goes blind to a new spelling at once — `check_ref_leaks`
+    /// reported a leak the compiler did not have when `OpFreeRefOrHandUp` arrived (loft#1186),
+    /// and of the nine lists this replaced no two agreed.  @FR-O-Override's contract is stated
+    /// over this notion, not over the one name the rule spells.
+    pub(crate) frees: std::sync::Arc<HashSet<u32>>,
+    /// The UNCONDITIONAL reference frees — `OpFreeRef` and `OpFreeRefTag`.  A check that asks
+    /// *"is this store released here, whatever the run"* reads this one.
+    pub(crate) unconditional_ref_frees: std::sync::Arc<HashSet<u32>>,
+    /// The witness-GUARDED reference frees — `OpFreeRefIfDistinct` and `OpFreeRefOrHandUp`: a
+    /// no-op where the placeholder aliases its witness, so a path walk reads one as CLEARING a
+    /// pending free rather than as a free.
+    pub(crate) conditional_ref_frees: std::sync::Arc<HashSet<u32>>,
+    /// `OpFreeText` — the text release, or `u32::MAX` where the table has none.
+    pub(crate) text_free: u32,
 }
 
 impl OpSets {
@@ -243,11 +260,33 @@ impl OpSets {
                 lengths.insert(d);
             }
         }
+        let nrs = |names: &[&str]| -> HashSet<u32> {
+            names
+                .iter()
+                .map(|n| data.def_nr(n))
+                .filter(|&d| d != u32::MAX)
+                .collect()
+        };
+        let unconditional_ref_frees = nrs(&["OpFreeRef", "OpFreeRefTag"]);
+        let conditional_ref_frees = nrs(&["OpFreeRefIfDistinct", "OpFreeRefOrHandUp"]);
+        let text_free = data.def_nr("OpFreeText");
+        let mut frees: HashSet<u32> = unconditional_ref_frees
+            .iter()
+            .chain(conditional_ref_frees.iter())
+            .copied()
+            .collect();
+        if text_free != u32::MAX {
+            frees.insert(text_free);
+        }
         Self {
             projections: std::sync::Arc::new(projection_ops(data)),
             value_readers: std::sync::Arc::new(value_reader_ops(data)),
             write_first_arg: std::sync::Arc::new(write_first_arg),
             lengths: std::sync::Arc::new(lengths),
+            frees: std::sync::Arc::new(frees),
+            unconditional_ref_frees: std::sync::Arc::new(unconditional_ref_frees),
+            conditional_ref_frees: std::sync::Arc::new(conditional_ref_frees),
+            text_free,
         }
     }
 }
@@ -1132,6 +1171,11 @@ fn analyze_fn_survival(
         let src = appends[0];
         let single_def = u.def_count.get(&v).copied().unwrap_or(0) == 1;
         let v_readonly = !u.ineligible.contains(&v);
+        // A PARAMETER is defined at entry, a definition the def count does not see: its
+        // reads ahead of the copy-fill see the caller's value, and rewriting them onto the
+        // source would answer the source there (`for … { s += v[i]; v = w }` read `w` on
+        // the first turn).  The verdicts below are for a LOCAL, as their own words say.
+        let v_is_local = !function.is_argument(v);
         let src_is_param = src.is_some_and(|s| function.is_argument(s));
         let src_unmutated = src.is_some_and(|s| !written.contains(&s));
 
@@ -1155,58 +1199,58 @@ fn analyze_fn_survival(
         // Implicit = a literal source is construction, not a copy of existing data (owned by
         // the model — silent). Forced = the result escapes / is reassigned / mutated, or the
         // source is mutated (the value must own its store). `Borrow` is already eliminated.
-        let (verdict, reason, class) = if single_def && v_readonly && src_is_param && src_unmutated
-        {
-            (
-                Verdict::Borrow,
-                "tier0: read-only local, unmutated param source",
-                CopyClass::Eliminated,
-            )
-        } else if single_def && v_readonly && src_local_stable {
-            (
-                Verdict::Borrow,
-                "tier1: read-only local, ordering-proven read-only local source",
-                CopyClass::Eliminated,
-            )
-        } else if crate::keys::link_widen_enabled()
-            && bind_link_safe(&u, function, v, src)
-            && bind_link_unobservable(&u, function, v, src)
-        {
-            // @PLN102 build step 4 — the transparent-link WIDENING (gated `LOFT_LINK_WIDEN`). A bind
-            // the tiers above leave as a copy is realized as a shared-store link when it is provably
-            // SAFE (source outlives the local, no escape) AND UNOBSERVABLE (neither side's store is
-            // mutated after the bind, ALIAS-AWARE) — the two oracles proven report-only in steps 2/3.
-            // The observable result is unchanged (copy ≡ link here); it just realizes more links. The
-            // `ElidePlan` production below runs unchanged, incl. its own borrower-safety gate. Dead
-            // when the flag is off ⇒ byte-identical.
-            (
-                Verdict::Borrow,
-                "widen: safe + unobservable link (LOFT_LINK_WIDEN)",
-                CopyClass::Eliminated,
-            )
-        } else if src.is_none() {
-            (
-                Verdict::Copy,
-                "source is not a plain var/field (e.g. a literal)",
-                CopyClass::Implicit,
-            )
-        } else if !single_def {
-            (
-                Verdict::Copy,
-                "reassigned (multiple defs)",
-                CopyClass::Forced,
-            )
-        } else if !v_readonly {
-            (Verdict::Copy, "local mutated or escapes", CopyClass::Forced)
-        } else if !src_is_param && !src_local_stable {
-            (
-                Verdict::Copy,
-                "source not a parameter / not provably read-only local",
-                CopyClass::Avoidable,
-            )
-        } else {
-            (Verdict::Copy, "source mutated", CopyClass::Forced)
-        };
+        let (verdict, reason, class) =
+            if single_def && v_is_local && v_readonly && src_is_param && src_unmutated {
+                (
+                    Verdict::Borrow,
+                    "tier0: read-only local, unmutated param source",
+                    CopyClass::Eliminated,
+                )
+            } else if single_def && v_is_local && v_readonly && src_local_stable {
+                (
+                    Verdict::Borrow,
+                    "tier1: read-only local, ordering-proven read-only local source",
+                    CopyClass::Eliminated,
+                )
+            } else if crate::keys::link_widen_enabled()
+                && bind_link_safe(&u, function, v, src)
+                && bind_link_unobservable(&u, function, v, src)
+            {
+                // @PLN102 build step 4 — the transparent-link WIDENING (gated `LOFT_LINK_WIDEN`). A bind
+                // the tiers above leave as a copy is realized as a shared-store link when it is provably
+                // SAFE (source outlives the local, no escape) AND UNOBSERVABLE (neither side's store is
+                // mutated after the bind, ALIAS-AWARE) — the two oracles proven report-only in steps 2/3.
+                // The observable result is unchanged (copy ≡ link here); it just realizes more links. The
+                // `ElidePlan` production below runs unchanged, incl. its own borrower-safety gate. Dead
+                // when the flag is off ⇒ byte-identical.
+                (
+                    Verdict::Borrow,
+                    "widen: safe + unobservable link (LOFT_LINK_WIDEN)",
+                    CopyClass::Eliminated,
+                )
+            } else if src.is_none() {
+                (
+                    Verdict::Copy,
+                    "source is not a plain var/field (e.g. a literal)",
+                    CopyClass::Implicit,
+                )
+            } else if !single_def {
+                (
+                    Verdict::Copy,
+                    "reassigned (multiple defs)",
+                    CopyClass::Forced,
+                )
+            } else if !v_readonly {
+                (Verdict::Copy, "local mutated or escapes", CopyClass::Forced)
+            } else if !src_is_param && !src_local_stable {
+                (
+                    Verdict::Copy,
+                    "source not a parameter / not provably read-only local",
+                    CopyClass::Avoidable,
+                )
+            } else {
+                (Verdict::Copy, "source mutated", CopyClass::Forced)
+            };
 
         if verdict == Verdict::Borrow
             && let Some(vdb) = u.def_vdb.get(&v)
@@ -2146,9 +2190,6 @@ impl<'a> Ownership<'a> {
     /// vars to their defining RHS). The recursive core of the analysis.
     fn classify(&mut self, node: &Value, func: &Function, defs: &Defs) -> Own {
         match node.unspan() {
-            // A var `OpDatabase` minted a fresh store into is Owned regardless of
-            // any other def (the retbuf a `materialized_view_return` fills).
-            Value::Var(v) if defs.db_vars.contains(v) => Own::Owned,
             Value::Var(v) if !self.visiting_vars.insert(*v) => {
                 // Recursion back-edge: this var appears in its OWN definition, as in
                 // `c = t[k] ?? c`.  Mirrors the function-level guard below — return
@@ -2160,11 +2201,35 @@ impl<'a> Ownership<'a> {
                 Own::Borrowed { base: u16::MAX }
             }
             Value::Var(v) => {
+                // A var `OpDatabase` MINTED a store into owns that store — and it owns
+                // exactly that.  Where a `Set` also defines it, the var's class is the JOIN
+                // of the mint with those definitions, in which a bare-`Var` right-hand side
+                // is a COPY into the minted store (@FR-B-Copy: a whole-value bind is
+                // independent of its source, and the mint IS the copy's store) and so
+                // Owned, while a call or a projection is whatever the oracle says of it.
+                // Reading the mint ALONE — "Owned regardless of any other def" — called a
+                // local minted once and then rebound to a call that may hand back its own
+                // argument (`c = M {…}; c = cond(c, 3)`) or to a capture read `Owned`, the
+                // one verdict that licenses a free, where the flow-sensitive shadow read
+                // `Join`/`Borrowed`; Check A's fact-disagree on 1017b/1326/1331 was that
+                // shortcut, not the shadow (@FR-O-Oracle, QUALITY.md B7r).
+                let minted = defs.db_vars.contains(v);
+                // A definition that binds NO STORE — `x = null` — says nothing about what
+                // `x` may own on its other definitions and is left out of the join, exactly
+                // as a null arm is in the `If` arm below; a var with only such definitions
+                // owns nothing anyone could mis-free.
                 let class = match defs.rhs.get(v) {
-                    Some(rhss) if !rhss.is_empty() => {
+                    Some(rhss) if rhss.iter().any(|r| !holds_no_store(self.data, r)) => {
                         let bound = rhss
                             .iter()
-                            .map(|r| self.classify(r, func, defs))
+                            .filter(|r| !holds_no_store(self.data, r))
+                            .map(|r| {
+                                if minted && matches!(r.unspan(), Value::Var(_)) {
+                                    Own::Owned
+                                } else {
+                                    self.classify(r, func, defs)
+                                }
+                            })
                             .reduce(Own::join)
                             .unwrap_or(Own::Owned);
                         // loft#704 — a branch that FILLS `v` in place rather than
@@ -2179,16 +2244,21 @@ impl<'a> Ownership<'a> {
                         // above deliberately calls `Borrowed`: it is really owned, but
                         // saying so would tell a callee it may free the CALLER's
                         // buffer.  This adds an alternative; it never replaces that.
-                        if defs.filled.contains(v) {
+                        if defs.filled.contains(v) || minted {
                             bound.join(Own::Owned)
                         } else {
                             bound
                         }
                     }
-                    // No local def: a parameter (the caller owns it ⇒ Borrowed of
-                    // itself) or an uninitialised local (Owned — nothing to mis-free).
+                    // No local def: a store the function minted in place with no `Set` at
+                    // all (the retbuf a `materialized_view_return` fills — a parameter, but
+                    // this function's own store), else a parameter (the caller owns it ⇒
+                    // Borrowed of itself) or an uninitialised local (Owned — nothing to
+                    // mis-free).
                     _ => {
-                        if func.is_argument(*v) {
+                        if minted {
+                            Own::Owned
+                        } else if func.is_argument(*v) {
                             Own::Borrowed { base: *v }
                         } else {
                             Own::Owned
@@ -2212,10 +2282,21 @@ impl<'a> Ownership<'a> {
                     self.call_ownership(*d, args, func, defs)
                 }
             }
-            // `??` / `if-else` lowers to `If`: the join of its two arms.
-            Value::If(_, then, els) => self
-                .classify(then, func, defs)
-                .join(self.classify(els, func, defs)),
+            // `??` / `if-else` lowers to `If`: the join of its two arms.  An arm that holds
+            // NO STORE — a `null`, the reference null sentinel — is the join's identity, not
+            // an owned value: `if <present> { <projection> } else { null }` (the tag read of
+            // a nullable slot, `Parser::emit_nullable_slot_read`) views exactly what its
+            // present arm views, and calling the pair a `Join` made a rebind release the
+            // container's store as if the local had owned it.
+            Value::If(_, then, els) => {
+                let seen = through_null_arm(self.data, node);
+                if matches!(seen.unspan(), Value::If(_, _, _)) {
+                    self.classify(then, func, defs)
+                        .join(self.classify(els, func, defs))
+                } else {
+                    self.classify(seen, func, defs)
+                }
+            }
             // A block's value is its tail; passthrough wrappers forward.
             Value::Block(b) => b
                 .operators
@@ -2225,6 +2306,29 @@ impl<'a> Ownership<'a> {
                 .last()
                 .map_or(Own::Owned, |t| self.classify(t, func, defs)),
             Value::Return(v) => self.classify(v, func, defs),
+            // `@FR-B-View` — a heap member read out of a tuple (`a = t.0`) is a VIEW of the
+            // tuple's member, exactly as a struct field read is; a scalar member is a value.
+            // A read off a work temp holding a bare copy of another tuple local (the
+            // destructure's `T1.4` temp) views THAT local's member: the temp copies the
+            // tuple's words, and a heap member's word is the handle.  Without this arm the
+            // read fell to the fallback and was called `Owned`, so the dead-store lint
+            // warned that a write through the view was lost — while both backends landed it.
+            Value::TupleGet(base, i) => {
+                let heap = matches!(func.tp(*base), crate::data::Type::Tuple(elems)
+                    if elems.get(*i as usize).is_some_and(crate::data::is_dbref));
+                if !heap {
+                    return Own::Owned;
+                }
+                let mut b = *base;
+                if let Some(rhss) = defs.rhs.get(&b)
+                    && let [only] = rhss.as_slice()
+                    && let Value::Var(x) = only.unspan()
+                    && matches!(func.tp(*x), crate::data::Type::Tuple(_))
+                {
+                    b = *x;
+                }
+                Own::Borrowed { base: b }
+            }
             // @FR-O-Oracle — a call resolves through the callee's return summary, and a
             // call has TWO spellings.  `Value::Call` names its definition; a `CallRef`
             // names a runtime value, so the target is recovered from the assignment that
@@ -2335,43 +2439,8 @@ impl<'a> Ownership<'a> {
         func: &Function,
         defs: &Defs,
     ) -> u16 {
-        let attrs = self.data.def(callee_d).attributes();
-        if callee_base == u16::MAX || (callee_base as usize) >= attrs.len() {
-            return u16::MAX;
-        }
-        // A hidden parameter is a return MECHANISM rather than something the author
-        // wrote, and most of them name nothing on the caller's side.  The delivery
-        // BUFFER is the exception: the caller allocates its own `__ref_N` and passes it
-        // at that position like any other argument, so a callee handing back its
-        // `__retbuf` is handing back a store the caller already holds — nameable, and
-        // the one answer that stops the caller adopting its own buffer (loft#1318).
-        // `__closure` stays refused here: nothing is passed at its position, and
-        // `closure_capture_base` reads the capture out of the closure build instead.
-        if attrs[callee_base as usize].hidden && !is_synth_buffer(&attrs[callee_base as usize].name)
-        {
-            return u16::MAX;
-        }
-        // The caller's args align with the callee's VISIBLE params, in order.
-        let arg_index = attrs[..callee_base as usize]
-            .iter()
-            .filter(|a| !a.hidden)
-            .count();
-        let Some(arg) = caller_args.get(arg_index) else {
-            return u16::MAX;
-        };
-        // A PROJECTION argument is witnessed by its ROOT: `pick(v[0], …)`, `pick(w.s, …)`
-        // and `pick(h[k], …)` all answer a `DbRef` living in the root container's store, so
-        // comparing the returned store against the root decides borrow-vs-mint exactly as a
-        // bare `Var` does.  One walk, shared with the @P290 bracket, so the base the guard
-        // witnesses against and the slot the bracket protects cannot disagree.
-        //
-        // A walk reaching MORE than one root — a join whose arms name different containers —
-        // has no single store to compare against, and the caller keeps the conservative
-        // never-free answer rather than guessing one of them.
-        match view_root_slots(self.data, arg).as_deref() {
-            Some([root]) => *root,
-            // A walk reaching MORE than one root has no single store to compare against.
-            Some(_) => u16::MAX,
+        match structural_arg_base(self.data, callee_d, callee_base, caller_args) {
+            Ok(base) => base,
             // A structural walk names a variable and what projects out of one; an argument
             // that is itself a CALL is not one of those shapes, and the oracle is what
             // answers for a call (@FR-O-Oracle).  Ask it: a callee handing back a view of
@@ -2379,13 +2448,12 @@ impl<'a> Ownership<'a> {
             // projection does, one frame further out.  `Owned` — the callee minted the
             // store — leaves the base unnameable, which is the right answer there, because
             // then no caller variable holds it.
-            None => match self.classify(arg, func, defs) {
+            Err(arg) => match self.classify(arg, func, defs) {
                 Own::Borrowed { base } | Own::Join { base } => base,
                 Own::Owned => u16::MAX,
             },
         }
     }
-
     /// loft#1248 — the caller variable a return that borrows the closure may be handing back.
     ///
     /// `caller_arg_base` maps a callee's borrowed VISIBLE parameter to the argument at the
@@ -2521,6 +2589,21 @@ impl<'a> Ownership<'a> {
             Value::Call(d, args) if self.projections.contains(d) => {
                 match args.first().map(Value::unspan) {
                     Some(Value::Var(b)) => Some(*b),
+                    // A struct-ENUM payload projection names its subject through a
+                    // variant check — `sh.inner` is `OpGetField(if <tag> { sh } else
+                    // { sentinel }, …)` — so the subject is one wrapper further out
+                    // than a struct field's.  Stop at it exactly as the `Var` arm above
+                    // does ([`projection_container_var`] peels the same shape for the
+                    // materialise walk and the emitters).  Without the peel the `If` arm
+                    // below resolved the subject THROUGH its own definitions, found a
+                    // mint, and answered `None` — so a payload view classified `Owned`,
+                    // the over-free direction this doc's own caveat names, and the
+                    // `lost-write` lint told the author a write that lands was lost.
+                    Some(Value::If(_, t, e))
+                        if variant_check_subject(self.data, t, e).is_some() =>
+                    {
+                        variant_check_subject(self.data, t, e)
+                    }
                     // nested `o.inner.rows`
                     Some(inner) => self.borrow_base_guarded(inner, func, defs, visited),
                     None => None,
@@ -2620,6 +2703,52 @@ impl<'a> Ownership<'a> {
             }
         }
         sites
+    }
+}
+
+/// The STRUCTURAL half of the callee→caller base translation, read by the oracle
+/// ([`Ownership::caller_arg_base`]) and by its flow-sensitive shadow (`ownership_cfg`) alike, so
+/// the two cannot drift on it: the shadow's private copy carried none of loft#1318's three fixes
+/// and reported the oracle's CORRECT answers as disagreements — `Borrowed(MAX)` for a call
+/// delivering through a hidden buffer, and no root for a projection argument (QUALITY.md B7r).
+///
+/// `Ok(base)` names the caller variable the callee's borrowed parameter `callee_base` arrives
+/// in, `u16::MAX` where nothing does: a hidden parameter that is not a delivery buffer (a
+/// return MECHANISM, naming nothing on the caller's side — `__closure` is resolved from the
+/// closure build instead), a missing argument, or a projection reaching two roots (a join whose
+/// arms name different containers has no single store to compare against).  The delivery
+/// BUFFER is the hidden parameter that IS nameable: the caller allocates its own `__ref_N` and
+/// passes it at that position, so a callee handing back its `__retbuf` hands back a store the
+/// caller already holds — the answer that stops the caller adopting its own buffer.  A
+/// projection argument is witnessed by its ROOT (`view_root_slots`): `pick(v[0], …)`,
+/// `pick(w.s, …)` and `pick(h[k], …)` all answer a `DbRef` living in the root container's
+/// store.  `Err(arg)` hands back an argument that is itself a CALL, which a structural walk
+/// cannot root and only the oracle can (@FR-O-Oracle).
+pub(crate) fn structural_arg_base<'a>(
+    data: &Data,
+    callee_d: u32,
+    callee_base: u16,
+    caller_args: &'a [Value],
+) -> Result<u16, &'a Value> {
+    let attrs = data.def(callee_d).attributes();
+    if callee_base == u16::MAX || (callee_base as usize) >= attrs.len() {
+        return Ok(u16::MAX);
+    }
+    if attrs[callee_base as usize].hidden && !is_synth_buffer(&attrs[callee_base as usize].name) {
+        return Ok(u16::MAX);
+    }
+    // The caller's args align with the callee's VISIBLE params, in order.
+    let arg_index = attrs[..callee_base as usize]
+        .iter()
+        .filter(|a| !a.hidden)
+        .count();
+    let Some(arg) = caller_args.get(arg_index) else {
+        return Ok(u16::MAX);
+    };
+    match view_root_slots(data, arg).as_deref() {
+        Some([root]) => Ok(*root),
+        Some(_) => Ok(u16::MAX),
+        None => Err(arg),
     }
 }
 
@@ -2935,6 +3064,113 @@ pub fn is_projection_op(data: &Data, d_nr: u32) -> bool {
     )
 }
 
+/// The container VARIABLE a projection chain ultimately reads out of — the ONE derivation of
+/// *which container did this view come out of?*
+///
+/// `OpGetVector` / `OpVectorRef` are `v[i]`, `OpGetField` is `s.f`; all of them yield a `DbRef`
+/// sharing `store_nr` with the container, which is what makes binding one a borrow rather than
+/// an owner.  The whole chain is peeled, because a view can sit several levels down
+/// (`outs[2].inner`): looking only at the outermost call's first argument finds another call.
+///
+/// A struct-ENUM base is peeled too.  A payload projection does not name its subject directly
+/// — `sh.inner`, and a `match`/`is` payload binding, lower to `OpGetField(if <tag == Holder>
+/// { sh } else { OpNullRefSentinel() }, …)` — so the chain bottomed out at `None` and no
+/// reader could name the subject: the view-materialise walk saw no container to be disturbed,
+/// and a payload view live across a reassignment of its subject was neither copied nor
+/// reported, where the plain-struct twin is both.  Only the shape the lowering emits is
+/// peeled — exactly one arm names a variable and the other is the null sentinel — so a user
+/// `if` choosing between two containers still answers `None`.
+///
+/// `None` when the chain does not bottom out in a plain variable, notably a field of a CALL
+/// result (`return mk().a.b`), whose base is a temporary rather than a container someone else
+/// owns: materialising there is a different question, and answering it here broke
+/// `tests/scripts/85-store-lifetime-return-field-of-local`.  Every caller then leaves the
+/// binding exactly as it is rather than guessing.
+///
+/// Two readers had this loop byte-for-byte — `scopes::base_container_var` and
+/// `generation::container_element_base`, each documented as "mirroring" the other — and the
+/// mirror is what the peel above had to be written into twice to work at all: the walk that
+/// NAMES a view to materialise and the emitter that COPIES it must agree, or the compiler
+/// reports a copy it did not make.
+#[must_use]
+pub fn projection_container_var(data: &Data, value: &Value) -> Option<u16> {
+    projection_container_place(data, value).map(|(v, _)| v)
+}
+
+/// The offset [`projection_container_place`] reports for a chain that projects through no
+/// field, so the place is the variable itself.
+pub const ANY_FIELD: u32 = u32::MAX;
+
+/// The PLACE a projection ultimately reads out of: the base variable, and the byte OFFSET of
+/// the field it projects through — [`ANY_FIELD`] when it projects through none.
+///
+/// [`projection_container_var`] is this answer with the offset dropped, and the offset is what
+/// tells `w.a` from `w.b`.  Both are containers of their own that happen to share a parent
+/// variable, and a disturbance of one does not end the places inside the other: reading the
+/// parent alone shook every view rooted at it whichever field it named, which silently emptied
+/// `moros_editor`'s undo stack (loft#1373's own regression, and loft#1384 is the case that
+/// costs).
+///
+/// The offset comes from the LAST `OpGetField` before the base variable — `w.a[0]` is
+/// `OpGetVector(OpGetField(w, 16, …), 88, idx)`, so the place is `(w, 16)` — and a chain with
+/// no field read, `v[0]` on a local, is `(v, ANY_FIELD)`.  A deeper chain (`w.inner.a[0]`)
+/// answers its OUTERMOST field, which is the one a disturbance of `w` can name; the inner
+/// steps are a lower bound, as everything in this walk is.
+#[must_use]
+pub fn projection_container_place(data: &Data, value: &Value) -> Option<(u16, u32)> {
+    let mut cur = value;
+    let mut field = ANY_FIELD;
+    loop {
+        if let Value::If(_, t, e) = cur.unspan()
+            && let Some(v) = variant_check_subject(data, t, e)
+        {
+            return Some((v, field));
+        }
+        let Value::Call(d, args) = cur.unspan() else {
+            return None;
+        };
+        if !is_projection_op(data, *d) {
+            return None;
+        }
+        if data.def(*d).name() == "OpGetField"
+            && let Some(Value::Int(off)) = args.get(1).map(Value::unspan)
+        {
+            field = *off as u32;
+        }
+        match args.first().map(Value::unspan) {
+            Some(Value::Var(c)) => return Some((*c, field)),
+            Some(inner) => cur = inner,
+            None => return None,
+        }
+    }
+}
+
+/// The subject of a VARIANT-CHECK `if` — the shape a struct-enum payload projection wraps its
+/// base in: one arm is the subject variable, the other `OpNullRefSentinel()`.
+///
+/// BOTH arms are tested, and the sentinel one by the OP IT CALLS rather than by "not a
+/// variable".  A loose reading claims user nodes: `a?` discharging a nullable parameter lowers
+/// to `if a.rec != 0 { a } else { <mint> }`, which also has one `Var` arm — reading that as a
+/// projection base changed a generic's return delivery from an adopt to a copy nobody freed,
+/// one leaked record per call (caught by `tests/scripts/1026-generic-discharged-null-return`
+/// under the wrap harness's leak gate).  Same class as loft#1379: recognise a lowering by what
+/// it BUILDS, never by node shape alone.
+fn variant_check_subject(data: &Data, then_arm: &Value, else_arm: &Value) -> Option<u16> {
+    let named = |v: &Value| match v.unspan() {
+        Value::Var(c) => Some(*c),
+        _ => None,
+    };
+    let sentinel = |v: &Value| {
+        matches!(v.unspan(), Value::Call(d, args)
+            if args.is_empty() && data.def(*d).name() == "OpNullRefSentinel")
+    };
+    match (named(then_arm), named(else_arm)) {
+        (Some(v), None) if sentinel(else_arm) => Some(v),
+        (None, Some(v)) if sentinel(then_arm) => Some(v),
+        _ => None,
+    }
+}
+
 /// loft#981 / loft#982 — may this call site set `OpCopyRecord`'s `0x8000` source-free
 /// bit on the store a call returned?
 ///
@@ -2992,9 +3228,16 @@ pub fn call_return_frees_source(data: &Data, d_nr: u32, call: &Value) -> bool {
 /// this differently would either free a store the caller still names, or strip the
 /// deps off a bind that stays a plain alias.
 ///
-/// Narrow on purpose: only a JOIN with a nameable witness.  Every other nullable bind
-/// keeps today's plain adopt — which is what a call that borrows nothing, or one whose
-/// witness the bracket cannot name, already correctly does.
+/// A JOIN or a pure BORROW with a nameable witness — `(F-Ret)` says the value a call
+/// answers is FRESH whichever arm produced it, so a callee that always hands its argument
+/// back (`fn keep(s: Node) -> Node { s }`, an element view `v[0]` through `-> T?`, a
+/// generic instance of either) is bound through the same guard: the store aliases the
+/// witness on every run and is copied on every run, and a `null` answer has no store to
+/// alias and stays null.  Asked for a JOIN alone, a nullable local bound from a
+/// borrow-returning callee stayed a plain alias — a write through it reached the caller's
+/// argument on both backends, and a witnessed local's witness then named the CALLER's
+/// store and released it (`@FR-O-Witness`, QUALITY.md B7v).  A call that borrows
+/// nothing, or one whose witness the bracket cannot name, keeps today's plain adopt.
 #[must_use]
 pub fn nullable_join_first_bind(
     data: &Data,
@@ -3018,8 +3261,34 @@ pub fn nullable_join_first_bind(
     if !callee.is_loft_defined() || !callee.returns_borrowed_view() {
         return None;
     }
-    let Own::Join { base } = ownership_of(data, d_nr, value) else {
-        return None;
+    let base = match ownership_of(data, d_nr, value) {
+        Own::Join { base } => base,
+        // A pure BORROW is guarded only where the witness is the one argument the return
+        // deps name: a return that may borrow EITHER of two arguments has two bases and one
+        // witness would adopt the other, and a base the oracle resolved to an argument the
+        // deps do not name is a translation the deps contradict (`(O-Oracle)`: never upgrade
+        // on a base that cannot be trusted) — both keep today's plain adopt.
+        Own::Borrowed { base } => {
+            let attrs = callee.attributes();
+            let visible: Vec<u16> = callee
+                .returned()
+                .depend()
+                .iter()
+                .copied()
+                .filter(|&d| attrs.get(d as usize).is_some_and(|a| !a.hidden))
+                .collect();
+            let [dep] = visible[..] else {
+                return None;
+            };
+            let Value::Call(_, args) = value.unspan() else {
+                return None;
+            };
+            match args.get(dep as usize).map(Value::unspan) {
+                Some(Value::Var(arg)) if *arg == base => base,
+                _ => return None,
+            }
+        }
+        Own::Owned => return None,
     };
     if base == u16::MAX {
         return None;
@@ -3561,6 +3830,39 @@ pub fn classifies_structurally(data: &Data, d: u32) -> bool {
         || data.op_sets().projections.contains(&d)
 }
 
+/// Does this value hold NO STORE at all — a `null` literal, or the reference null sentinel
+/// `Parser::convert` lowers it to in a reference-typed position?  Such a value neither needs
+/// protecting nor can be borrowed from, and in a join it is the identity: the other arm's
+/// class is the pair's.  The one spelling of that fact for the classifier, the argument
+/// witness and the view-root walk.
+#[must_use]
+pub(crate) fn holds_no_store(data: &Data, value: &Value) -> bool {
+    match value.unspan() {
+        Value::Null => true,
+        Value::Call(d, args) => args.is_empty() && data.def(*d).name() == "OpNullRefSentinel",
+        _ => false,
+    }
+}
+
+/// The value a two-arm `if` DELIVERS when one arm holds no store: the other arm.  A tagged
+/// nullable slot is read as `if <present> { <payload projection> } else { nullref }`
+/// (`Parser::emit_nullable_slot_read`), and for every question about ownership — does this
+/// bind a view, what does it own, may it be freed at a rebind — the pair answers as its
+/// present arm does.  Any other value answers as itself, so a caller can read through
+/// unconditionally.
+#[must_use]
+pub(crate) fn through_null_arm<'v>(data: &Data, value: &'v Value) -> &'v Value {
+    if let Value::If(_, then, els) = value.unspan() {
+        if holds_no_store(data, els) {
+            return through_null_arm(data, then);
+        }
+        if holds_no_store(data, then) {
+            return through_null_arm(data, els);
+        }
+    }
+    value
+}
+
 /// The bare verdict name (no base) — for the free-site dump's `class=` field.
 fn own_kind(own: Own) -> &'static str {
     match own {
@@ -3810,6 +4112,229 @@ pub fn post_scope_lints(
     // steer whose successor does not resolve.
     superseded_fold_diagnostics(data, diags, fallback_file);
     warn_linked_group_append(data, diags, fallback_file);
+    // loft#1397 — a payload binding whose subject's place is overwritten with another variant.
+    warn_variant_overwritten(data, diags, fallback_file);
+}
+
+/// loft#1397 — a `match` / `is` PAYLOAD binding whose subject's PLACE is overwritten with a
+/// DIFFERENT variant while the binding is still read.
+///
+/// `formal/binding.md` `(B-Disturb)` is explicit that overwriting a place is NOT disturbing
+/// it — *"`o.inner = Box{…}` writes INTO the place `o.inner` already occupies, so a view of
+/// it survives"* — so the binding still names the payload slot and reads what is there now.
+/// Both backends agree, and the VALUE is what the rules give.  Nothing here is a lifetime
+/// defect, and the rules do not change to match the code.
+///
+/// What is missing is the DIAGNOSTIC.  loft#980's `variant-field-unchecked` exists for exactly
+/// this hazard — a field only some variants declare, read at a tag the program did not check —
+/// and it is deliberately quiet for `match` / `is` bindings, because those are per-arm and are
+/// the cure it names.  That exemption assumes the variant cannot change under the binding.  It
+/// can: the arm is entered as `Holder`, the subject's place is overwritten with `Empty`, and
+/// the per-arm binding keeps reading `Empty`'s bytes at `Holder`'s offsets.
+///
+/// Keyed on the ARM's own tag test rather than on a variant's discriminant derived here, so
+/// the lint cannot drift from the numbering the parser emits: the condition names the place
+/// and the tag in one node, and the overwrite is an `OpSetEnum` on that same place with a
+/// different one.
+///
+/// A LOCAL subject never reaches this.  `sh = Empty{…}` builds into a work-ref and repoints
+/// the local, so its `OpSetEnum` names a different place — and that shape is a REASSIGNMENT,
+/// which `(B-View)` already materialises and warns about.  Only a place the overwrite clause
+/// covers gets here, which is exactly the case that is correct-but-unwarned.
+///
+/// `warning`, not advice, by the tier rule: the value read is another variant's, typed as this
+/// one's, which is the same wrong result loft#980 reports.
+pub fn warn_variant_overwritten(
+    data: &Data,
+    diags: &mut crate::diagnostics::Diagnostics,
+    fallback_file: &str,
+) {
+    if !crate::keys::variant_overwritten_enabled() {
+        return;
+    }
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) {
+            continue;
+        }
+        // The DEFINITION's file, for the reason `warn_lost_temp_writes` gives: a warning gates
+        // a library's CI, so a dependency's line must not be paired with the consumer's path.
+        let file = if def.position.file.is_empty() {
+            fallback_file
+        } else {
+            def.position.file.as_str()
+        };
+        let mut hits: Vec<(u16, u16, u32, u32)> = Vec::new();
+        find_variant_arms(data, &def.code, &mut |place, tag, arm| {
+            let mut w = VariantWatch {
+                data,
+                function: &def.variables,
+                place,
+                tag,
+                bound: HashSet::new(),
+                stale: false,
+                at: def.position.clone(),
+                hits: Vec::new(),
+            };
+            w.walk(arm);
+            for (b, at) in w.hits {
+                hits.push((b, place.0, at.line, at.pos));
+            }
+        });
+        hits.sort_unstable();
+        hits.dedup_by_key(|(b, _, _, _)| *b);
+        for (binding, base, line, col) in hits {
+            let function = &def.variables;
+            let name = function.name(binding).to_string();
+            let field = name
+                .trim_start_matches("_mv_")
+                .rsplit_once('_')
+                .map_or_else(|| name.clone(), |(n, _)| n.to_string());
+            let subject = function.name(base).to_string();
+            let msg = format!(
+                "`{field}` names the payload of the variant this arm matched, and `{subject}` \
+                 is given a DIFFERENT variant while `{field}` is still read \u{2014} the binding \
+                 keeps naming the same slot, so this reads the new variant's bytes at \
+                 `{field}`'s offset. Copy the payload out before the write (`x = {field};`) \
+                 and read `x`"
+            );
+            diags.add_at_coded(
+                crate::diagnostics::Level::Warning,
+                Some("variant-overwritten-binding"),
+                &msg,
+                file,
+                line,
+                col,
+            );
+            // A diagnostic says what is wrong; the fix says what to write instead, and that is
+            // the half a reader acts on.  CONDITIONAL, and the condition is real rather than a
+            // formality: the cure depends on which value the author wanted.  Copying the
+            // payload out keeps the one the arm MATCHED; an author who meant to read what the
+            // subject holds now wants the opposite edit — re-enter the match after the write —
+            // and no tool can tell those apart from the source.
+            diags.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: format!("copy the payload out first: `x = {field};` then read `x`"),
+                condition: Some(format!(
+                    "if `{field}` is meant to be the payload this arm matched, rather than \
+                     whatever `{subject}` holds after the write"
+                )),
+                edit: None,
+                concept: "pattern matching",
+                concept_ref: "@F29",
+            });
+        }
+    }
+}
+
+/// Call `f` for every variant-check `if` — the lowering a `match` arm and an `is` both take —
+/// with the PLACE its tag is read from, the tag it tests, and the arm it guards.
+fn find_variant_arms(data: &Data, node: &Value, f: &mut impl FnMut((u16, u32), i32, &Value)) {
+    if let Value::If(cond, then_arm, _) = node.unspan()
+        && let Some((place, tag)) = variant_check(data, cond)
+    {
+        f(place, tag, then_arm);
+    }
+    node.unspan()
+        .for_each_child(&mut |c| find_variant_arms(data, c, f));
+}
+
+/// The place and tag a variant-check condition reads — `OpEqInt(OpConvIntFromEnum(OpGetEnum(P,
+/// 0)), N)`, and the non-struct spelling without the `OpGetEnum`.
+///
+/// An `is` wraps its condition in an `Insert` that first stabilises the subject into a local,
+/// so the tail is taken rather than the whole node.
+fn variant_check(data: &Data, cond: &Value) -> Option<((u16, u32), i32)> {
+    let tail = match cond.unspan() {
+        Value::Block(bl) | Value::Loop(bl) => bl.operators.last()?.unspan(),
+        // The `is` spelling stabilises its subject into a local first and yields the test as
+        // the LAST item of an `Insert`, where `match` hands the test bare.
+        Value::Insert(items) => items.last()?.unspan(),
+        other => other,
+    };
+    let Value::Call(d, args) = tail else {
+        return None;
+    };
+    if data.def(*d).name() != "OpEqInt" || args.len() != 2 {
+        return None;
+    }
+    let Value::Int(tag) = args[1].unspan() else {
+        return None;
+    };
+    let Value::Call(c, cargs) = args[0].unspan() else {
+        return None;
+    };
+    if data.def(*c).name() != "OpConvIntFromEnum" {
+        return None;
+    }
+    let subject = match cargs.first()?.unspan() {
+        Value::Call(g, gargs) if data.def(*g).name() == "OpGetEnum" => gargs.first()?,
+        other => other,
+    };
+    Some((projection_container_place(data, subject)?, *tag))
+}
+
+/// The ordered walk of one variant arm: what is BOUND, when the subject's place stops holding
+/// the variant the arm matched, and which bindings are read after that.
+struct VariantWatch<'a> {
+    data: &'a Data,
+    function: &'a crate::variables::Function,
+    place: (u16, u32),
+    tag: i32,
+    bound: HashSet<u16>,
+    stale: bool,
+    /// The nearest source position seen, so the report lands on the READ rather than on the
+    /// function — a warning a reader cannot locate is a warning they cannot act on.
+    at: crate::lexer::Position,
+    hits: Vec<(u16, crate::lexer::Position)>,
+}
+
+impl VariantWatch<'_> {
+    fn walk(&mut self, node: &Value) {
+        let outer = self.at.clone();
+        if let Some(p) = node.span_pos() {
+            self.at = p.clone();
+        }
+        self.walk_inner(node);
+        self.at = outer;
+    }
+
+    fn walk_inner(&mut self, node: &Value) {
+        match node.unspan() {
+            // The value runs before the target is written, so a read inside it is a read
+            // BEFORE this binding exists.
+            Value::Set(v, rhs) => {
+                self.walk(rhs);
+                // A PAYLOAD binding is named by the parser (`_mv_<field>_N`).  The side
+                // table that records which field each one projects (`mv_field_origin`) is
+                // cleared when the two passes are joined, so the name is the fact that
+                // survives to here — the same one `Variables::is_overwritten_view` reads.
+                if self.function.name(*v).starts_with("_mv_") {
+                    // Re-bound after the overwrite: it names the new variant's payload, which
+                    // is what the program asked for.
+                    self.bound.insert(*v);
+                    self.hits.retain(|(h, _)| h != v);
+                }
+                return;
+            }
+            Value::Var(v) if self.stale && self.bound.contains(v) => {
+                self.hits.push((*v, self.at.clone()));
+            }
+            Value::Call(d, args) if self.data.def(*d).name() == "OpSetEnum" => {
+                if let (Some(p), Some(Value::Enum(m, _))) = (
+                    args.first()
+                        .and_then(|a| projection_container_place(self.data, a)),
+                    args.get(2).map(Value::unspan),
+                ) && p == self.place
+                    && i32::from(*m) != self.tag
+                {
+                    self.stale = true;
+                }
+            }
+            _ => {}
+        }
+        node.unspan().for_each_child(&mut |c| self.walk(c));
+    }
 }
 
 /// Advise when two members of one linked collection GROUP are appended to in the same block
@@ -4180,8 +4705,18 @@ impl DoubleMove<'_> {
             // A reassignment replaces the value, so what was handed off is no longer what
             // this variable holds — `s1 = S{h:c}; c = mk(); s2 = S{h:c}` moves two distinct
             // resources into two containers and is correct.
+            //
+            // A plain whole-value copy `t = s` is itself a hand-off (the copy owns the
+            // resource, `scopes::copy_moves_drop_from`), so `t = s; u = s` is the same
+            // double release as two containers built from one droppable.
             Value::Set(v, rhs) => {
                 self.scan(rhs, st);
+                if let Value::Var(src) = rhs.unspan()
+                    && crate::scopes::copy_moves_drop_from(self.func, self.data, *v, *src, false)
+                        == Some(*src)
+                {
+                    self.record_source(*src, st);
+                }
                 st.remove(v);
             }
             Value::Call(d, args) if *d == self.copy_d && args.len() >= 3 => {
@@ -4214,6 +4749,16 @@ impl DoubleMove<'_> {
         // The exact predicate the drop suppression uses (`scopes::collect_drop_transferred`),
         // so the lint and the mechanism cannot drift: a hand-off is what makes the source
         // stop dropping, and this asks the same question of the same node.
+        // A whole-value copy into a compiler buffer (a materialised branch arm, a return
+        // buffer) moves the drop the way `t = s` does — the same arm the collector reads.
+        if let (Value::Var(src), Value::Var(dst)) = (args[0].unspan(), args[1].unspan())
+            && self.func.name(*dst).starts_with("__ref")
+            && crate::scopes::copy_moves_drop_from(self.func, self.data, *dst, *src, true)
+                == Some(*src)
+        {
+            self.record_source(*src, st);
+            return;
+        }
         let moved = matches!(args[2].unspan(), Value::Int(tp) if tp & 0x8000 != 0);
         if !moved
             && !crate::scopes::copy_hands_off(&args[1], self.func, self.data)
@@ -4221,9 +4766,14 @@ impl DoubleMove<'_> {
         {
             return;
         }
-        let Some(src) = crate::scopes::drop_bearing_source(&args[0]) else {
+        let Some(src) = crate::scopes::drop_bearing_source(&args[0], self.func) else {
             return;
         };
+        self.record_source(src, st);
+    }
+
+    /// Record a hand-off of `src`, and report the SECOND one of the same variable.
+    fn record_source(&mut self, src: u16, st: &mut Handoffs) {
         // Only a variable the AUTHOR wrote can be acted on. A compiler temp handed off twice
         // (`__lift_N`, `__ref_N`, `_elm_N`) is either impossible or our own bug, and either
         // way names nothing the reader can edit.
@@ -4329,9 +4879,9 @@ pub fn warn_double_move(
                 format!("at line {}", first.line)
             };
             let msg = format!(
-                "`{name}` is handed to a second owner here — a container already took \
-                 ownership of it {earlier}, and each owner releases what it owns, so this \
-                 one {ty} value is released TWICE"
+                "`{name}` is handed to a second owner here — a container or a copy already \
+                 took ownership of it {earlier}, and each owner releases what it owns, so \
+                 this one {ty} value is released TWICE"
             );
             diags.add_at_coded(
                 crate::diagnostics::Level::Warning,
@@ -5375,10 +5925,11 @@ mod uaf_overlay_tests {
 /// Returns the freed return-source vars, sorted + deduped. Empty = clean.
 pub fn return_source_freed(data: &Data, d_nr: u32) -> Vec<u16> {
     let def = data.def(d_nr);
+    let sets = data.op_sets();
     let ops = FreeOps {
-        fr: data.def_nr("OpFreeRef"),
-        ft: data.def_nr("OpFreeText"),
-        fif: data.def_nr("OpFreeRefIfDistinct"),
+        fr: std::sync::Arc::clone(&sets.unconditional_ref_frees),
+        ft: sets.text_free,
+        fif: std::sync::Arc::clone(&sets.conditional_ref_frees),
         db: data.def_nr("OpDatabase"),
     };
     let mut out: Vec<u16> = Vec::new();
@@ -5413,10 +5964,11 @@ pub fn return_source_freed(data: &Data, d_nr: u32) -> Vec<u16> {
 /// Returns the offending work-ref vars, sorted + deduped. Empty = clean.
 pub fn ref_param_publish_freed(data: &Data, d_nr: u32) -> Vec<u16> {
     let def = data.def(d_nr);
+    let sets = data.op_sets();
     let ops = FreeOps {
-        fr: data.def_nr("OpFreeRef"),
-        ft: data.def_nr("OpFreeText"),
-        fif: data.def_nr("OpFreeRefIfDistinct"),
+        fr: std::sync::Arc::clone(&sets.unconditional_ref_frees),
+        ft: sets.text_free,
+        fif: std::sync::Arc::clone(&sets.conditional_ref_frees),
         db: data.def_nr("OpDatabase"),
     };
     let mut out: Vec<u16> = Vec::new();
@@ -5489,14 +6041,14 @@ fn scan_rpf(
             // MAY-alias: published on either arm is published for the free that follows.
             *published = pt.union(&pe).copied().collect();
         }
-        Value::Call(d, args) if *d == ops.fr => {
+        Value::Call(d, args) if ops.fr.contains(d) => {
             if let Some(Value::Var(s)) = args.first().map(Value::unspan)
                 && published.contains(s)
             {
                 out.push(*s);
             }
         }
-        Value::Call(d, args) if *d == ops.fif || *d == ops.db => {
+        Value::Call(d, args) if ops.fif.contains(d) || *d == ops.db => {
             // IfDistinct is the SAFE free; OpDatabase re-allocates — both end the alias.
             if let Some(Value::Var(s)) = args.first().map(Value::unspan) {
                 published.remove(s);
@@ -5508,12 +6060,13 @@ fn scan_rpf(
     }
 }
 
-/// The scope-free / alloc op numbers the return-source walk keys off.
+/// The scope-free / alloc op numbers the return-source walk keys off — read off
+/// [`OpSets`], the one home of the free-op notion, so a new spelling reaches this walk too.
 struct FreeOps {
-    fr: u32,  // OpFreeRef (plain)
-    ft: u32,  // OpFreeText
-    fif: u32, // OpFreeRefIfDistinct (the SAFE conditional free)
-    db: u32,  // OpDatabase (re-alloc)
+    fr: std::sync::Arc<HashSet<u32>>, // the UNCONDITIONAL reference frees
+    ft: u32,                          // OpFreeText
+    fif: std::sync::Arc<HashSet<u32>>, // the witness-GUARDED frees (the SAFE conditional ones)
+    db: u32,                          // OpDatabase (re-alloc)
 }
 
 /// Path-sensitive walk: track the stores plain-`OpFreeRef`-freed on the current path
@@ -5548,12 +6101,12 @@ fn scan_rsf(
             scan_rsf(e, code, ops, &mut fe, out);
             *freed = ft.intersection(&fe).copied().collect();
         }
-        Value::Call(d, args) if *d == ops.fr => {
+        Value::Call(d, args) if ops.fr.contains(d) => {
             if let Some(Value::Var(s)) = args.first().map(Value::unspan) {
                 freed.insert(*s);
             }
         }
-        Value::Call(d, args) if *d == ops.fif || *d == ops.db => {
+        Value::Call(d, args) if ops.fif.contains(d) || *d == ops.db => {
             // IfDistinct is the SAFE free; OpDatabase re-allocates — both clear the store.
             if let Some(Value::Var(s)) = args.first().map(Value::unspan) {
                 freed.remove(s);
@@ -5562,7 +6115,7 @@ fn scan_rsf(
         Value::Return(r) | Value::Drop(r) => {
             let mut sources: HashSet<u16> = HashSet::new();
             let mut seen: HashSet<u16> = HashSet::new();
-            ret_alias_sources(r, code, ops.fr, ops.ft, ops.fif, &mut seen, &mut sources);
+            ret_alias_sources(r, code, ops, &mut seen, &mut sources);
             for &s in &sources {
                 if freed.contains(&s) {
                     out.push(s);
@@ -5574,16 +6127,16 @@ fn scan_rsf(
     }
 }
 
-fn is_free_op(node: &Value, fr: u32, ft: u32, fif: u32) -> bool {
-    matches!(node.unspan(), Value::Call(d, _) if *d == fr || *d == ft || *d == fif)
+fn is_free_op(node: &Value, fops: &FreeOps) -> bool {
+    matches!(node.unspan(), Value::Call(d, _) if fops.fr.contains(d) || *d == fops.ft || fops.fif.contains(d))
 }
 
 /// The last op of a sequence that carries the block's VALUE — skipping trailing
 /// scope-exit frees and `Line` markers (the same rule as `scopes::last_non_free_result`).
-fn last_value_op(ops: &[Value], fr: u32, ft: u32, fif: u32) -> Option<&Value> {
+fn last_value_op<'a>(ops: &'a [Value], fops: &FreeOps) -> Option<&'a Value> {
     ops.iter()
         .rev()
-        .find(|op| !is_free_op(op, fr, ft, fif) && !matches!(op.unspan(), Value::Line(_)))
+        .find(|op| !is_free_op(op, fops) && !matches!(op.unspan(), Value::Line(_)))
 }
 
 /// Collect the record work-refs the return value aliases: a returned `Var` is traced
@@ -5593,9 +6146,7 @@ fn last_value_op(ops: &[Value], fr: u32, ft: u32, fif: u32) -> Option<&Value> {
 fn ret_alias_sources(
     node: &Value,
     code: &Value,
-    fr: u32,
-    ft: u32,
-    fif: u32,
+    fops: &FreeOps,
     seen: &mut HashSet<u16>,
     out: &mut HashSet<u16>,
 ) {
@@ -5603,27 +6154,27 @@ fn ret_alias_sources(
         Value::Var(v) => {
             if seen.insert(*v) {
                 if let Some(rhs) = last_set_rhs(*v, code) {
-                    ret_alias_sources(rhs, code, fr, ft, fif, seen, out);
+                    ret_alias_sources(rhs, code, fops, seen, out);
                 } else {
                     out.insert(*v);
                 }
             }
         }
         Value::If(_, t, e) => {
-            ret_alias_sources(t, code, fr, ft, fif, seen, out);
-            ret_alias_sources(e, code, fr, ft, fif, seen, out);
+            ret_alias_sources(t, code, fops, seen, out);
+            ret_alias_sources(e, code, fops, seen, out);
         }
         Value::Block(bl) | Value::Loop(bl) => {
-            if let Some(l) = last_value_op(&bl.operators, fr, ft, fif) {
-                ret_alias_sources(l, code, fr, ft, fif, seen, out);
+            if let Some(l) = last_value_op(&bl.operators, fops) {
+                ret_alias_sources(l, code, fops, seen, out);
             }
         }
         Value::Insert(ops) => {
-            if let Some(l) = last_value_op(ops, fr, ft, fif) {
-                ret_alias_sources(l, code, fr, ft, fif, seen, out);
+            if let Some(l) = last_value_op(ops, fops) {
+                ret_alias_sources(l, code, fops, seen, out);
             }
         }
-        Value::Span(b) => ret_alias_sources(&b.1, code, fr, ft, fif, seen, out),
+        Value::Span(b) => ret_alias_sources(&b.1, code, fops, seen, out),
         _ => {}
     }
 }
@@ -5697,9 +6248,9 @@ mod return_source_tests {
     const DB: u32 = 103;
     fn ops() -> FreeOps {
         FreeOps {
-            fr: FR,
+            fr: std::sync::Arc::new(HashSet::from([FR])),
             ft: FT,
-            fif: FIF,
+            fif: std::sync::Arc::new(HashSet::from([FIF])),
             db: DB,
         }
     }
@@ -5807,9 +6358,9 @@ mod ref_param_publish_tests {
 
     fn ops() -> FreeOps {
         FreeOps {
-            fr: FR,
+            fr: std::sync::Arc::new(HashSet::from([FR])),
             ft: FT,
-            fif: FIF,
+            fif: std::sync::Arc::new(HashSet::from([FIF])),
             db: DB,
         }
     }

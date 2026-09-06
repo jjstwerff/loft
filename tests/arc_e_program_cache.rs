@@ -455,3 +455,118 @@ fn a_warm_run_renders_the_same_diagnostics_including_their_fixes() {
     let _ = std::fs::remove_dir_all(&cache);
     let _ = std::fs::remove_dir_all(&cache_x);
 }
+/// `introspect` always PARSES: a warm bundle carries no variable table, so under a cache hit
+/// the dump rendered every variable as `name(65535)` and the slot table's number and span
+/// columns as `-` — two runs of one binary read as two different compilers, which is the
+/// exact question `scripts/introspect_diff.sh` asks.  Measured on the released 2026.8.0.
+#[test]
+fn introspect_parses_fresh_under_a_warm_program_cache() {
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir();
+    let script = tmp.join(format!("loft_arce_introspect_{pid}.loft"));
+    std::fs::write(
+        &script,
+        "fn main() {\n  total = 0;\n  for n in 1..4 { total = total + n; }\n  print(\"{total}\\n\");\n}\n",
+    )
+    .expect("write script");
+    let cache_dir = tmp.join(format!("loft_arce_introspect_cache_{pid}"));
+    let _ = std::fs::remove_dir_all(&cache_dir);
+    let introspect = || {
+        let out = Command::new(loft_bin())
+            .arg("introspect")
+            .arg(&script)
+            .current_dir(workspace_root())
+            .env_remove("LOFT_STDLIB_CACHE")
+            .env("LOFT_PROGRAM_CACHE", "1")
+            .env("XDG_CACHE_HOME", &cache_dir)
+            .output()
+            .expect("failed to invoke loft binary");
+        assert!(
+            out.status.success(),
+            "introspect failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    // Warm the cache the way an ordinary run does, so a bundle EXISTS for the script.
+    let (ok, _) = run(&script, Some(&cache_dir));
+    assert!(ok, "the warming run failed");
+    let first = introspect();
+    let second = introspect();
+    assert!(
+        first.contains("total(") && !first.contains("(65535)"),
+        "the dump must carry real variable numbers:\n{first}"
+    );
+    assert_eq!(
+        first, second,
+        "two introspect runs of one binary must emit identically"
+    );
+    let _ = std::fs::remove_file(&script);
+    let _ = std::fs::remove_dir_all(&cache_dir);
+}
+
+/// `@FR-O-Witness` — a heap-record local whose assignments MIX ownership releases its
+/// stores through an owner witness both emitters READ (`Function::owner_witness`) to copy
+/// into a FRESH store rather than in place.  The witness was maintained in the IR and
+/// restored by no snapshot field, so a WARM run — the parse replaced by the cached bundle —
+/// emitted the pre-witness copy arm and wrote the copy INTO the record the local was
+/// viewing: the sharp cell of loft#1336 answered `b == 7` on its second run and `b == 2`
+/// on its first, on both backends.  A fact the emitters read must survive the snapshot
+/// exactly as `skip_free` does; this pins that for the witness, cold against warm.
+#[test]
+fn a_warm_run_keeps_the_owner_witness() {
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir();
+    let script = tmp.join(format!("loft_arce_witness_{pid}.loft"));
+    std::fs::write(
+        &script,
+        "struct Node { value: integer, next: reference<Node>? }\n\
+         fn run() -> integer {\n\
+         \x20 c = Node { value: 4, next: null };\n\
+         \x20 b = Node { value: 2, next: c };\n\
+         \x20 a = Node { value: 1, next: b };\n\
+         \x20 s: Node? = a;\n\
+         \x20 s = a.next;\n\
+         \x20 s = a;\n\
+         \x20 s.value = 7;\n\
+         \x20 b.value * 100 + a.value * 10 + s.value\n\
+         }\n\
+         fn main() { println(\"witness {run()}\"); }\n",
+    )
+    .expect("write script");
+    let cache_dir = tmp.join(format!("loft_arce_witness_cache_{pid}"));
+    let _ = std::fs::remove_dir_all(&cache_dir);
+    for backend in ["--interpret", "--native"] {
+        let run = |warm_label: &str| -> String {
+            let out = Command::new(loft_bin())
+                .arg(backend)
+                .arg(&script)
+                .current_dir(workspace_root())
+                .env_remove("LOFT_STDLIB_CACHE")
+                .env("LOFT_PROGRAM_CACHE", "1")
+                .env("LOFT_STRICT_STORES", "1")
+                .env("XDG_CACHE_HOME", &cache_dir)
+                .output()
+                .expect("failed to invoke loft binary");
+            assert!(
+                out.status.success(),
+                "{backend} {warm_label} run failed: {}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let cold = run("cold");
+        assert!(
+            cold.contains("witness 217"),
+            "{backend} cold output: {cold}"
+        );
+        let warm = run("warm");
+        assert!(
+            warm.contains("witness 217"),
+            "{backend} warm run copied into the viewed record (b overwritten): {warm}"
+        );
+    }
+    let _ = std::fs::remove_file(&script);
+    let _ = std::fs::remove_dir_all(&cache_dir);
+}

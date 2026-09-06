@@ -161,6 +161,41 @@ Checklist #4 (`is_collection`) resolves in the same breath: its home exists and 
 detector flagged them as a candidate drift pair; reading them shows a deliberate pair. That is
 the detector working as intended — it proposes, the reading disposes.
 
+### The linked GROUP, walked (`@FR-Col-Group`, 2026-09-05)
+
+Nine sites, three questions.  **Which fields form a group** has two derivations that were
+measured agreeing rather than merged — `Stores::field` (the db, by content id) and
+`Parser::collection_groups` (the two advices, by parser type) answer from different tables at
+different times, and nine shapes (forward-declared element, alias, variant, nullable member,
+nullable element, three members, two groups, nullable vector member, two plain vectors)
+agree.  **Which keyed kinds are views** is `link_shared_nullable_views`'s five arms, the same
+set `is_keyed` names.  **Which write routes maintain every member** had one home for ADDING
+(`Stores::record_finish`) and two hand-carried copies of the loop for LEAVING (`coll[key] =
+null`, `e#remove`) — now `Parser::group_sibling_unlinks`, and the three element-level writes
+through the vector member that had neither (`v[i] = e`, `v[i] = null`, `v.remove(i)`) go
+through `Parser::group_elem_write`, with `Stores::link_record_siblings` (`OpLinkRecord`) as
+`record_finish`'s sibling half for the re-link.  **Residual, named:** *"which struct field
+does this collection expression name"* still has two derivations — `Parser::field_site`
+(`expressions.rs`, from the assign's `parent_tp`, variant-aware) and `Parser::keyed_field_site`
++ `holder_type` (`collections.rs`, from the expression; now reads the `OpGetField` type
+annotation and resolves a vector-element base).  A merge wants the assign's `parent_tp`
+threaded into the removal sites, which is a refactor with no defect behind it today.
+
+### The uncomputable default, walked (`@FR-E-Uncomp-NN`, 2026-09-06)
+
+Eight sites, three questions, two of them already one home each: **what is `default(τ)`** is
+`IntegerSpec::default_value` (asked by `to_default`, `uninitialised_native_value` and the
+parser's range guard), and **null or default** is `uncomputable_default` (asked by both range
+paths).  The third — **where does an uncomputable result land** — had one home per spelling and
+two spellings with none: a value-`if` reached a classifier that claimed it as a `??`
+(`range_guard_inside_discharge` matched the bare-variable lowering by node; it now asks the
+builder, `bare_variable_discharge`), and an `else if` chain reached no conversion at all
+(`parse_if_expecting` threads the then arm's type into the chain's then block, and
+`parse_block`'s three `else`-only carve-outs read `arm_of_sibling`).  The de-duplication is the
+first: `range_guard_inside_discharge` carried its own discharge matcher beside
+`null_discharge_subject`, the declared home, and the two disagreed on exactly the shape an
+author writes.  QUALITY.md B7y; loft#1379, loft#1380.
+
 ## The DbRef set — a list that drifts SHORT, and the bug it produced (checklist #2, 2026-08-24)
 
 `Reference | Vector | Enum(_, true, _)` appears at **43 sites**. It looks like "the heap
@@ -447,8 +482,9 @@ without anyone having to remember.
 | `@FR-O-Borrow` | an aliasing value names its source; borrowers are skip-free | the `Deps` list; `Function::make_independent` strips a dep to promote a borrow to owner |
 | `@FR-O-Owner` · `@FR-O-Derived` | single owner; free is DERIVED, once, at scope exit | `Scopes::get_free_vars` (`src/scopes.rs`) — the scope-exit sweep |
 | `@FR-O-Move` | a returned store transfers to the caller — and a return that BORROWS a parameter is recorded, so the caller copies | TRANSFER: `get_free_vars`'s `ret_var` / `return_sources` suppression; `Parser::ref_return` (`src/parser/control.rs`). BORROW: `Def::returns_borrowed_view` reads the recorded dep, `use_analysis::call_return_frees_source` gates the source-free bit on it plus the @P290 bracket. ⚠ The borrow clause is recorded only where a delivery arm runs — `block_result` for `Text` / `Vector` / `Reference` / keyed, and `parse_return` for the explicit spelling; a return shape reaching neither records nothing and reads as OWNED (loft#1140 was the keyed kinds missing from both) |
-| `@FR-O-Complete` | per binding, per path — set-and-reconcile | `Scopes::scan_if`'s intersect of `owned_refs` across both arms (`src/scopes.rs`); and a bound value branch gives every arm tail a single bind would leave OWNING a temp of its own, so the joined binding has one fact — `Scopes::arm_bind` / `lift_join_arm_tails` (D-own-8) |
-| `@FR-O-NoDiverge` | both backends translate the SAME facts | structural: `scopes` decides and writes `OpFreeRef` into the IR; the emitters translate |
+| `@FR-O-Complete` | per binding, per path — set-and-reconcile | `Scopes::scan_if`'s intersect of `owned_refs` across both arms (`src/scopes.rs`); and a bound value branch gives every arm tail a single bind would leave OWNING a temp of its own, so the joined binding has one fact — `Scopes::arm_bind` / `lift_join_arm_tails` (D-own-8).  The other half, what a binding HOLDS on the paths that never assigned it (D-own-33): `scopes::needs_pre_init` (the null before a branch and the hoist out of a loop body, through `base()`), `witness_buffer` for a literal's buffer adopted in an inner scope (`adopted_work_refs`), `state/codegen.rs::gen_set_first_nullable_collection_null` (a nullable vector's null is the sentinel), and `Parser::join_arms` reaching a `match` block's tail so `join_source_frees` licenses every arm.  The VECTOR spelling (D-own-35): `Parser::sink_vec_bind_into_arms` (`src/parser/expressions.rs`) writes a value-branch bind out per arm at the bind selector `classify_vec_bind`, and `vec_copy_needs_db` mints inside an arm and on a parameter's first rebind; `Parser::branch_sunk_vectors` carries the bound-to-a-branch fact to `classify_ret_promotion` |
+| `@FR-O-NoDiverge` | both backends translate the SAME facts; a decision still made per backend is spelled ONCE | structural: `scopes` decides and writes `OpFreeRef` into the IR; the emitters translate.  The displacement free's fact-reading half is `Function::owns_displaced_store` (`Function::borrows_one_argument` beneath it), read by `state/codegen.rs`'s `owned_ref`, `generation/dispatch.rs`'s `owned_ref_reassign` and the scope-exit sweep alike |
+| `@FR-O-Detach` | a binding's DETACH is sequenced AFTER every read of it by the value assigned | the ONE static question is `Value::reads_var` (`src/data.rs`); three placements: HOIST the reads (`Parser::rebind_local_heap_param`, `parse_object`'s literal, and `Parser::snapshot_read_destination` for a collection build that reads its destination — the literal and the comprehension), DEFER the free past the assignment (`state/codegen.rs`'s stash + `OpFreeRefIfDistinct`; `generation/dispatch.rs`'s `_old` / `_disp` stash, for every right-hand side that produces a store, a value-`if` included), RELEASE BY IDENTITY after the `Set` (the owner witness, `src/scopes.rs`) |
 
 **The load-bearing invariant is `O-Complete`, not soundness.** loft has no user-facing
 borrow checker — the user writes naively and the compiler must always find a lowering — so
@@ -497,11 +533,11 @@ reframes the rest:
 
 | rule | fact | implemented at |
 |---|---|---|
-| `@FR-O-Oracle` | the own-vs-borrow derivation, from the IR | `use_analysis::ownership_of` |
+| `@FR-O-Oracle` | the own-vs-borrow derivation, from the IR; the callee→caller base translation has one home | `use_analysis::ownership_of`; `use_analysis::structural_arg_base` (read by the oracle and by the `ownership_cfg` shadow alike); `use_analysis::projection_container_var` names a projection's container for the oracle, the view-materialise walk and both emitters alike, peeling the variant check a struct-enum payload projection wraps its subject in; cross-checked by Check A under `LOFT_OWN_ORACLE=check`, whose injected true positive is `LOFT_OWN_INJECT_FACT_OWNED` |
 | `@FR-O-Proxy` | empty `deps` as a stand-in for "owner" — unsound alone | `Type::depend().is_empty()`, 24 sites |
-| `@FR-O-Override` | the never-free veto that makes the proxy safe at a free | `Function::is_skip_free` |
+| `@FR-O-Override` | the never-free veto that makes the proxy safe at a free — over the free NOTION (`OpSets::frees`, five spellings), with the one admissible free named | `Function::is_skip_free`; the downstream intercepts `state/codegen.rs::generate_call` and `generation/ops/ref_ops.rs`; `Function::is_staged_text_temp` (the admissible release); gated by `ownership_cfg`'s Check D under `LOFT_OWN_ORACLE=check` |
 | `@FR-O-Latest` | latest assignment's ownership + the LOOP DEPTH it was taken at | `Scopes::owned_refs` |
-| `@FR-O-Witness` | a MIXED-ownership local's owner, per RUN, by store identity | `Scopes::owner_witness` (`owner_witness_locals`, `witness_set_kind`), `Function::owner_witness`; both emitters read the flag to copy FRESH and to decline the materialise arms |
+| `@FR-O-Witness` | a MIXED-ownership local's owner, per RUN, by store identity | `Scopes::owner_witness` (`owner_witness_locals`, `witness_set_kind`), `Function::owner_witness` (stored in the snapshot as `VAR_OWNER_WITNESS`, cache format v5); both emitters read the flag to copy FRESH and to decline the materialise arms |
 
 **`deps` is not the oracle.** `ownership_of` derives own-vs-borrow from the IR — a store
 mint is `Owned`, a projection is `Borrowed(base)`, a call resolves through the callee's
@@ -590,7 +626,7 @@ So the site says which, in a vocabulary the gate parses:
 |---|---|---|
 | `// @FR-O-Proxy asks free` | 9 | ownership, and a free follows wherever it is emitted — **`O-Override` is required with it** |
 | `// @FR-O-Proxy asks copy` | 8 | copy-vs-alias / materialise-vs-view; a wrong answer costs a copy, never a release |
-| `// @FR-O-Proxy asks alloc` | 4 | whether to ALLOCATE or null-init a store — the opposite direction from a free |
+| `// @FR-O-Proxy asks alloc` | 5 | whether to ALLOCATE or null-init a store — the opposite direction from a free |
 | `// @FR-O-Proxy asks oracle` | 3 | an independent derivation that drives no emission (@PLN94's oracle, witness accounting) |
 
 **A declaration is a claim, so the gate disproves what it can**: a site declaring anything

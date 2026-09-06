@@ -476,11 +476,14 @@ impl State {
             }
         };
         let load_ops = [op_of("OpVarRef"), op_of("OpVarVector")];
-        let free_ops = [
-            op_of("OpFreeRef"),
-            op_of("OpFreeRefIfDistinct"),
-            op_of("OpFreeRefTag"),
-        ];
+        // Every reference-free spelling, read off the one free-op home (`OpSets`).
+        let sets = data.op_sets();
+        let free_ops: Vec<u16> = sets
+            .unconditional_ref_frees
+            .iter()
+            .chain(sets.conditional_ref_frees.iter())
+            .map(|&d| data.def(d).op_code)
+            .collect();
         if load_ops.iter().chain(free_ops.iter()).any(|&o| o >= 255) {
             return;
         }
@@ -523,7 +526,7 @@ impl State {
                     if v != fv.var_nr || bc <= frame_pos || bc < fn_start || bc >= fn_end {
                         continue;
                     }
-                    if !self.uaf_is_read(bc, fv.slot, load_ops, free_ops) {
+                    if !self.uaf_is_read(bc, fv.slot, load_ops, &free_ops) {
                         continue;
                     }
                     let line = self
@@ -575,7 +578,7 @@ impl State {
     /// ref loads) is NOT an `OpFreeRef`-family op.  Entries that are write
     /// sites (`generate_set` keys the RHS's first op) or loads of a different
     /// variable's slot return `false`.
-    fn uaf_is_read(&self, bc: u32, slot: u16, load_ops: [u16; 2], free_ops: [u16; 3]) -> bool {
+    fn uaf_is_read(&self, bc: u32, slot: u16, load_ops: [u16; 2], free_ops: &[u16]) -> bool {
         let code = &self.bytecode;
         let at = |p: u32| -> Option<u16> { code.get(p as usize).map(|&b| u16::from(b)) };
         let Some(op) = at(bc) else { return false };

@@ -82,6 +82,13 @@ const CLEAN_CORPUS: &[&str] = &[
     "doc/claude/plans/94-cfg-ownership-dataflow/probes/06-capture.loft",
     "tests/scripts/505-collection-capture.loft",
     "tests/scripts/85-struct-copy-return-owned.loft",
+    // The three shapes the two derivations disagreed on over the 1247-file corpus until the
+    // `@FR-O-Oracle` walk (QUALITY.md B7r): a local minted once and rebound by a call that may
+    // hand back its argument, a keyed literal repointed at a captured collection inside a
+    // closure, and a call delivering through a hidden buffer.  Zero disagreements is the claim.
+    "tests/scripts/1017b-a-conditional-borrow-into-its-own-binding.loft",
+    "tests/scripts/1326-a-captured-keyed-collection-rebind-replaces.loft",
+    "tests/scripts/1331-a-repointed-literal-accumulator-is-detached.loft",
 ];
 
 const A1B_UAF: &str = "tests/scripts/85-temp-subject-borrow-return-uaf.loft";
@@ -99,9 +106,9 @@ fn oracle_clean_on_correct_corpus() {
     }
 }
 
-/// 4.3 — the true-positive gate: the known-wrong plan is flagged, the correct default is not.
-/// This is the class the runtime gates (exit / leak / interp-vs-native) structurally MISS — see the
-/// strictness table in PHASE4_DESIGN.md.
+/// 4.3 — the known-wrong A1b plan (the promotion collapse: a temp subject built INTO the return
+/// buffer, then a borrowed view of it returned) fails its own fixture at run time, and the correct
+/// default does not — the runtime channel this class is caught on.
 ///
 /// It takes ALL THREE opt-outs to reach that plan now. `LOFT_NO_A1B` restores the promotion
 /// collapse, but loft#872's work-ref/argument step-over then keeps the roles apart anyway — pass 2's
@@ -111,28 +118,83 @@ fn oracle_clean_on_correct_corpus() {
 /// handed the promoted buffer whatever the other two do. Any ONE of the three makes this fixture
 /// right, which is worth knowing: they are independent guards on the same collapse, and the gate has
 /// to disable all of them to have a defect to catch.
+///
+/// This gate used to ask Check A to FLAG the wrong plan, and it did — but the disagreement it
+/// reported was the shadow's own weaker callee-to-caller base translation (`Borrowed(MAX)` for an
+/// argument built in place) against the oracle's mint shortcut (`Owned` for any `OpDatabase` var),
+/// two derivation defects that happened to differ on this shape.  With the mint shortcut refined and
+/// one translation shared by both (`use_analysis::structural_arg_base`), the two derivations agree on
+/// the wrong plan as on the right one, and Check A stays CLEAN on both — that is asserted here too,
+/// so a future divergence on this fixture is a finding.  Check A's own true positive is the injected
+/// one below.
 #[test]
-fn oracle_flags_the_a1b_wrong_plan() {
-    let wrong = check_reds(
-        A1B_UAF,
-        &[
-            ("LOFT_NO_A1B", "1"),
-            ("LOFT_NO_WORKREF_STEPOVER", "1"),
-            ("LOFT_NO_P2_OBJECT_WORKREF", "1"),
-        ],
-    );
+fn the_a1b_wrong_plan_fails_at_run_time_and_the_oracles_agree_on_it() {
+    let wrong_env: &[(&str, &str)] = &[
+        ("LOFT_NO_A1B", "1"),
+        ("LOFT_NO_WORKREF_STEPOVER", "1"),
+        ("LOFT_NO_P2_OBJECT_WORKREF", "1"),
+    ];
+    let run = |env: &[(&str, &str)]| -> (bool, String) {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg("--interpret")
+            .arg(root().join(A1B_UAF))
+            .env("LOFT_NO_CACHE", "1");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().expect("run loft");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let (wrong_ok, wrong_err) = run(wrong_env);
     assert!(
-        wrong
+        !wrong_ok && wrong_err.contains("assertion failed"),
+        "the known-wrong A1b plan must fail its fixture at run time; got ok={wrong_ok}:\n{wrong_err}"
+    );
+    let (right_ok, right_err) = run(&[]);
+    assert!(
+        right_ok,
+        "the correct default plan must pass its fixture:\n{right_err}"
+    );
+    for env in [wrong_env, &[][..]] {
+        let reds = check_reds(A1B_UAF, env);
+        let disagree: Vec<&String> = reds
             .iter()
-            .any(|r| r.contains("n_h") && r.contains("fact-disagree")),
-        "the oracle did NOT flag the known-wrong LOFT_NO_A1B plan (n_h):\n{}",
-        wrong.iter().cloned().collect::<Vec<_>>().join("\n")
-    );
-    let correct = check_reds(A1B_UAF, &[]);
+            .filter(|r| r.contains("fact-disagree"))
+            .collect();
+        assert!(
+            disagree.is_empty(),
+            "the two ownership derivations disagreed on the A1b fixture under {env:?}: {disagree:?}"
+        );
+    }
+}
+
+/// Check A's TRUE-POSITIVE gate, injected: `LOFT_OWN_INJECT_FACT_OWNED=inner` forces the shadow's
+/// fact for `inner` — a vector header viewing its own `__vdb_` backing, `Borrowed` to the oracle and
+/// never filled, so no `Join` softens the comparison — to `Owned`, and Check A must report the
+/// `fact-disagree`; the un-injected run must be clean.  Symmetric to the leak-scan and over-free
+/// injections — a report whose zero cannot be made non-zero proves nothing.
+#[test]
+fn oracle_fact_check_flags_an_injected_owned_fact() {
+    let disagree = |env: &[(&str, &str)]| -> Vec<String> {
+        check_reds(A1B_UAF, env)
+            .into_iter()
+            .filter(|r| r.contains("fact-disagree") && r.contains("inner"))
+            .collect()
+    };
     assert!(
-        correct.is_empty(),
-        "the oracle cried wolf on the CORRECT A1b plan:\n{}",
-        correct.iter().cloned().collect::<Vec<_>>().join("\n")
+        disagree(&[]).is_empty(),
+        "Check A cried wolf on the un-injected fixture: {:?}",
+        disagree(&[])
+    );
+    let injected = disagree(&[("LOFT_OWN_INJECT_FACT_OWNED", "inner")]);
+    assert!(
+        injected
+            .iter()
+            .any(|r| r.contains("mine=Owned") && r.contains("B=Borrowed")),
+        "Check A FAILED to flag the injected Owned fact for inner (vacuous?): {injected:?}"
     );
 }
 
@@ -445,5 +507,114 @@ fn oracle_over_free_check_flags_an_injected_free() {
     assert!(
         injected.iter().any(|r| r.contains("bview")),
         "the over-free check FAILED to flag the injected bview over-free (vacuous?): {injected:?}"
+    );
+}
+
+/// The never-free TRUE-POSITIVE gate (Check D, on the promoted `check` path): proving the
+/// @FR-O-Override check is not vacuous.  The B7p guard marks `d` never-free (a nullable local that
+/// only views a projection); `LOFT_OWN_INJECT_FREE_SKIPFREE=d` makes `get_free_vars` name a
+/// witness-guarded free of `d` against itself — a run-time no-op, but a free of a never-free
+/// binding in a spelling neither backend intercepts, which the check MUST report; the un-injected
+/// run MUST be clean for `d`.
+/// @PLN153 phase 4 — the over-free check sees a NULLABLE view local as the heap local it is.
+///
+/// `08b` is the positive control (08) with `bview` declared `vector<integer>?`: the same
+/// dep-carrying view of the holder's store behind a nullability marker (`@FR-L-Null`, the
+/// same storage).  Check B's heap filter asked `heap_dep()` of the local's type BARE, so the
+/// nullable spelling was never a candidate and the injected over-free went unflagged while the
+/// dense control's was flagged — the oracle green over exactly the twin @PLN153 is about.
+/// Both halves: the un-injected run stays clean, the injected one goes RED on `bview`.
+#[test]
+fn oracle_over_free_check_sees_a_nullable_view_local() {
+    let ctrl = "doc/claude/plans/94-cfg-ownership-dataflow/probes/08b-overfree-positive-control-nullable.loft";
+    let reds = |env: &[(&str, &str)]| -> Vec<String> {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg("--interpret")
+            .arg(root().join(ctrl))
+            .env("LOFT_NO_CACHE", "1")
+            .env("LOFT_OWN_ORACLE", "check");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().expect("run loft check");
+        String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .filter(|l| {
+                l.starts_with("RED ") && l.contains("free-of-borrowed") && l.contains("bview")
+            })
+            .map(str::to_string)
+            .collect()
+    };
+    assert!(
+        reds(&[]).is_empty(),
+        "the over-free check cried wolf on the un-injected nullable control: {:?}",
+        reds(&[])
+    );
+    let injected = reds(&[("LOFT_OWN_INJECT_FREE_BORROWED", "bview")]);
+    assert!(
+        injected.iter().any(|r| r.contains("bview")),
+        "the over-free check FAILED to flag the injected over-free of a NULLABLE view (the \
+         heap filter read the wrapper as not-a-heap-local): {injected:?}"
+    );
+}
+
+#[test]
+fn oracle_override_check_flags_an_injected_free_of_a_never_free_binding() {
+    let guard = "tests/scripts/a-nullable-view-local-does-not-free-what-it-displaces.loft";
+    let reds = |env: &[(&str, &str)]| -> Vec<String> {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg("--check")
+            .arg(root().join(guard))
+            .env("LOFT_NO_CACHE", "1")
+            .env("LOFT_OWN_ORACLE", "check");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().expect("run loft check");
+        String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .filter(|l| {
+                l.starts_with("RED ") && l.contains("never-free-freed") && l.contains(" d (v")
+            })
+            .map(str::to_string)
+            .collect()
+    };
+    assert!(
+        reds(&[]).is_empty(),
+        "Check D cried wolf on the un-injected guard: {:?}",
+        reds(&[])
+    );
+    let injected = reds(&[("LOFT_OWN_INJECT_FREE_SKIPFREE", "d")]);
+    assert!(
+        injected.iter().any(|r| r.contains("OpFreeRefIfDistinct")),
+        "Check D FAILED to flag the injected free of the never-free `d` (vacuous?): {injected:?}"
+    );
+}
+
+/// One release mechanism per local: a local whose assignments MIX ownership gets an owner
+/// witness (loft#1336) and is never-free, so it must not ALSO be given the loft#1200
+/// displacement flag — that flag's guarded `OpFreeRef` was dropped at codegen by the never-free
+/// veto on both backends, a dead free the IR carried for every witnessed local.  Check D reports
+/// such a dropped free as a `NOTE`; the 1200 guard, whose locals all take the witness, must
+/// produce none.  (Observer-only when the witness is switched off, hence the env pin.)
+#[test]
+fn a_witnessed_local_carries_no_dead_displacement_free() {
+    let guard = "tests/scripts/1200-a-nullable-record-local-frees-what-it-displaces.loft";
+    let mut cmd = Command::new(loft_bin());
+    cmd.arg("--check")
+        .arg(root().join(guard))
+        .env("LOFT_NO_CACHE", "1")
+        .env("LOFT_OWN_ORACLE", "check")
+        .env_remove("LOFT_NO_OWNER_WITNESS");
+    let out = cmd.output().expect("run loft check");
+    let notes: Vec<String> = String::from_utf8_lossy(&out.stderr)
+        .lines()
+        .filter(|l| l.starts_with("NOTE ") && l.contains("never-free"))
+        .map(str::to_string)
+        .collect();
+    assert!(
+        notes.is_empty(),
+        "a witnessed local still carries a second, dead release in the IR:\n{}",
+        notes.join("\n")
     );
 }

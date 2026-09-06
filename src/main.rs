@@ -4168,6 +4168,17 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
 /// Silent unless one of the variables is actually set, so an ordinary native run is
 /// unchanged.
 fn announce_profiler_cannot_follow_native() {
+    // @PLN154 — the stack shadow has the same shape of limit and the same reason to say so:
+    // it lives on the interpreter's value-stack store, and a native binary has no such store
+    // to shadow.  Announced here rather than at the exit report, because a native run never
+    // reaches that report and would otherwise say nothing at all.
+    if loft::stack_verify::enabled() {
+        eprintln!(
+            "loft: LOFT_VERIFY_STACK set, but the stack shadow is interpreter-only — this \
+             program runs native,\n  so no slot will be checked. Add --interpret to verify \
+             it."
+        );
+    }
     let asked: Vec<&str> = ["LOFT_PROFILE", "LOFT_ALLOC_PATHS", "LOFT_ALLOC_SITES"]
         .into_iter()
         .filter(|v| std::env::var_os(v).is_some())
@@ -8788,8 +8799,15 @@ fn main() {
                 None => (None, None),
             }
         };
-    let program_cache_on =
-        loft::cache::program_cache_enabled() && script_desugared.is_none() && !script_mode;
+    // `introspect` reports what the PARSER emits for this program, so it always parses: a
+    // warm bundle carries no variable table, and the dump then rendered every variable as
+    // `name(65535)` with `-` in the slot table — two runs of one binary read as two
+    // compilers (measured 2026-09-05 on the released 2026.8.0, `LOFT_NO_CACHE=1` was the
+    // only way to compare emissions).
+    let program_cache_on = loft::cache::program_cache_enabled()
+        && script_desugared.is_none()
+        && !script_mode
+        && !introspect_mode;
     p.track_sources = program_cache_on;
     // @PLN11 G2/M6 — on a warm hit with LOFT_CODEGEN_STORE, the cache is loaded
     // as a SKELETON (def table only) and the mmap'd bundle store is returned
@@ -11333,22 +11351,31 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                         cache_dir.display()
                     );
                 } else {
-                    // Remove stale cached binaries for THIS source file only.
-                    let prefix = format!("{source_stem}-");
-                    if let Ok(entries) = std::fs::read_dir(&cache_dir) {
-                        for entry in entries.flatten() {
-                            if entry.file_name().to_string_lossy().starts_with(&prefix) {
-                                let _ = std::fs::remove_file(entry.path());
-                            }
-                        }
-                    }
-                    if std::fs::copy(&binary, &cached_binary).is_ok() {
-                        // P254 — tighten the freshly written binary
-                        // to 0700.  std::fs::copy preserves source
-                        // mode, which for `/tmp/loft_native_bin_<pid>`
-                        // is typically 0644 — wider than we want.
-                        native_utils::tighten_cache_binary(&cached_binary);
-                    }
+                    // Publish ATOMICALLY.  A plain `fs::copy` onto `cached_binary`
+                    // truncates it in place and then streams ~11 MB, and for that
+                    // whole window another process testing the cache sees a file
+                    // that EXISTS and passes `cache_safe_to_execute` — which reads
+                    // symlink, owner and mode but never SIZE.  So a concurrent run
+                    // execs a 0-byte-and-growing ELF and dies with no stdout and no
+                    // stderr at all.  The mode check does not save it: once the
+                    // entry exists at 0700, a later copy truncates it while the
+                    // mode stays 0700.  Measured as a red `make ci` in two runs of
+                    // three, on `alias_link_baseline::baseline_leak_clean_native` —
+                    // whose two native cells compile the same source concurrently,
+                    // so they race exactly when the entry is cold.
+                    //
+                    // Stage under a private per-process name in the SAME directory
+                    // (so the rename cannot cross a filesystem), tighten it while it
+                    // is still invisible under its final name, then rename.  POSIX
+                    // rename is atomic and a process already exec'ing the old inode
+                    // keeps it, so every reader sees one COMPLETE binary.  The
+                    // leading `.` keeps a staged file out of the sweep's prefix.
+                    native_utils::publish_cached_binary(
+                        &binary,
+                        &cached_binary,
+                        &cache_dir,
+                        &source_stem,
+                    );
                 }
             }
             binary
@@ -11702,6 +11729,17 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
     // often exactly what is being asked. Both are silent unless armed.
     state.report_alloc_sites(&p.data);
     state.report_profile(&p.data);
+    // @PLN154 phase 0 — the stack-write census, on the same terms: it measured the run
+    // that happened, fault or not.  Silent unless `LOFT_STACK_CENSUS` armed it.
+    if loft::stack_census::enabled() {
+        loft::stack_census::report(Some(&p.data));
+    }
+    // @PLN154 phase 1 — the stack shadow's verdict.  It prints on a CLEAN run too: silence
+    // is the result this instrument exists to make trustworthy, and a detector that says
+    // nothing when it found nothing reads exactly like one that never ran.
+    if loft::stack_verify::enabled() {
+        loft::stack_verify::report();
+    }
     // loft#1088 — the network summary was BUILT and never printed: `LOFT_NET_PROFILE=1`
     // accumulated every event and nothing called `report`, so only `=trace` (which
     // prints per event) produced output at all.  Beside the other two because it is the
@@ -11722,6 +11760,17 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
         let n = loft::keys::strict_store_violations();
         if n > 0 {
             eprintln!("[strict-store] FAILED: {n} store-lifetime violation(s)");
+            std::process::exit(1);
+        }
+    }
+    // @PLN154 phase 5 — the same reason, one lever over: every finding is reported at its
+    // own site during the run, and the count becomes a non-zero exit here so the shadow can
+    // be a GATE rather than something someone has to read the output of.  A sweep that has
+    // to grep stderr is a sweep that goes green when the format changes.
+    if loft::stack_verify::enabled() {
+        let n = loft::stack_verify::violations();
+        if n > 0 {
+            eprintln!("[stack-verify] FAILED: {n} stack-slot violation(s)");
             std::process::exit(1);
         }
     }

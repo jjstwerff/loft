@@ -1823,24 +1823,15 @@ impl Stores {
             self.raise_recoverable_runtime(crate::runtime_error::RuntimeErrorKind::NegativeIndex {
                 idx: index,
             });
-            // Sentinel matches `vector::get_vector` legacy OOB shape
-            // (preserve `db.store_nr`, set `rec=0`).  See
-            // `State::vec_get_or_raise` for the rationale.
-            return crate::keys::DbRef {
-                store_nr: db.store_nr,
-                rec: 0,
-                pos: 0,
-            };
+            // `nullref`, the one value spelling of absence (`DbRef::or_null`,
+            // @FR-L-Null) — see `State::vec_get_or_raise`, its interpreter twin.
+            return crate::keys::DbRef::NULL;
         }
         if normalized >= i64::from(len) {
             self.raise_recoverable_runtime(
                 crate::runtime_error::RuntimeErrorKind::IndexOutOfBounds { idx: index, len },
             );
-            return crate::keys::DbRef {
-                store_nr: db.store_nr,
-                rec: 0,
-                pos: 0,
-            };
+            return crate::keys::DbRef::NULL;
         }
         crate::vector::get_vector(db, size, index, &self.allocations)
     }

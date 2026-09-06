@@ -921,15 +921,14 @@ impl State {
         self.put_stack(new_value);
     }
 
+    /// `OpGetRecord` — the keyed lookup `c[k]`.  Its one exit answers the record as a VALUE:
+    /// `nullref` for a miss, whichever arm below missed (`DbRef::or_null`, @FR-L-Null).
+    /// `codegen_runtime::OpGetRecord` is the native twin, normalised at its exit the same way.
     pub fn get_record(&mut self) {
         let (db_tp, key) = self.read_key(false);
         let data = *self.get_stack::<DbRef>();
         let res = if data.rec == 0 {
-            DbRef {
-                store_nr: data.store_nr,
-                rec: 0,
-                pos: 0,
-            }
+            DbRef::NULL
         } else {
             // @PLN129 arc A — the miss path consults a bound source; identical to
             // `find` for an unbound collection, which is every collection today.
@@ -955,7 +954,7 @@ impl State {
                 self.database.fetch_missing(&data, db_tp, &key)
             }
         };
-        self.put_stack(res);
+        self.put_stack(res.or_null());
     }
 
     /// @PLN133 S9 — does this program declare a driver for what this collection
@@ -1123,6 +1122,15 @@ impl State {
         let till = self.stack_key(till_key, &keys);
         let from = self.stack_key(from_key, &keys);
         let data = *self.get_stack::<DbRef>();
+        // A holder with no record — a field reached through `nullref` — holds no
+        // collection, and the cursor says so before any store is resolved: `finish ==
+        // u32::MAX` is what `step` reads as "done", and the same test opens
+        // `codegen_runtime::OpIterate`.  Resolving the store first indexed
+        // `allocations[u16::MAX]`.
+        if data.rec == 0 {
+            self.put_stack((u64::from(u32::MAX) << 32) | u64::from(u32::MAX));
+            return;
+        }
         // Start the loop at the 'till' key and walk to the 'from' key
         let reverse = on & 64 != 0;
         // The 'till' key is exclusive the found key
@@ -1293,10 +1301,13 @@ impl State {
         let finish = *self.get_var::<u32>(state_var - 4);
         let reverse = on & 64 != 0;
         let data = *self.get_stack::<DbRef>();
-        let store = crate::keys::store(&data, &self.database.allocations);
+        // The holder's record is tested BEFORE its store is resolved: a holder reached
+        // through `nullref` has no store to resolve (`codegen_runtime::OpStep` asks in the
+        // same order).
         let cur = if data.rec == 0 || finish == u32::MAX {
             new_ref(&data, 0, 0)
         } else {
+            let store = crate::keys::store(&data, &self.database.allocations);
             match on & 63 {
                 1 => {
                     let rec = new_ref(&data, cur, arg);
@@ -1632,6 +1643,16 @@ impl State {
         if data.store_nr == u16::MAX {
             return;
         }
+        // @FR-L-Null, the DESTINATION half of the same question (loft#1374's boundary).  A
+        // read naming no record answers `nullref`, so an out-of-range element write
+        // (`w.es[9] = e` on a one-element vector) hands this a null PLACE.  There is nothing
+        // to write into, so the write is dropped — which is what the language already says
+        // such a write does.  Without it `store_mut` indexes `allocations[65535]` and the
+        // process dies on a program the compiler accepted.  The source half above and this
+        // one are one rule read from its two ends.
+        if to.store_nr == u16::MAX {
+            return;
+        }
         // @PLN90 phase 1 — make the copy visible. A real record deep-copy is about to
         // run (the no-op-alias and null cases returned above). LOFT_COPY_DUMP prints one
         // line per executed structure copy so we can inventory every copy + map it to its
@@ -1830,11 +1851,11 @@ impl State {
         let src = *self.get_stack::<DbRef>();
         // `rec == 0` is the absence test, not `store_nr == u16::MAX` — the doc above already
         // says so ("`v == null` … tests `rec == 0`") while the guard asked the narrower
-        // question.  Absence has two spellings: the null sentinel carries `store_nr ==
-        // u16::MAX`, and an index past the end of a LIVE container carries the container's
-        // real `store_nr` with `rec == 0` (`vector::get_vector`).  Reading only the first
-        // left `k = v[oob]` deep-copying from a record that is not there, so `k` came back
-        // holding the pre-allocated record's uninitialised bytes instead of null (loft#823).
+        // question.  A read that names no record answers `nullref` (`DbRef::or_null`,
+        // @FR-L-Null), whose `rec` is 0 as well, so this test is total over every source a
+        // call can hand back; reading the `store_nr` alone left `k = v[oob]` deep-copying
+        // from a record that was not there, so `k` came back holding the pre-allocated
+        // record's uninitialised bytes instead of null (loft#823).
         if src.rec == 0 {
             // Null return: reclaim the pre-allocated destination record and bind
             // the null sentinel so `v == null` holds.

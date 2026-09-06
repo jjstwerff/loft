@@ -216,6 +216,13 @@ shows up in the other (verified: `a = mk(); a[0]=99; b = mk()` leaves `b[0]==1`)
 leaks a view of its own local: the returned heap value is owned by the caller. The only borrow you
 can get back is an explicit `&T` return, which binding.md governs.
 
+**A generic's instance owes exactly this, and nothing in the rule distinguishes it.**  The
+declaration defers a generic's return promotion to instantiation, and for a long time nothing at
+instantiation received it, so `fn same<T>(x: T) -> T { x }` bound to a struct, a vector or a keyed
+collection handed the argument up while its concrete twin copied — measured on the 48-cell
+independence matrix the sentence above states, 13 generic cells wrong on both backends and every
+concrete one right (D-call-13, QUALITY.md B7t).  The concrete twin is the oracle for the instance.
+
 ---
 
 ## Deviations
@@ -253,7 +260,11 @@ measurement that closed it — is the companion [calls-history.md](calls-history
   local}, both backends, in
   `tests/scripts/1290-a-heap-parameter-rebind-is-local-in-every-spelling.loft`, with a FIELD
   write (`F-ParamHeap`), a `&` parameter (`F-ParamRef`) and a plain LOCAL as the controls.
-  The COLLECTION half is
+  The VECTOR kind's `p = other` spelling was in neither oracle and answered wrong until
+  2026-09-05 (D-call-14): `tests/scripts/a-vector-parameter-reassigned-from-a-variable-rebinds-locally.loft`
+  crosses it with a returned rebind, a rebind through a value branch, a double one, a loop and a
+  read ahead of the rebind, with the mutate-through, a self arm and a `&` parameter as the
+  controls.  The COLLECTION half is
   `tests/scripts/1294-a-keyed-parameter-rebind-is-local.loft` — all five keyed kinds
   (`hash`, `sorted`, `index`, `spatial`, `trie` are what `is_keyed` names) crossed with the
   same right-hand sides plus the empty literal, a CONDITIONAL rebind and a double one, with

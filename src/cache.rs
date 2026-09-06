@@ -52,7 +52,7 @@ use sha2::{Digest, Sha256};
 /// 4 — the `Data` root carries the two import tables (`imports`, `use_names`)
 /// a warm load replays into `def_names`, which grew the root from 16 to
 /// 20 bytes (loft#1359).
-const CACHE_FORMAT_VERSION: u8 = 4;
+const CACHE_FORMAT_VERSION: u8 = 5;
 
 /// Loft crate version — a release bump invalidates every cache.
 const LOFT_VERSION: &str = env!("CARGO_PKG_VERSION");

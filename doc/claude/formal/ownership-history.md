@@ -6,7 +6,7 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — D-own-29 OPENED AND CLOSED 2026-09-04 (loft#1346, below), after D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
+OPEN: **0** — D-own-38 CLOSED 2026-09-06 (loft#1388: the release is by STORE IDENTITY now, `@FR-O-Witness`, with the hand-off at the closure build; below); D-own-39 OPENED AND CLOSED 2026-09-06 (loft#1398: the `is` payload binding recorded no borrow in its TYPE, so the empty-deps proxy read it as OWNED and `--native` copied where the interpreter aliased — #429's cure applied to one of its two sites, below); D-own-38 OPEN 2026-09-06 (loft#1388 residual: the release of a store a closure record adopted, and of one orphaned beside it, is decided per BINDING where the question is per STORE, below); D-own-37 OPENED AND CLOSED 2026-09-06 (loft#1389: the degenerate self-dep was stripped for one of the two RECORD kinds, so an annotated struct-enum local read as borrowed and never freed what a join displaced, below); D-own-36 OPENED AND CLOSED 2026-09-06 (the `@FR-O-Detach` walk: a collection literal's detach ran before its reads on every destination, and `--native` declined a value-`if`'s displaced free, below); D-own-35 OPENED AND CLOSED 2026-09-05 (loft#1370: the per-path fact had no home for a VECTOR local — every value-branch bind aliased the chosen arm — closed at the parser's selector, below); D-own-34 OPENED AND CLOSED 2026-09-05 (the owner witness did not survive the cache, and a nullable bind from a borrow-returning call aliased); D-own-33 OPENED AND CLOSED 2026-09-05 (the per-path fact was short of four homes, every one a nullable local not treated as the heap local it is: a literal buffer adopted inside a loop, the branch pre-init, the loop hoist, a keyed `match` bind, below; a fifth face is loft#1367, owned by @PLN153); D-own-32 OPENED AND CLOSED 2026-09-05 (the oracle called a minted variable Owned regardless of its other definitions, and its shadow re-derived the base translation, below); D-own-31 OPENED AND CLOSED 2026-09-05 (the never-free contract named one spelling of five and forbade a release the language ships, below); D-own-30 OPENED AND CLOSED 2026-09-05 (a nullable local holding a projection VIEW freed the store it displaced, below), after D-own-29 2026-09-04 (loft#1346, below) and D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
 single cell, its Face B CLOSED the same day, that cell's one known SYMPTOM closed 2026-08-26
 with the FACT still wrong, loft#1098, and the fact itself closed by giving every path of a
 value branch its own binding — below).  D-own-26 CLOSED 2026-09-03: its gate existed all
@@ -38,6 +38,459 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-39 — OPENED AND CLOSED (2026-09-06, loft#1398): #429's borrow dep reached the `match` binding and not the `is` one
+
+`(O-Proxy)` reads an empty dep list as OWNED, and that proxy is only ever as good as the deps a
+binding actually carries — which is why #429 gave a HEAP struct-enum payload binding a frame dep
+on its subject, closing an interp-vs-native divergence with it.  It was applied to
+`parse_match_enum_field_bindings` alone.  The `is` spelling is the same bind at the sibling
+site, and carried `set_skip_free` without the dep:
+
+```loft
+w = W{st: Holder{inner: Pay{a: 1}}, t: "w"};
+if w.st is Holder { inner } { w.st = Empty{z: 0}; g = inner.a; }
+// --interpret 0, --native 1 (+ kt=82 Pay×1 not freed)
+```
+
+With no dep the type read OWNED, so `--native` deep-COPIED the payload where the interpreter
+aliased it — and then leaked the copy.  `(O-NoDiverge)` forbids the split either way, and
+`(B-Disturb)` says which number is right: overwriting a place is not disturbing it, so the
+binding still names the slot and 0 is the answer.  The `match` twin gave 0 on both backends
+throughout, which is what located the gap at the SITE rather than at the rule.
+
+⚠ **These two sites have now diverged TWICE on the same axis**, which is the thing to carry
+forward rather than either fix.  The `@FR-O-Owner` walk found the `is` capture carrying no dep
+where the `match` twin does, from the MATERIALISE side — its gate had to admit an empty list to
+cover it (loft#1394's D-bind-19).  This entry is the same asymmetry from the OWNERSHIP side: an
+empty list is `(O-Proxy)`'s reading of OWNED, so the same missing dep that made a view
+invisible to one walk made it a copy to the other backend.  A third reader of these two sites
+should assume the asymmetry rather than discover it.
+
+**Closed by giving the `is` site the same dep**, under the same shape test #429 states: a
+`Reference` / `Vector` / `Enum` payload takes a frame dep on `match_borrow_source`'s answer, a
+SCALAR takes none (it carries no `DbRef`), and a TEXT payload is untouched — it is an owned copy
+with its own write-back route (`record_text_payload_view`).
+
+The two sites are not folded into one home here, and that is the honest state rather than a
+claim: the `match` path binds through the subject expression and the `is` path through a
+stabilised `_is_subj_N` local, and the surrounding code differs enough that a shared helper
+would be a third thing to keep in step.  What is shared is the PREDICATE — both call
+`Parser::match_borrow_source` and both test the same three type kinds — so the next divergence
+of this class is a grep for that call.
+
+Guard `an-is-payload-binding-borrows-its-subject-like-its-match-twin` (8 cells: the overwrite
+shape, the `match` twin beside it, a plain read, a write THROUGH the binding, and four controls
+— vector and text payloads, a LOCAL subject whose reassignment `(B-View)` materialises, and two
+arms over one subject).  Falsified at cb2dca92: `--native` 1 where `--interpret` reads 0, with
+`kt=82 Pay×1` not freed.
+
+### D-own-38 — OPENED AND CLOSED (2026-09-06, loft#1388): every release a captured local owes is by STORE IDENTITY
+
+`(O-Latest)` says ownership belongs to the LATEST assignment *at that point*.  A closure record
+adopts the store its capture named AT THE BUILD, and the frame's scope-exit free is suppressed
+so the record's cascade is the sole owner (#323).  loft#1324 established that the suppression
+must name the same STORE the adoption does, and closed it for the COLLECTION half — a capture
+that names a VIEW, whose backing local `capture_build_backings` finds.  The DIRECT half asked
+`is_captured(v)`, a fact about the BINDING, and kept suppressing the free of whatever the local
+named LAST:
+
+```loft
+s = S{a: 1, b: "x"};
+h: fn(integer) -> integer = |i| { s.a + i };
+s = build(h);                    // the store `s` ends up holding is freed by nobody
+// Warning: 1 stores not freed at program exit: kt=81 S×1
+```
+
+**Closed for that half** by giving `capture_build_backings` the second fact read off the same
+walk — which captured locals are ASSIGNED AGAIN after their build — and having
+`capture_adoption_owns_free` (the one home all three consumers read: `get_free_vars`,
+`check_ref_leaks`, `ownership_cfg`'s oracle) decline the suppression for them.  The two build
+spellings differ in ORDER and both are handled: a STORED closure is built by an earlier
+statement, while an INLINE argument is built inside the very right-hand side that reassigns
+the local (`s = build(|i| { s.a + i })` hands the record the store `s` is about to stop
+naming).  `Value::walk` is pre-order, so the inline build is reached after its own assignment;
+`captures_built_in` reads it off the right-hand side against the map as it stood BEFORE the
+assignment, and the walk skips it when it arrives.  Measured over 9 cells on both backends:
+7 clean where 6 leaked, values unchanged in every one.
+
+**What is still per binding, and why it is one deviation and not two.**  Both residual cells
+are the same question asked at a different moment — *does anything still hold this store?* —
+and both are answered today by a static fact about the BINDING:
+
+* **A stored closure and TWO reassignments** (`s = build(h); s = build(h)`) leaks the
+  INTERMEDIATE store.  The record holds the first store forever, so the first reassignment must
+  not free what it displaces — but the second displaces a store no record ever adopted, and
+  `owns_displaced_store`'s `!is_captured(v)` vetoes both alike.  The two sites are
+  indistinguishable statically; what tells them apart is whether the displaced store IS the one
+  the record holds, which the record can be asked at run time
+  (`OpFreeRefIfDistinct(<displaced>, OpGetDbRef(___clos_N, <offset>))` is the existing op pair).
+  Dropping the veto instead is measured WRONG: the free then runs before the right-hand side is
+  evaluated and the closure reads a released store (`a=1` where `a=2` is right).
+* **A closure record REUSED across loop passes.**  `OpDatabase` on an already-allocated record
+  variable records into the same store, so each pass RE-ADOPTS a new capture and only the last
+  adoption is ever released — the previous pass's store is orphaned the moment the capture slot
+  is overwritten.  A 5-pass loop leaks 4.  The release belongs at the hand-off: a capture slot
+  overwritten with a different `DbRef` gives up what it held.
+
+  **The obvious cure was BUILT and measured WRONG, which is why it is not here.**  Freeing the
+  record before the rebuild (`OpFreeRef(w)` ahead of the build's `OpDatabase`) clears the leak
+  in every loop cell, and the escape argument holds: a capturing closure may not be stored in a
+  collection, a fn-ref struct field takes one capture shape, and a factory's record escapes by
+  RETURNING, which leaves the loop.  The struct 5-pass loop went clean with its values
+  unchanged.  The VECTOR loop went clean and its values did NOT hold: `v = build_v(|i| { (v[0]
+  ?? 0) + i })` over three passes answered `4,5` on the interpreter and `1,2` on `--native`,
+  where `4,5` is right and both backends agreed on it before.
+
+  What it collides with is the fix ABOVE.  `free_named`'s cascade releases an ADOPTED capture,
+  and the frame now frees the same local's store for a local reassigned after its build — so
+  the two free one store between them.  A leak traded for a backend split and a wrong answer is
+  the trade this project refuses, and it is what `get_free_vars`' own note says out loud:
+  *suppress without adopting and the store is never freed at all, adopt without suppressing and
+  it is freed twice.*  The release is admissible only together with `record_adopts_capture`
+  reading the same verdict `capture_adoption_owns_free` now reads — one decision, as that note
+  requires.
+
+Neither is reachable from a per-binding fact, and that is `(O-Latest)` saying so rather than an
+observation about this code: the fact belongs to the LATEST assignment at that point, and a
+type-level `deps` list can express neither which assignment nor the loop depth.  So the veto is
+wrong in KIND, not merely imprecise, and its two sites are statically indistinguishable by
+construction.
+
+**CLOSED the same day, by the mechanism the rules already licensed.**  `(O-Witness)` is release
+by STORE IDENTITY, and a captured local reassigned after its build has exactly the mixed
+ownership it models — the record owns the store the capture named AT THE BUILD, the frame owns
+every store after it.  Three parts, and each answers one of the failures above:
+
+* **The witness**, extended to such a local.  `owner_witness_locals` admits it off
+  `CaptureBuilds::reassigned_after_build`, in both spellings of "the record took this local's
+  store": a struct capture names the local outright, a collection capture names a view whose
+  backing local is this one.
+* **The HAND-OFF at the closure build, emitted FIRST.**  The record becomes the owner there, so
+  the witness gives that store up — a clear, never a free.  Ahead of the guarded release,
+  because for an INLINE closure argument the capture and the target are the same local: the
+  record adopts the old store and the local moves on in one statement, so a release asked first
+  frees what the record has just taken.  That is `(O-Detach)` in ownership clothing, and it is
+  exactly what made dropping the veto answer `a=1` where `a=2` is right.
+* **The record's own release**, beside it and GATED on every capture in the build having a
+  witness.  The gate is the soundness argument: a capture without one is still owned by the
+  frame, so the cascade and the frame would free one store between them.  `(O-Derived)` — one
+  decision, one home.
+
+Eleven cells, both backends, all clean with their values unchanged — every row of the issue's
+matrix including the two that stayed open at 3360fb93 (a stored closure called twice, and
+either spelling in a loop), plus a three-call cell, a vector capture in a loop, and the
+never-reassigned control the whole thing must not disturb.
+
+**The COLLECTION half needed the same sentence, and finding it was the last step.**  A closure
+capturing a VECTOR inside a loop kept one store, and `2026.9.0` did not — so this was a
+REGRESSION from the more accurate backing map above, not a residual: resolving a build against
+the map as it stood BEFORE the assignment gave `backing[v] = __vdb_1` where the pre-order walk
+had previously given nothing, and `backs_an_adopted_capture` then suppressed `__vdb_1`'s free
+on the strength of the FIRST pass's adoption while the record's slot had been rewritten twice
+since.  `(O-Latest)` says exactly that: the record holds what the capture named at the build,
+and a build that RE-RUNS holds only its last.  So the backing's suppression is declined where
+the build sits inside a LOOP.
+
+**And the narrowing is loft#1324's guard, not a precaution.**  The first cut declined on
+"the capture was reassigned after its build", which is also true of #323's escaping factory —
+a build that runs ONCE, whose record outlives the frame and must keep its suppression however
+often the capture is reassigned afterwards.  Declining there frees the store the escaped
+closure still reads:
+`1324-a-reassigned-capture-suppresses-the-store-the-record-holds` failed with `null(oob)` on
+the first run of the `scopes` subject.  A build that re-runs and a build that escapes are
+opposite cases, and only the loop test separates them.
+
+The instrument that caught it was the shipped binary: `2026.9.0` frees `#2 #3 #4 #5` here and
+the branch freed `#2 #3 #5`, which named the missing free before any reasoning about why.
+
+**A vector-typed WITNESS was built and measured wrong on the way**, and is recorded because it
+is the obvious next idea: admitting a vector local to `owner_witness_locals` with a
+`Vector`-typed `__own_` handle removes the leak and makes `--native` answer `1,2` where `4,5`
+is right, because the witness then releases a store the record still holds.  The witness stays
+record-typed; the collection half is answered by the suppression clause instead.
+
+Guard `a-captured-local-reassigned-after-the-build-frees-its-own-store` (7 cells: both build
+spellings, the struct and vector captures, and the two controls that must NOT move — a capture
+never reassigned, whose store is the record's, and a literal right-hand side, which rebuilds in
+place and mints nothing).  Falsified at ac412a96 — `kt=81 S×3, kt=25 main_vector<integer>×1` ->
+clean on both backends.
+
+### D-own-37 — OPENED AND CLOSED (2026-09-06, loft#1389): the degenerate self-dep was stripped for one RECORD kind of two
+
+`(O-Proxy)` reads a binding's dep list to answer *does this local own the store a reassignment
+displaces?*, and #328 established that a dep on the binding ITSELF is not a borrow at all — it is
+a degenerate edge that flips the variable into the dependent-view codegen class.  `Parser::change_var`
+strips it, and it read `Type::Reference` alone:
+
+```loft
+e: Sh = Circle{r: 1};                              // deps=[e] — a dep on itself
+e = if e is Circle { circle(2) } else { e };       // the minting arm runs
+// Warning: 1 stores not freed at program exit: kt=82 Circle×1
+```
+
+A struct-enum is a record reached through a `DbRef` exactly as a struct is — `data::is_dbref`
+names `Reference` and `Enum(_, true, _)` together — so the annotated literal bind kept `[e]`,
+`owns_displaced_store` read the non-empty list as BORROWED, the join's displaced free was never
+emitted, and one store leaked per execution on BOTH backends, growing 1:1 with a loop.  Values
+were right throughout; the leak announced itself only at exit.  The un-annotated form, the same
+local bound from a CALL, and the plain struct twin were all clean, which is what located the
+gap at the type kind rather than at the join.
+
+**Closed by stating the strip over both record kinds** — `Reference | Enum(_, true, _)` — and by
+reading the deps through the generic accessors, so the stripped list keeps the dep SPACE it
+arrived in rather than being rebuilt as `Frame`.
+
+The COLLECTION kinds stay outside it, and that boundary is measured rather than assumed.  For a
+`vector` or a `text` the self-dep is the @P302 re-init-in-place ownership marker that `(g)` in
+[ownership.md](ownership.md) reads as `Owned` (`t = "{t}x"`), not a degenerate borrow.  An
+env-gated probe over `tests/scripts`, `tests/docs` and `default/` counted **6418** self-deps
+reaching this site on a collection kind — 3760 `Vector`, 2658 `Text`, 42 keyed/optional — and
+**zero** on `Enum`.  So widening past the two record kinds would re-answer a question that is
+already right, at the cost of every one of those readings.
+
+Guard `an-annotated-struct-enum-local-owns-what-it-mints` (7 cells: the `if` join, the `match`
+join, a 4-pass loop, the hand-back arm, the annotated-from-a-call, un-annotated and plain-struct
+controls), falsified at 32e36462 — `kt=82 Circle×6` -> clean on both backends.  It carries a
+`main` that calls every cell because `--tests` does not leak-check, so a `main`-less leak guard
+reads INERT on the build it was written to catch (`scripts/falsify.sh` § ONE CHANNEL IS BLIND).
+
+### D-own-36 — OPENED AND CLOSED (2026-09-06, the `@FR-O-Detach` walk): a collection literal's detach ran before its reads, and `--native` declined a value-`if`'s displaced free
+
+`(O-Detach)` sequences a binding's detach AFTER every read of it by the value being assigned.
+Walked as a rule (QUALITY.md B8a): its eight sites ask one static question — *does the value
+read the binding?* — with one home, `Value::reads_var`, and answer it by one of three
+placements (hoist the reads into temporaries; defer the free past the assignment; release by
+store identity after the `Set`).  A 37-cell matrix over 14 binding kinds × 20 right-hand-side
+shapes found the eight in agreement and two shapes that never reached one:
+
+* **The vector literal.**  `v = [v[1]?, v[0]?]` answered `[0, 0]`; `len(v)` inside the literal
+  read `0` then `1`; a struct element read its `?? default`; a parameter, a typed local, a
+  struct field and a `+=` all read the result being built — sixteen spellings, both backends,
+  silent.  The build's detach (`create_vector`'s `=` repoint, `clear_vector_field`) was emitted
+  at the head of the build's ops, before the element expressions that read the destination.
+  The comprehension had been held to the rule three times (`I-Comp`, D-iter-1..3) with a
+  snapshot of its own; the literal is the same build without the loop.  Closed by
+  `Parser::snapshot_read_destination` — one home, which the comprehension's deferred route now
+  calls too: copy the destination before the first write, rename every read in the parts to
+  the copy, and let the two detach sites insert after it (`Parser::build_snapshot_len`).  Guard
+  `a-vector-literal-reads-what-its-destination-held`, falsified at 6f9c0886 (14 assertions → 0
+  on the interpreter, the native run's first → 0).  Residual: a field reached through an
+  element and a captured collection are destinations the snapshot cannot name (loft#1391).
+* **A value-`if` on `--native`** (`(O-NoDiverge)`).  `s = if s.a > 5 { mk(7) } else { s }` — the
+  interpreter stashes and post-frees through `rhs_reads_v`; native's `owned_ref_reassign`
+  listed the right-hand sides that produce a store and `Value::If` was not among them, so the
+  then arm's displaced store leaked on that backend alone, one per execution.  Declining the
+  detach is the rule's own forbidden third option.  Added to the list; the identity guard
+  already makes the else arm — the same store — a no-op.  And the `match` spelling of the same
+  shape did not compile natively at all: `output_if_inner` peeled a `Span` to decide not to
+  open a brace for a block arm and asked the bare value when closing one.  Guard
+  `a-join-reassignment-whose-other-arm-is-the-binding-frees-and-compiles`, falsified at
+  6f9c0886 (a rustc refusal → runs; the leak by hand under `LOFT_NATIVE_LEAK_CHECK=1`, 1 → 0).
+
+Filed, not folded in: loft#1388 — a captured struct local's reassignment from a call retains
+the displaced store (`owns_displaced_store`'s `!is_captured` veto is the rule's *declined
+detach*: a per-binding answer to a per-store question); loft#1389 — an annotated struct-enum
+local bound from a variant literal carries a dep on itself and never frees what a join
+displaces; loft#1390 — a variant literal does not join with a binding of its enum type.
+
+### D-own-35 — OPENED AND CLOSED (2026-09-05, loft#1370): the per-path fact had no home for a VECTOR local, and the parameter rebind read the proxy's carve-out as ownership
+
+`(O-Complete)` asks that every path of a bound value branch be its own binding, and `(B-Copy)`
+that a plain whole-value bind copy.  B7v gave the RECORD spelling its home (D-own-34, the
+statement-form sink in `scopes.rs`); the vector spelling had none, because the vector copy is
+the PARSER's (`classify_vec_bind` and its copy arm), and a value-branch RHS never reached that
+selector.  Measured (QUALITY.md B7w, 33 cells, both backends): every value-branch bind of a
+vector local handed it the chosen arm's STORE — `if`, `else if`, `match`, `??`; dense, nullable
+and null-initialised; every element kind; projection, mixed and parameter-source arms; inside a
+loop; and the first bind through a `match` or `??` wrapper.  Beside it, `x = s.v ?? va` viewed
+an owned projection that `x = s.v` copies.  The keyed twin copies (`OpReplaceKeyed`) and is the
+control.
+
+**Closed** at the selector: `Parser::sink_vec_bind_into_arms` writes the bind out per arm and
+classifies each tail by the same selector, a copy inside an arm always mints (the join's deps
+make the ownership proxy unreadable there), a `??` hoist is judged by its source, a
+buffer-yielding block is bound whole, a wrapper-block first bind is declared at the statement,
+a promoted return buffer keeps the value form (F-Ret's adopt-or-materialise), and a returned
+local the rewrite sank keeps its own store at the return (`Bind`, carried by
+`branch_sunk_vectors` since the `Set(v, If)` the ladder read it from is gone).  Guard
+`a-vector-local-bound-from-a-value-branch-copies-the-chosen-arm.loft`, falsified at faa38979.
+The parameter half is calls-history D-call-14.  Corpus census: 20 of 1260 files moved, all
+green both backends under strict stores, poison and the native leak check.
+
+### D-own-34 — OPENED AND CLOSED (2026-09-05): the per-path fact was short of three more homes, and the fact the emitters read did not survive the cache
+
+The `@FR-O-Witness` walk (QUALITY.md B7v) built the caller-side and cache matrices B7u's had
+not, and each red was a nullable local not treated as the heap local it is — none the mixed-path
+join the matrix was drawn for:
+
+- **The owner witness did not survive the startup cache.**  `owner_witness` was maintained in
+  the IR and restored by no snapshot field, so a WARM program-cache run served the pre-witness
+  copy arm: `s: S? = a; s = a.next; s = a` wrote the second copy INTO the record `s` was
+  viewing, `b == 7` on both backends where a cold run read `b == 2`.  A fact the emitters read
+  must survive the snapshot exactly as `skip_free` does — `__own_<name>` is now the tenth stored
+  `Variable` field (`VAR_OWNER_WITNESS`), through the JSON codec, the store codec and the schema
+  source, and `CACHE_FORMAT_VERSION` is bumped to 5 so a stale bundle is not read.  Guard:
+  `tests/arc_e_program_cache.rs::a_warm_run_keeps_the_owner_witness`, cold vs warm, both backends.
+
+- **A nullable local bound from a call that answers a BORROW of its argument aliased it.**
+  `x: S? = keep(a); x.value = 9` wrote through to `a` on both backends while the dense twin
+  copied; a witnessed local first-bound that way pointed its owner witness at the CALLER's store
+  and released it at the first view.  The heap first-bind dispatch asks its shape against the
+  bare type, and its one nullable arm (loft#1106's join guard) admitted only a `Join` verdict —
+  a callee that ALWAYS hands its argument back is a pure `Borrowed`, so it stayed a plain alias.
+  `nullable_join_first_bind` now admits a `Borrowed` whose witness is the ONE argument the return
+  deps name (a two-source return keeps the plain adopt — loft#1368 — because one witness would
+  adopt the other), and the reassignment strip and the var-copy strip peel `base()` so the copy
+  is emitted for the nullable spelling too.  Guard:
+  `a-nullable-local-bound-from-a-borrow-returning-call-copies-it.loft` (5 fns, both backends).
+
+- **A `-> S?` callee freed a PARAMETER on its null path.**  A record source of a return with a
+  reachable null arm is paired with the hoisted return value (`OpFreeRefIfDistinct(src,
+  __ret_N)`), which is right for a LOCAL but freed the CALLER's argument on every `null` answer,
+  both backends.  A parameter is no longer a null-arm source (its store is the caller's,
+  F-ParamHeap; a REBOUND parameter keeps its own release by identity against its entry stash).
+  Guard: `a-null-answer-does-not-free-the-argument-the-other-arm-hands-up.loft` (3 fns).
+
+- **A heap-record local reassigned from a value branch handed up the chosen arm's STORE.**
+  `x = if c { a } else { b }` on an owned `x` aliased `a` and then freed it as its own at scope
+  exit; a witnessed local the same.  The FIRST bind already lifts each arm into a temp the
+  binding borrows, but a binding assigned elsewhere cannot borrow those (`@FR-O-Latest`), so the
+  REASSIGNMENT is now lowered to the statement form `if c { x = a } else { x = b }` — each arm's
+  `Set` gets the copy a single bind of its tail would.  Records only; the vector/keyed twin is
+  loft#1370.  Guard: `a-record-reassigned-from-a-value-branch-copies-the-chosen-arm.loft` (6 fns).
+
+Every guard `make falsify`'d at e575a33f; the corpus IR census moved 7 of 1241 files, every one
+green on both backends under strict stores and poison.  A trap the walk caught in its own work:
+peeling the var-copy strip through `base()` widened it onto a CAPTURED nullable local, whose
+closure holds the store — freeing it read `null` through the capture; the strip now excludes a
+captured or never-free local (`@FR-L-CapHeap`), and `1181`/`1202` are the controls.  Held FIXED
+and filed apart: the two-source nullable return (loft#1368) and the vector value-branch reassign
+(loft#1370).
+
+### D-own-33 — OPENED AND CLOSED (2026-09-05): the per-path fact was short of four homes, every one a nullable local not treated as the heap local it is
+
+`(O-Complete)` requires the fact PER BINDING and PER PATH — every binding, every arm.  Measured on
+the `@FR-O-Complete` rule-led walk (QUALITY.md B7u) with the matrix the rule states and its
+guards had not crossed — the STATEMENT form, a local assigned on two paths with different
+ownership, every cell called twice — the record, vector and keyed columns held (81 of 81) and
+the nullable column did not, in four ways that are not the mixed-path join at all:
+
+1. **A binding that adopts a literal's work-ref inside a loop body had two owners.**  `y: S? =
+   S { n: 3 }` (and a struct-enum literal, and a literal in an `if`/`match` arm) builds in a
+   function-scoped `__ref_p2_N` the binding aliases.  loft#1317 paired the buffer's forced
+   exit free with the local and declined the pairing where the local is inner-scoped — a loop
+   body.  There the binding's per-iteration free returned the store, the buffer kept the
+   number, and the next iteration's `OpDatabase` reused it in place after another record had
+   taken it: the second iteration's literal was written over that record, both backends,
+   nothing reported.  Closed by giving the literal buffer the pairing @P378(a) already gives a
+   CALL buffer (`witness_buffer`): the adopter's free declines while they alias and the buffer
+   keeps, reuses in place and frees once at exit — carried for every arm's buffer.  A MOVE at
+   the adopt was tried first and reverted: it was right for the loop and contradicted every
+   site that reads the buffer as the owner (the owner witness, loft#1200's flag, the `??`
+   lift), four leaks from one reset.
+2. **A nullable local first assigned inside a branch held no null on the other path.**
+   `scopes::needs_pre_init` listed the bare heap spellings and did not peel `Optional`, so the
+   second arm's `Set` was a reassignment whose guarded displacement free read an
+   uninitialised frame word — a refused free, or the free of a live store the previous frame
+   left there.  Closed by the peel.
+3. **A nullable local first assigned inside a loop body stayed body-scoped** — the hoist reads
+   the same predicate — and the read after the loop was a use-after-free (interpreter) or an
+   unresolved `var_x` (rustc).  The same peel; a nullable VECTOR's null-init then needed the
+   sentinel rather than the dense arm's store or placeholder (`gen_set_first_nullable_collection_null`).
+   A keyed nullable local reads present-and-empty on the untaken path on both backends — its
+   assignment copies INTO its own store, so the init allocates — and what absence means for it
+   is @PLN153's question, recorded and not frozen.
+4. **A keyed local bound through a `match` never freed the taken arm's store**: `join_arms`
+   (loft#1154's per-arm licence for the free-source bit) took the `scalar_match` block as one
+   arm.  It now reaches a value block's tail, where every `match` keeps its chain.
+
+A fifth face is OPEN elsewhere: two spellings of `S?` meeting in one local (loft#1367, the
+tagged field projection and the pointer), owned by @PLN153 phase 3 through `(L-Null-Which)`.
+
+Guards: `a-binding-that-adopts-a-literal-buffer-inside-a-loop-frees-it-once` (falsified at
+64437246 under `LOFT_POISON=1` — plain mode hands the stale buffer its own number back; the
+poison sweep is the CI leg), `a-nullable-local-first-assigned-inside-a-branch-or-loop-holds-null-on-the-other-path`,
+`a-keyed-local-bound-through-a-match-frees-the-arm-that-ran`.  Corpus IR moved in 20 of 1241
+files, all green on both backends under strict stores.
+
+### D-own-32 — OPENED AND CLOSED (2026-09-05): the oracle called a minted variable Owned regardless of its other definitions, and its shadow re-derived the base translation
+
+`(O-Oracle)` says the answer is a function of the VALUE, computed by one derivation, and that a
+translation which cannot name a base must not upgrade the verdict.  Two things fell short of it,
+found because the @PLN94 shadow derivation (Check A) disagreed with the oracle in 14 places over
+the 1247-file corpus (QUALITY.md B7r).  First, `classify` read *"a var `OpDatabase` minted a
+fresh store into is Owned regardless of any other def"* — right for the retbuf a
+`materialized_view_return` fills, and an UPGRADE for a local minted once and then rebound by a
+call that may hand back its own argument (`c = M {…}; c = cond(c, 3)`, 1017b) or by a capture
+read (`__kvb_1` inside a closure, 1326/1331): `Owned`, the verdict that licenses a free, where
+the value is a `Join` or a view.  Masked at run time by the distinctness guard and by
+loft#1331's detach, which is the caveat's exact shape.  Second, the shadow's private copy of the
+callee-to-caller base translation, written to *"mirror"* the oracle's, carried none of
+loft#1318's three fixes, so a call delivering through a hidden buffer read `Join(MAX)` there
+and `Borrowed(buffer)` in the oracle (37-stress).
+
+Closed on both sides.  The mint arm now JOINS the mint with the variable's other definitions
+(a bare-`Var` right-hand side is a copy per `(B-Copy)` and so Owned; a call or projection is
+what the oracle says of it; a minted variable with no `Set` stays Owned), and the translation
+has ONE home, `use_analysis::structural_arg_base`, read by the oracle and by the shadow — the
+shadow's independence is in the flow, not in the translation.  Check A reads 0 over the corpus;
+the emitted IR, bytecode and Rust are byte-identical across all 1247 files, so the change is in
+the facts and not in the programs.  The A1b gate, whose asserted disagreement was these two
+defects meeting on one fixture, now asserts the runtime failure of the wrong plan and Check A
+clean on both plans, with an injected true positive (`LOFT_OWN_INJECT_FACT_OWNED`).
+
+### D-own-31 — OPENED AND CLOSED (2026-09-05): the never-free contract named one spelling of five, and forbade a release the language ships
+
+`(O-Override)` read *"no `OpFreeRef` is ever emitted for this binding — exactly that sentence
+and nothing weaker."*  Measured on the `@FR-O-Override` rule-led walk (QUALITY.md B7q) over
+the 1247-file corpus, the sentence was wrong in both directions.  It named ONE of a free's
+five spellings, and the two backends intercept the flag downstream for two of them only
+(`OpFreeRef`, `OpFreeRefTag`; a bare variable operand), so a never-free binding freed by
+`OpFreeText`, `OpFreeRefIfDistinct`, `OpFreeRefOrHandUp` or through a tuple element would
+have honoured the letter of the rule while releasing the store — and the question "which ops
+free their first argument?" was a hand-spelled list in nine places, no two agreeing.  And it
+FORBADE a release the language ships and tests: a `??` text subject (`__ncc_N`) and a text
+return stage (`__ret_N`) are marked never-free so the scope-exit sweep does not free the value
+their block yields, and the pass that staged them frees them after the statement that copied
+the value out — 217 function–binding pairs in the corpus, every live-spelling free of a never-free binding
+there was, and not one anywhere else.
+
+Closed by extending the RULE, per the doctrine's other half: an edge the rules cannot express
+means the rule wants extending.  `(O-Override)` now forbids every free DERIVED FROM OWNERSHIP
+in any spelling — `use_analysis::OpSets::frees` is the one home of the list, and all nine
+matchers read it — and names the one admissible free: the release the marking pass places on
+a fact of its own, `Function::is_staged_text_temp`.  `ownership_cfg`'s Check D
+(`LOFT_OWN_ORACLE=check`) is the gate — a free of any other never-free binding by any live
+spelling is a RED, and `LOFT_OWN_INJECT_FREE_SKIPFREE` proves it fires.  Found and closed
+alongside: a local that took BOTH the loft#1200 displacement flag and the loft#1336 owner
+witness, the witness's never-free mark dropping the flag's free at codegen on both backends —
+right by accident, and 172 lines of dead IR in the 1200 guard; the witness now runs first and
+the flag's own never-free exclusion keeps a witnessed local out.
+
+### D-own-30 — OPENED AND CLOSED (2026-09-05): a nullable local holding a projection VIEW freed the store it displaced
+
+`(O-Owner)` says one thing owns each store and only it frees it; `(O-Latest)` places the free
+from the LATEST assignment.  The D-own-16 residual `borrows_one_argument` reads a nullable
+local's single-ARGUMENT dep as ownership and frees the store it displaces at a reassignment —
+correct for the WHOLE-value argument borrow it was written for (`d: S? = p`, whose store is
+free-protected on the borrow path), wrong for a PROJECTION.  `d: In? = q.inner` aliases q's
+NESTED store, which carries no free-protection, so the reassignment released the CALLER's
+record; a view of a LOCAL's field or a vector element failed the same way, the dep still
+naming its base.  A SILENT-WRONG: the freed store read correct until a later allocation reused
+its slot, then returned the filler's value (`777` for `71`, both backends); the vector-element
+shape crashed out of bounds under `LOFT_POISON`.
+
+Found on the `@FR-O-Latest` rule-led walk (QUALITY.md B7p), 1266 cells KIND × first source ×
+second source × position, scored under poison because the plain build hid it.  Closed at the
+FACT: a view owns no store, so the empty/argument-dep proxy is wrong for a view-holder and
+`(O-Override)` vetoes it.  `scopes::nullable_view_locals` marks such locals never-free before
+the scan; all three free-site twins (`state/codegen.rs`, this file's scope-exit, `generation/
+dispatch.rs`) already consult `is_skip_free`.  The two mixed-ownership shapes that DO own a
+store are excluded and keep their machinery: a solely-owned minting call the loft#1200 runtime
+flag, a view+mint mix the owner witness (loft#1336).  Guard
+`a-nullable-view-local-does-not-free-what-it-displaces.loft`, falsified at `51646648` on both
+backends via the value channel.
 
 ### D-own-29 — OPENED AND CLOSED (2026-09-04, loft#1346): the interpreter kept a nullable record's borrowed-view result raw where native copied it
 

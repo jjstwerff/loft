@@ -427,6 +427,53 @@ let g = (raw ^ (raw >> 13)).wrapping_mul(0x9E37_79B1);
 
 ---
 
+## An attribution in a comment is a claim, and nothing gates it
+
+A comment that says *which mechanism causes which symptom* — "narrowing this list un-fixes
+that issue", "this arm is what makes the interpreter answer null", "the copy comes from here" —
+is an assertion about behaviour, and it goes into the permanent record with no test standing
+between it and a reader. Code is gated: a wrong `if` fails a guard. **A wrong sentence fails
+nothing.** So the attributions that most need measuring are exactly the ones that feel too
+small to measure, because they are going into prose rather than into a branch.
+
+Measured on 2026-09-06, when a two-checkout pairing produced six such claims between them in
+one day and every one was wrong in the same way — plausible, cheap to check, and asserted
+instead:
+
+- a mechanism named from behaviour that `loft introspect` contradicted (the pass being blamed
+  did not run in that program at all);
+- a control described without the axis it depends on (*"an undisturbed arm must still alias"*
+  is right for a struct tail and inverted for a collection one), which argued for reverting a
+  correct fix;
+- a one-to-one mapping of "narrowing X breaks issue Y, respectively", where one issue was in
+  fact lost by BOTH narrowings, for two different reasons;
+- a "values unchanged" two sentences before the measurement that contradicted it;
+- a fix credited with closing a case that the falsify control showed already passing;
+- an argument position asserted to be the same across two ops that do not share it.
+
+The instruments are all cheap and all already in the tree: read the emitted IR
+(`loft introspect`), run the PLAIN spelling of the same shape on the same build, edit the
+change out and rebuild, and make each narrowing you are about to describe rather than
+predicting it. The last one is the general form — **if a comment is about to say that removing
+something would break something else, remove it and look.** A table of what actually fired is
+worth the twenty minutes, and it is the only version a later reader can trust.
+
+⚠ **And never use a binary you suspect as the oracle for the suspicion.** When the question is
+*did the shipped release do this too?*, the shipped release cannot answer it; build the control
+from source, which is what `make falsify` does and why. An oracle has to be independent of the
+thing under test — that is a property of what an oracle IS, not a precaution about one bug.
+
+**The practical failure mode is not disagreeing with that rule; it is that the non-independent
+oracle is one command away and the independent one is a rebuild.** Measured the same day: twenty
+minutes were spent believing a correct fix was over-wide, and what cost them was reaching for
+the shipped binary FIRST because it was closest, then reaching for the independent instrument
+only once the fast answer came back surprising. By then the surprising answer had already been
+believed. So ask **"which oracle is independent here?" before the first measurement**, not after
+one that startles you — the ordering is the whole of it, because an oracle consulted second
+arrives after a conclusion has formed.
+
+---
+
 ## Check
 
 Following loft's own rule — *progress is evaluated, not asserted*

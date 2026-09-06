@@ -103,6 +103,14 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROXY = re.compile(r"depend\(\)\.is_empty\(\)")
+# The same read, one statement apart: `let deps = <…>.depend();` and a later `deps.is_empty()`.
+# The one-expression spelling is the common one, and reading only it left this check blind to a
+# form the tree already uses twice (`ownership_cfg.rs`'s Check B, `control.rs`'s arm-return
+# free) — both compliant, so the hole cost nothing yet and was a claim about the classifier
+# rather than about the code.  A gate that cannot see a spelling reports it as clean.
+DEP_ALIAS = re.compile(
+    r"\blet\s+(?:mut\s+)?([a-z_][a-z0-9_]*)\s*(?::[^=]+)?=\s*[^;]*\.depend\(\)\s*;"
+)
 # Emitting a free, not merely naming one.
 FREE_EMIT = re.compile(r"OpFree|free_ref|emit_free")
 # Discrimination 6 — WRITING the ownership fact `get_free_vars` reads reaches a free just as
@@ -145,6 +153,26 @@ LET = re.compile(r"let\s+(?:mut\s+)?([a-z_][a-z0-9_]*)\s*=")
 def code_only(text):
     """Strip line comments — discrimination 3."""
     return "\n".join(l.split("//")[0] for l in text.split("\n"))
+
+
+def enclosing_guards(lines, fn_start, n):
+    """The lines that OPEN a block still open at line `n` — the guards this site sits inside.
+
+    The obligation is that a site freeing on the proxy consults @FR-O-Override, and a site can
+    do that from an enclosing `if !…skip_free(x) { … }` as legitimately as from its own
+    condition.  Reading only the statement is what made `control.rs`'s arm-return free look
+    unguarded when its whole block is inside exactly that test — a false positive, and one
+    only visible once the aliased spelling was in scope at all.
+    """
+    depth, opens = 0, []
+    for i in range(fn_start, n):
+        code = code_only(lines[i])
+        opened = code.count("{") - code.count("}")
+        if opened > 0:
+            opens.append((depth, lines[i]))
+        depth += opened
+        opens = [(d, l) for (d, l) in opens if d < depth]
+    return "\n".join(l for _, l in opens)
 
 
 def frees(region, binding):
@@ -298,10 +326,27 @@ for path in sorted(glob.glob(os.path.join(ROOT, "src", "**", "*.rs"), recursive=
     starts = [i for i, l in enumerate(lines) if FN.match(l)] + [len(lines)]
     rel = os.path.relpath(path, ROOT)
     last_proxy = -1
+    # Locals holding a dep list, so `<name>.is_empty()` below reads as the proxy it is.
+    # Function-scoped: the name is re-seeded at each `let`, and a stale one only ever adds a
+    # site to inspect, never removes one.
+    dep_aliases: set[str] = set()
+    fn_starts = set(starts)
     for n, line in enumerate(lines):
+        # A name means nothing outside the function that bound it, and carrying one across
+        # would read an unrelated `xs.is_empty()` as an ownership question.
+        if n in fn_starts:
+            dep_aliases.clear()
         if line.lstrip().startswith(("//", "///")):
             continue
-        for m in PROXY.finditer(code_only(line)):
+        am = DEP_ALIAS.search(code_only(line))
+        if am:
+            dep_aliases.add(am.group(1))
+        alias_hits = [
+            am2
+            for am2 in re.finditer(r"\b([a-z_][a-z0-9_]*)\.is_empty\(\)", code_only(line))
+            if am2.group(1) in dep_aliases
+        ]
+        for m in list(PROXY.finditer(code_only(line))) + alias_hits:
             fn_end = next((s for s in starts if s > n), len(lines))
             stmt, decl, region = gated_region(lines, n, fn_end, decl_floor=last_proxy + 1)
             last_proxy = n
@@ -343,7 +388,11 @@ for path in sorted(glob.glob(os.path.join(ROOT, "src", "**", "*.rs"), recursive=
                 undecl.append((f"{rel}:{n + 1}", line.strip()[:74]))
             elif reaches and verdict != "free":
                 contra.append((f"{rel}:{n + 1}", verdict))
-            if (reaches or verdict == "free") and not DISCHARGE.search(code_only(stmt)):
+            fn_start = max([sx for sx in starts if sx <= n], default=0)
+            discharged = DISCHARGE.search(code_only(stmt)) or DISCHARGE.search(
+                enclosing_guards(lines, fn_start, n)
+            )
+            if (reaches or verdict == "free") and not discharged:
                 viol.append((f"{rel}:{n + 1}", line.strip()[:74]))
             elif verbose:
                 # Say WHICH green this is.  "discharged" is a proof — the site reaches a free

@@ -176,12 +176,16 @@ impl Parser {
         }
     }
 
+    /// `snapshot_len` is how many ops at the head of `code` are the literal's snapshot of the
+    /// destination it reads ([`Parser::snapshot_read_destination`]); the `=` repoint this
+    /// inserts lands after them.
     pub(crate) fn create_vector(
         &mut self,
         code: &mut Value,
         f_type: &Type,
         op: &str,
         var_nr: u16,
+        snapshot_len: usize,
     ) -> bool {
         // @PLN25 / loft#909 — whether the target needs a record-pointer BACKING is a
         // question about its storage, and `Optional(τ)` shares τ's storage exactly.  Peel
@@ -305,7 +309,22 @@ impl Parser {
                         // The empty-literal `v = []` reassign is handled by the
                         // `ls.is_empty()` clear below; a rebind param gets a fresh backing
                         // (`db_ops` non-empty), so neither reaches here.
-                        if db_ops.is_empty()
+                        // loft#1371 — a `&`-LINKED vector LOCAL (`pe = &e`) is the same
+                        // question one step out: a fresh backing would re-point the link,
+                        // so the whole-value write must clear the SHARED store and refill
+                        // it in place.  `vector_db` DOES allocate for a local, so this arm
+                        // drops `db_ops` rather than finding it empty.  The empty literal
+                        // (`pe = []`) takes its clear from the `ls.is_empty()` block below.
+                        let amp_linked = !self.first_pass
+                            && var_nr != u16::MAX
+                            && self
+                                .amp_vector_locals
+                                .contains(&(self.context, self.vars.name(var_nr).to_string()));
+                        if amp_linked {
+                            if !ls.is_empty() {
+                                front.push(self.cl("OpClearVector", &[Value::Var(var_nr)]));
+                            }
+                        } else if db_ops.is_empty()
                             && !self.first_pass
                             && self.vars.is_argument(var_nr)
                             && !ls.is_empty()
@@ -315,8 +334,12 @@ impl Parser {
                             front.extend(db_ops);
                         }
                     }
+                    // After the literal's snapshot of the destination, when it took one
+                    // (`snapshot_read_destination`): the repoint below is the detach the
+                    // snapshot must precede.
+                    let at = snapshot_len;
                     for (i, p) in front.into_iter().enumerate() {
-                        ls.insert(i, p);
+                        ls.insert(at + i, p);
                     }
                     if ls.is_empty()
                         && !self.first_pass
@@ -475,7 +498,20 @@ impl Parser {
                     }
                 }
             }
-            Value::Block(bl) if bl.operators.len() == 1 => Self::join_arms(&bl.operators[0], out),
+            // A value block's arms are its TAIL's: a plain arm block holds the one value, and
+            // a `match` lowers to a block that binds its subject first (`scalar_match`,
+            // `tuple_match`, `vector_match`, …) and then holds the `if` chain that chooses
+            // — the same shape as `ncc` above, without a subject to substitute.  Taking the
+            // whole block as one arm made every `match` a value the bracket cannot name, so
+            // the conservative never-free stood: `x = match k { 0 => { mk(1) }, _ => { mk(2)
+            // } }` on a keyed local copied the taken arm's fresh store out and abandoned it,
+            // one per evaluation, where the `if … else if …` spelling of the same program
+            // freed it (loft#1154's fix reached the `if`, not the `match`).
+            Value::Block(bl) => {
+                if let Some(last) = bl.operators.last() {
+                    Self::join_arms(last, out);
+                }
+            }
             other => out.push(other),
         }
     }
@@ -639,16 +675,18 @@ impl Parser {
     /// spellings ask one question: a `??` that discharged a null `== null` reports, or the
     /// reverse, would be two answers where the rules give one.
     ///
-    /// Absence has three encodings, because a collection is reached three ways: a HANDLE
-    /// (a local, a parameter, a return) carries the store_nr sentinel; a SLOT (a field, a
-    /// vector element) holds [`DbRef::ABSENT_REC`] in its four-byte word; and a MISSED
-    /// lookup answers a DbRef with no record at all.  `OpVectorIsNull`
-    /// (`vector::is_absent_collection`) is the one test that reads all three.
+    /// Absence has two encodings, because a collection is reached two ways: a VALUE (a
+    /// local, a parameter, a return, and what a missed lookup or an index past the end
+    /// answers — `DbRef::or_null`) carries the store_nr sentinel; a SLOT (a field, a
+    /// vector element) holds [`DbRef::ABSENT_REC`] in its four-byte word.
+    /// `OpVectorIsNull` (`vector::is_absent_collection`) is the one test that reads both,
+    /// and it also reads a reference whose HOLDER has no record — a field read through an
+    /// unallocated buffer — as absent, since no slot is there to consult.
     ///
-    /// `OpConvBoolFromRef`'s `rec != 0` reads only the third, which is why the coalesce
-    /// used to call every null collection FIELD present: a field read is a sub-reference
-    /// whose `rec` is the HOLDER's record, so the default was unreachable and a `hash`
-    /// / `index` then dereferenced the absent record (loft#1120).
+    /// `OpConvBoolFromRef`'s `rec != 0` reads only that last case, which is why the
+    /// coalesce used to call every null collection FIELD present: a field read is a
+    /// sub-reference whose `rec` is the HOLDER's record, so the default was unreachable
+    /// and a `hash` / `index` then dereferenced the absent record (loft#1120).
     fn collection_is_null(&mut self, operand: &Value) -> Value {
         self.cl("OpVectorIsNull", std::slice::from_ref(operand))
     }
@@ -682,7 +720,8 @@ impl Parser {
         } else if matches!(tp.base(), Type::Float | Type::Single) {
             // `valid` is is-NON-null, so the two answers are the other way round here.
             let mut valid = operand;
-            self.convert(&mut valid, tp, &Type::Boolean);
+            // A null TEST, not a store — @FR-N-Store admits the read.
+            self.convert_admitting(&mut valid, tp, &Type::Boolean);
             return Some(if negate {
                 valid
             } else {
@@ -758,8 +797,11 @@ impl Parser {
                 self.cl("OpRefIsNull", &[operand])
             }
         } else if matches!(tp, Type::Optional(_)) && matches!(tp.base(), Type::Reference(_, _)) {
-            // Gate on `Optional`, NOT bare `Reference`: a collection LOOKUP result is a
-            // bare `Reference` whose miss is `rec == 0`, and `OpRefIsNull` misreads it.
+            // Gate on `Optional`, NOT bare `Reference`: a bare `Reference` — a lookup
+            // result, an element read trusted by contract — keeps the generic `OpEqRef`
+            // dispatch, whose `rec` test is total over every value a read answers
+            // (`nullref` has `rec == 0` too, `DbRef::or_null`) and over a reference whose
+            // holder has no record, which `OpRefIsNull`'s store-number test is not.
             self.cl("OpRefIsNull", &[operand])
         } else {
             return None;
@@ -822,6 +864,27 @@ impl Parser {
         }
         args.iter()
             .any(|a| matches!(a.unspan(), Value::Var(v) if self.vars.is_caller_hidden_buf(*v)))
+    }
+
+    /// Does `val` PRODUCE a whole record of its own, rather than READ a place that already
+    /// holds one?
+    ///
+    /// The question a `&`-linked local's whole-value write has to ask (loft#1376).  A `&` at
+    /// a struct projection is invisible in the IR — `pi = &o.j` and `pi = o.j` emit identical
+    /// ops (@PLN130 F9) — so a place READ cannot be told apart from a re-point of the link,
+    /// and it keeps the binding meaning it has.  A value that MINTS a record has no place
+    /// behind it to link to, so a write of one through a link is unambiguously
+    /// `@FR-B-Ref-Write`: copy it INTO the place the link names.
+    ///
+    /// An object literal (a `Block`, or the `Insert` spelling) and a call answer yes; a
+    /// builtin `Op*` accessor — the field, element and keyed-element reads every link bind
+    /// is built from — answers no, as does a bare variable.
+    pub(crate) fn produces_whole_record(&self, val: &Value) -> bool {
+        match val.unspan() {
+            Value::Block(_) | Value::Insert(_) | Value::CallRef(_, _) => true,
+            Value::Call(d, _) => !self.data.def(*d).name().starts_with("Op"),
+            _ => false,
+        }
     }
 
     pub(crate) fn copy_ref(&mut self, to: &Value, code: &Value, f_type: &Type) -> Value {
@@ -2106,6 +2169,10 @@ impl Parser {
         ctp: &mut Type,
         op_pos: &Position,
     ) {
+        // A tagged slot's value is read through its tag before anything else asks about it:
+        // the subject is a pointer from here on (`@FR-L-Null-Which`), so the null test, the
+        // default's hint and the result type all see `S?`, never the slot's synthetic.
+        self.read_through_tag(code, ctp);
         // Redundant-coalesce warning — fire ONLY when the LHS type is genuinely
         // non-null.  `expr_not_null` tracks the last-read name's not-null-ness but
         // does NOT account for a fault op (`sqrt`, `/`, `ln`, …) nulling a non-null
@@ -2176,7 +2243,17 @@ impl Parser {
         // @PLN25 slice (b): a `??` discharges null, so its RESULT is the non-null base. Peel
         // any `Optional` from the LHS type here so the null-check builder + the result type
         // see the base (e.g. `Optional<text>` routes exactly as plain `text` did pre-marker).
-        *ctp = ctp.base().clone();
+        // loft#1372 — through a `&` LINK first.  `@FR-C-Ref`: a `&τ` reads through to its
+        // referent, so a `??` on a linked slot is a read of the SLOT and its result is the
+        // slot's non-null base.  `base()` peels only `Optional`, so for a `&τ?` it was the
+        // identity: the coalesce typed its own result `&integer?`, against which EVERY
+        // default is a mismatch, and `p ?? 0` inside a `&integer?` parameter was reported as
+        // the author's error.  That refusal is half of why @FR-B-Ref-Intro's `&τ` for every
+        // τ had to be declined (D-bind-17).
+        *ctp = match &*ctp {
+            Type::RefVar(inner) => inner.base().clone(),
+            other => other.base().clone(),
+        };
         let lhs_type = ctp.clone();
         // @PLN17: boolean now has a real null sentinel (255), so `??` works — the
         // null-check for a boolean LHS is `lhs == null` (raw `== 255`), NOT the
@@ -2231,6 +2308,8 @@ impl Parser {
     /// this same dispatch once `T` is concrete.  A nested generic — where `concrete` is
     /// still an outer template's variable — re-stamps through that same call and stays
     /// deferred, the way loft#1016 / #1020 / #1028 each do.
+    /// Enforces the test half of @FR-N-Coal — `e ?? d` discharges `τ?` to `τ`, and this is
+    /// the per-representation `is null` that decides whether `d` is taken.
     pub(crate) fn coalesce_not_null(&mut self, src: &Value, tp: &Type) -> Value {
         if self.is_type_var_operand(tp) {
             // Deferred, NOT decided.  The placeholder is an attribute-less struct, so
@@ -2324,10 +2403,16 @@ impl Parser {
         if !self.lexer.peek_token(";") && !self.lexer.peek_token("}") {
             let ret_pos = self.lexer.peek_pos().clone();
             let t = self.expression(&mut ret_val);
-            // @PLN25 (N-Store): `lhs ?? return ret` returns `ret` into the caller's
-            // non-null return slot — an un-discharged nullable `ret` is a violation.
-            self.n_store_violation(&t, &r_type, "the return value", None);
-            if t != Type::Null && !self.convert(&mut ret_val, &t, &r_type) && !self.first_pass {
+            // @FR-N-Store: `lhs ?? return ret` returns `ret` into the caller's non-null return
+            // slot — the store face asks; a bare `null` return takes the sentinel path below
+            // and is asked at the site.
+            if t == Type::Null {
+                self.n_store_violation(&t, &r_type, "the return value", None);
+            }
+            if t != Type::Null
+                && !self.convert_store(&mut ret_val, &t, &r_type, "the return value", None)
+                && !self.first_pass
+            {
                 self.validate_convert("return", &t, &r_type, &ret_pos);
             }
         } else if r_type != Type::Void && !self.first_pass {
@@ -2702,7 +2787,11 @@ impl Parser {
         };
         // Bring the default to the result type (widen narrow→i64, or the original
         // default→value-type convert); report a genuine mismatch (e.g. `text ?? 0`).
-        if !self.convert(&mut rhs, &rhs_type, &result_type) && !self.first_pass {
+        // The default meets the coalesce's RESULT type — `(N-Coal)`'s `d ⇐ τ` is the
+        // coalesce's own typing (`?? null` keeps the value nullable, a nullable default
+        // widens it), not a store into a slot: @FR-N-Store admits it here and is asked
+        // wherever the coalesced value lands.
+        if !self.convert_admitting(&mut rhs, &rhs_type, &result_type) && !self.first_pass {
             // @PLN102 arc-E — `convert` FAILED: the default `d` is not assignable to the
             // coalesce type, i.e. `τ? ?? d` with `d` not usable where a `τ` is expected.
             // Left unreported (the old dead `can_convert` call), this built a MISMATCHED
@@ -2921,6 +3010,10 @@ impl Parser {
         parent_tp: &mut Type,
         ctp: &mut Type,
     ) {
+        // The subject of a postfix `?` is read through its tag first, as a `??` subject is:
+        // the default is then built for the pointer's base `S`, the shape the present arm
+        // has.
+        self.read_through_tag(code, ctp);
         // Same C54.G-hybrid swap `??` does: if the operand is an immediate trapping
         // arithmetic / index op (`(a / b)?`, `v[i]?`), swap it to the Nullable peer so
         // it yields the sentinel silently instead of raising, then the fallback below
@@ -3113,6 +3206,8 @@ impl Parser {
         (rhs, rhs_type)
     }
 
+    /// The checked half of @FR-N-Cast (`N-Cast?` in `types.md`): the value if it fits,
+    /// else the type's null — never a fault, never a wrapped value.
     /// @PLN25 DN4 `(N-Cast?)` — lower `e as τ?` (narrowing, not provably-fit) to a
     /// range guard: bind `e` once, yield it if it lies in τ's range, else the
     /// integer null. Pure parse-time desugar over existing ops (`OpLeInt`,
@@ -3452,6 +3547,10 @@ impl Parser {
                 // at runtime (C80, no trap). Two regimes:
                 //  · @PLN25 DN3 (default / OFF): the result auto-TYPES `τ?` (`s as integer` is
                 //    `integer?`; discharge with `?? d` or a `τ?` slot).
+                //  · @FR-N-Cast — a bare `as τ` ASSERTS the value fits; a parse cannot be
+                //    asserted, which is @FR-N-Parse folded in: `text as τ` is refused bare and
+                //    written `as τ?`, the checked form (N-Cast?, lowered by `implicit_checked_narrow`'s
+                //    explicit twin below).
                 //  · @PLN102 Phase 4 (N-Cast, LOFT_NULLFLOW): a cast `as τ` is an ASSERTION, and a
                 //    parse can't be proven, so a BARE `text as τ` is a compile error directing to
                 //    the checked `as τ?` (value or null) or the assert-or-default `as τ ?? d`. A
@@ -3462,7 +3561,7 @@ impl Parser {
                     && matches!(ctp, Type::Text(_))
                     && matches!(rt.base(), Type::Integer(_) | Type::Float | Type::Single)
                 {
-                    if crate::keys::nullflow_enabled() && !self.lexer.peek_token("??") {
+                    if crate::keys::ncast_asserts() && !self.lexer.peek_token("??") {
                         if !self.first_pass {
                             diagnostic!(
                                 self.lexer,
@@ -3887,6 +3986,9 @@ impl Parser {
                     concept_ref: "@F38",
                 });
             }
+            // @FR-N-Arith — non-null integer operands give a non-null result typed by the
+            // operands' RANGES; only a nullable operand (@FR-N-Prop) or a partial op
+            // (@FR-N-Div) makes the result nullable.
             // @PLN25 (N-Arith) range-tracking — capture the operand bounds BEFORE
             // call_op consumes them, so the result range of `&`/`%` can be narrowed
             // (a masked/modded value becomes provably-fit for a later narrowing
@@ -3913,9 +4015,11 @@ impl Parser {
             // @PLN102 Phase 3 (N-Domain) — float / single `/` and `%` also fault on a zero
             // divisor, so they type `τ?` too (like integer `/`). Gated on LOFT_NULLFLOW; the
             // `divisor_provably_nonzero` elision keeps `x / 2.0` non-null. Integer stays default-on.
+            // @FR-N-Div and its float twin @FR-N-Domain: `/` and `%` type `τ?` because a zero
+            // divisor yields the reserved null; a divisor provably non-zero keeps `τ`.
             let div_nullable = (operator == "/" || operator == "%")
                 && (matches!(ctp.base(), Type::Integer(_))
-                    || (crate::keys::nullflow_enabled()
+                    || (crate::keys::ndomain_enabled()
                         && matches!(ctp.base(), Type::Float | Type::Single)))
                 && !self.divisor_provably_nonzero(&second_code);
             // @PLN102 (N-Prop) Phase 2 — capture operand nullability BEFORE `call_op` consumes
@@ -3924,7 +4028,9 @@ impl Parser {
             // `abs(n)` on a null n all stay null). Gated on LOFT_NULLFLOW; the result is wrapped
             // `τ?` below (beside the div wrap). C85 stays the complement — non-null operands are
             // untouched here, so overflow of two non-null values still types non-null.
-            let operand_nullable = crate::keys::nullflow_enabled()
+            // @FR-N-Prop: a nullable operand makes the result nullable — null PROPAGATES
+            // through a value-preserving scalar op rather than being laundered by it.
+            let operand_nullable = crate::keys::nprop_enabled()
                 && (matches!(*ctp, Type::Optional(_)) || matches!(second_type, Type::Optional(_)));
             *ctp = self.call_op(
                 code,

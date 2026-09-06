@@ -248,15 +248,33 @@ tests/scripts/48b-spatial-slice.loft (the asserted box/open/cap slices). CAVEATS
 ```
   (Col-Group)   two or more collections over ONE element type in ONE struct are several ROUTES
                 to a single record set, provided at least one of them is keyed.  A record
-                entering through any member is in every member, by any write route.  Membership
-                is a fact about the PAIR — not about declaration order, not about which member
-                is written first, not about whether the element is dense (vector<E>) or
-                nullable (vector<E?>), and not about whether a MEMBER itself is nullable
-                (hash<E[k]>? is a collection over E in that struct, so it is a member).
-                Two members neither of which is keyed (two plain vectors) are INDEPENDENT.
+                entering through any member is in every member, and a record LEAVING through
+                any member leaves every member, by any write route — the element-level writes
+                through the vector member included (v[i] = e, v[i] = null, v.remove(i),
+                e#remove), where a replaced record keeps its identity and is indexed again
+                under the key it now carries.  Membership is a fact about the PAIR — not about
+                declaration order, not about which member is written first, and not about
+                whether a MEMBER itself is nullable (hash<E[k]>? is a collection over E in
+                that struct, so it is a member).
+                The members must share one element LAYOUT, though: a nullable element is the
+                tagged __nullable<E> (a discriminant plus the payload) and a dense one is E
+                itself, so a dense vector<E> and a vector<E?> cannot both be routes to one
+                record set, and a struct declaring both beside a keyed member is REFUSED
+                (loft#1385).  Every member dense, or every member nullable, is one set.
+                Membership is the whole SET, not a pair: *at least one of THEM* is a question
+                about every collection over that element type in the struct, and the second
+                sentence settles the rest by being applied twice — if a and h are one record
+                set and b and h are one record set, a record entering through a is in h, and a
+                record in h is in b.  Two members neither of which is keyed are INDEPENDENT
+                exactly when the struct has NO keyed collection over their element type.
+  (Col-Group-Dup) a key already held by a keyed member, entering AGAIN through ANY member,
+                displaces the OLDER record from every keyed member and leaves it in the
+                vector, which has no key to refuse on: es += [E{k:7}]; es += [E{k:7,n:"dup"}]
+                reads len(es) = 2, len(by_k) = 1, by_k[7].n = "dup", and the same through
+                by_k — the group's dedup is unlink-only, never a free (loft#1226).
 ```
 
-Six fixes are all instances of this one rule, which is why it is written here rather than left
+Seven fixes are all instances of this one rule, which is why it is written here rather than left
 to the issues: `trie`/`spatial` were absent from the pairing test (loft#927); the `others` link
 ran one way, so which member maintained the rest depended on declaration order (loft#843); the
 test asked only whether the field being ADDED was keyed, so a plain `vector<E>` declared second
@@ -264,9 +282,12 @@ formed no group (loft#1158); only `hash` had its element rewritten to a nullable
 `__nullable<E>`, so the other four kinds no longer matched by content; a whole vector VALUE
 (`data = rows()`) reached only the member it was assigned to, because the bulk write never
 passed the per-record chokepoint that maintains the group (loft#1152, and loft#1159 for the
-same route into a KEYED member); and the same nullable-element rewrite asked both of its halves
+same route into a KEYED member); the same nullable-element rewrite asked both of its halves
 with a bare variant test, so a member spelled `hash<S[k]>?` — or a vector spelled
-`vector<S?>?` — fell out of the set entirely (loft#1204).
+`vector<S?>?` — fell out of the set entirely (loft#1204); and the keyed test was asked of the
+PAIR rather than of the STRUCT, so two plain vectors beside a keyed member skipped each other
+and the keyed member became a HUB — a write through it reached both vectors, a write through
+either vector reached only it (loft#1375).
 
 Every one of them **failed silently** — the pairing was never refused, a second independent
 collection was built instead, and `len` of the empty view is a legal value.  That is the shape
@@ -307,11 +328,41 @@ so it reaches the group exactly as the direct spelling does (loft#1160, and loft
 the one route still outside it, and not by omission — it picks its origin from the runtime tag,
 so there is no one field to resolve it to.
 
+**The element-level writes through the vector member were the routes that reached no
+chokepoint** (2026-09-05, the `@FR-Col-Group` walk).  Every route that ADDS a record reaches
+`record_finish`; a keyed removal and `e#remove` emit the unlinks (loft#900, loft#903).  But
+`w.es[0] = E{k:11}` copied INTO the record in place, so the views kept it under the hash of
+the OLD key — `by_k[11]` null, `by_k[7]` null, `len(by_k)` still 2; `w.es[0] = null` on a
+`vector<E?>` left the view one entry long; `w.es.remove(0)` left the removed key findable and
+a re-add of it counted twice.  Silent, both backends, one nesting level down too.  Now one
+parser home, `Parser::group_elem_write`, binds the element once, emits
+`Parser::group_sibling_unlinks` (the loop the two removal spellings already carried, now
+shared), the write, and — for a replace — `OpLinkRecord`, which is `Stores::record_finish`'s
+sibling half on its own (`link_record_siblings`).  The temporary is typed as the element PLACE
+resolves, deps included: without them the native emitter reads the bind as owning and copies.
+
+The walk that finds the holder is a walk over the READ, so it inherits whatever spelling the
+read has.  A group one level inside a `vector<R?>` element (`rooms[0].items.remove(0)`) arrives
+as `if <present> { payload } else { nullref }` — `(L-Null)`'s non-slot spelling — which is not a
+vector read, so the holder resolved to nothing and the sibling unlinks were never emitted: the
+removed record stayed findable under its key, silently, on both backends.  `keyed_field_site`,
+`holder_type` and `vector_element_type` peel that read through `use_analysis::through_null_arm`,
+which is the one home for *"what does a null-arm read answer?"*.  The DENSE twin was never
+broken, which is what says the tag is the axis.
+
 *Anchors:* `Stores::field` (`src/database/types.rs`, the pairing test + `other_indexes`);
+`Parser::collection_groups` (`src/parser/objects.rs`, the parser's derivation of the same
+question — measured agreeing with `Stores::field` on nine shapes: a forward-declared element,
+an alias, a variant, a nullable member, a nullable element, three members, two groups in one
+struct, a nullable vector member, two plain vectors);
 `Parser::link_shared_nullable_views` (`src/parser/definitions.rs`, the nullable-element
 rewrite); `Stores::record_finish` (`src/database/structures.rs`, the per-record sibling
-insert); `Stores::insert_keyed_copy` (`src/database/search.rs`, the one keyed insert both the
+insert) and `Stores::link_record_siblings` (its sibling half alone, `OpLinkRecord`);
+`Parser::group_sibling_unlinks` / `Parser::group_elem_write` (`src/parser/collections.rs`, a
+record leaving, and the element-level writes through the vector member);
+`Stores::insert_keyed_copy` (`src/database/search.rs`, the one keyed insert both the
 point write and the bulk fill take); DATABASE.md § Clearing one member of a linked group;
+tests/scripts/a-group-element-written-through-the-vector-member-reaches-every-member.loft;
 tests/scripts/a-keyed-view-joins-a-nullable-element-vector.loft;
 tests/scripts/a-collection-group-does-not-depend-on-declaration-order.loft;
 tests/scripts/1158-a-group-forms-whichever-member-is-declared-first.loft;

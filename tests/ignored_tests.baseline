@@ -35,6 +35,7 @@ tests/fuzz_differential.rs::keyed_generated_agree_across_backends	F3 differentia
 tests/host_call.rs::measure_call_cost	a measurement, not a gate — run with --test host_call measure_call_cost -- --ignored --nocapture
 tests/issues.rs::regen_fill_rs	maintenance: regenerates src/fill.rs — run manually when default/*.loft changes
 tests/leak_cases.rs::leak_cases_native	heavy (rustc per case) — run with --test leak_cases -- --ignored
+tests/leak_cross_mode.rs::issue1369_nullable_rebind_absent_source_leak_free_both_backends	heavy (shells out + rustc) — run with --test leak_cross_mode -- --ignored
 tests/leak_cross_mode.rs::p297_nested_call_arg_temp_leak_free_both_backends	heavy (shells out + rustc) — run with --test leak_cross_mode -- --ignored
 tests/leak_cross_mode.rs::p298_const_struct_arg_call_leak_free_both_backends	heavy (shells out + rustc) — run with --test leak_cross_mode -- --ignored
 tests/leak_cross_mode.rs::plain_call_to_loop_local_leak_free_both_backends	heavy (shells out + rustc) — run with --test leak_cross_mode -- --ignored

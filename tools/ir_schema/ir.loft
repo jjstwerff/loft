@@ -183,6 +183,9 @@ struct Variable {
   skip_free: boolean,
   captured: boolean,
   caller_hidden_buf: boolean,
+  // @FR-O-Witness — the owner witness `__own_<name>` of a mixed-ownership local (u16::MAX = none);
+  // read by both emitters, so it must survive the snapshot exactly as `skip_free` does
+  owner_witness: integer,
 }
 
 struct Function {

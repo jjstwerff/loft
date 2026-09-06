@@ -14,9 +14,371 @@ invariants, internal phase numbers)?  See
 
 ## 2026-09
 
+**A `match` arm now has to answer in the type its siblings answer in.**  Every arm was parsed
+without knowing what type the `match` as a whole was expected to produce, so an arm of another
+type was neither converted nor refused: a `float` destination with an integer arm read the
+integer's BITS as a float, an `integer` destination with a `2.5` arm read the float's bits as
+an integer, and `250 + 10` landed in a `u8` local holding 260.  All of it silent, on both
+backends, and for every kind of subject you can match on.  Arms now convert to the type their
+siblings answer in, exactly as an `else` block converts to its `if`'s — so the integer arm
+becomes a real `2.0`, and the ones that cannot convert are reported and name the arm.
+
+**Removing an item from a collection inside an optional record now updates its index.**  A
+struct held inside a `vector<Room?>` has collections of its own; removing an item from one of
+them left the removed item findable through the sibling lookup, so a search still returned
+something that was no longer there.  The same shape one level up, and the same shape without
+the `?`, always worked.
+
+**Writing past the end of a vector no longer stops the program.**  `items[9] = thing` on a
+shorter vector does nothing, which is what it has always meant; on compiled and interpreted
+programs alike it had begun ending the run instead.  A negative index still counts from the
+end and writes a real element.
+
+**A value that turns out to be absent no longer costs you memory.**  Assigning a
+may-be-missing value over one a variable already held (`x = maybe`) quietly kept the old
+record alive when `maybe` turned out to be nothing — once per time it happened, on compiled
+programs only.  A long-running loop that reassigned such a variable grew for as long as it
+ran.
+
+**A `match` used for its value now says so when an arm gives none.**
+`v = match k { 1 => { 5 }, _ => { println("one") } }` quietly set `v` to null when the second
+arm ran, and on compiled programs it failed with an error from the Rust compiler instead. It
+is now refused where you wrote it, with a message saying to give the arm a value or end the
+`match` with `;` to make it a statement.
+
+**Writing an `if` statement the other way round now works.**
+`if k == 1 { println("one") } else { 5 };` compiled, while the mirror
+`if k == 1 { 5 } else { println("one") };` was rejected — the same statement with its arms
+swapped. Both are statements, both throw the value away, and both now compile.
+
+**A function that returns one of two things now hands back a value of its own.**
+`fn pick(p, q, first) -> Node? { if first { p } else { q } }` gave the caller the *second*
+argument itself, so writing to the result changed the caller's own variable — while the first
+argument was correctly copied. Both are copies now, and so is the plain `-> Node` version,
+which had the same problem despite being the documented way around it, and so is the generic
+`fn pick<T>(p: T, q: T, …) -> T?`.
+which had the same problem despite being the documented way around it.
+
+**A generic function used at two integer widths now works in either order.**  Calling the
+same generic with a `u8` and then a `u16` was rejected — *"cannot implicitly narrow u16 to
+u8"*, pointing at the second call — while writing the two calls the other way round compiled
+fine.  The two widths were being treated as one specialisation. They are now two, and the
+order you write them in no longer matters.
+
+**A linked list or a tree no longer crashes the compiler when a generic touches it.**
+`struct Node { value: integer, next: reference<Node>? }` passed to any generic function killed
+the process outright — no error message, no output. The compiler was walking the struct's own
+`next` edge round and round while measuring it. It now recognises that a field pointing back
+at its own struct is a link rather than something stored inside it.
+
+**A `&` reference can link a value that may be absent.**  `fn bump(p: &integer?)` and
+`q = &x` where `x: integer?` were refused outright — you had to link the non-null value and
+carry the absence beside it.  Both now work, read and write, on both backends: reading gives
+the source's current value (`p ?? 0` and the rest), writing reaches the source, and writing
+`null` clears it.
+
+**…and so does a `&` link to a field or a list element.**  `pi = &o.i; pi = S { n: 2 }`
+left `o.i` alone, while `pi.n = 2` through the same link worked — so the link looked
+correct right up to the moment you replaced the whole value.  Both now write the thing the
+link names.
+
+**A `&` link to a text or a vector now behaves like the `&` you already know.**  Writing a
+`&` variable is supposed to write the thing it links — `a = 3; b = &a; b = 4` leaves `a` at
+4 — and that held for numbers, and for a `&` PARAMETER of any kind.  A `&` to a text or a
+vector LOCAL was quietly different: `pc = &c; pc = "z"` left `c` alone (the `&` was dropped
+and you got a copy), and `pe = &e; pe = [2, 2]` gave `pe` a new list instead of replacing
+`e`'s contents.  Writing the link with the `&` on the type instead of the value
+(`pc: &text = c`) could crash outright.  All of these now do what the plain-language rule
+says, on both backends, and a `&` to a struct no longer leaks the value it replaces.
+
 The **say-what-you-do** release. Two threads, and they turned out to be one: every page of
 the language reference was read against the compiler that ships, and most of what came back
 was not a wrong sentence but a promise nothing was keeping.
+
+**A value chosen by an `if` keeps what it was given.**  `x = if k > 0 { h.inner } else
+{ mk(0) }` used to start reading the NEW `h` as soon as `h` was replaced — on both backends
+when `x` was fresh, and on the compiled one even when it was not.  It now keeps the value it
+was handed, like every other binding.
+
+**A view taken inside an `if` or `match` arm is copied when its container is replaced in the
+same arm.**  `got = match sh { Holder{inner} => { sh = Empty{…}; inner.a }, … }` read the new
+subject's bytes; the same two lines written outside a branch have been copied and reported for
+a month.  A plain struct view in that position was wrong on both backends, not just one.
+
+**A view of an enum's payload is copied when its subject is replaced, and the compiler says
+so.**  `x = sh.inner` followed by `sh = Empty{…}` used to read the NEW subject's bytes through
+the old view — `x.a` answered `0` where the payload said `1` — while the same code written
+against a plain struct has copied and warned for a month.  Both now behave the same way and
+both tell you.  The same blindness was making the compiler warn that a write through such a
+view was "lost" when it was not, which gated library builds; that is gone too.
+
+**A value that may be null is reported wherever it lands in a slot that cannot hold one.**
+`t: (integer, integer) = (v[i], 1)`, `H { f: w[i] }` with a vector field, and `s[at + 1..]`
+after a `find` — a tuple member, a vector field and an index or key — said nothing when the
+value was null, while the same value into an element, an argument or a return already
+warned.  All of them now warn, with the discharge to write (`?? d`, `?`, `match`); a program
+that compiled yesterday still compiles.  The check moved to the one place every such value
+passes, so a position nobody had listed cannot be silent again.
+
+**A declared local takes a nullable value with a warning, like every other slot.**
+`x: integer = v[i]` used to stop compilation with *cannot change type from integer to
+integer?* — the one slot the compiler refused where a field, an element, an argument or a
+return warned.  It now warns like they do, names the local, and the program runs with the
+null in the slot (a narrow `u8` local still refuses: it has no bit pattern left for null).
+An inferred local written a nullable value widens to `integer?` instead of being refused —
+`a = 2; a = v[i]` — as the reference always said, and the next non-null slot it reaches is
+where the warning lands.  A write-back `&integer` parameter, which used to take the null in
+silence, warns with the rest.
+
+**A nullable struct read out of a field or an element is one value, whichever way you
+reach it.**  `x = y; x = o.opt` — a local first bound to a nullable parameter and then to a
+nullable field — used to read `y` as if it carried the field's tag byte and free its record
+underneath the caller; `x = o.opt ?? y` was refused with an internal name in the message;
+`x = o.opt; if c { x = null }` was refused; and `d: S = o.opt` read a record of zeroes when the
+field was absent.  A field's or an element's nullable struct is now read as the plain `S?` it
+is the moment it leaves its slot, so every such local, `??` and `?` behaves as it does for a
+plain `S?` value.  One thing to know: such a local views the field's record, so clearing the
+field afterwards is not visible through the local, exactly as with a pointer field.
+
+**A `&` reference to a nullable value is refused with a message, not silently copied.**
+`q = &x` with `x: integer?` used to bind a plain copy — `q = 7` left `x` unchanged and nothing
+said so — and a `&integer?` parameter could be neither read nor written in its body.  Both
+now say *a `&` reference cannot link a nullable `integer?` yet* and name the way round; the
+link itself is still owed (loft#1372).
+
+**`loft introspect` shows the program as it is parsed.**  When a program had already run
+once, the startup cache answered the next `introspect` from its bundle, and the dump then
+named every variable `65535` with a `-` where its slot number and span belong — two runs of
+the same command on the same file did not print the same thing.  `introspect` now always
+parses; ordinary runs keep the cache.
+
+**`if x is Variant { field }` reads the same value on both backends.**  A payload bound by
+`is` was copied by the native compiler and shared by the interpreter, so the same program
+could answer differently depending on how it was run — and the native copy was then never
+released.  `match` has bound it correctly for a year; `is` does now too.  Writing through the
+binding still reaches the value it came from.  (loft#1398)
+
+**Replacing an enum inside a struct while you are still reading its payload now warns.**
+`match w.st { Holder{inner} => { w.st = Empty{z: 0}; inner.a }, … }` reads `Empty`'s field
+through `inner`, because writing into a place does not move what points at it — that is what
+the language documents, and both backends agree. What was missing is that nothing said so, at
+the one spelling the equivalent warning deliberately skips: a per-arm binding was taken to be
+proof that the variant could not change underneath it. It can. The value is unchanged; you are
+told, and told to copy the payload out first.  (loft#1397)
+
+**A list read out of a chosen branch keeps the value it was given.**  `b = if … {
+d.tiles.proto } else { [] }` followed by a new `d` used to read the NEW `d` when the program
+was interpreted, while the compiled build read the old one — the same program answering two
+different things depending on how you ran it.  Both give the old value now, which is the one
+the branch chose.  Writing through such a list still does not reach the struct it came from:
+copying is what a plain list assignment does, and the branch spelling follows it.  (loft#1399)
+
+**A value kept from one loop pass to the next is the value from that pass.**  Reading a list
+out of a returned struct in two steps — `t = dv.tiles; prev = t.proto;` — left `prev` reading
+the CURRENT pass's data on the next turn, so a loop comparing consecutive steps answered
+*nothing changed* every time.  Written as one expression (`prev = dv.tiles.proto`) it was
+already right and said so; both spellings now copy, and both say so.  A number read the same
+way, or a whole struct one step down, are unchanged.  (loft#1393, reported by the planet
+generator)
+
+**A list built from what it replaces reads the old value, at the last two places it did
+not.**  `xs[0].items = [xs[0].items[1]?, xs[0].items[0]?]` — reversing a list that lives in a
+struct inside a list — answered zeros, and so did the same line inside a closure over the
+list.  Both read what the destination held when the statement began now, as a plain local, a
+field and a parameter already did.  Reading a NEIGHBOURING field, or another element's, is
+untouched: those are different places and are read as they stand.  (loft#1391)
+
+**A `&` link to a vector keeps up with its source.**  `q = &v; v = [7, 8, 9]` left `q`
+reading the two elements `v` had when the link was taken, while `v` read three — on both
+backends, with nothing said.  The link now follows the source, as the `&` to a struct, a text
+or a struct field always has.  Writing through either side still reaches the other.
+(loft#1392)
+
+**A local a closure captured, and then assigned again, no longer leaks the value it ends
+up with.**  `s = S{…}; h = |i| { s.a + i }; s = build(h)` kept the store `s` ends up holding,
+and so did the inline form `s = build(|i| { s.a + i })` and the same shapes over a vector —
+one per reassignment, on both backends, with the right answer printed and only the exit
+warning to say so.  The closure record owns the value it captured; the frame owns whatever the
+local is given afterwards, and now frees it.  A capture that is never reassigned is unchanged:
+that value still belongs to the closure.  A stored closure called twice, either spelling
+inside a loop, and a closure capturing a list inside a loop are all clean.  (loft#1388)
+
+**A `match` or `if` arm may hand back the enum it is choosing over.**  `e = match e {
+Circle{r} => Circle{r: r + 1}, _ => e }` — replace one variant, keep everything else — was
+refused with *"expected Circle, got Sh"*, as was its `if` spelling, where the same value
+returned through a function typed as the enum was accepted.  A variant and its enum join to
+the enum, and now they do.  The same change closes the other half of it: a `match` whose arms
+answer in different variants used to keep the FIRST arm's variant, so `v: Circle = match e {
+… Square{…} }` was accepted and read a `Square`'s bytes through `Circle`'s fields with nothing
+said.  It is refused now, as the `if` spelling always was.  (loft#1390)
+
+**A struct-enum local declared with its enum no longer leaks when you replace it.**  `e: Sh =
+Circle{r: 1}` followed by `e = if … { circle(2) } else { e }` kept the record it replaced —
+one per pass of a loop, on both backends, with the right answer printed and only the exit
+warning to say so.  Writing the same local from a call, or leaving the annotation off, was
+always clean.  (loft#1389)
+
+**A vector literal that reads the vector it replaces reads what that vector held.**  `v =
+[v[1], v[0]]` now reverses `v`, `v += [len(v), len(v)]` appends the length twice, and a struct
+element, a struct field, a parameter or a loop reads the value from before the statement —
+where every one of them used to read the empty (or half-built) result the literal was
+filling, and answer zeros or defaults with nothing said.  Comprehensions were given this
+promise in August; the literal is the same build without the loop and now shares its cure.
+Two destinations still read the result being built — a field reached through an element,
+and a collection a closure captured — and are on the list (loft#1391).
+
+**Replacing a struct "when …" no longer leaks natively, and its `match` spelling compiles.**
+`s = if s.a > 5 { mk(7) } else { s }` released the store it replaced on the interpreter and
+kept it on `--native`, one per pass of a loop; and `s = match s.a { 9 => mk(7), _ => s }` was
+refused by rustc outright.  Both backends now free the same store, and the `match` runs.
+
+**A generic function works at a self-referential struct.**  Calling `fn id<T>(v: T) -> T?`
+with a `Node` whose `next` is a `reference<Node>?` used to kill the compiler outright — no
+message, just a crash — because sizing a `vector<Node>` element walked into `next` forever.
+It now asks the store for the size, like every other vector does — and a generic that builds
+a `vector<u8>` or `vector<i16>` now writes and reads its elements at their own width, where it
+used to hand back a neighbour's bytes (`200 0` for two bytes `200, 201`).  (loft#1378)
+
+**An `if` you write is yours, and an `else if` arm is an `else` arm.**  Storing an
+if-expression into a `u8` (or any narrow type) used to treat it as a `??` fallback: the then
+arm could read `null` in a slot that has no null, and the first thing compared in your
+CONDITION was silently range-checked too, so `c: u8 = if k == 1000 { a } else { b }` took the
+else arm.  Both now behave like every other spelling — a value that may not fit is refused at
+compile time with the message `c: u8 = a + b` gets, and your condition is left alone.  And an
+`else if` arm is now held to the first arm's type: `x: integer = if a { 1 } else if b { 2.5 }
+else { 3 }` is refused instead of printing the float's bits, and `else if b { 2 }` behind a
+`1.5` becomes `2.0`.  (loft#1379, loft#1380)
+
+**A generic function returns a value of its own, like a plain function does.**  `fn same<T>(x: T)
+-> T { x }` used to hand back the argument itself when `T` was a struct, a vector or a keyed
+collection, so `r = same(v); r[0] = 99` changed `v`, and `fn pair<T>(x: T) -> (T, integer)`
+did the same through the tuple; a plain function written the same way copied.  Every generic
+now returns what its plain twin returns.  Two nullable tuple members were wrong for plain
+functions as well: `(x, 1)` with `x: S?` read back garbage, and `(null, 2)` with a
+`vector<T>?` member read back as an empty vector instead of `null`.
+
+**A tuple built inside a generic copies what it holds.**  `t = (s, 1)` inside a
+`fn f<T: …>(…)` now behaves the same as the version with the concrete type written in
+place — mutating `s` afterwards no longer shows through `t.0` when `T` is a struct.  The
+generic and the non-generic spelling of the same function had been giving different
+answers, which is the one thing a type variable is supposed never to do.  A `T` bound to a
+vector or a keyed collection is still shared rather than copied (loft#1365).
+**A record set cannot be held two ways at once, and says so.**  Declaring a list of `E` and a
+list of `E?` beside a lookup over the same records used to leave the first list quietly out of
+the group — writes through it reached nothing else. That declaration is now refused, because
+the two lists store their elements differently and one set cannot be read both ways; the error
+names the two fixes. Lists that agree — all plain, or all nullable — are unaffected.
+
+**A value read out of one field of a record is not disturbed by another field growing.**  The
+copy-on-growth rule now asks WHICH list grew: reading from `w.a` and then appending to `w.a`
+gives you your own copy, while appending to `w.b` leaves your view of `w.a` exactly as it was.
+
+**A list you read out of a list stays yours when the outer list grows.**  The same fix as for
+a record read, now for a list: `b = w[0]` followed by appends to `w` used to leave `b` empty
+once the outer list outgrew its allocation.  `b` is now your own copy, and you are told so.
+
+**Two lists and a lookup over the same records are all one collection again.**  A struct with
+two plain lists beside a keyed one — `{ a: vector<E>, b: vector<E>, h: hash<E[k]> }` — behaved
+as though the lookup were a hub: adding through it filled both lists, but adding through either
+list reached only the lookup, so each list held part of the data and nothing said so.  All the
+routes now reach all the members, whichever order you declare them in.  Two plain lists with no
+keyed member beside them stay independent, as before.
+
+**An `if` used as a statement no longer trips the native compiler.**  `if c { println("x") }
+else { 5 };` ran fine interpreted and failed to build with `--native`, reporting a Rust type
+error for loft code you wrote.  A statement's value is thrown away — that is what a statement
+is — and both backends now agree.
+
+**A value you read out of a list stays yours when the list grows.**  `d = v[0]` followed by
+appends used to read whatever was at the old address once the list outgrew its allocation —
+right for a few appends, garbage for many, with nothing said either way.  Now the value is
+copied for you at the point you bound it, and a note tells you the copy happened and that
+writes through it no longer reach the list.  Taking a `&` reference INTO a list that then
+grows is refused instead of quietly breaking; a `&` to the list itself is unaffected.
+
+**A lookup that finds nothing is `null` everywhere it goes.**  `v[i]` past the end, `h[k]` for
+a key that is not there, and the same read on a `sorted` or an `index`, used to answer a value
+that only some null tests could see: bound to a `S?` local it read as present, passed to a
+`S?` parameter its `!= null` passed and its fields read `null`, returned from a `-> S?`
+function it came back present, and `b = find(v, 9); b.n` read garbage.  Every one of those
+now sees `null`, on both backends.  Two neighbours fixed on the way: a `vector<S?>` element
+read by a variable index (`v[i]` rather than `v[1]`) no longer refuses to compile, and a
+field read or a method call on an absent `vector<S?>` element (`v[i].n`, `v[i].area()`) is
+`null` rather than a record of zeroes.
+
+**A list chosen by an `if`, a `match` or a `??` is your own copy.**  Assigning a vector from a
+branch — `x = if c { a } else { b }`, a `match`, `x = s.items ?? fallback` — now copies the chosen
+branch the way `x = a` does, so writing through `x` no longer changes `a`; that holds on the first
+assignment and on a later one, for a nullable `x`, and inside a loop.  Assigning another vector
+to a vector PARAMETER now rebinds the parameter locally instead of overwriting the caller's
+vector in place, as the language reference already promised.
+
+**Replacing, nulling or removing one element of a list keeps its lookups in step.**  A struct
+with a `vector<E>` and a `hash<E[k]>` over the same records is one record set with two routes,
+and `w.es += [e]` has kept `w.by_k` current for a long time.  `w.es[0] = E { k: 11 }`,
+`w.es[0] = null` and `w.es.remove(0)` did not: the lookup went on answering for the old key,
+`len(w.by_k)` counted a record that was gone, and re-adding a removed key counted it twice —
+on both backends, and one struct deeper (`w.rooms[0].items[0] = …`).  Each of those now
+updates every keyed sibling, and `v.remove(i)` answers `true` or `false` as documented.
+
+**A value kept in a `struct?` behaves the same whether it came from a variable, a call, or a
+branch.**  A few store-sharing corners are gone: a nullable local set from a function that hands
+back one of its arguments now gets its own copy (writing through it no longer changes the
+caller's value); a function returning `struct?` no longer disturbs an argument on the path where
+it answers `null`; and reassigning a record local from an `if`/`match` that yields a value copies
+the chosen branch, as a first assignment already did.  A separate, invisible fix: a program run a
+second time from the same directory (served from loft's on-disk cache) now behaves exactly like
+its first run for these cases.
+
+**A struct-enum value binds like a struct.**  `c = e` on an enum-with-fields value now gives
+`c` its own copy on the interpreter, as it already did on `--native` — at a first bind, a
+rebind, from a parameter, through a nullable spelling, from a variant into its enum
+(`c: Shape = circle`), and on each arm of an `if` (where both backends had shared it).  A
+nullable one no longer leaves its copy behind.  And a field every variant declares is
+reachable through a nullable receiver (`e: Shape?; e.n = 9`, `x = e.n`) instead of being
+refused as a type change on the write and an unknown field on the read — exactly as `s.v`
+on an `s: S?` always was.  Found by walking the bind-copies rule across every position a
+struct's bind is measured at; the same walk found that a tuple holding a vector or struct
+member is shared, not copied, by a whole-tuple bind or a destructure (loft#1361, open, with
+a verified workaround).
+
+**A reassigned droppable is released.**  `s = S { h: open(a) }; s = S { h: open(b) }` never
+closed `a`: the hook ran at scope end only, and the first record was rebuilt over or freed
+without it.  It now runs at the reassignment, after the new value is computed, on both
+backends — for a rebind from a literal, a call, to `null`, and inside a loop of a local
+declared outside it.  A field or element overwritten in place is unchanged (the documented
+boundary), and a literal handed into a nested field or an element is released once by its
+container instead of twice.
+
+**A copied droppable is released once.**  `t = s` on a record whose type defines `OpDrop`
+— or holds a field that does — ran the hook for both records, so a copied file handle was
+closed twice; a copy returned from a function ran it three times, the first two before the
+caller had read what it was handed.  The copy now owns the resource and the source stops
+dropping, the same move a struct field or a collection element already made, on both
+backends.  A copy taken from a parameter leaves the caller as the owner.  Two copies of
+one value are reported by the `double-move` warning, as two containers built from it
+already were.
+
+**A nullable local that views someone else's record no longer frees it.**  `d: In? =
+q.inner; d = …` on a value with a nullable field of a parameter freed the caller's nested
+record when `d` was reassigned — invisible until a later allocation reused the slot, at
+which point the read returned the wrong value.  A view of a local's field or a vector
+element failed the same way.  A projection is a view and owns nothing, so it is left alone;
+a nullable local that actually mints a record of its own still releases it.
+
+**A nullable local behaves like its dense twin inside a branch and a loop.**  `y: S? = S {
+n: 3 }` inside a loop body — or a struct-enum literal, or the literal in an `if`/`match`
+arm — was minted in a buffer the loop's next pass reused in place after another record had
+taken it, so the second iteration's literal overwrote that record on both backends and
+nothing said so.  A `S?`, `vector<T>?` or `text?` local first assigned inside one arm of an
+`if` freed a stale word on the other arm (a refused free, or on the second call the free of
+a live record), and one first assigned inside a loop body could not be read after the loop
+(a use-after-free on the interpreter, a rustc error natively) where the same dense local
+could.  And a keyed local bound from a `match` leaked the arm's collection where the
+`if … else if …` spelling did not.  Each now does what the dense or the `if` spelling always
+did.  One shape stays open: a nullable local assigned both a field like `o.opt` and a plain
+`S?` value keeps only the last assignment's representation (loft#1367, being folded into
+the null model's one bind junction; use a separate local per source until then).
 
 **Every text buffer a frame mints is released.**  A handful of shapes answered the right
 value on both backends while the interpreter left one text buffer behind per call: a
@@ -217,6 +579,10 @@ shell idiom there is.
 
 ### Smaller things you may notice
 
+- A tuple with a heap member is a value: `u = t` copies the member, `(s, 5)` copies a struct
+  member in, and `a = t.0` / `(a, b) = t` copy a collection member out of a tuple you own —
+  on both backends.  A struct member read out is still a view, as a struct field is; and the
+  `lost-write` warning no longer fires on a write through that view.
 - A struct or vector yielded from a generator's LOOP body compiles on `--native`, and the
   consumer reads the value as it was at the yield; the statements after the loop run too
   (they were silently dropped).

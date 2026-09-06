@@ -480,14 +480,12 @@ impl Output<'_> {
     /// argument); otherwise `None`.  Used by the B5-L3 text-temp collapse
     /// to avoid hoisting a Call past a free of one of the Call's operands.
     pub(crate) fn free_op_var(op: &Value, data: &crate::data::Data) -> Option<u16> {
-        if let Value::Call(d, args) = op.unspan() {
-            let name = data.def(*d).name();
-            if matches!(name, "OpFreeRef" | "OpFreeText" | "OpFreeRefIfDistinct")
-                && let Some(arg0) = args.first()
-                && let Value::Var(v) = arg0.unspan()
-            {
-                return Some(*v);
-            }
+        if let Value::Call(d, args) = op.unspan()
+            && data.op_sets().frees.contains(d)
+            && let Some(arg0) = args.first()
+            && let Value::Var(v) = arg0.unspan()
+        {
+            return Some(*v);
         }
         None
     }
@@ -502,6 +500,7 @@ impl Output<'_> {
             name,
             "OpNewRecord"
                 | "OpFinishRecord"
+                | "OpLinkRecord"
                 | "OpGetRecord"
                 | "OpIterate"
                 | "OpDatabase"

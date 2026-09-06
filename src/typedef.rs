@@ -130,6 +130,8 @@ pub fn complete_definition(_lexer: &mut Lexer, data: &mut Data, d_nr: u32) {
 /// mismatch → corrupted enum-discriminant reads on both backends (loft#417).  Returns
 /// the synth `__nullable<S>` enum def for an eligible element (a non-stdlib,
 /// non-synthetic struct); `None` leaves the element dense.
+/// The storage half of @FR-N-Dense: a `vector<S>` element is stored dense and non-null, and
+/// only `vector<S?>` gets the tagged `__nullable<S>` that can hold absence (@FR-L-Null-Tag).
 pub(crate) fn nullable_vector_elem(
     data: &mut Data,
     lexer: &mut Lexer,
@@ -222,6 +224,13 @@ fn copy_unknown_fields(data: &mut Data, d: u32) {
 /// it wraps.  Re-wrapping before the call would therefore trip the guard on exactly the
 /// resolution it exists to allow, so the optional case writes the field directly, the same
 /// escape [`Data::rewrite_unknown_refs`] takes for `Vector<Unknown>` and friends.
+///
+/// The re-wrap goes through [`Type::optional`], the idempotent former, and not a bare
+/// `Type::Optional(Box::new(…))`: the `?` was peeled off a FORWARD reference, and what the
+/// stub resolves to can itself be nullable — `type Maybe = integer?` declared after
+/// `struct S { f: Maybe? }`.  A bare wrap built `integer??` there, a type `@FR-N-Idem` says
+/// cannot exist, and the first write to the field was refused with that spelling in the
+/// message (@PLN153 phase 0, the one constructor route the census found open).
 fn set_attr_type_keeping_optional(
     data: &mut Data,
     d: u32,
@@ -230,7 +239,7 @@ fn set_attr_type_keeping_optional(
     optional: bool,
 ) {
     if optional {
-        data.definitions[d as usize].attributes[nr].typedef = Type::Optional(Box::new(resolved));
+        data.definitions[d as usize].attributes[nr].typedef = Type::optional(resolved);
     } else {
         data.set_attr_type(d, nr, resolved);
     }

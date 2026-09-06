@@ -228,6 +228,35 @@ impl Stores {
                     if fields.get(field as usize).is_some_and(|f| !f.other_indexes.is_empty())
             );
         self.insert_record(&d, rec, tp, shares_records);
+        self.link_siblings(data, rec, parent_tp, field);
+    }
+
+    /// Put a record ONE member of a linked group already holds into every OTHER member —
+    /// the sibling half of [`Self::record_finish`] on its own (`@FR-Col-Group`: a record
+    /// entering through any member is in every member).
+    ///
+    /// An element-level write through the vector member — `w.es[i] = e`, or the `Some`
+    /// half of `w.es[i] = e` on a `vector<E?>` — keeps the record's IDENTITY and changes
+    /// its contents, so the keyed views that index it by key are unlinked before the write
+    /// and handed the record again after it.  The primary already holds it, and a
+    /// `record_finish` here would append the record to the vector a second time.
+    /// `OpLinkRecord` is the op that reaches this, emitted by the parser beside the write.
+    pub fn link_record_siblings(&mut self, data: &DbRef, rec: &DbRef, parent_tp: u16, field: u16) {
+        // A record that is not there links nowhere: the element place of an out-of-range
+        // index reads null, and the write before this was already dropped on it.  Tested
+        // BEFORE any store is resolved — an absent read answers `DbRef::NULL`, whose store
+        // number names no store.
+        if rec.rec == 0 || data.rec == 0 {
+            return;
+        }
+        let (parent_tp, data_owned) = self.nullable_field_parent(data, parent_tp, field);
+        self.link_siblings(&data_owned, rec, parent_tp, field);
+    }
+
+    /// The sibling walk itself, over a parent already redirected through
+    /// [`Self::nullable_field_parent`]: every field named by `other_indexes` is handed
+    /// the record as a SECONDARY insert (index-only, never freeing what it displaces).
+    fn link_siblings(&mut self, data: &DbRef, rec: &DbRef, parent_tp: u16, field: u16) {
         if field != u16::MAX
             && let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
                 self.types[parent_tp as usize].parts.clone()
@@ -256,11 +285,7 @@ impl Stores {
                     // Index ONLY a `Some` record (discriminant 2).  A null element is either
                     // the zeroed/absent slot (discriminant 0) or the explicit `Null` variant
                     // (discriminant 1); both are skipped.
-                    if self
-                        .nullable_some_variant(self.content(sibling_content))
-                        .is_some()
-                        && self.store(rec).get_byte(rec.rec, rec.pos, 0) != 2
-                    {
+                    if self.absent_nullable_record(self.content(sibling_content), rec) {
                         continue;
                     }
                     let o = self.field_ref(data, parent_tp, *fld_nr);
@@ -1703,14 +1728,13 @@ impl Stores {
         }
     }
 
+    /// The record a four-byte child pointer field names, as a VALUE: `nullref` when the
+    /// holder has no record or the pointer is zero (`DbRef::or_null`, @FR-L-Null) — a zero
+    /// pointer is the slot's spelling of absence and does not leave the slot.
     #[must_use]
     pub fn get_ref(&self, db: &DbRef, fld: u32) -> DbRef {
         if db.rec == 0 {
-            return DbRef {
-                store_nr: db.store_nr,
-                rec: 0,
-                pos: 0,
-            };
+            return DbRef::NULL;
         }
         let store = self.store(db);
         let res = store.get_u32_raw(db.rec, db.pos + fld);
@@ -1719,6 +1743,7 @@ impl Stores {
             rec: res,
             pos: 8,
         }
+        .or_null()
     }
 
     #[must_use]
@@ -1742,6 +1767,28 @@ impl Stores {
                     .offset(to.rec as isize * 8 + to.pos as isize),
                 len as usize,
             );
+        }
+        // @PLN154 — this is the return-value slide, the one untyped byte move on the
+        // interpreter stack, and the tags have to travel with the bytes: the destination
+        // otherwise keeps whatever its previous occupant left, and a callee that returned
+        // nothing would read as a value at the caller.  A source with no shadow is real
+        // heap data, so it arrives WRITTEN.
+        if self.store(to).shadow_armed() {
+            let at = (to.rec as isize * 8 + to.pos as isize) as usize;
+            let src = (from.rec as isize * 8 + from.pos as isize) as usize;
+            let tags = if self.store(from).shadow_armed() {
+                self.store(from).shadow_tags(src, len as usize)
+            } else {
+                // Heap bytes carry no tag, and they are real data: opaque, so they match
+                // whatever the destination is read as.
+                self.store_mut(to)
+                    .shadow_write(at, len as usize, crate::stack_verify::OPAQUE);
+                Vec::new()
+            };
+            if tags.is_empty() {
+                return;
+            }
+            self.store_mut(to).shadow_set_tags(at, &tags);
         }
     }
 }

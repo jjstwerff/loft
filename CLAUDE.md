@@ -75,6 +75,10 @@ make profile ARGS="--interpret p.loft"   # which loft FN/LINE/PATH burns the tim
                                          #   over loft's own Rust.  `make profile-corpus` checks
                                          #   the instruments against known answers — PERFORMANCE.md
 make index ; ./scripts/idx tag:@P259     # rebuild + query the tracker index (prefer over grep -rn)
+make sweep-scratch                       # reclaim loft's temp scratch (dead-process native
+                                         #   artefacts, aged test caches, old agent sessions);
+                                         #   `df -h /` before a gate — a full disk fails the
+                                         #   NATIVE corpus with a code-shaped message
 make view                                # branch-aware doc/code viewer; binds LOOPBACK,
                                          #   LOFT_VIEW_PORT (default 8765).  Remote:
                                          #   ssh -N -L 8765:127.0.0.1:8765 <host>
@@ -530,6 +534,16 @@ undiscoverable. `advice`, not `warning`: the zero is documented behaviour, so ig
 cannot produce a result the language did not promise. Quiet on a field with a declared
 default, on a NULLABLE field (absence is a value it holds), and on a bare `S {}` — that asks
 for the whole default record; the ambiguity is only in the PARTIAL literal) ·
+`LOFT_NO_VARIANT_OVERWRITTEN` (loft#1397 `variant-overwritten-binding` WARNING: a
+`match`/`is` PAYLOAD binding still read after the subject's PLACE is given a DIFFERENT
+variant — `match w.st { Holder{inner} => { w.st = Empty{z: 0}; inner.a }, … }` reads
+`Empty`'s `z` at `Holder`'s offset. `(B-Disturb)` makes overwriting a place NOT a
+disturbance, so the value is what the rules give and both backends agree; what was
+missing is loft#980's `variant-field-unchecked`, whose exemption for a per-arm binding
+assumes the variant cannot change under it. Keyed on the ARM's own tag test, so it cannot
+drift from the parser's numbering. Quiet on a SAME-variant overwrite (the value is
+right), on an unrelated field, and on a LOCAL subject — that is a reassignment `(B-View)`
+already materialises) ·
 `LOFT_NO_LINKED_GROUP` (loft#926 `linked-group-double-fill` ADVICE: one struct literal
 gives RECORDS to two members of a linked collection group — two keyed collections over one
 element type are two routes to a SINGLE record set, so both end up holding everything and

@@ -3175,6 +3175,26 @@ sanctioned workaround — `disown` after constructing the container — REQUIRES
 a field, so a declaration-site refusal rejects its own cure, and with the collection case in
 scope it would have to cover `vector<T>` as well.
 
+**Extended to the plain whole-value copy (2026-09-04).** `t = s` is the same step with no
+container around it — `@FR-B-Copy` makes it a second record holding one resource — and the
+same reasoning gives the same answer: the copy owns, the source stops dropping, once per
+resource on both backends.  Measured before the change: `h2 = h` ran the hook twice, `t = s`
+twice, a struct-enum arm once only because it aliased (a bind-copy defect closed the same
+day), `t = s; return t` three times.  `scopes::copy_moves_drop_from` is the one home; the
+`double-move` warning reads it too, so `t = s; u = s` is reported as two owners.  A copy off
+a parameter leaves the caller as the owner.  Guard:
+`tests/scripts/a-whole-value-copy-of-a-droppable-releases-once.loft`.
+
+**And to the reassignment (2026-09-05, loft#1362).**  A rebind is the owner's death for the
+record it displaces, and the hook ran at scope end only — a struct literal assigned to a live
+local is rebuilt IN PLACE, so the old record's bytes were gone before anything could read
+them.  The release is taken on a null-safe snapshot copied before the statement and dropped
+after it (`scopes::displaced_drop`), and the hand-off fact now follows the ASSIGNMENT: a
+source copied and then rebound releases through its copy only, and a copy rebound releases
+what it displaces.  The rule is `heap.md (H-Drop)`; the OLD value of an overwritten field or
+element stays the boundary named above.  Guard:
+`tests/scripts/1362-a-rebind-releases-the-droppable-it-displaces.loft`.
+
 That leaves one question, and it is a question about the GUARANTEE rather than the mechanism:
 which container deaths run the cascade?
 
@@ -3581,3 +3601,43 @@ element assignment); `par_vec_of_capturing_fns_t4` now guards the refusal instea
 for a feature; [formal/closures.md](formal/closures.md) keeps its one-line note and cites this
 entry. Per-element state goes in a struct whose field carries the closure:
 `Stepper { advance: fn(x: integer) -> integer { x + step } }`.
+
+## C117 — a linked group's members must share one element LAYOUT; the tag-aware dense read is declined
+
+A struct declaring both a dense `vector<E>` and a `vector<E?>` beside a keyed member is
+REFUSED.  The alternative — the group adopting the tagged layout, with every dense read
+skipping the discriminant — is declined.
+
+### What was actually there
+
+Two rules that cannot both hold.  `(Col-Group)` said membership is *"not about whether the
+element is dense (`vector<E>`) or nullable (`vector<E?>`)"*, so all three members are routes to
+one record set.  `(N-Dense)` says a `vector<E>` stores `E` and its elements are non-null unless
+the author wrote `vector<E?>`.  One record set that may hold absence cannot be read through a
+non-null element type.
+
+Both silent answers were measured before the refusal was chosen (loft#1385).  Left alone, the
+dense member falls out of its own group: a write through it reaches nothing else, and `len` of
+the member that never received the record is a legal `0`.  Made to join — by comparing the
+element through the nullable peel (`Stores::key_owner`), which is the obvious fix and does make
+the group form both ways — the dense member RECEIVES the record and misreads it: `a[0].n`
+answered `7` and `a[0].k` answered `2`, the `Some` discriminant.  That is loft#1134's misread:
+a zero turned into garbage, which is worse than the zero.
+
+### Why the tag-aware read is declined rather than deferred
+
+Making it work means the group adopts the tagged representation and every read through a dense
+member skips the discriminant.  That gives `vector<E>` elements a layout the author did not
+write, and `(N-Dense)`'s promise — that a `vector<E>` stores `E` — stops being true of the
+bytes.  It is a feature nobody asked for, bought by making a written type mean something else.
+
+So the refusal is the answer, not a placeholder: the message names both cures (`a: vector<E?>`
+to join the group, or drop the keyed member that groups them), and `(Col-Group)` now states the
+layout condition rather than leaving it to be re-derived.  Same direction as `D-bind-17`'s `&τ?`
+decline, and what the freeze axis wants — both alternatives are silent, and a refusal is loud.
+
+Guards: `tests/scripts/1385-a-group-cannot-hold-one-element-two-ways.loft` (the refusal, and the
+note recording that all four declaration orders were measured) and
+`1385b-a-group-agreeing-on-nullability-still-forms.loft` (the four shapes it must not cross —
+no keyed member, all-nullable, all-dense, and a member's own `?`).
+

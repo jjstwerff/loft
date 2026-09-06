@@ -11844,6 +11844,8 @@ fn test() {
 /// The test depends on `tests/docs/*.loft` existing (it does in-tree)
 /// because the bug requires a real `file(...).files()` iterator —
 /// synthetic vector iteration doesn't reproduce the slot overlap.
+// The slice bound discharges its `find` (`?? 0`): since @PLN153 phase 3 a nullable INDEX is
+// an `(N-Store)` slot and warns, and this fixture expects no diagnostics.
 #[test]
 fn p185_slot_alias_on_late_local_in_nested_for() {
     code!(
@@ -11856,7 +11858,7 @@ fn p185_slot_alias_on_late_local_in_nested_for() {
         for i in 0..3 {
             body += \"{i}\";
         }
-        key = path[path.find(\"/\") + 1..path.len() - 5];
+        key = path[(path.find(\"/\") ?? 0) + 1..path.len() - 5];
         out += `
           {key}
         `;
@@ -16756,14 +16758,15 @@ fn main() {
 // The runtime representation is identical to before (in-band sentinel), so a
 // runtime test cannot distinguish `-> integer` from `-> integer?`; the honest
 // type is only observable at a declared-non-null BOUNDARY, where assigning the
-// nullable result to a non-null declaration is a compile error.  This is the
+// nullable result to a non-null declaration is reported — `(N-Store)`'s WARNING at full
+// width (@PLN153 phase 3b: the declared local used to be a hard error).  This is the
 // non-vacuous guard: it FAILS if a future edit reverts a signature to non-null.
 #[test]
 fn pln102_stdlib_reachable_null_returns_are_typed_nullable() {
     // Each of these assigns a nullable-returning stdlib call to a declared
-    // NON-NULL local.  With honest `?` return types this is rejected; if the
+    // NON-NULL local.  With honest `?` return types this is reported; if the
     // return type were reverted to non-null it would compile clean (the guard
-    // would then fail to see the expected error → test fails).
+    // would then fail to see the expected diagnostic → test fails).
     let cases = [
         ("find", "n: integer = \"abc\".find(\"z\");"),
         ("rfind", "n: integer = \"abc\".rfind(\"z\");"),
@@ -16779,16 +16782,16 @@ fn pln102_stdlib_reachable_null_returns_are_typed_nullable() {
             false,
         );
         assert!(
-            p.diagnostics.level() >= loft::diagnostics::Level::Error,
-            "{name}: nullable return assigned to a non-null decl should error, got: {:?}",
+            p.diagnostics.level() >= loft::diagnostics::Level::Warning,
+            "{name}: nullable return assigned to a non-null decl should be reported, got: {:?}",
             p.diagnostics.lines()
         );
         assert!(
             p.diagnostics
                 .lines()
                 .iter()
-                .any(|l| l.contains("cannot change type") && l.contains("integer?")),
-            "{name}: expected a nullable-mismatch diagnostic mentioning `integer?`, got: {:?}",
+                .any(|l| l.contains("is stored into the local `n`") && l.contains("integer?")),
+            "{name}: expected the (N-Store) diagnostic naming `integer?`, got: {:?}",
             p.diagnostics.lines()
         );
     }

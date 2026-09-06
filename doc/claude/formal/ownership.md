@@ -82,6 +82,22 @@ Anything that just borrows is tracked but never frees. Crucially, *where* to fre
 **computed** from these facts, not guessed per code-site — and it's computed for **every**
 binding on **every** branch, not just the easy ones.
 
+**`(O-Complete)`'s "every path" has two halves, and a set-and-reconcile of OWNERSHIP covers
+only one.**  The other is what the binding HOLDS on the paths that never assigned it — the
+null a local first assigned inside a branch carries on the other arm, and outside the loop
+that first bound it — and which store a binding that ADOPTS a compiler buffer's record is
+freeing at its own scope exit when that scope is inside the buffer's.  Both were measured
+short of the rule for the NULLABLE spellings alone (D-own-33): `needs_pre_init` names the
+locals that get the null and the hoist, and it must peel `Optional`; a literal's `__ref_p2_N`
+adopted inside a loop body takes the pairing a call's `__ref_N` already has (`witness_buffer`,
+@P378(a)) so one owner frees once; and the free-source licence of a keyed join reaches every
+`match` arm, not only an `if`'s.  The rule did not change: the code did, at those three homes.
+The VECTOR spelling of a bound value branch has its home where the vector copy has its home —
+the parser's bind selector, not the post-parse lift — and had none until D-own-35: every
+value-branch bind of a vector local aliased the chosen arm, and `x = s.v ?? va` viewed a
+projection `x = s.v` copies.  `Parser::sink_vec_bind_into_arms` writes such a bind out per arm
+and classifies each tail by the same selector; a promoted return buffer keeps the value form.
+
 **`O-Detach` is about ORDER, and it is the one rule here that a correct ownership FACT cannot
 save you from.** Every other rule answers *who owns this store*; this one answers *when may the
 lowering act on that answer*. A binding whose ownership is computed perfectly is still read as
@@ -90,9 +106,14 @@ what `p = mk(p.a + 1)` did on a heap parameter, on both backends, with nothing r
 (loft#1312). The same order appears three more times: the `--native` adopt-vs-copy guard cleared
 the destination while the source still named that store; the reassignment path in `codegen.rs`
 avoids it by asking `Value::reads_var` and deferring the free; and the @PLN87 P2.1 literal
-lowering avoids it by hoisting the field reads into temporaries. Declining the detach is NOT a
-third option — that is what D-own-16's open half does, and it trades a wrong answer for a
-retained store rather than resolving the order.
+lowering avoids it by hoisting the field reads into temporaries. A collection LITERAL is the
+same rule at the build's own detach — the `=` repoint, a field's clear — and had no home until
+D-own-36: `v = [v[1], v[0]]` read the emptied result; `Parser::snapshot_read_destination` now
+hoists its reads onto a copy taken before the first write, the comprehension's cure given one
+home. Declining the detach is NOT a third option — that is what D-own-16's open half does, and
+it trades a wrong answer for a retained store rather than resolving the order; `--native` did
+exactly that for a value-`if` right-hand side (D-own-36's second face) until it counted the
+shape among those that produce a store.
 
 **This is an INTERNAL system — it never rejects a program it can compile.** loft has no
 user-facing borrow checker; the user writes naively and the compiler always finds a valid
@@ -127,6 +148,18 @@ a carried fact*, never re-worked out in the code generator. And because both bac
 the same answer, they can't disagree — which is exactly what makes the operational rules
 hold on native as well as interp.
 
+**Where a decision still lives in a backend, it is spelled ONCE.**  The displacement free at
+a heap reassignment is the one store-lifetime decision both code generators still make
+themselves, and its fact-reading half is `Function::owns_displaced_store` (the store-backed
+kinds, the empty-dep proxy or the one-argument borrow `Function::borrows_one_argument`, the
+`O-Override` veto, the capture exclusion, the detach) — read by the interpreter's `owned_ref`,
+native's `owned_ref_reassign` and the scope-exit sweep alike.  Two lists kept "verbatim" by
+hand drifted four times, each found by a leak or an abort on one backend only (QUALITY.md
+B7s); one predicate cannot.  What stays per backend is only what IS per backend — the
+interpreter's hidden-buffer-argument exclusion, native's declared-local and store-producing
+right-hand-side conditions.  A fact both backends need belongs in the IR; one they cannot
+share belongs behind one predicate.
+
 ### The facts that answer it — there are four, and `deps` is not the oracle
 
 `O-Deps` above is written as though `deps` were the single source of truth. It is not, and
@@ -146,9 +179,21 @@ and a decision that reads the wrong one is wrong in the silent direction:
                 FREES on the proxy MUST also consult O-Override — otherwise it frees a
                 store someone else owns.
   (O-Override)  a binding may carry an explicit never-free flag
-                (`variables::Function::is_skip_free`).  Its contract is exactly "no
-                `OpFreeRef` is ever emitted for this binding", and it VETOES the proxy and
-                the scope-exit sweep alike.  It exists BECAUSE O-Proxy is unsound alone.
+                (`variables::Function::is_skip_free`).  Its contract is "no free DERIVED
+                FROM OWNERSHIP is ever emitted for this binding" — in ANY of a free's five
+                spellings (`OpFreeRef`, `OpFreeRefTag`, `OpFreeText`, `OpFreeRefIfDistinct`,
+                `OpFreeRefOrHandUp`; `use_analysis::OpSets::frees` is the one home of that
+                list, and a matcher spelling its own goes blind to the next one), from the
+                scope-exit sweep, a transition free, a pre-`Set` free or a move alike — so
+                it VETOES the proxy and the sweep alike.  It exists BECAUSE O-Proxy is
+                unsound alone.  The ONE admissible free of a never-free binding is the
+                release the MARKING pass places itself, on a fact of its own rather than on
+                the proxy: a STAGED TEXT TEMP (`Function::is_staged_text_temp` — a `??`
+                subject, a return-delivery stage) is never-free for the sweep because its
+                value outlives the block the sweep would free it in, and the pass that
+                staged it frees it after the statement that copied the value out.
+                `ownership_cfg`'s Check D (`LOFT_OWN_ORACLE=check`) is the gate: a free of
+                any other never-free binding, by any live spelling, is a RED.
   (O-Latest)    ownership is a property of the LATEST assignment to a binding, at the LOOP
                 DEPTH at which that assignment was taken (`Scopes::owned_refs`, a memo of
                 O-Oracle plus that depth).  A type-level `deps` list can express neither,
@@ -190,7 +235,12 @@ loops* it happened.  And where even that is not enough — a local that OWNS aft
 assignment and VIEWS after another, in a loop that runs both — the ownership is a per-RUN
 fact, and `O-Witness` carries it in a slot beside the local: the walker `cur: Node? = a;
 while cur != null { cur = cur.next }` frees the copy it started from at the first rebind
-and nothing at the last, whichever iteration that is (loft#1336).
+and nothing at the last, whichever iteration that is (loft#1336).  Because it is a fact the
+EMITTERS read, it must survive the startup cache like `skip_free` does: it was maintained in
+the IR and restored by no snapshot field, so a WARM program-cache run emitted the pre-witness
+copy arm and wrote a copy INTO the record the local was viewing.  `__own_<name>` is now the
+tenth stored variable field, and the cache format version is bumped so a stale bundle is not
+read (loft#1336 follow-up, QUALITY.md B7v).
 
 ⚠ **`(O-Oracle)`'s interprocedural half has a failure mode of its own: it can lose the
 callee's answer on the way back to the caller.** The summary is stated in the CALLEE's
@@ -209,6 +259,18 @@ not upgrade the verdict.** Naming the base is always preferable to declining —
 what `(O-Oracle)`'s run-time test compares against, so a named one keeps the mint arm's free
 as well — but between an unnameable base and `Owned` there is no trade: `Owned` is the
 over-free direction, and a leak is recoverable where a premature free is not.
+
+**And the translation itself has ONE home.**  `use_analysis::structural_arg_base` carries the
+hidden-parameter rule, the delivery-buffer exception and the projection-root walk, and both
+derivations of the fact read it — the oracle, and the @PLN94 flow-sensitive shadow that
+cross-checks it (Check A).  The shadow's own copy, written to *mirror* the oracle's, carried
+none of loft#1318's three fixes and reported the oracle's CORRECT answers as disagreements;
+what the shadow keeps independent is the FLOW, never the translation.  The oracle's answer for
+a VARIABLE is likewise the join of ALL its definitions — a store `OpDatabase` minted into it
+makes it Owned only where nothing else defines it (the retbuf a `materialized_view_return`
+fills), and a variable minted once and then rebound by a call that may hand back its argument
+is a `Join`, not `Owned`; reading the mint alone was the upgrade this paragraph forbids, held
+right at run time by the distinctness guard (D-own-32, QUALITY.md B7r).
 
 ⚠ **The reason to write this down is that the choice is currently invisible.** 38 functions
 test `depend().is_empty()`; some legitimately want the proxy (they are asking "is this a
@@ -275,7 +337,11 @@ implication that reading `deps` is *sufficient*.
 ## Deviations
 
 **OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
-[ownership-history.md](ownership-history.md).
+[ownership-history.md](ownership-history.md).  The most recent, `D-own-38` (loft#1388), was
+closed by `(O-Witness)`: every release a captured local owes is now by STORE IDENTITY, with the
+hand-off at the closure build placed ahead of it for `(O-Detach)`'s ordering.  One shape keeps
+a store — a closure capturing a VECTOR inside a loop, because the witness is record-typed — and
+the entry records why the obvious widening is not taken: it answers wrong on `--native`.
 
 > **A zero here is a claim to re-measure, and this is what its oracle covers.**  The join
 > family is pinned by three files: `1323-every-arm-of-a-value-branch-has-its-own-binding`
@@ -285,7 +351,9 @@ implication that reading `deps` is *sufficient*.
 > the return position) and `1320-…` (the fn-ref arm that opened it).  Held FIXED, and
 > therefore NOT measured by them: a fn-ref whose TARGET cannot be resolved — a fn-typed
 > parameter or field — which is loft#1327 and reads `Owned` at every site that frees on the
-> oracle; a `&` binding or a struct-`Enum` variable as an arm (they keep the alias they had);
+> oracle; a `&` binding as an arm (it keeps the alias it had — a struct-`Enum` variable arm
+> was in this list until 2026-09-04, when the `@FR-B-Copy` walk gave it the copy lowering
+> a struct's has, `tests/scripts/a-struct-enum-whole-value-bind-copies-like-a-struct.loft`);
 > and the `--native` release of a displaced store on a fn-ref re-bind of a USER local, which
 > is loft#1328 and which the `??` hoist sidesteps by releasing in the IR.
 

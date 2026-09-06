@@ -554,15 +554,21 @@ impl Parser {
                 // three exceptions — `(B-View)` is a struct PROJECTION, `(B-View-Base)` a
                 // borrowed base, `(B-View-Depth)` an index or nested read — and this is a
                 // whole value off an owned local.
-                if let Type::Reference(d_nr, _) = self.vars.tp(*into).base()
-                    && let Type::Reference(vd_nr, _) = self.vars.tp(v_nr).base()
-                    && d_nr == vd_nr
+                //
+                // And through `heap_def_nr()`, the one home for "is this a heap RECORD":
+                // a struct-enum is the same shape, and spelled as a bare `Reference` this
+                // arm kept a nullable struct-enum destination DEPENDING on its source while
+                // both emitters copied — a copy nobody freed.  `Data::copies_as` admits the
+                // `(C-Var)` widening `c: E = s` with `s` a variant of `E` beside the
+                // same-def pair.
+                if let Some(d_nr) = self.vars.tp(*into).base().heap_def_nr()
+                    && let Some(vd_nr) = self.vars.tp(v_nr).base().heap_def_nr()
+                    && self.data.copies_as(d_nr, vd_nr)
                 {
                     // Don't create OpCopyRecord here: generate_set handles the copy when
                     // value=Var(src). Using Var(v_nr) directly lets method calls like
                     // `d = c.double()` pass c as `self` without the broken CopyRecord-as-self
                     // pattern that was causing garbage store_nr crashes (Issue 1).
-                    let d_nr = *d_nr;
                     let into_var = *into;
                     self.vars.make_independent(into_var, v_nr);
                     *code = Value::Var(v_nr);
@@ -571,7 +577,9 @@ impl Parser {
                     // including the flow-narrowing peel above, so a source proven non-null
                     // in this branch answers the bare type and a `τ?` stays `τ?` — dropping
                     // the marker here would make `bns` non-null and lose the null arm.
-                    let bare = Type::Reference(d_nr, crate::data::Deps::none());
+                    // The destination's own base spelling (`Reference` or struct-`Enum`),
+                    // with no deps: the copy owns.
+                    let bare = self.vars.tp(into_var).base().without_deps();
                     return if matches!(t, Type::Optional(_)) {
                         Type::Optional(Box::new(bare))
                     } else {
@@ -4328,7 +4336,7 @@ impl Parser {
     /// declared `xs: τ? = null` that the literal OMITS — are written in different
     /// functions, and a marker only one of them wrote is exactly how the omitted spelling
     /// came to read back present-and-empty.
-    fn mark_collection_absent(&mut self, code: &Value, item_pos: i32) -> Value {
+    pub(crate) fn mark_collection_absent(&mut self, code: &Value, item_pos: i32) -> Value {
         #[allow(clippy::cast_possible_wrap)]
         let absent = Value::Int(crate::keys::DbRef::ABSENT_REC as i32);
         self.cl("OpSetInt4", &[code.clone(), Value::Int(item_pos), absent])
@@ -4699,6 +4707,11 @@ impl Parser {
             // Emit OpAppendVector to deep-copy the source vector into the
             // struct's field so the data is independent of the source store.
             //
+            // @FR-N-Store — this lowering never reaches `convert`, so it asks for itself:
+            // `H { f: w[i] }` with `w[i]: vector<integer>?` was the one struct-field cell of
+            // loft#1366's matrix that said nothing.
+            self.n_store_violation(exp_tp, &td, "the field", None);
+            //
             // the same holds for any non-Insert vector-typed
             // expression (e.g. `C { v: build() }` where `build` returns a
             // vector).  Before this was a plain push, which left the field
@@ -4875,9 +4888,9 @@ impl Parser {
                 let dst_name = self.int_type_name(&td);
                 if let Some(hint) = self.nullable_sentinel_hint(value, &td, &dst_name) {
                     diagnostic!(self.lexer, Level::Error, "{hint}");
-                } else if self.n_store_violation(exp_tp, &td, "the field", None) {
-                    // @PLN25 (N-Store): a nullable into a non-null field — diagnostic emitted.
-                } else if !self.convert(value, exp_tp, &td) {
+                } else if !self.convert_store(value, exp_tp, &td, "the field", None) {
+                    // @FR-N-Store is asked inside the store face; this arm is the plain
+                    // type mismatch.
                     // Plan-07 phase 6 (partial) — name the value side first
                     // ("cannot assign <got> to <expected>"), the field-type
                     // side last.  Old shape "Cannot write {field_type} on

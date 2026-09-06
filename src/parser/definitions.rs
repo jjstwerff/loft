@@ -1562,7 +1562,7 @@ impl Parser {
         // identical until the flag flips default-on. Self-contained fns only (no desugar cascade):
         // sqrt / asin / acos. (pow / log — and their desugar consumers exp / ln / log2 / log10 —
         // land with the constant-in-domain elision, step 3.5.)
-        if !crate::keys::nullflow_enabled()
+        if !crate::keys::ndomain_enabled()
             && matches!(result, Type::Optional(_))
             && matches!(
                 fn_name.as_str(),
@@ -3639,6 +3639,81 @@ impl Parser {
     /// A DENSE vector sibling's element is `Reference(S)`, not the `Enum`, so nothing matches
     /// and the rewrite is a no-op — which is also what makes it inert with the `LOFT_E2_SYNTH`
     /// gate off.  The trigger is the `?` the author wrote (`vector<S?>`), gate or no gate.
+    /// Refuse a linked group whose members disagree about NULLABILITY — a dense `vector<S>`
+    /// beside a `vector<S?>`, with a keyed member to group them.
+    ///
+    /// Two rules meet here and cannot both hold.  `(Col-Group)` says membership is "not about
+    /// whether the element is dense (`vector<E>`) or nullable (`vector<E?>`)", so all three
+    /// are ROUTES to one record set.  `(N-Dense)` says a `vector<E>` stores `E` and its
+    /// elements are non-null unless the author wrote `vector<E?>`.  One record set that may
+    /// hold absence cannot be read through a non-null element type: the records are not even
+    /// the same shape, since a nullable element is the tagged `__nullable<E>` (a discriminant
+    /// plus the payload) and a dense one is `E` itself.
+    ///
+    /// Measured both ways before choosing the refusal.  Left as it was, the dense member
+    /// silently falls out of its own group — a write through it reaches nothing else, and
+    /// `len` of the member that never received the record is a legal `0` (loft#1385).  Made to
+    /// join by comparing the element through the nullable peel, it receives the record and
+    /// MISREADS it: `a[0].n` answered `7` and `a[0].k` answered `2`, the `Some` discriminant,
+    /// which is loft#1134's misread — a zero turned into garbage, which is worse.
+    ///
+    /// So the declaration has no coherent meaning and is declined at the point the group would
+    /// form, with a message naming the cure.  That is the direction `D-bind-17` took for `&τ?`
+    /// and the direction the freeze axis wants: a refusal is loud, and both alternatives here
+    /// are silent.  Rewriting the DENSE member to nullable is not open — it would give the
+    /// author an element type they did not write and contradict `(N-Dense)`.
+    ///
+    /// Only fires where a group would actually form: two vectors with NO keyed member over
+    /// that element type are independent (`(Col-Group)`'s last sentence), so a dense and a
+    /// nullable vector alone keep compiling.
+    fn refuse_mixed_nullability_group(
+        &mut self,
+        d_nr: u32,
+        n: usize,
+        nullable_of: &std::collections::HashMap<u32, u32>,
+    ) {
+        for a in 0..n {
+            let declared = match self.data.attr_type(d_nr, a) {
+                Type::Optional(inner) => *inner,
+                other => other,
+            };
+            // A DENSE vector over a struct that also has a NULLABLE sibling in this struct.
+            let Type::Vector(inner, _) = declared else {
+                continue;
+            };
+            let Type::Reference(s, _) = *inner else {
+                continue;
+            };
+            if !nullable_of.contains_key(&s) {
+                continue;
+            }
+            // …and a KEYED member over the same struct, which is what makes them one group.
+            let keyed = (0..n).any(|k| {
+                let kt = match self.data.attr_type(d_nr, k) {
+                    Type::Optional(i) => *i,
+                    other => other,
+                };
+                matches!(kt,
+                    Type::Hash(el, _, _)
+                        | Type::Sorted(el, _, _)
+                        | Type::Index(el, _, _)
+                        | Type::Radix(el, _, _)
+                        | Type::Trie(el, _, _) if el == s)
+            });
+            if !keyed {
+                continue;
+            }
+            let dense = self.data.def(d_nr).attributes[a].name.clone();
+            let elem = self.data.def(s).original_name().clone();
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`{dense}` holds `{elem}` while another member of its record set holds `{elem}?` — one set cannot be read both ways, because a nullable element is stored behind a tag and a dense one is not. Write `{dense}: vector<{elem}?>` to join the group, or drop the keyed member that groups them"
+            );
+            return;
+        }
+    }
+
     fn link_shared_nullable_views(&mut self, d_nr: u32) {
         let n = self.data.definitions[d_nr as usize].attributes.len();
         // payload struct `S` -> its `__nullable<S>` enum, gathered from nullable vector siblings.
@@ -3669,6 +3744,7 @@ impl Parser {
         if nullable_of.is_empty() {
             return;
         }
+        self.refuse_mixed_nullability_group(d_nr, n, &nullable_of);
         for a in 0..n {
             // Which record set a view indexes is a question about its ELEMENT, so it is asked
             // of the peeled type and the wrapper is restored below: a member declared

@@ -287,6 +287,17 @@ pub struct Store {
     pub tag: u32,
     /// When true, this Store borrows another's buffer — `Drop` must NOT dealloc.
     borrowed: bool,
+    /// Which SLOT this store occupies in `Stores` — its `store_nr`, the first field of every
+    /// `DbRef` that names it.
+    ///
+    /// @PLN154 phase 3.  A `Store` method does not otherwise know its own number, which is
+    /// why the edit journal buffers changes per store and lets `Stores` tag them at the
+    /// drain.  The relocation log cannot do that: a record that MOVES invalidates every
+    /// reference that named it, and a reference is `(store_nr, rec, pos)` — so the number
+    /// has to travel with the move, not be attached at a later drain.
+    ///
+    /// `u16::MAX` until the slot goes live.
+    pub store_nr: u16,
     /// Which allocation this slot is, on `Stores`' monotonic counter.
     ///
     /// Slot NUMBERS are reused, so `store_nr` alone cannot answer *"is this the same store I
@@ -357,6 +368,16 @@ pub struct Store {
     /// and `3` (`WAL`) are reserved for future phases.
     #[cfg_attr(not(feature = "mmap"), allow(dead_code))]
     durable_tier: u16,
+    /// @PLN154 — the stack shadow: one tag word per store byte, `0` meaning nothing has
+    /// written it.
+    ///
+    /// Empty on every store but the interpreter's value stack, and empty there too unless
+    /// `LOFT_VERIFY_STACK` armed it — so the hook in [`addr_mut`](Self::addr_mut) is a
+    /// length load and a not-taken branch on an ordinary run.  It lives HERE, beside the
+    /// bytes it describes, because a shadow kept anywhere else has to be told about every
+    /// growth and every move by hand, and phase 0 measured 33 separate routes that write
+    /// these bytes.
+    init_shadow: Vec<u32>,
 }
 
 impl Debug for Store {
@@ -462,6 +483,208 @@ impl Store {
         }
     }
 
+    /// @PLN154 — arm the stack shadow on this store.
+    ///
+    /// From here on every write through [`addr_mut`](Self::addr_mut) tags the bytes it
+    /// covers, a byte-for-byte move carries the tags with the bytes, and
+    /// [`shadow_written`](Self::shadow_written) can answer whether anything ever wrote a
+    /// span.  Called on the interpreter's value-stack store only, and only when
+    /// `LOFT_VERIFY_STACK` is set.
+    ///
+    /// The store's existing bytes are tagged UNWRITTEN, which is what they are: arming
+    /// happens at `State::new`, before the first frame exists.
+    pub fn arm_init_shadow(&mut self) {
+        self.init_shadow = vec![0u32; self.size as usize * 8];
+        crate::stack_verify::note_armed();
+    }
+
+    /// Pack a byte's tag: the kind and width the value was written at, and where in that
+    /// value this byte sits.
+    ///
+    /// The index is what makes a read starting INSIDE a value distinguishable from one
+    /// starting at its base, which is the difference between *"the slot holds another type"*
+    /// and *"the two sides disagree about where the slot begins"*.  Both are findings and
+    /// they want different words.
+    #[inline]
+    const fn pack_tag(kind: u16, idx: usize) -> u32 {
+        // Beyond 254 bytes the index saturates: only an opaque raw span is that wide, and
+        // an opaque tag is admitted at any offset anyway.
+        let idx = if idx > 254 { 254 } else { idx };
+        ((kind as u32) << 8) | (idx as u32 + 1)
+    }
+
+    /// Is the @PLN154 shadow armed on this store?
+    #[inline]
+    #[must_use]
+    pub fn shadow_armed(&self) -> bool {
+        !self.init_shadow.is_empty()
+    }
+
+    /// Tag `len` bytes at absolute byte offset `at` as written.
+    ///
+    /// `at` is the offset from the store's base — the `rec * 8 + fld` that
+    /// [`addr_mut`](Self::addr_mut) computes — so a tag and a byte are always in one
+    /// coordinate system.
+    ///
+    /// Under `LOFT_VERIFY_STACK_INJECT` this does nothing, which makes every checked read
+    /// report: the positive control that tells a detector that cannot fire from a corpus
+    /// that is clean.
+    /// Outlined and `cold`: the branch that guards it in [`addr_mut`](Self::addr_mut) is
+    /// never taken on an ordinary run, and inlining the body there pushed the hot path's
+    /// code apart for nothing — measured at +10 % instructions on a field-write loop before
+    /// this attribute, and under 1 % after.
+    #[cold]
+    #[inline(never)]
+    pub fn shadow_write(&mut self, at: usize, len: usize, kind: u16) {
+        if crate::stack_verify::inject() {
+            return;
+        }
+        let end = (at + len).min(self.init_shadow.len());
+        for (i, slot) in self.init_shadow[at.min(end)..end].iter_mut().enumerate() {
+            *slot = Self::pack_tag(kind, i);
+        }
+    }
+
+    /// Drop the tags on `len` bytes at `at`: the span has left the live frame, and the
+    /// next occupant of those offsets inherits nothing from the last.
+    #[cold]
+    #[inline(never)]
+    pub fn shadow_kill(&mut self, at: usize, len: usize) {
+        if self.init_shadow.is_empty() {
+            return;
+        }
+        let end = (at + len).min(self.init_shadow.len());
+        if at < end {
+            self.init_shadow[at..end].fill(0);
+        }
+    }
+
+    /// What does the shadow say about `at..at + len`?
+    ///
+    /// The three answers are the states the plan separates.  `Unwritten` — no byte of the
+    /// span was ever written — is @PLN154 phase 1's finding, and it is the one that means
+    /// the slot has no occupant at all.  `Partial` is a slot whose occupant is NARROWER
+    /// than the read: an eval slot is stepped to eight bytes
+    /// ([`aligned_stack_step`](crate::variables::aligned_stack_step)) while a `boolean`
+    /// writes one and a `character` four, so every sub-word scalar leaves padding nobody
+    /// wrote.  Whether the read's width matches the write's is phase 2's question, and
+    /// answering it here would report the language's own stepped slots on day one.
+    ///
+    /// A span outside the shadow answers `Written` and is counted in the summary: that is
+    /// a fault in the shadow's own plumbing rather than a finding about the program, and
+    /// reporting it as one would bury the real findings.
+    #[must_use]
+    pub fn shadow_state(&self, at: usize, len: usize, kind: u16) -> crate::stack_verify::SlotState {
+        use crate::stack_verify::{OPAQUE, SlotState, kind_width};
+        if self.init_shadow.is_empty() {
+            return SlotState::Written;
+        }
+        let Some(span) = self.init_shadow.get(at..at + len) else {
+            crate::stack_verify::note_out_of_range();
+            return SlotState::Written;
+        };
+        let base = span[0];
+        if base == 0 {
+            return SlotState::Unwritten;
+        }
+        let wrote = (base >> 8) as u16;
+        // A handle whose record has moved: the tag kept its width and index and changed only
+        // its family, so it lands here rather than in a second lookup.
+        if wrote & 0xFF00 == crate::stack_verify::STALE {
+            return SlotState::Stale;
+        }
+        // A raw byte BLOCK on either side is opaque: whoever assembled it knows what is in
+        // it, and the shadow's tag does not.  The fn-ref slot is written as
+        // `[MaybeUninit<u8>; 20]` and read back as an `i64` and a `DbRef`; a coroutine frame
+        // is restored from its own snapshot.  Those are composite reads, not disagreements.
+        if wrote == OPAQUE || kind == OPAQUE {
+            return SlotState::Written;
+        }
+        if wrote == kind && base & 0xFF == 1 {
+            return SlotState::Written;
+        }
+        // THE FINDING IS A HANDLE CROSSING A VALUE, in either direction.  A `DbRef` is a
+        // position in a store, so reading one as a number answers an address wearing a
+        // number's clothes, and reading a number as one indexes a store by data — and
+        // neither can be an intended pun, because a slot the compiler typed as a reference
+        // is a reference on every path.  That is the monomorph-layout class this phase was
+        // opened for: loft#1028 wrote `OpNullRefSentinel`'s twelve bytes into a slot the
+        // monomorph read as an `integer`, and loft#1016 defaulted a `__typevar_T` RECORD
+        // into one it read as a float.
+        //
+        // The WIDTH comparison is deliberately not a finding, and that is measured rather
+        // than conceded: the interpreter's frame carries composite slots the compiler
+        // addresses field by field — the 20-byte fn-ref slot, the iterator state `OpStep`
+        // reads as two `u32`s — so a width rule reports the frame's own layout on 43 of the
+        // first 180 corpus programs.  What survives is counted as a pun, not reported.
+        let crossing = (wrote >> 8 == 1) != (kind >> 8 == 1);
+        if crossing {
+            return SlotState::Mismatch { wrote };
+        }
+        // The remaining disagreements are the language's own puns: a scalar narrower than
+        // its stepped slot (`OpSizeScalar` reads eight bytes to discard a `boolean`), a null
+        // sentinel written as the word it is and read as the float it stands for, and a
+        // composite slot read one field at a time.
+        let _ = kind_width(wrote);
+        SlotState::Partial
+    }
+
+    /// Read the tags of `at..at + len`, for a move that has to carry them.
+    #[must_use]
+    pub fn shadow_tags(&self, at: usize, len: usize) -> Vec<u32> {
+        self.init_shadow
+            .get(at..at + len)
+            .map_or_else(|| vec![0u32; len], <[u32]>::to_vec)
+    }
+
+    /// Write `tags` over the span starting at `at`.
+    pub fn shadow_set_tags(&mut self, at: usize, tags: &[u32]) {
+        let end = (at + tags.len()).min(self.init_shadow.len());
+        if at < end {
+            self.init_shadow[at..end].copy_from_slice(&tags[..end - at]);
+        }
+    }
+
+    /// Mark the `len`-byte value based at `at` as a STALE handle: it names a record that has
+    /// moved.  Keeps the width and the index, so a later read reports the handle rather than
+    /// a width disagreement.
+    pub fn shadow_stale(&mut self, at: usize, len: usize) {
+        let end = (at + len).min(self.init_shadow.len());
+        for slot in &mut self.init_shadow[at.min(end)..end] {
+            if *slot != 0 {
+                *slot = (*slot & 0xFF) | (u32::from(crate::stack_verify::STALE) << 8);
+            }
+        }
+    }
+
+    /// Does a live HANDLE begin at byte `at`?
+    ///
+    /// @PLN154 phase 3's scan asks exactly this and nothing else, and it asks it about every
+    /// four-byte offset in the frame — so the tag's encoding is decoded HERE, beside
+    /// [`pack_tag`](Self::pack_tag) that wrote it, rather than open-coded at the caller where
+    /// a change to the layout would leave a silently-never-matching test behind.
+    #[must_use]
+    pub fn shadow_handle_base_at(&self, at: usize) -> bool {
+        let Some(&tag) = self.init_shadow.get(at) else {
+            return false;
+        };
+        // index 0 within the value (stored as 1), and the handle family.
+        tag & 0xFF == 1 && (tag >> 8) as u16 >> 8 == 1
+    }
+
+    /// Move the tags of a `len`-byte span from `from` to `to`, within this store.
+    ///
+    /// The SOURCE tags are the real ones — whoever wrote the bytes wrote them there — so
+    /// an unwritten source stays unwritten at the destination, which is the property that
+    /// lets a callee's missing return value be caught at the caller's read.
+    pub fn shadow_move(&mut self, from: usize, to: usize, len: usize) {
+        if self.init_shadow.is_empty() {
+            return;
+        }
+        let tags = self.shadow_tags(from, len);
+        self.shadow_set_tags(to, &tags);
+    }
+
     /// Total capacity of this store in bytes.
     #[must_use]
     pub fn byte_capacity(&self) -> u64 {
@@ -549,6 +772,7 @@ impl Store {
             read_only: false,
             free_protect_depth: 0,
             borrowed: false,
+            store_nr: u16::MAX,
             alloc_serial: 0,
             created_at: 0,
             last_op_at: 0,
@@ -565,6 +789,7 @@ impl Store {
             durable_meta_path: None,
             file_path: None,
             durable_tier: 0,
+            init_shadow: Vec::new(),
         };
         store.init(); // sets claims = {PRIMARY} and free_root = 0
         store
@@ -675,6 +900,7 @@ impl Store {
             recording: None,
             tag: 0,
             borrowed: false,
+            store_nr: u16::MAX,
             alloc_serial: 0,
             created_at: 0,
             last_op_at: 0,
@@ -684,6 +910,7 @@ impl Store {
             durable_meta_path: None,
             file_path: Some(std::path::PathBuf::from(path)),
             durable_tier: 0,
+            init_shadow: Vec::new(),
         };
         if init {
             store.init();
@@ -744,6 +971,7 @@ impl Store {
             read_only: false,
             free_protect_depth: 0,
             borrowed: false,
+            store_nr: u16::MAX,
             alloc_serial: 0,
             created_at: 0,
             last_op_at: 0,
@@ -760,6 +988,7 @@ impl Store {
             durable_meta_path: None,
             file_path: None,
             durable_tier: 0,
+            init_shadow: Vec::new(),
         };
         #[cfg(debug_assertions)]
         store.validate(0);
@@ -840,6 +1069,7 @@ impl Store {
             read_only: false,
             free_protect_depth: 0,
             borrowed: false,
+            store_nr: u16::MAX,
             alloc_serial: 0,
             created_at: 0,
             last_op_at: 0,
@@ -856,6 +1086,7 @@ impl Store {
             durable_meta_path: None,
             file_path: None,
             durable_tier: 0,
+            init_shadow: Vec::new(),
         };
         // @PLN97 arc G Phase 2 — fail-closed structural validation of an
         // UNTRUSTED buffer, ALWAYS-ON and BEFORE `fl_rebuild`.  A crafted
@@ -1131,6 +1362,14 @@ impl Store {
         let new = self.claim(size);
         self.copy(rec, new);
         self.delete(rec);
+        // @PLN154 phase 3 — the record MOVED, so every reference that named it is stale.
+        // Recorded here rather than detected later because this is the only moment both
+        // record numbers exist: afterwards the old one is a free block like any other, and
+        // a frame slot still naming it is indistinguishable from one naming a slot that was
+        // simply reused.
+        if crate::stack_verify::enabled() {
+            crate::stack_verify::note_relocation(self.store_nr, rec, new);
+        }
         new
     }
 
@@ -1487,6 +1726,13 @@ impl Store {
             unsafe { self.ptr.add(old_bytes).write_bytes(0, bytes - old_bytes) };
         }
         self.size = size;
+        // @PLN154 — the shadow spans the buffer, so it grows with it.  The new bytes are
+        // tagged unwritten, which is what they are: nothing has been put there yet.  The
+        // tags themselves do not move, because a growth keeps every `rec * 8 + fld` where
+        // it was.
+        if !self.init_shadow.is_empty() {
+            self.init_shadow.resize(bytes, 0);
+        }
     }
 
     /// Give the store's tail back: lower the capacity to `words`, keeping every
@@ -1579,6 +1825,11 @@ impl Store {
     /// chain — F2, because a stale `free_root` still indexes the words that were
     /// just cut and would hand one of them out.
     fn retile_tail(&mut self, mark: u32) {
+        // @PLN154 — the shadow spans the buffer, so a truncation truncates it.  Called
+        // from both shrink paths, which is why it sits here rather than beside each.
+        if !self.init_shadow.is_empty() {
+            self.init_shadow.truncate(self.size as usize * 8);
+        }
         let tail = mark.max(PRIMARY);
         if tail < self.size {
             *self.addr_mut(tail, 0) = -((self.size - tail) as i32);
@@ -1795,6 +2046,7 @@ impl Store {
             recording: None,
             tag: self.tag,
             borrowed: false,
+            store_nr: u16::MAX,
             alloc_serial: 0,
             created_at: 0,
             last_op_at: 0,
@@ -1804,6 +2056,7 @@ impl Store {
             durable_meta_path: None,
             file_path: None,
             durable_tier: 0,
+            init_shadow: Vec::new(),
         }
     }
 
@@ -1830,6 +2083,7 @@ impl Store {
             read_only: false,
             free_protect_depth: self.free_protect_depth,
             borrowed: false,
+            store_nr: self.store_nr,
             alloc_serial: self.alloc_serial,
             created_at: self.created_at,
             last_op_at: self.last_op_at,
@@ -1846,6 +2100,7 @@ impl Store {
             durable_meta_path: None,
             file_path: None,
             durable_tier: 0,
+            init_shadow: Vec::new(),
         }
     }
 
@@ -1874,6 +2129,7 @@ impl Store {
             recording: None,
             tag: self.tag,
             borrowed: true,
+            store_nr: u16::MAX,
             alloc_serial: 0,
             created_at: 0,
             last_op_at: 0,
@@ -1883,6 +2139,7 @@ impl Store {
             durable_meta_path: None,
             file_path: None,
             durable_tier: 0,
+            init_shadow: Vec::new(),
         }
     }
 
@@ -2609,7 +2866,7 @@ impl Store {
     }
 
     #[inline]
-    pub fn addr_mut<T>(&mut self, rec: u32, fld: u32) -> &mut T {
+    pub fn addr_mut<T: 'static>(&mut self, rec: u32, fld: u32) -> &mut T {
         // Only hard `read_only` blocks writes.  Call-bracket
         // `free_protected` lets writes through (only frees are blocked).
         debug_assert!(
@@ -2638,10 +2895,47 @@ impl Store {
             "Write to read-only store at rec={rec} fld={fld} (locked by: {})",
             self.lock_origin
         );
+        // @PLN154 — the one write hook.  Phase 0 counted 33 sites that write the
+        // interpreter stack and 32 of them arrive here, where `T` also names the width;
+        // the typed accessor above them carries only 74.5 % of the bytes.  Off, this is
+        // the length load and the not-taken branch.
+        if !self.init_shadow.is_empty() {
+            self.shadow_write(
+                at as usize,
+                std::mem::size_of::<T>(),
+                crate::stack_verify::kind_of::<T>(),
+            );
+        }
         unsafe {
             let off = self.ptr.offset(at).cast::<T>();
             off.as_mut().expect("Reference")
         }
+    }
+
+    /// A raw pointer to `len` bytes at `(rec, fld)`, for a caller that writes the whole
+    /// span in one untyped move.
+    ///
+    /// @PLN154 — the difference from `addr_mut::<u8>` is that the bound and the shadow tag
+    /// both cover `len` rather than the one byte the type names.  Seven sites in the
+    /// interpreter restore a coroutine frame, overlay a worker's stack or slide a yielded
+    /// value this way; each is a route the phase-0 census counted and none of them can be
+    /// reached through a typed accessor, so the primitive is where the two facts live
+    /// instead of being repeated at every site.
+    ///
+    /// # Safety
+    /// The caller writes at most `len` bytes from the returned pointer.  The span is
+    /// bounds-checked here.
+    pub fn addr_span_mut(&mut self, rec: u32, fld: u32, len: usize) -> *mut u8 {
+        assert!(
+            !self.read_only,
+            "Write to read-only store at rec={rec} fld={fld} (locked by: {})",
+            self.lock_origin
+        );
+        let at = self.offset_in_bounds(rec, fld, len);
+        if !self.init_shadow.is_empty() {
+            self.shadow_write(at as usize, len, crate::stack_verify::OPAQUE);
+        }
+        unsafe { self.ptr.offset(at) }
     }
 
     pub fn buffer(&mut self, rec: u32) -> &mut [u8] {
@@ -2654,6 +2948,11 @@ impl Store {
         // the slice — and a FREED record's header is negative, which reading it as
         // `u32` turns into a span of gigabytes.  Bound it before it becomes a slice.
         let at = self.offset_in_bounds(rec, 8, size);
+        // @PLN154 — a `&mut [u8]` handed out is a write of the whole span as far as the
+        // shadow can tell; the caller need not come back through a typed accessor.
+        if !self.init_shadow.is_empty() {
+            self.shadow_write(at as usize, size, crate::stack_verify::OPAQUE);
+        }
         unsafe {
             let p = self.ptr.offset(at);
             std::slice::from_raw_parts_mut(p, size)
@@ -2830,6 +3129,11 @@ impl Store {
         // SAFETY: callers pass a record/element's own `pos..pos+len`, which lies
         // within its claimed allocation.
         unsafe { std::ptr::write_bytes(ptr, 0, len as usize) }
+        // @PLN154 — `addr_mut::<u8>` above tagged one byte; the write covers `len`.
+        if !self.init_shadow.is_empty() {
+            let at = (rec as usize) * 8 + pos as usize;
+            self.shadow_write(at, len as usize, crate::stack_verify::OPAQUE);
+        }
     }
 
     #[inline]
@@ -2858,6 +3162,15 @@ impl Store {
             std::ptr::copy(
                 self.ptr.offset(from_rec as isize * 8 + from_pos),
                 self.ptr.offset(to_rec as isize * 8 + to_pos),
+                size as usize,
+            );
+        }
+        // @PLN154 — a raw byte move carries its tags, so a span the source never wrote
+        // arrives unwritten and is caught at the read rather than at this copy.
+        if !self.init_shadow.is_empty() {
+            self.shadow_move(
+                (from_rec as isize * 8 + from_pos) as usize,
+                (to_rec as isize * 8 + to_pos) as usize,
                 size as usize,
             );
         }
@@ -2892,6 +3205,19 @@ impl Store {
                 to_store.ptr.offset(to_rec as isize * 8 + to_pos),
                 len as usize,
             );
+        }
+        // @PLN154 — the tags follow the bytes across stores too.  A source with no shadow
+        // is real data, so the destination is tagged WRITTEN; only a shadowed source can
+        // hand over an unwritten span.
+        if to_store.shadow_armed() {
+            let at = (to_rec as isize * 8 + to_pos) as usize;
+            if self.shadow_armed() {
+                let tags =
+                    self.shadow_tags((from_rec as isize * 8 + from_pos) as usize, len as usize);
+                to_store.shadow_set_tags(at, &tags);
+            } else {
+                to_store.shadow_write(at, len as usize, crate::stack_verify::OPAQUE);
+            }
         }
     }
 

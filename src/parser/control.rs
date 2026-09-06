@@ -461,6 +461,8 @@ struct PatternArm {
 /// 4323 spanned values arrive here over the corpus and peeling changes the answer **0** times,
 /// because a spanned arm is never a null arm — the same structural fact that keeps
 /// `Return`/`Break`/`Continue` unspanned in block-operator position.
+/// The null-arm recogniser of @FR-N-Match: which arm of a `match` on `τ?` is the `null` arm,
+/// so the other arms bind the `τ`.
 fn arm_body_is_null(code: &Value) -> bool {
     match code {
         Value::Null => true,
@@ -873,7 +875,33 @@ impl Parser {
             // it at each statement boundary; the within-statement `?? d` / `== null` tracking is
             // untouched (both operand and consumer parse inside this one `self.expression`).
             self.expr_not_null = false;
+            // loft#1382 — statement position, decided by the ONE reader that knows it.  A
+            // statement beginning with `if` or `match` has its value discarded
+            // (`@FR-F-Block`), so its arms need not agree with each other; a value-position
+            // one never starts its statement (`v = if …` starts with `v`), which is what
+            // makes a single peek sufficient.  `parse_if` consumes the flag, so a nested
+            // value-`if` inside a statement one does not inherit it.
+            let saved_stmt_if = self.stmt_if_pending;
+            self.stmt_if_pending = self.lexer.peek_token("if") || self.lexer.peek_token("match");
+            let pending_before = self.pending_arm_mismatch.take();
             t = self.expression(&mut n);
+            self.stmt_if_pending = saved_stmt_if;
+            // …and CONFIRM it here, where the `;` is finally visible.  `@FR-F-Block` discards
+            // a block's value *"only where the BLOCK itself is a statement — a `;`-terminated
+            // one"*, and a leading `if` does not prove that: a function TAIL also begins its
+            // statement, and there the value is the function's, so its arms must still agree
+            // (`fn t() { if c { 2 } else { "a" } }` is a real error, `parse_errors::wrong_if`).
+            // The gate below therefore RECORDS the mismatch instead of reporting it, and this
+            // is where it is either dropped — the construct was a statement — or reported.
+            // Deciding here rather than by looking ahead is what keeps the lexer untouched:
+            // a scan to the end of the construct has to re-lex it, and reverting that left
+            // the parser mis-positioned on 250 tests.
+            if let Some(m) = self.pending_arm_mismatch.take()
+                && !self.lexer.peek_token(";")
+            {
+                self.arm_mismatch_report(&m);
+            }
+            self.pending_arm_mismatch = pending_before;
             self.expected = saved_expected;
             // Track unconditional terminators at block scope.
             // if/else/loop/match contain terminators inside branches — not unconditional.
@@ -1383,6 +1411,41 @@ impl Parser {
                 t = Type::Text(Deps::frame1(ret));
             }
         }
+        // loft#1368 / `@FR-F-Ret` — a returned whole heap value is FRESH, never a view of a
+        // parameter.  A function tail that is a value BRANCH hands back each arm's own borrow
+        // (`fn pick(p, q, …) -> Node["p", "q"]?`), and a caller can witness only ONE of them,
+        // so the arm that borrowed the OTHER source was adopted and a write through the result
+        // reached the caller's argument — on both backends, silently.
+        //
+        // Bind the branch to a local FIRST, which is exactly the workaround the issue
+        // documents (`r: Node = if first { p } else { q }; r`) and which works because a bind
+        // COPIES each arm through its own temp (`@FR-B-Copy`, the join-arm lift of loft#1321).
+        // Writing it here means every `-> S` / `-> S?` return gets it, not only the ones whose
+        // author knew to.  The scope pass then sees an ordinary local return, which is the
+        // shape its machinery is already correct for.
+        // Not in a generic TEMPLATE: its body is cloned into each monomorph, and a local
+        // minted here reaches codegen in the clone with no slot (`__ret_join[65535]`).  The
+        // monomorph is parsed as an ordinary function and takes the rewrite there, which is
+        // where the concrete return type is known anyway.
+        let in_generic_template = self.context != u32::MAX
+            && matches!(self.data.def(self.context).def_type(), DefType::Generic);
+        if !self.first_pass
+            && !in_generic_template
+            && context == "return from block"
+            && matches!(
+                result.base(),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            )
+            && self.tail_is_borrowing_branch(&l)
+        {
+            let last = l.len() - 1;
+            let tmp = self.create_unique("__ret_join", result);
+            self.vars.defined(tmp);
+            let branch = std::mem::replace(&mut l[last], Value::Null);
+            l[last] = crate::data::v_set(tmp, branch);
+            l.push(Value::Var(tmp));
+            t = result.clone();
+        }
         t = self.block_result(context, result, &t, &mut l, &last_expr_peek.position);
         // @PLN25/#585: drop any guard-clause fall-through narrowing this block introduced — the
         // proof does not escape the block (see `nn_base` above).
@@ -1601,6 +1664,50 @@ impl Parser {
         }
     }
 
+    /// Is this block's tail a value BRANCH handing back TWO OR MORE different parameters
+    /// (loft#1368)?
+    ///
+    /// The shape no caller can witness: with one nameable source the caller's guarded bind
+    /// copies correctly, and with two it can name only the first, so the arm that borrowed the
+    /// other is adopted and the write lands on the caller's argument.
+    ///
+    /// Asked of the ARMS, not of the declared return deps.  A MONOMORPH's return type carries
+    /// no deps at all — `t_4Node_pickg` returns a bare `ref(Node)?` where its concrete twin
+    /// returns `Node["p", "q"]?` — so a deps test sees the generic instance as borrowing
+    /// nothing and leaves exactly the shape a generic makes easiest to write unguarded.
+    fn tail_is_borrowing_branch(&self, l: &[Value]) -> bool {
+        let Some(tail) = l.last() else {
+            return false;
+        };
+        self.is_borrowing_branch(tail)
+    }
+
+    /// [`Self::tail_is_borrowing_branch`] asked of one value.
+    fn is_borrowing_branch(&self, tail: &Value) -> bool {
+        fn arm_params(v: &Value, vars: &crate::variables::Function, out: &mut Vec<u16>) -> bool {
+            match v.unspan() {
+                Value::If(_, t, f) => {
+                    let _ = arm_params(t, vars, out);
+                    let _ = arm_params(f, vars, out);
+                    true
+                }
+                Value::Block(bl) => bl
+                    .operators
+                    .last()
+                    .is_some_and(|x| arm_params(x, vars, out)),
+                Value::Var(x) => {
+                    if vars.is_argument(*x) && !out.contains(x) {
+                        out.push(*x);
+                    }
+                    false
+                }
+                _ => false,
+            }
+        }
+        let mut params = Vec::new();
+        arm_params(tail, &self.vars, &mut params) && params.len() > 1
+    }
+
     pub(crate) fn block_result(
         &mut self,
         context: &str,
@@ -1737,8 +1844,21 @@ impl Parser {
             // The work-ref an `else` arm was boxed into (loft#1350) — the arm's own
             // ownership fact, read where the arm's type is settled below.
             let mut boxed_arm_w: Option<u16> = None;
+            // A block handed a SIBLING EXPRESSION's type as its expected type: the `else`
+            // arm (`parse_if` passes the then arm's), and the then arm of an `else if`
+            // CHAIN (`parse_if_expecting` passes the enclosing then arm's; a top-level `if`
+            // expects `Unknown`).  Every other caller's expected type is a DECLARED one.
+            // The three carve-outs below are about the sibling, not about the keyword, so
+            // they read this and not `context == "else"` (loft#1380).
+            // A `match` ARM is an else arm too (loft#1380's twin): the destination checks the
+            // whole construct, so each arm converts to the type its siblings answer in, with
+            // the same carve-outs — the sibling-variant join, the statement-position discard,
+            // the honest nullability.  Gated on a KNOWN expected type exactly as `if` is: the
+            // first concrete arm has nothing to agree with and names the type instead.
+            let arm_of_sibling = context == "else"
+                || ((context == "if" || context == "match_arm") && !result.is_unknown());
             let tuple_rewritten = !self.first_pass
-                && (context == "return from block" || context == "else")
+                && (context == "return from block" || arm_of_sibling)
                 && matches!(t, Type::Tuple(_))
                 && tail_has_tuple_leaf(l[last].unspan(), &self.vars)
                 && matches!(result, Type::Reference(d, _) if self.data.def(*d).name().starts_with("__tuple<"))
@@ -1748,7 +1868,7 @@ impl Parser {
                     } else {
                         unreachable!()
                     };
-                    if context == "else" {
+                    if arm_of_sibling {
                         let same_shape = if let Type::Tuple(elems) = t {
                             let names: Vec<String> =
                                 elems.iter().map(|e| e.name(&self.data)).collect();
@@ -1881,18 +2001,6 @@ impl Parser {
             // not an `if`/`match` arm (whose `result` may legitimately be nullable).
             // A scalar `τ?` tail hits none of the vector/tuple special cases above,
             // and `convert` below peels `Optional`, so no double-diagnose.
-            if context == "return from block" {
-                // @PLN102 (N-Store) — this check runs at BLOCK FINALIZATION, so `self.lexer`
-                // has advanced to the block's `}` (reporting the NEXT function).  Anchor to
-                // the tail expression's own span; fall back to the enclosing function's
-                // position (a bare-var/rewritten tail may have lost its span) — always the
-                // RIGHT function, never the next.  See nstore-position-fix.md.
-                let at = l[last]
-                    .span_pos()
-                    .cloned()
-                    .or_else(|| Some(self.data.def(self.context).position().clone()));
-                self.n_store_violation(t, result, "the return value", at.as_ref());
-            }
             // A tail conversion is checked once the block is CLOSED, so `report_pos`
             // would attribute anything it raises to the `}`.  `tail_pos` is the tail
             // statement's own first token (captured per statement by the block loop), and
@@ -1905,15 +2013,59 @@ impl Parser {
             // of them and nothing is licensed BETWEEN them, so asking `convert` produced
             // *"expected A, got B on else"* for a join `match` accepts (loft#1117).  The
             // arm keeps its own type and `parse_if` joins the two to their enum.
-            let sibling_variant = context == "else" && self.sibling_variants(t, result);
+            let sibling_variant = arm_of_sibling && self.arm_joins_to_enum(t, result);
+            // @FR-F-Block — the arms of a construct in STATEMENT position yield nothing
+            // anybody reads, so their types need not agree.  Only one ORDER used to compile:
+            // a void THEN arm makes the expected type `void`, which accepts any else arm,
+            // while a void ELSE arm arrived as a conversion `void ⤳ integer` that nothing
+            // licenses — `{ println } else { 5 };` was accepted and its mirror refused
+            // (loft#1382), on both backends, where `match` accepted both.
+            //
+            // Gated on POSITION, not on the arms' types alone: `Type::Void` on an arm is not
+            // one fact — it is also what a block reports when its value travels through a
+            // BUFFER — so keying on it dropped the retbuf delivery of twenty other tests.
+            //
+            // And only where one arm yields NOTHING.  The corpus pins
+            // `if c { 2 } else { "a" };` as a refusal: two VALUES of different types is a
+            // mistake worth reporting wherever it sits, and widening that is not what
+            // loft#1382 asks.  A void arm beside a value arm is not a type mistake at all —
+            // there is no value for the two to disagree about.
+            let stmt_arm = arm_of_sibling
+                && self.arms_of_statement_construct
+                && (matches!(t, Type::Void) || matches!(result, Type::Void));
             let needs_convert = !tuple_rewritten
                 && !if_unified
                 && !vec_match_candidate
                 && !vec_arm_handled
                 && !sibling_variant;
+            // @FR-N-Store — the tail is a STORE into the return slot.  The store face asks
+            // where the tail converts; a tail that does not convert (a rewritten tuple, a
+            // unified `if`, a vector match, a sibling variant) is asked here.  Anchored to
+            // the tail's OWN span, because this runs at block FINALIZATION with `self.lexer`
+            // on the `}` — reporting the NEXT function otherwise (nstore-position-fix.md);
+            // a bare-var tail has no span and falls back to the enclosing function's.
+            let is_return = context == "return from block";
+            let ret_at = if is_return {
+                l[last]
+                    .span_pos()
+                    .cloned()
+                    .or_else(|| Some(self.data.def(self.context).position().clone()))
+            } else {
+                None
+            };
+            if is_return && !needs_convert {
+                self.n_store_violation(t, result, "the return value", ret_at.as_ref());
+            }
             let converted = if needs_convert {
                 self.lexer.to((tail_pos.line, tail_pos.pos));
-                let done = self.convert(&mut l[last], t, result);
+                let done = if is_return {
+                    self.convert_store(&mut l[last], t, result, "the return value", ret_at.as_ref())
+                } else {
+                    // An arm meeting its sibling's type is the JOIN (`(N-Join)`: the `if` is
+                    // `τ?` when an arm is), not a store — wherever the joined value lands is
+                    // asked there.
+                    self.convert_admitting(&mut l[last], t, result)
+                };
                 // `end_seek`, not a second `to`: the diagnostics raised just below are
                 // block-tail checks too, and a seek left standing switches `report_pos`
                 // off for them.
@@ -1945,12 +2097,24 @@ impl Parser {
                             concept_ref: "@F16",
                         });
                     }
+                } else if stmt_arm {
+                    // Deferred: the construct BEGAN its statement, but a function TAIL does
+                    // that too and there the arms must still agree.  `parse_block`'s loop
+                    // drops this when a `;` follows and reports it otherwise.  Recording the
+                    // TYPES rather than a rendered string keeps `validate_convert`'s
+                    // same-name-two-defs case (loft#1094) intact.
+                    self.pending_arm_mismatch = Some(crate::parser::ArmMismatch {
+                        test: t.clone(),
+                        should: result.clone(),
+                        context: context.to_string(),
+                        at: tail_pos.clone(),
+                    });
                 } else {
                     self.validate_convert(context, t, result, tail_pos);
                 }
             }
-            // loft#978 — an `else` arm is the ONE block handed a SIBLING EXPRESSION as
-            // its expected type (`parse_if` passes the THEN arm's), and an expected type
+            // loft#978 — an `else` arm (and a chain's then arm, `arm_of_sibling`) is a block
+            // handed a SIBLING EXPRESSION as its expected type, and an expected type
             // cannot say what the value in hand borrows: it was written before that value
             // existed.  Taking it whole republished the then-arm's dep list as the else
             // arm's, so a fresh-record then-arm erased the container view the else arm
@@ -1960,7 +2124,7 @@ impl Parser {
             // different space entirely — grafting frame vars onto those is the
             // cross-space read loft#666 was made of, so the shape alone is taken there,
             // exactly as before.
-            tp = if context == "else" {
+            tp = if arm_of_sibling {
                 // loft#1103 — the SHAPE comes from the expected type, but the arm's own
                 // NULLABILITY does not: `(N-Join)` says a join is optional iff some arm is,
                 // and this is the arm whose answer was being dropped.  `x: integer = if c
@@ -1975,7 +2139,15 @@ impl Parser {
                 // A sibling variant keeps its OWN shape: the expected type names the
                 // then arm's variant, and taking it whole would report this arm as that
                 // one — which is also what lets `parse_if` see that the two differ.
-                let honest = if sibling_variant {
+                let honest = if stmt_arm {
+                    // loft#1382 — in STATEMENT position the arm keeps its OWN type.  Taking
+                    // the then arm's would tell the native emitter both arms are non-void,
+                    // and its `(F-Block)` discard gate (loft#1381) keys on exactly one arm
+                    // being void — so the mirror would parse here and then hand rustc a raw
+                    // E0308.  The `if`'s own join is decided in `parse_if` from the THEN
+                    // arm and is unaffected.
+                    t.clone()
+                } else if sibling_variant {
                     t.clone()
                 } else if let Some(w) = boxed_arm_w {
                     // The arm was boxed into `w` (loft#1350): its value is that work-ref,
@@ -3387,6 +3559,40 @@ impl Parser {
             // struct-field construction does. Raw `Value::Null` made native emit `()` into the
             // typed slot → E0308; interp tolerated it. `self.null` peels `Optional` to the base
             // sentinel, so a `τ?` element types correctly too.
+            // A `null` for a nullable COLLECTION member is the reserved ABSENT id in the
+            // slot, exactly as `H { xs: null }` writes it (loft#917) — `self.null(&ftp)`
+            // appends nothing and leaves an EMPTY collection, so `(null, 2)` read back as
+            // `[]` and `miss.0 == null` answered false, on both backends (QUALITY.md B7t).
+            // The null arrives as a bare `Value::Null` from a concrete declaration and as the
+            // TYPED null a template gave a `T?` element (`OpNullRefSentinel()`, since the
+            // template compiled `T` as a record) from a monomorph — one absence, two
+            // spellings, and the slot takes the same id for both.
+            let is_null_elem = match elem.unspan() {
+                Value::Null => true,
+                Value::Call(d, args) if args.is_empty() => {
+                    let n = self.data.def(*d).name();
+                    n == "OpNullRefSentinel" || (n.starts_with("OpConv") && n.ends_with("FromNull"))
+                }
+                _ => false,
+            };
+            if is_null_elem
+                && let stored = self.data.attr_type(synthetic_d_nr, i)
+                && (matches!(stored.base(), Type::Vector(_, _))
+                    || crate::parser::vectors::is_keyed(stored.base()))
+                && (matches!(stored, Type::Optional(_))
+                    || self.data.attr_nullable(synthetic_d_nr, i))
+                && let Some(pos) = crate::data::stored_tuple_offsets_for_def(
+                    &self.data,
+                    &self.database,
+                    synthetic_d_nr,
+                    self.data.def(synthetic_d_nr).attributes().len(),
+                )
+                .and_then(|o| o.get(i).copied())
+            {
+                let mark = self.mark_collection_absent(&Value::Var(w), i32::from(pos));
+                ops.push(mark);
+                continue;
+            }
             let elem = if matches!(elem.unspan(), Value::Null) {
                 let ftp = self.data.attr_type(synthetic_d_nr, i).clone();
                 self.null(&ftp)
@@ -3402,7 +3608,58 @@ impl Parser {
                 Some(src) => src,
                 None => elem,
             };
-            ops.push(self.set_field_no_check(synthetic_d_nr, i, 0, Value::Var(w), elem));
+            // A NULLABLE record member is a TAGGED slot (`__nullable<S>`: discriminant +
+            // payload), and a dense `S` written into it by the plain field write lands on
+            // the discriminant — presence becomes a data byte, and `(x, 1)` read back as
+            // `4294967199` where `x.a` was `7`, on both backends (QUALITY.md B7t; the
+            // loft#1134 shape, at the tuple return).  The tagged write the element-wise
+            // path already uses (`tuple_elem_tag_write`) decides from the STORED type and
+            // the member's own spelling, so ask it first and fall back to the field write.
+            // The member's spelling is the ELEMENT's own static type, not the slot's: a
+            // struct literal in a `S?` position is already lowered to the tagged
+            // `__nullable<S>::Some` record (`#NullableSome`), and so is a nullable field
+            // read (`#ncc`), and for those the plain copy IS the right write — wrapping one
+            // a second time buried the real discriminant one payload deep and `(NvW { nv_n:
+            // 7 }, 9)` read `2`, the tag, for `7` (tests 1123/1139 on the corpus census).
+            // Only a dense pointer — a `S` or `S?` local, a parameter, a call — needs the tag.
+            let tagged = match self.data.attr_type(synthetic_d_nr, i) {
+                Type::Enum(syn, true, _) => self.nullable_payload_struct(syn).and_then(|payload| {
+                    let in_slot_form =
+                        |tp: &Type| matches!(tp.base(), Type::Enum(s, true, _) if *s == syn);
+                    let already = match elem.unspan() {
+                        Value::Var(v) => in_slot_form(self.vars.tp(*v)),
+                        Value::Block(bl) => in_slot_form(&bl.result),
+                        Value::Call(d, _) => in_slot_form(self.data.def(*d).returned()),
+                        _ => false,
+                    };
+                    if already {
+                        return None;
+                    }
+                    let spelled = Type::Optional(Box::new(Type::Reference(payload, Deps::none())));
+                    let pos = crate::data::stored_tuple_offsets_for_def(
+                        &self.data,
+                        &self.database,
+                        synthetic_d_nr,
+                        self.data.def(synthetic_d_nr).attributes().len(),
+                    )
+                    .and_then(|o| o.get(i).copied())?;
+                    self.tuple_elem_tag_write(
+                        synthetic_d_nr,
+                        i,
+                        &Value::Var(w),
+                        pos,
+                        &spelled,
+                        &elem,
+                    )
+                }),
+                _ => None,
+            };
+            match tagged {
+                Some(writes) => ops.extend(writes),
+                None => {
+                    ops.push(self.set_field_no_check(synthetic_d_nr, i, 0, Value::Var(w), elem));
+                }
+            }
         }
         ops.push(Value::Var(w));
         *tail = crate::data::v_block(
@@ -3585,6 +3842,25 @@ impl Parser {
     }
 
     pub(crate) fn parse_if(&mut self, code: &mut Value) -> Type {
+        // loft#1382 — take statement position from the caller and CLEAR it, so a value-`if`
+        // nested inside a statement one (`if c { v = if d { 1 } else { 2 } }`) does not
+        // inherit it.  Held across the arms in `arms_of_statement_construct`, which is what
+        // the arm-agreement gate reads, and restored at exit so a sibling construct in the
+        // same statement is unaffected.  Cleared HERE and not in `parse_if_expecting`,
+        // because an `else if` CHAIN recurses through that one and its arms belong to the
+        // same statement construct.
+        let is_stmt = std::mem::replace(&mut self.stmt_if_pending, false);
+        let outer_arms = std::mem::replace(&mut self.arms_of_statement_construct, is_stmt);
+        let r = self.parse_if_expecting(code, &Type::Unknown(0));
+        self.arms_of_statement_construct = outer_arms;
+        r
+    }
+
+    /// [`parse_if`](Self::parse_if) with the type its THEN arm is expected to answer in:
+    /// `Unknown` for an `if` that names its own type — every one an author opens — and the
+    /// enclosing then arm's type for an `else if` CHAIN, whose arms are else arms and convert
+    /// at their tails exactly as a plain `else` block does (@FR-N-Decl, loft#1380).
+    fn parse_if_expecting(&mut self, code: &mut Value, expected: &Type) -> Type {
         let mut test = Value::Null;
         // loft#986 — the `{` after this condition opens a BLOCK; an empty `{ }` must not
         // read as a struct literal here.
@@ -3622,7 +3898,7 @@ impl Parser {
         let mut true_code = Value::Null;
         let write_state = self.vars.save_and_clear_write_state();
         self.vars.clear_write_state();
-        let mut true_type = self.parse_block("if", &mut true_code, &Type::Unknown(0));
+        let mut true_type = self.parse_block("if", &mut true_code, expected);
         if !is_bindings.is_empty()
             && let Value::Block(bl) = &mut true_code
         {
@@ -3676,10 +3952,35 @@ impl Parser {
                 // unreachable, on both backends and on released 2026.8.0.  A THEN arm
                 // that already names the merged type keeps `false_type` at `Void`
                 // exactly as before; nothing downstream reads the chain's type there.
-                let chain_type = self.parse_if(&mut false_code);
+                // @FR-N-Decl — the chain's arms are ELSE arms, and an else arm answers in
+                // the then arm's type or is refused, at its own tail, through the same
+                // `parse_block` conversion the plain `else` block below takes.  The chain
+                // used to be parsed expecting nothing, so its value was never held to the
+                // type this expression reports: `if a { 1 } else if b { 2.5 } else { 3 }`
+                // into an `integer` read the float's bits as a number, and `if a { p } else
+                // if b { p + q } else { q }` put 260 into a `u8` — a local, an argument and
+                // a return alike, both backends (loft#1380).  A statement `if` (a `Void`
+                // then arm) expects nothing of its chain, as before; a then arm that names
+                // no type yet (`null`, a return) adopts the chain's, as before.
+                let chain_expected = if matches!(true_type, Type::Void) {
+                    Type::Unknown(0)
+                } else {
+                    true_type.clone()
+                };
+                let chain_type = self.parse_if_expecting(&mut false_code, &chain_expected);
                 if true_type == Type::Unknown(0) {
                     false_type = chain_type;
                 } else {
+                    // @FR-C-Var — a chain whose arms are OTHER variants of the then arm's
+                    // enum joins to that enum, exactly as the plain else below does; the
+                    // inner `if` has already joined its own two arms, so the chain arrives
+                    // as the enum or as one sibling variant.
+                    let variant_enum = self.variant_parent_enum(&true_type);
+                    if let Some(enum_tp) = &variant_enum
+                        && self.joins_to_enum(enum_tp, &true_type, &chain_type)
+                    {
+                        true_type = enum_tp.clone();
+                    }
                     // loft#978 — the chain's TYPE deliberately stays out of `false_type`
                     // (above), but what it BORROWS is still a value this if-expression can
                     // deliver, so it has to reach the join below.  Without it an
@@ -3703,7 +4004,7 @@ impl Parser {
                 false_type = self.parse_block("else", &mut false_code, &true_type);
                 // @FR-C-Var — two DIFFERENT variants of one enum join to the ENUM, and
                 // that is this expression's type.  `parse_block` accepted the sibling arm
-                // and kept its own type (see its `sibling_variants` carve-out); deciding
+                // and kept its own type (see its `arm_joins_to_enum` carve-out); deciding
                 // the join is this site's half, because only here are both arms in hand.
                 //
                 // The widening is what keeps the acceptance sound.  Left at the then-arm's
@@ -3712,7 +4013,7 @@ impl Parser {
                 // this variant's offsets (loft#980's class).  Two arms of the SAME variant
                 // widen nothing, so a variant-typed destination stays legal for them.
                 if let Some(enum_tp) = &variant_enum
-                    && Self::joins_to_enum(enum_tp, &true_type, &false_type)
+                    && self.joins_to_enum(enum_tp, &true_type, &false_type)
                 {
                     true_type = enum_tp.clone();
                 }
@@ -3726,7 +4027,7 @@ impl Parser {
                 // Two arms of the SAME variant keep that variant: nothing was widened, and
                 // a `v: A` destination stays legal for them.
                 if let Some(enum_tp) = &variant_enum
-                    && Self::joins_to_enum(enum_tp, &true_type, &false_type)
+                    && self.joins_to_enum(enum_tp, &true_type, &false_type)
                 {
                     true_type = enum_tp.clone();
                 }
@@ -3918,6 +4219,37 @@ impl Parser {
     #[allow(clippy::too_many_lines)]
     // @F29 — pattern matching (enum/scalar/tuple, guards, or-patterns, exhaustiveness)
     pub(crate) fn parse_match(&mut self, code: &mut Value) -> Type {
+        // loft#1382 / loft#1386 — statement position comes from the caller (`parse_block`'s
+        // loop is what sees the `;`), and the void-arm fact is scoped to THIS match so a
+        // nested one cannot leak into its parent's verdict.
+        let is_stmt = std::mem::replace(&mut self.stmt_if_pending, false);
+        let outer_arms = std::mem::replace(&mut self.arms_of_statement_construct, is_stmt);
+        let outer_void = std::mem::replace(&mut self.match_void_arm, false);
+        let r = self.parse_match_inner(code);
+        // @FR-F-Block discards a STATEMENT's arms, so a void one there is no defect.  In
+        // VALUE position the path that ran yields nothing, and the exemption let the match
+        // take the other arms' type: `v = match k { 1 => { 5 }, _ => { println(…) } }`
+        // answered `v = null` with nothing said, where the `if` twin is refused (loft#1386).
+        if !self.first_pass
+            && !self.arms_of_statement_construct
+            && self.match_void_arm
+            && !matches!(r, Type::Void | Type::Null | Type::Never)
+        {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "expected {}, got void on a match arm — this `match` is used as a VALUE, so \
+                 every arm has to produce one; give the arm a value, or make the `match` a \
+                 statement by ending it with `;`",
+                r.name(&self.data),
+            );
+        }
+        self.match_void_arm = outer_void;
+        self.arms_of_statement_construct = outer_arms;
+        r
+    }
+
+    fn parse_match_inner(&mut self, code: &mut Value) -> Type {
         // One charge for the whole construct — arm count is not complexity (a 12-arm flat
         // dispatch reads straight down); its arms deepen via `parse_block("match_arm")`.
         if !self.first_pass {
@@ -4101,22 +4433,21 @@ impl Parser {
                 let arm_write_state = self.vars.save_and_clear_write_state();
                 self.vars.clear_write_state();
                 let mut arm_body = Value::Null;
-                let arm_type = if self.lexer.peek_token("{") {
-                    self.parse_block("match_arm", &mut arm_body, &Type::Unknown(0))
-                } else {
-                    self.expression(&mut arm_body)
-                };
+                let arm_expected = Self::match_arm_expected(&result_type);
+                let arm_type = self.parse_match_arm_body(&arm_expected, &mut arm_body);
                 self.vars.restore_write_state(&arm_write_state);
                 // loft#978 — every arm can deliver this match's value, so the result carries
                 // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
                 // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
                 result_type = self.join_arm_into(&result_type, &arm_body, &arm_type);
+                self.match_void_arm |= matches!(arm_type, Type::Void);
                 if result_type == Type::Void || result_type == Type::Null {
                     result_type = arm_type.clone();
                 } else if !self.first_pass
                     && arm_type != Type::Void
                     && arm_type != Type::Null
-                    && !match_arm_types_unify(&result_type, &arm_type)
+                    && !self.arm_convert_reported
+                    && !self.match_arms_unify(&result_type, &arm_type)
                 {
                     diagnostic!(
                         self.lexer,
@@ -4569,11 +4900,8 @@ impl Parser {
             let arm_write_state = self.vars.save_and_clear_write_state();
             self.vars.clear_write_state();
             let mut arm_body = Value::Null;
-            let mut arm_type = if self.lexer.peek_token("{") {
-                self.parse_block("match_arm", &mut arm_body, &Type::Unknown(0))
-            } else {
-                self.expression(&mut arm_body)
-            };
+            let arm_expected = Self::match_arm_expected(&result_type);
+            let mut arm_type = self.parse_match_arm_body(&arm_expected, &mut arm_body);
             self.vars.restore_write_state(&arm_write_state);
             // @PLN85 match_return (LOFT_JOIN_OWN): if this arm yields a borrowed-view
             // vector field binding DIRECTLY (`Filled { items } => { items }`), wrap it in
@@ -4606,12 +4934,14 @@ impl Parser {
             // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
             // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
             result_type = self.join_arm_into(&result_type, &arm_body, &arm_type);
+            self.match_void_arm |= matches!(arm_type, Type::Void);
             if result_type == Type::Void || result_type == Type::Null {
                 result_type = arm_type.clone();
             } else if !self.first_pass
                 && arm_type != Type::Void
                 && arm_type != Type::Null
-                && !match_arm_types_unify(&result_type, &arm_type)
+                && !self.arm_convert_reported
+                && !self.match_arms_unify(&result_type, &arm_type)
             {
                 diagnostic!(
                     self.lexer,
@@ -4848,24 +5178,117 @@ impl Parser {
 
     /// Parse a wildcard (`_`) arm in a match expression.
     /// Returns the arm and whether it is exhaustive (no guard).
+    /// The type a match arm is expected to answer in: what the arms have agreed on so
+    /// far, or `Unknown` while nothing is settled yet.
+    ///
+    /// `Void` and `Null` are "not settled": a `null`-first arm must not pin the result
+    /// (`match c { false => null, true => S{…} }` answers `S`), and a `Void` result is
+    /// either the initial value or a statement `match` whose arms yield nothing — the
+    /// same "expect nothing" an `else if` chain passes down for a `Void` then arm.
+    fn match_arm_expected(result_type: &Type) -> Type {
+        if result_type.is_unknown() || matches!(result_type, Type::Void | Type::Null) {
+            Type::Unknown(0)
+        } else {
+            result_type.clone()
+        }
+    }
+
+    /// Parse one match arm's body in the type its SIBLING arms answer in.
+    ///
+    /// A match arm is an else arm: `@FR-N-Decl` checks the destination against the whole
+    /// construct, so every arm converts to the construct's type at its own tail exactly as
+    /// `parse_block("else", …)` converts an `if`'s else arm.  Without the expected type an
+    /// arm was neither converted nor refused — a float arm's bits read as an integer, an
+    /// integer arm's as a float, and `250 + 10` reached a `u8` local holding 260, silently
+    /// on both backends and for every subject kind (loft#1380's `match` twin).
+    ///
+    /// A `{ … }` arm is a block, and `block_result` performs the conversion with the
+    /// carve-outs it already applies to `else`.  A BARE arm (`1 => x`) has no block tail,
+    /// so the same conversion is asked here through the same `convert_admitting` /
+    /// `validate_convert` pair, and the carve-outs are restated in the same order.
+    fn parse_match_arm_body(&mut self, expected: &Type, arm_code: &mut Value) -> Type {
+        // Cleared AFTER the body is parsed on both paths, never at entry: a nested `match`
+        // inside this arm runs its own arms through here, so a flag set at entry would still
+        // carry that inner arm's answer when THIS one is asked about.  From each clear to the
+        // gate that reads it nothing else parses, so the field describes exactly this arm.
+        if self.lexer.peek_token("{") {
+            let tp = self.parse_block("match_arm", arm_code, expected);
+            // A block arm reports through `block_result`, which hands back the EXPECTED type
+            // on a failure — so the cross-arm gate sees the arms agreeing and stays silent
+            // without being told.  Cleared all the same: the field is this arm's answer, not
+            // the previous arm's, and a caller must not have to know which path reports.
+            self.arm_convert_reported = false;
+            return tp;
+        }
+        let at = self.lexer.pos().clone();
+        let t = self.expression(arm_code);
+        self.arm_convert_reported = false;
+        if self.first_pass || expected.is_unknown() {
+            return t;
+        }
+        // A void or null arm carries no value for the siblings to disagree about; a bare
+        // `null` lowers to the result type's sentinel once the result is settled.
+        if matches!(t, Type::Void | Type::Null) {
+            return t;
+        }
+        // @FR-C-Var — two variants of one enum join to the ENUM and nothing is licensed
+        // between them, so the arm keeps its own shape and the join above still sees that
+        // the two differ.  `block_result` carves the same case out for `else`.
+        if self.arm_joins_to_enum(&t, expected) {
+            return t;
+        }
+        // A struct-enum pattern binding yields a BORROW — `Ship { carrier } => carrier` is
+        // `&text` — while a sibling arm commonly yields the owned twin (`_ => "none"`).  That
+        // is one type modulo ownership: the caller reads the value either way, which is why
+        // `match_arm_types_unify` strips the wrapper rather than requiring the two to agree.
+        // So it is not a conversion question, and asking `convert` for it re-points the
+        // sibling arm's value — the extractor pattern's wildcard stopped answering its own
+        // literal (`tests/scripts/35-nested-match.loft`).  A `&τ` on EITHER side is passed
+        // through: an arm whose borrow also needs a width change keeps the gap the wrapper
+        // already had, and narrowing it further needs the borrow to convert, not this site.
+        if matches!(t, Type::RefVar(_)) || matches!(expected, Type::RefVar(_)) {
+            return t;
+        }
+        // @FR-F-Block — the arms of a construct in STATEMENT position yield nothing anybody
+        // reads, so their types need not agree.
+        if self.arms_of_statement_construct && matches!(expected, Type::Void) {
+            return t;
+        }
+        if !self.convert_admitting(arm_code, &t, expected) {
+            self.validate_convert("match_arm", &t, expected, &at);
+            self.arm_convert_reported = true;
+            return t;
+        }
+        // loft#1103 — the SHAPE is the expected type's, the NULLABILITY the arm's own:
+        // `(N-Join)` makes the construct optional iff some arm is.
+        let honest = expected.with_deps_of(&t);
+        if crate::keys::pln25_dn1_enabled()
+            && matches!(t, Type::Optional(_))
+            && !matches!(honest, Type::Optional(_))
+        {
+            Type::optional(honest)
+        } else {
+            honest
+        }
+    }
+
     fn parse_match_wildcard_arm(&mut self, result_type: &mut Type) -> (EnumArm, bool) {
         let guard_opt = self.parse_optional_guard();
         let is_exhaustive = guard_opt.is_none();
         self.expect_match_arm_arrow();
         let mut arm_code = Value::Null;
-        let arm_type = if self.lexer.peek_token("{") {
-            self.parse_block("match_arm", &mut arm_code, &Type::Unknown(0))
-        } else {
-            self.expression(&mut arm_code)
-        };
+        let arm_expected = Self::match_arm_expected(result_type);
+        let arm_type = self.parse_match_arm_body(&arm_expected, &mut arm_code);
         // loft#978 — see the arm sites above: the wildcard is an arm like any other.
         let joined = self.join_arm_into(result_type, &arm_code, &arm_type);
         *result_type = joined;
+        self.match_void_arm |= matches!(arm_type, Type::Void);
         if *result_type == Type::Void {
             *result_type = arm_type.clone();
         } else if !self.first_pass
             && arm_type != Type::Void
-            && !match_arm_types_unify(result_type, &arm_type)
+            && !self.arm_convert_reported
+            && !self.match_arms_unify(result_type, &arm_type)
         {
             diagnostic!(
                 self.lexer,
@@ -4941,11 +5364,8 @@ impl Parser {
         }
         self.expect_match_arm_arrow();
         let mut arm_code = Value::Null;
-        let arm_type = if self.lexer.peek_token("{") {
-            self.parse_block("match_arm", &mut arm_code, &Type::Unknown(0))
-        } else {
-            self.expression(&mut arm_code)
-        };
+        let arm_expected = Self::match_arm_expected(result_type);
+        let arm_type = self.parse_match_arm_body(&arm_expected, &mut arm_code);
         let block = v_block(vec![arm_code], arm_type.clone(), "struct_match");
         if *result_type == Type::Void {
             *result_type = arm_type;
@@ -7598,11 +8018,8 @@ impl Parser {
 
             self.expect_match_arm_arrow();
             let mut arm_code = Value::Null;
-            let arm_type = if self.lexer.peek_token("{") {
-                self.parse_block("match_arm", &mut arm_code, &Type::Unknown(0))
-            } else {
-                self.expression(&mut arm_code)
-            };
+            let arm_expected = Self::match_arm_expected(&result_type);
+            let arm_type = self.parse_match_arm_body(&arm_expected, &mut arm_code);
             // A `null`-first arm must NOT pin the result to `Null` — promote to
             // the first CONCRETE arm's type (else `match c { false => null, true
             // => S{…} }` resolves to `Null`, `build_scalar_chain` can't type the
@@ -7611,6 +8028,7 @@ impl Parser {
             // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
             // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
             result_type = self.join_arm_into(&result_type, &arm_code, &arm_type);
+            self.match_void_arm |= matches!(arm_type, Type::Void);
             if result_type == Type::Void || result_type == Type::Null {
                 result_type = arm_type.clone();
             }
@@ -8647,15 +9065,13 @@ impl Parser {
             // delegated to `parse_block("block", …, &Type::Void)`, which DROPS the trailing
             // result expression (`{ c = 5; c }` → `c = 5; drop c`) — the block then yielded void,
             // so native delivered 0 (interpret happened to still surface the value).
-            let arm_type = if self.lexer.peek_token("{") {
-                self.parse_block("match_arm", &mut arm_code, &Type::Unknown(0))
-            } else {
-                self.expression(&mut arm_code)
-            };
+            let arm_expected = Self::match_arm_expected(&result_type);
+            let arm_type = self.parse_match_arm_body(&arm_expected, &mut arm_code);
             // loft#978 — every arm can deliver this match's value, so the result carries
             // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
             // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
             result_type = self.join_arm_into(&result_type, &arm_code, &arm_type);
+            self.match_void_arm |= matches!(arm_type, Type::Void);
             if result_type == Type::Void {
                 result_type = arm_type.clone();
             }
@@ -8937,11 +9353,8 @@ impl Parser {
             let arm_write_state = self.vars.save_and_clear_write_state();
             self.vars.clear_write_state();
             let mut arm_body = Value::Null;
-            let arm_type = if self.lexer.peek_token("{") {
-                self.parse_block("match_arm", &mut arm_body, &Type::Unknown(0))
-            } else {
-                self.expression(&mut arm_body)
-            };
+            let arm_expected = Self::match_arm_expected(&result_type);
+            let arm_type = self.parse_match_arm_body(&arm_expected, &mut arm_body);
             self.vars.restore_write_state(&arm_write_state);
 
             // Combine element conditions with AND (short-circuit: if a { b } else { false })
@@ -8973,6 +9386,7 @@ impl Parser {
             // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
             // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
             result_type = self.join_arm_into(&result_type, &arm_body, &arm_type);
+            self.match_void_arm |= matches!(arm_type, Type::Void);
             if result_type == Type::Void {
                 result_type = arm_type.clone();
             }
@@ -9302,6 +9716,33 @@ impl Parser {
                             // note at parse_match_enum_field_bindings in
                             // this file for the match-arm path).
                             self.vars.set_skip_free(v_nr);
+                            // ...and the borrow must be in the TYPE, which is the other half
+                            // of that note and was applied only to the `match` path.  #429
+                            // gave a HEAP payload binding a frame dep on its subject because
+                            // an empty dep list is the @FR-O-Proxy proxy for OWNED, and the
+                            // two backends then read the same bind differently: `--native`
+                            // deep-COPIES it and the interpreter aliases.  The `is` spelling
+                            // is the same bind and had no dep, so `if w.st is Holder { inner }
+                            // { w.st = Empty{…}; inner.a }` answered 1 natively and 0 on the
+                            // interpreter, with a leaked `Pay` record beside it — the same
+                            // divergence #429 closed for `match`, at the sibling site
+                            // (loft#1398).  Scalars carry no DbRef and need no dep, exactly as
+                            // there.
+                            if matches!(
+                                &field_type,
+                                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                            ) && let Some(src) = self.match_borrow_source(&stable_subject)
+                            {
+                                let bound_tp = match self.vars.tp(v_nr).clone() {
+                                    Type::Reference(td, _) => {
+                                        Type::Reference(td, Deps::frame1(src))
+                                    }
+                                    Type::Vector(it, _) => Type::Vector(it, Deps::frame1(src)),
+                                    Type::Enum(td, su, _) => Type::Enum(td, su, Deps::frame1(src)),
+                                    other => other,
+                                };
+                                self.vars.set_type(v_nr, bound_tp);
+                            }
                             self.is_capture_bindings.push(v_set(v_nr, field_read));
                             let old = self.vars.set_name(&field_name, v_nr);
                             self.is_capture_aliases.push((field_name.clone(), old));
@@ -9854,6 +10295,461 @@ impl Parser {
             && l.last().is_some_and(Self::if_tail_yields_text)
     }
 
+    /// The tuple twin of [`Self::promote_monomorph_text_return`] (@FR-F-Ret).
+    ///
+    /// A declaration whose tuple return SHAPE depends on `T` defers its boxing to
+    /// instantiation; `tuple_return_rewrite` boxes the instance's signature to the synthetic
+    /// `__tuple<…>` record, and this rewrites every tuple TAIL and every `return (…)` of the
+    /// body into that record — the same `synthetic_tuple_return` block a concrete declaration
+    /// gets from `block_result`, with the member copies `set_field_no_check` performs.  Signature
+    /// without body was the mismatch @PLN85's generic-tuple-return-fix.md measured (a `__tuple`
+    /// signature over a bare-tuple body: garbage on the interpreter, E0308 on native), which
+    /// is why this runs where the signature is rewritten and not elsewhere.
+    ///
+    /// Runs in the MONOMORPH's frame (the same swap the text twin makes): the work-ref belongs
+    /// to the function the code lands in.  A body that yields no stack tuple — a concrete-shaped
+    /// template boxed at its declaration, whose body `block_result` already rewrote — is left
+    /// untouched, so the work-ref is minted only where a tail is rewritten.
+    pub(crate) fn promote_monomorph_tuple_return(&mut self, d_nr: u32) {
+        let Type::Reference(synth, _) = self.data.def(d_nr).returned().base().clone() else {
+            return;
+        };
+        if !self.data.def(synth).name().starts_with("__tuple<") {
+            return;
+        }
+        let saved_ctx = self.context;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = d_nr;
+        let mut code =
+            std::mem::replace(&mut self.data.definitions[d_nr as usize].code, Value::Null);
+        if let Value::Block(bl) = &mut code
+            && bl
+                .operators
+                .iter()
+                .any(|op| Self::yields_stack_tuple(op, &self.vars, true))
+        {
+            let synth_ref = Type::Reference(synth, Deps::none());
+            let w = self.vars.work_refs(&synth_ref, &mut self.lexer);
+            let kt = self.data.def(synth).known_type();
+            for op in &mut bl.operators {
+                self.rewrite_tuple_returns_with_work_ref(synth, kt, w, op);
+            }
+            if let Some(last) = bl.operators.last_mut() {
+                self.rewrite_tail_tuple_with_work_ref(synth, kt, w, last);
+            }
+            bl.result = synth_ref;
+        }
+        self.data.definitions[d_nr as usize].code = code;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = saved_ctx;
+    }
+    /// Does `v` yield a STACK tuple — a tuple literal, a local of tuple type, or a
+    /// branch/block whose tail does — where `tail` says the value is in tail position (so a
+    /// bare leaf counts) rather than a statement (where only a `return` counts)?
+    fn yields_stack_tuple(v: &Value, vars: &crate::variables::Function, tail: bool) -> bool {
+        match v.unspan() {
+            Value::Return(inner) => Self::yields_stack_tuple(inner, vars, true),
+            Value::Tuple(_) => tail,
+            Value::Var(x) => {
+                tail && (*x as usize) < vars.count() as usize
+                    && matches!(vars.tp(*x).base(), Type::Tuple(_))
+            }
+            Value::If(_, t, e) => {
+                Self::yields_stack_tuple(t, vars, tail) || Self::yields_stack_tuple(e, vars, tail)
+            }
+            Value::Block(b) | Value::Loop(b) => {
+                let n = b.operators.len();
+                b.operators
+                    .iter()
+                    .enumerate()
+                    .any(|(i, op)| Self::yields_stack_tuple(op, vars, tail && i + 1 == n))
+            }
+            Value::Insert(ops) => {
+                let n = ops.len();
+                ops.iter()
+                    .enumerate()
+                    .any(|(i, op)| Self::yields_stack_tuple(op, vars, tail && i + 1 == n))
+            }
+            _ => false,
+        }
+    }
+    /// Rewrite every `return <tuple>` reachable from `node` into the synthetic record `w`
+    /// — the early-return half of [`Self::promote_monomorph_tuple_return`]; the tail is the
+    /// caller's own `rewrite_tail_tuple_with_work_ref`.
+    fn rewrite_tuple_returns_with_work_ref(
+        &mut self,
+        synth: u32,
+        kt: u16,
+        w: u16,
+        node: &mut Value,
+    ) {
+        match node {
+            Value::Span(b) => self.rewrite_tuple_returns_with_work_ref(synth, kt, w, &mut b.1),
+            Value::Return(inner) => self.rewrite_tail_tuple_with_work_ref(synth, kt, w, inner),
+            Value::Block(b) | Value::Loop(b) => {
+                for op in &mut b.operators {
+                    self.rewrite_tuple_returns_with_work_ref(synth, kt, w, op);
+                }
+            }
+            Value::Insert(ops) => {
+                for op in ops.iter_mut() {
+                    self.rewrite_tuple_returns_with_work_ref(synth, kt, w, op);
+                }
+            }
+            Value::If(_, t, e) => {
+                self.rewrite_tuple_returns_with_work_ref(synth, kt, w, t);
+                self.rewrite_tuple_returns_with_work_ref(synth, kt, w, e);
+            }
+            _ => {}
+        }
+    }
+    /// The vector twin of [`Self::promote_monomorph_text_return`] (@FR-F-Ret / @FR-B-Copy).
+    ///
+    /// A template binds `T` as a record, so a whole-value bind `s = x` and a returned `x` are
+    /// lowered for a RECORD: the bind copies at codegen and the return hands the argument up
+    /// raw, which the caller copies off the declared `["x"]` dep.  Substituting a VECTOR for
+    /// `T` changes neither lowering, and a vector's are different: a vector bind copies at the
+    /// parse (`OpClearVector` + `OpAppendVector` into the local's own store) and a vector
+    /// return copies in the CALLEE (`borrow_tail_copy`), because a caller never copies a
+    /// vector it is handed.  So the instance aliased on both counts — `s = x` bound the
+    /// argument's store and the frame then FREED it, `{ x }` handed the argument's store up
+    /// and a write through the result wrote the argument, on both backends (QUALITY.md B7t).
+    ///
+    /// Two rewrites, both on the substituted body: a `Set(v, Var(u))` whose target the TEMPLATE
+    /// typed as the type variable and both sides now type as vectors becomes
+    /// `OpReplaceVector(v, u)` — the copy into the store the vector local's null-init allocates
+    /// (@FR-B-Copy); and where the return's own summary says the body hands a PARAMETER up
+    /// (@FR-O-Oracle, a pure borrow), every such leaf is copied into one fresh local the frame
+    /// then returns, so the caller adopts a mint as it does for the concrete twin.  Runs in the
+    /// MONOMORPH's frame, like the other two.
+    /// loft#1387 / `@FR-F-Ret` — give a MONOMORPH's return tail the per-arm copy the
+    /// non-generic path takes (loft#1368).
+    ///
+    /// A return whose tail is a value BRANCH over two or more PARAMETERS hands back each
+    /// arm's own borrow, and a caller can witness only one of them, so the other arm is
+    /// adopted and a write through the result reaches the caller's argument.  `parse_block`
+    /// binds such a tail to a local — the bind copies each arm through its own temp
+    /// (`@FR-B-Copy`) — but that is SKIPPED inside a generic TEMPLATE: a local minted in a
+    /// body that is then CLONED into every monomorph reaches codegen in the clone with no
+    /// slot.  The monomorph does not re-parse its block either, so it took neither, and the
+    /// shape a generic makes easiest to write was the one left aliasing.
+    ///
+    /// Runs in the MONOMORPH's frame like the other post-substitution rewrites: the local
+    /// belongs to the function the code lands in, and minting it here gives it that
+    /// function's own slot.
+    pub(crate) fn bind_monomorph_join_return(&mut self, d_nr: u32) {
+        let ret = self.data.def(d_nr).returned().clone();
+        if !matches!(ret.base(), Type::Reference(_, _) | Type::Enum(_, true, _)) {
+            return;
+        }
+        let saved_ctx = self.context;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = d_nr;
+        let mut code =
+            std::mem::replace(&mut self.data.definitions[d_nr as usize].code, Value::Null);
+        if let Value::Block(bl) = &mut code
+            && let Some(last) = bl.operators.len().checked_sub(1)
+        {
+            // The tail arrives either already wrapped in a `Return` or as the bare branch —
+            // a monomorph's body is the substituted TEMPLATE's, whose delivery has not run.
+            let branch_is_tail = match bl.operators[last].unspan() {
+                Value::Return(inner) => self.is_borrowing_branch(inner),
+                other => self.is_borrowing_branch(other),
+            };
+            if branch_is_tail {
+                let tmp = self.create_unique("__ret_join", &ret);
+                self.vars.defined(tmp);
+                let wrapped = matches!(bl.operators[last].unspan(), Value::Return(_));
+                let branch = match bl.operators[last].unspan_mut() {
+                    Value::Return(inner) => std::mem::replace(&mut **inner, Value::Var(tmp)),
+                    other => std::mem::replace(other, Value::Var(tmp)),
+                };
+                bl.operators[last] = crate::data::v_set(tmp, branch);
+                bl.operators.push(if wrapped {
+                    Value::Return(Box::new(Value::Var(tmp)))
+                } else {
+                    Value::Var(tmp)
+                });
+            }
+        }
+        self.data.definitions[d_nr as usize].code = code;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = saved_ctx;
+    }
+
+    pub(crate) fn promote_monomorph_vector_return(
+        &mut self,
+        d_nr: u32,
+        tmpl_vars: &crate::variables::Function,
+        holders: &[u32],
+    ) {
+        // The borrowed-parameter verdict is read while the body is still in place — the
+        // oracle classifies `def.code`, which the swap below moves out.
+        let borrowed_param: Option<u16> =
+            if matches!(self.data.def(d_nr).returned().base(), Type::Vector(_, _)) {
+                match crate::use_analysis::return_ownership(&self.data, d_nr) {
+                    crate::use_analysis::Own::Borrowed { base }
+                        if (base as usize) < self.data.def(d_nr).attributes().len()
+                            && !self.data.def(d_nr).attributes()[base as usize].hidden =>
+                    {
+                        Some(base)
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+        let saved_ctx = self.context;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = d_nr;
+        let mut code =
+            std::mem::replace(&mut self.data.definitions[d_nr as usize].code, Value::Null);
+        // Which locals did the template type as the type variable?  Those are the binds the
+        // record lowering was written for; a local the template already typed as a vector
+        // got the vector lowering at the parse and is left alone.
+        let tv_typed = |v: u16, vars: &crate::variables::Function| -> bool {
+            (v as usize) < tmpl_vars.count() as usize
+                && matches!(tmpl_vars.tp(v).base(), Type::Reference(h, _) if holders.contains(h))
+                && (v as usize) < vars.count() as usize
+                && matches!(vars.tp(v).base(), Type::Vector(_, _))
+        };
+        if let Value::Block(bl) = &mut code {
+            // B-Copy: the whole-value vector binds.
+            let mut declared: Vec<u16> = Vec::new();
+            for op in &mut bl.operators {
+                self.rewrite_generic_vector_binds(op, &tv_typed, &mut declared);
+            }
+            // F-Ret: the borrowed return.
+            if let Some(param) = borrowed_param
+                && (param as usize) < self.vars.count() as usize
+                && let Type::Vector(elm, _) = self.vars.tp(param).base().clone()
+                && Self::yields_var(&bl.operators, param)
+            {
+                let owned = Type::Vector(elm.clone(), Deps::none());
+                let copy = self.create_unique("__ret_copy", &owned);
+                if copy != u16::MAX {
+                    self.vars.defined(copy);
+                    let rec_tp = self.append_elem_tp(&elm);
+                    for op in &mut bl.operators {
+                        self.copy_returned_var_into(op, param, copy, rec_tp, false);
+                    }
+                    if let Some(last) = bl.operators.last_mut() {
+                        self.copy_returned_var_into(last, param, copy, rec_tp, true);
+                    }
+                    bl.operators
+                        .insert(0, crate::data::v_set(copy, Value::Null));
+                    bl.result = owned;
+                }
+            }
+        }
+        self.data.definitions[d_nr as usize].code = code;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = saved_ctx;
+    }
+    /// The bind half of [`Self::promote_monomorph_vector_return`]: every `Set(v, Var(u))` with
+    /// `v` type-variable-typed in the template and both sides vectors now becomes the copy.
+    /// The FIRST assignment of a local is also its declaration — the null-init that allocates
+    /// an owned vector local's store on both backends — so a first bind keeps a `Set(v, null)`
+    /// in front of the copy; a rebind copies into the store the local already has.
+    fn rewrite_generic_vector_binds(
+        &mut self,
+        node: &mut Value,
+        tv_typed: &dyn Fn(u16, &crate::variables::Function) -> bool,
+        declared: &mut Vec<u16>,
+    ) {
+        match node {
+            Value::Span(b) => self.rewrite_generic_vector_binds(&mut b.1, tv_typed, declared),
+            Value::Set(v, rhs) => {
+                let first = !declared.contains(v);
+                declared.push(*v);
+                if let Value::Var(u) = rhs.unspan()
+                    && *u != *v
+                    && tv_typed(*v, &self.vars)
+                    && (*u as usize) < self.vars.count() as usize
+                    && !self.vars.is_argument(*v)
+                    && let Type::Vector(elm, _) = self.vars.tp(*u).base().clone()
+                {
+                    let (v, u) = (*v, *u);
+                    let rec_tp = self.append_elem_tp(&elm);
+                    let replace = self.cl(
+                        "OpReplaceVector",
+                        &[Value::Var(v), Value::Var(u), Value::Int(rec_tp)],
+                    );
+                    *node = if first {
+                        Value::Insert(vec![crate::data::v_set(v, Value::Null), replace])
+                    } else {
+                        replace
+                    };
+                } else {
+                    self.rewrite_generic_vector_binds(rhs, tv_typed, declared);
+                }
+            }
+            Value::Block(b) | Value::Loop(b) => {
+                for op in &mut b.operators {
+                    self.rewrite_generic_vector_binds(op, tv_typed, declared);
+                }
+            }
+            Value::Insert(ops) => {
+                for op in ops.iter_mut() {
+                    self.rewrite_generic_vector_binds(op, tv_typed, declared);
+                }
+            }
+            Value::If(_, t, e) => {
+                self.rewrite_generic_vector_binds(t, tv_typed, declared);
+                self.rewrite_generic_vector_binds(e, tv_typed, declared);
+            }
+            _ => {}
+        }
+    }
+    /// Is EVERY return leaf of the body — the tail, each `return`, each arm of a branch in
+    /// either position — the variable `x` itself?  A body with no leaf at all answers no.
+    pub(crate) fn every_return_leaf_is_var(ops: &[Value], x: u16) -> bool {
+        // (found, all) over the leaves reached.
+        fn walk(v: &Value, x: u16, tail: bool, acc: &mut (bool, bool)) {
+            match v.unspan() {
+                Value::Return(inner) => walk(inner, x, true, acc),
+                Value::If(_, t, e) => {
+                    walk(t, x, tail, acc);
+                    walk(e, x, tail, acc);
+                }
+                Value::Block(b) | Value::Loop(b) => {
+                    let n = b.operators.len();
+                    for (i, op) in b.operators.iter().enumerate() {
+                        walk(op, x, tail && i + 1 == n, acc);
+                    }
+                }
+                Value::Insert(ops) => {
+                    let n = ops.len();
+                    for (i, op) in ops.iter().enumerate() {
+                        walk(op, x, tail && i + 1 == n, acc);
+                    }
+                }
+                Value::Var(y) if tail => {
+                    acc.0 = true;
+                    if *y != x {
+                        acc.1 = false;
+                    }
+                }
+                Value::Null if tail => {}
+                _ if tail => {
+                    acc.0 = true;
+                    acc.1 = false;
+                }
+                _ => {}
+            }
+        }
+        let mut acc = (false, true);
+        let n = ops.len();
+        for (i, op) in ops.iter().enumerate() {
+            walk(op, x, i + 1 == n, &mut acc);
+        }
+        acc.0 && acc.1
+    }
+    /// Does the body hand `x` up — as the tail or through a `return`?
+    fn yields_var(ops: &[Value], x: u16) -> bool {
+        fn leaf(v: &Value, x: u16, tail: bool) -> bool {
+            match v.unspan() {
+                Value::Return(inner) => leaf(inner, x, true),
+                Value::Var(y) => tail && *y == x,
+                Value::If(_, t, e) => leaf(t, x, tail) || leaf(e, x, tail),
+                Value::Block(b) | Value::Loop(b) => {
+                    let n = b.operators.len();
+                    b.operators
+                        .iter()
+                        .enumerate()
+                        .any(|(i, op)| leaf(op, x, tail && i + 1 == n))
+                }
+                Value::Insert(ops) => {
+                    let n = ops.len();
+                    ops.iter()
+                        .enumerate()
+                        .any(|(i, op)| leaf(op, x, tail && i + 1 == n))
+                }
+                _ => false,
+            }
+        }
+        let n = ops.len();
+        ops.iter()
+            .enumerate()
+            .any(|(i, op)| leaf(op, x, i + 1 == n))
+    }
+    /// The return half of [`Self::promote_monomorph_vector_return`]: every leaf `x` in return
+    /// position — the tail when `tail`, a `return x` anywhere — becomes a copy into `copy`
+    /// followed by `copy`, so what leaves the frame is a store the frame minted.
+    fn copy_returned_var_into(
+        &mut self,
+        node: &mut Value,
+        x: u16,
+        copy: u16,
+        rec_tp: i32,
+        tail: bool,
+    ) {
+        match node {
+            Value::Span(b) => self.copy_returned_var_into(&mut b.1, x, copy, rec_tp, tail),
+            Value::Return(inner) => {
+                if matches!(inner.unspan(), Value::Var(y) if *y == x) {
+                    let replace = self.cl(
+                        "OpReplaceVector",
+                        &[Value::Var(copy), Value::Var(x), Value::Int(rec_tp)],
+                    );
+                    *node = Value::Insert(vec![replace, Value::Return(Box::new(Value::Var(copy)))]);
+                } else {
+                    self.copy_returned_var_into(inner, x, copy, rec_tp, true);
+                }
+            }
+            Value::Var(y) if tail && *y == x => {
+                let replace = self.cl(
+                    "OpReplaceVector",
+                    &[Value::Var(copy), Value::Var(x), Value::Int(rec_tp)],
+                );
+                *node = Value::Insert(vec![replace, Value::Var(copy)]);
+            }
+            Value::If(_, t, e) => {
+                self.copy_returned_var_into(t, x, copy, rec_tp, tail);
+                self.copy_returned_var_into(e, x, copy, rec_tp, tail);
+            }
+            Value::Block(b) | Value::Loop(b) => {
+                let n = b.operators.len();
+                for (i, op) in b.operators.iter_mut().enumerate() {
+                    self.copy_returned_var_into(op, x, copy, rec_tp, tail && i + 1 == n);
+                }
+                if tail {
+                    b.result = Type::Vector(
+                        match self.vars.tp(copy).base() {
+                            Type::Vector(elm, _) => elm.clone(),
+                            other => Box::new(other.clone()),
+                        },
+                        Deps::none(),
+                    );
+                }
+            }
+            Value::Insert(ops) => {
+                let n = ops.len();
+                for (i, op) in ops.iter_mut().enumerate() {
+                    self.copy_returned_var_into(op, x, copy, rec_tp, tail && i + 1 == n);
+                }
+            }
+            _ => {}
+        }
+    }
     pub(crate) fn promote_monomorph_text_return(&mut self, d_nr: u32) {
         // Only plain `text` / `text?` returns (tuple-of-text is a separate arc).
         if !matches!(
@@ -10542,24 +11438,42 @@ impl Parser {
     /// same question six times and drift at the first one anybody forgets. `Void` / `Null` arms
     /// are left alone: they carry no type of their own to contribute, and the DN1 walkers own
     /// the bare-`null` arm.
-    /// Are these two types two DIFFERENT variants of one enum?
+    /// Do a `match`'s settled result type and one arm's type agree?
+    ///
+    /// [`match_arm_types_unify`] modulo ownership, plus the one case the JOIN creates:
+    /// once an arm has widened the result to an enum ([`Self::join_arm_into`]), a later
+    /// arm naming one of that enum's VARIANTS agrees with it — `@FR-C-Var` licenses
+    /// `Reference(S) ⤳ Enum(E)` exactly there.  The arm keeps its own variant type on
+    /// purpose (`arm_joins_to_enum` returns before converting it, so the join can still
+    /// see the two differ), which is why the gate cannot read the arm's type alone.
+    fn match_arms_unify(&self, result: &Type, arm: &Type) -> bool {
+        match_arm_types_unify(result, arm)
+            || matches!(
+                (self.variant_parent_enum(arm), result),
+                (Some(Type::Enum(a, _, _)), Type::Enum(b, _, _)) if a == *b
+            )
+    }
+
+    /// Does this ARM join to an enum rather than convert to what its siblings have
+    /// settled on so far?
     ///
     /// @FR-C-Var licenses `Reference(S) ⤳ Enum(E)` for each variant and nothing between
-    /// two of them, so this is the pair for which "does one convert to the other?" is the
-    /// wrong question — they join to their enum instead.  The SAME variant twice is not a
-    /// sibling pair: that conversion is reflexive and takes the ordinary path.
-    fn sibling_variants(&self, a: &Type, b: &Type) -> bool {
-        let (Type::Reference(x, _), Type::Reference(y, _)) = (a, b) else {
-            return false;
-        };
-        if x == y {
-            return false;
-        }
-        let (dx, dy) = (self.data.def(*x), self.data.def(*y));
-        matches!(self.data.def_type(*x), DefType::EnumValue)
-            && matches!(self.data.def_type(*y), DefType::EnumValue)
-            && dx.parent != u32::MAX
-            && dx.parent == dy.parent
+    /// two of them, so wherever the siblings have settled on ONE variant, "does this arm
+    /// convert to that?" is the wrong question for two kinds of arm: another variant of
+    /// the same enum, and the ENUM itself.  Both join to the enum, which is wider than the
+    /// expected type, so `convert` is asked in the direction the rules do not license and
+    /// answers *"expected Circle, got Sh"* for a join that is admissible (loft#1117 for the
+    /// variant, loft#1390 for the enum — `match e { Circle{r} => Circle{r: r + 1}, _ => e }`,
+    /// where `_ => e` is the binding this very statement assigns).
+    ///
+    /// One home with the site that DECIDES the join ([`Self::joins_to_enum`], read by
+    /// `parse_if` and by [`Self::join_arm_into`]): an arm accepted here must be an arm the
+    /// join widens for, or a slot declared as one variant ends up holding another.
+    /// The SAME variant twice is not such a pair — that conversion is reflexive and takes
+    /// the ordinary path.
+    fn arm_joins_to_enum(&self, arm: &Type, expected: &Type) -> bool {
+        self.variant_parent_enum(expected)
+            .is_some_and(|e| self.joins_to_enum(&e, expected, arm))
     }
 
     /// Do a then-arm and an else-arm join to `enum_tp` rather than to the then-arm's own
@@ -10569,12 +11483,20 @@ impl Parser {
     /// False for the same variant (nothing widened), and false for a `Void` / `Never` /
     /// `Null` else arm — a diverging or valueless arm states no type to join with, and an
     /// `else if` chain deliberately keeps its shape out of `false_type` (loft#936).
-    fn joins_to_enum(enum_tp: &Type, true_type: &Type, false_type: &Type) -> bool {
+    fn joins_to_enum(&self, enum_tp: &Type, true_type: &Type, false_type: &Type) -> bool {
         let Type::Enum(e, _, _) = enum_tp else {
             return false;
         };
         match (true_type, false_type) {
-            (Type::Reference(a, _), Type::Reference(b, _)) => a != b,
+            // A sibling variant, and only a sibling: the arm's def must belong to THIS
+            // enum.  The acceptance sites read this predicate too (`arm_joins_to_enum`),
+            // so an unrelated struct reaching it would be waved past the conversion it
+            // has to fail rather than widened.
+            (Type::Reference(a, _), Type::Reference(b, _)) => {
+                a != b
+                    && matches!(self.data.def_type(*b), DefType::EnumValue)
+                    && self.data.def(*b).parent == *e
+            }
             (_, Type::Enum(f, _, _)) => f == e,
             _ => false,
         }
@@ -10604,6 +11526,21 @@ impl Parser {
 
     fn join_arm_into(&self, so_far: &Type, arm: &Value, tp: &Type) -> Type {
         let joined = so_far.joined_deps(&self.arm_join_type(arm, tp));
+        // @FR-C-Var — when an arm joins to an ENUM the join is that enum, not the variant
+        // the earlier arms happened to name.  `parse_if` decides this for its two arms;
+        // every `match` arm site reaches it here, which is the one place both the settled
+        // type and the new arm are in hand.  Without it the result kept the FIRST arm's
+        // variant while later arms were accepted into it, so `v: Circle = match e {
+        // Circle{r} => …, Square{s} => Square{…} }` was admitted and read a `Square`'s
+        // bytes at `Circle`'s offsets — loft#980's class, which the `if` twin refuses.
+        // The deps are the joined ones: naming the type more widely does not change which
+        // store the value borrows.
+        let joined = match self.variant_parent_enum(so_far) {
+            Some(enum_tp) if self.joins_to_enum(&enum_tp, so_far, tp) => {
+                enum_tp.with_deps_of(&joined)
+            }
+            _ => joined,
+        };
         if crate::keys::pln25_dn1_enabled()
             && matches!(tp, Type::Optional(_))
             && !matches!(joined, Type::Optional(_))
@@ -12077,6 +13014,11 @@ impl Parser {
                 // (it aliases the subject `e`); freeing its deps would over-free `e`
                 // (@PLN85 match_return). The append already copied its elements into `w`.
                 if !self.vars.skip_free(local) {
+                    // @FR-O-Proxy asks free — the arm's own backing store is released here.
+                    // @FR-O-Override is consulted by the enclosing test, which is where the
+                    // borrowed-view case (a `_mv_` match-field binding) is turned away; the
+                    // veto has to be read for a free on the proxy, and reading it once for
+                    // the whole block is what that test is.
                     if deps.is_empty()
                         && self.vars.is_work_ref(local)
                         && !self.vars.is_argument(local)
@@ -12809,7 +13751,10 @@ impl Parser {
         // return re-mints its destination through `materialize_return_into`, so the rebind
         // has nothing to abandon there.
         let bound_to_vector_join = matches!(ctx.ret.ret_promo_base(), Type::Vector(_, _))
-            && Self::var_bound_to_branch(body, v);
+            && (Self::var_bound_to_branch(body, v)
+                || self
+                    .branch_sunk_vectors
+                    .contains(&(self.context, n.to_string())));
         // loft#1101 — the candidate is a VIEW of another local (`e = vv[0]; e`), the
         // binding twin of the tail projection `returns_own_field` above suppresses.
         // That rung reads the tail SHAPE, so it only sees a projection written at the
@@ -13558,15 +14503,18 @@ impl Parser {
                     self.rewrite_tail_tuple_to_synthetic_struct(synthetic_d_nr, &mut v);
                     true
                 };
-            // @PLN25 (N-Store): an explicit `return` is a STORE into the caller's
-            // non-null return slot — an un-discharged nullable `τ?` must be
-            // discharged (`?? d` / `match`) first.  Emitted here; `convert` below
-            // still peels `Optional`, so no double-diagnose.  Gate-OFF / first-pass:
-            // a no-op (`n_store_violation` returns `false`).
-            self.n_store_violation(&t, &r_type, "the return value", None);
+            // @FR-N-Store: an explicit `return` is a STORE into the caller's non-null return
+            // slot.  The store face asks where the value converts; the two lowerings that do
+            // not convert — a bare `null` (the sentinel) and a tuple rewritten into its
+            // synthetic struct — are asked at the site.
+            if t == Type::Null || tuple_rewritten {
+                self.n_store_violation(&t, &r_type, "the return value", None);
+            }
             if t == Type::Null {
                 v = self.null_value(&r_type);
-            } else if !tuple_rewritten && !self.convert(&mut v, &t, &r_type) {
+            } else if !tuple_rewritten
+                && !self.convert_store(&mut v, &t, &r_type, "the return value", None)
+            {
                 self.validate_convert("return", &t, &r_type, &expr_start.position);
             }
             // loft#822 — `convert` can UNBOX a stored tuple into its stack spelling, and

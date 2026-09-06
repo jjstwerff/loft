@@ -273,6 +273,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     replace_keyed,
     clear_keyed,
     index_group,
+    link_record,
     fill_keyed,
     set_keyed,
     length_spatial,
@@ -2397,6 +2398,15 @@ fn index_group(s: &mut State) {
     let v_view = *s.get_stack::<DbRef>();
     let v_primary = *s.get_stack::<DbRef>();
     s.database.index_group_records(&v_primary, &v_view, v_tp);
+}
+
+fn link_record(s: &mut State) {
+    let v_parent_tp = s.code::<u16>();
+    let v_fld = s.code::<u16>();
+    let v_rec = *s.get_stack::<DbRef>();
+    let v_data = *s.get_stack::<DbRef>();
+    s.database
+        .link_record_siblings(&v_data, &v_rec, v_parent_tp, v_fld);
 }
 
 fn fill_keyed(s: &mut State) {

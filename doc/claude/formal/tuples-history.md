@@ -6,13 +6,102 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** (D-tup-7 opened and closed 2026-09-04, loft#1350 — below; D-tup-4's KEYED half CLOSED 2026-08-31, loft#1230); D-tup-5 and D-tup-6 opened and closed
+OPEN: **0** — D-tup-9 opened and closed 2026-09-05 (loft#1365 — below: the record and scalar bindings by @PLN153 phase 1, the collection half by the @FR-F-Ret join).  (D-tup-8 opened and closed 2026-09-04, loft#1361 — below; D-tup-7 opened and closed 2026-09-04, loft#1350 — below; D-tup-4's KEYED half CLOSED 2026-08-31, loft#1230); D-tup-5 and D-tup-6 opened and closed
 2026-08-28; D-tup-3 opened and closed 2026-08-26; D-tup-2 closed the day the
 rule it needed was written down.  Bounded by the oracle note below — **and D-tup-3 is what that
 note was warning about**: it was found by giving an element a HEAP type, which this doc's
 all-`(integer, integer)` oracle cannot express, so the zero above never covered it.  D-tup-5 and
 D-tup-6 are two more from the same blind spot, one axis further: a NULLABLE element, which the
 all-`(integer, integer)` oracle cannot express either.
+
+### D-tup-9 — OPENED AND CLOSED (2026-09-05, loft#1365): a tuple literal member typed by a type variable
+
+`(T-Cons)` copies a heap element INTO a tuple literal and `binding.md (B-Copy)` copies a plain
+bind.  D-tup-8 made that hold for a member whose type is KNOWN at the literal; this is the
+member whose type is a generic's type variable.  Neither rule has a clause for generics, and
+that is the point of the entry: a monomorph is an ordinary program, so `(s, 1)` must behave
+the same whether `s` is written `Ctr` or reached through a `T` bound to `Ctr`.
+
+**Closed for a RECORD and for a SCALAR binding (2026-09-05).**  The difficulty is that the
+template has to decide something that does not exist yet: a type variable is spelled
+`Type::Reference` to its placeholder, so it looks exactly like a record, while what the member
+IS — a record to copy, a collection to copy differently, or a scalar with nothing to copy —
+exists only per instantiation.  Both one-sided answers were measured and both are wrong.
+DECLINING the copy in the template (the shape that shipped for a day) left a struct-bound `T`
+aliasing: `s = a; t = (s, 1); s.bump(); t.0.value()` answered `1` for a `Counter { n: 0 }`
+where `Counter` written in place answered `0`.  Emitting it UNCONDITIONALLY allocated a record
+with the type variable's own row — the layout escape loft#1070's guard refuses — an ICE on
+both backends for `pair_sum<T: Addable>(a, b) -> (T, T)` with `T` an integer.
+
+The cure decides per instantiation: the template emits the record copy, and
+`Parser::collapse_parametric_tuple_member_copies` removes it again in each monomorph whose
+bound type it does not fit.  The test is the block's own contents against that type
+(`tuple_member_copy_shape_fits`), never a "this was a type variable" flag — a generic body
+also builds tuples from CONCRETE members, and their copies are correct and must not be
+touched.  Unwrapping the value is only half of undoing the guess: the template also gave the
+tuple ELEMENT the backing's dep, and an element still naming a backing whose copy is gone is
+owned by a variable nothing fills, so the store the member holds is freed by nobody — a leak
+the first version shipped and the guard's absence would not have caught.  The dep therefore
+goes with the copy (`Variables::make_tuple_members_independent`, `make_independent` one level
+down, since a tuple carries no deps of its own and `deps_mut` on a `Type::Tuple` is `None`).
+
+Guard `tests/scripts/1365-a-tuple-member-typed-by-a-type-variable-is-copied.loft`: nine
+record cells, each against a CONCRETE twin rather than a literal — mutating the local, mutating
+through the tuple, the member at index 1, both members typed by the variable, arity three, the
+tuple as a return value, a two-field record so a wrong row shows in the value, the literal in a
+loop and in an `if` arm — plus four scalar cells as the control, since keeping them green is
+what the declining version bought by making the record cells wrong.
+
+**The collection half, closed by the join rather than by the copy pass (2026-09-05).**  With
+`T` bound to a `vector` or a keyed collection the template's record copy does not fit either,
+so the collapse unwraps it — and the member is then a VIEW of its local
+(`Variables::retarget_tuple_member_deps`, `(B-View)`; the first cut stripped the dep and
+freed the caller's hash at the callee's exit, which the @FR-F-Ret guard's second call
+observed).  The @FR-F-Ret walk (QUALITY.md B7t, calls-history D-call-13) boxes a generic's
+`-> (T, …)` at instantiation exactly as a named function's is boxed, so the copy the concrete
+path performs at the RETURN applies unchanged and happens once.  Measured on the joined tree,
+both backends, no leaked store: `keep<T>(a: T) -> (T, integer)` with a `vector<integer>` reads
+`len` 2 through the returned copy after the source grew to 3; with a `hash`, 1 against 2 — the
+concrete twin's answers.  Two earlier readings of this entry named a missing free and a stack
+tuple ABI as the cause; the ABI was the true one and the walk closed it.  The guard is the
+walk's own `a-generic-instance-returns-what-its-concrete-twin-returns.loft` (`vector_tuplocal`,
+`keyed_tuplocal`).  A generic's tuple built and NEVER returned keeps the view, and no program
+can observe that — an opaque `T` bound to a collection has no mutator to reach it through — so
+that last cell is unmeasurable rather than open.
+
+### D-tup-8 — OPENED AND CLOSED (2026-09-04, loft#1361): a tuple with a heap member was shared where the rules say copy
+
+> **The cell this entry's guard did not cross (2026-09-05, QUALITY.md B7t).**  A keyed member
+> reaching the tuple literal through a LOCAL bound from a parameter and then RETURNED —
+> `s = x; t = (s, 7); return t` — was written into the synthetic `__tuple` record by
+> `emit_set_one_element` as a 4-byte header where a struct field write copies
+> (`OpReplaceKeyed`): the interpreter wrote into a released, reused store and native refused
+> the int for a `DbRef`.  Fixed in that leg; the cell lives in
+> `a-generic-instance-returns-what-its-concrete-twin-returns.loft`.  The same walk boxed a
+> generic's `-> (T, integer)` at instantiation, which is the return-ABI half of D-tup-9's
+> collection case as the sibling stream named it.
+
+`(T-Cons)` copies a heap element INTO a tuple literal and `binding.md (B-Copy)` copies a plain
+bind, whole-value and heap alike; `layout.md (L-Tuple)` makes a tuple a synthetic struct, so a
+struct's own boundary applies to it.  Three places kept the tuple's stack WORDS instead — and a
+heap member's word is its handle.  A whole-tuple bind `u = t` copied the words (the interpreter's
+`set_var_tuple`; native's `whole_tuple_clone` emitted `.clone()`, a pointer copy for a `DbRef`
+leaf), so `t.0 += [9]` grew `u.0`; the literal's member copy (`tuple_member_owned_copy`) knew a
+VECTOR and a KEYED local but not a STRUCT, so `(s, 5); s.v = 9` read 9 through `p.0.v`; and the
+destructure's `T1.4` temp read its elements back the same way.  Both backends, the same wrong
+values, nothing said so — the walk of `@FR-B-Copy` (QUALITY.md § B7n) found it by moving the
+struct's bind through every position a bind can take.
+
+Closed with ONE home rather than four: the whole-tuple bind and the destructure lower onto the
+literal's per-member copy, which gained the struct (and struct-enum, and nullable, and nested
+tuple) branches; a member read OUT follows `(B-View)` / `(B-View-Base)` — a collection member off
+an owned tuple copies (`af = bx.v`), a struct member views, and off a parameter every member views
+— through the same `classify_vec_bind` a struct field read takes.  The ownership oracle learned
+that a heap member read out of a tuple is a view, which silenced a `lost-write` warning that had
+been firing on a write both backends landed.  The return path's unwrap (`tuple_member_copy_source`,
+loft#1109) matches the struct branch's shape too.  Guard
+`tests/scripts/1361-a-tuple-with-a-heap-member-copies-like-any-other-value.loft` (15 cells,
+falsified on both channels); the oracle note below stands — this was found one axis past it.
 
 ### D-tup-7 — OPENED AND CLOSED (2026-09-04, loft#1350): a lifetime-tuple result refused to join a tuple literal in an `if`
 
@@ -429,4 +518,3 @@ member, not the family.
 ### the status line formal/README.md's area table carried until 2026-09-04
 
 **0 open** (2026-08-31) — D-tup-1 closed 2026-08-20 (the reference tuple has a rule; `&(τ,…)`'s SCALAR-only restriction is now binding.md's D-bind-11, not an unspecified composition), and D-tup-4's keyed half closed 2026-08-31 (loft#1230: a keyed collection given to a tuple is COPIED like its vector twin, so `(T-Cons)`'s independence holds for every element type) — positional products (n≥2); `.i` a compile-time index; `(a,b) = …` destructuring; tuple returns. ⚠ its differential oracle is all-`(integer, integer)`: the doc read `0 open` through loft#1004 and loft#1005, both `text`-element deviations it could not see
-

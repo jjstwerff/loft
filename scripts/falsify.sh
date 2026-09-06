@@ -36,6 +36,15 @@
 # `a-nullable-return-joins-its-branch-arms.loft`, whose leaking cell `make ci` failed on while
 # this reported `0|0|none|none|0` for both trees (QUALITY.md B6p).  Until `--tests` grows a leak
 # check, score a leak guard by giving it a `main` and running it under `--interpret`.
+#
+# ⚠ A SECOND CHANNEL IS BLIND, for the mirror-image reason.  `expect_channel` counts only
+# `@EXPECT_ERROR` / `@EXPECT_FAIL`, and `entry_modes` routes only those two to `--tests`.  A
+# guard whose subject is a WARNING declares `@EXPECT_WARNING` and, if it also has a `main`
+# (which a leak or value guard wants), gets a direct run — where nothing matches warnings at
+# all.  Both trees then read `expect -` and the guard is reported INERT however loudly it
+# fires.  Measured 2026-09-06 on `a-payload-binding-warns-when-its-subject-is-given-another-\
+# variant.loft`: INERT here, 0 -> 2 reports by hand.  Until this grows a warning channel,
+# score such a guard by hand — run it on both builds and count the reports.
 set -uo pipefail
 
 usage() {
@@ -176,7 +185,14 @@ signature() { # <binary> <tree> <guard-path> <extra-args…> ; "exit|asserts|lea
   # library scored INERT — measured on the loft#1259 parser guard, which fails outright
   # against the pre-fix `lib/parser.loft` and reported "the control and this tree answer
   # the same".  A guard is scored against a tree by running it there.
+  # The arena instruments pass through when the caller armed them.  A defect that only an
+  # instrument can see — a stale work-ref reclaiming, in place, a store number another
+  # record has since taken, which `LOFT_POISON=1` turns into a garbage read and plain mode
+  # hides behind the allocator's reuse order — is scored on the channel that sees it, and
+  # the guard's `@falsified-at` line says which one was armed.
   out=$(cd "$tree" && timeout -k 5 "$((lim + 20))" env LOFT_NATIVE_LEAK_CHECK=1 LOFT_TIMEOUT="$lim" \
+        ${LOFT_POISON:+LOFT_POISON="$LOFT_POISON"} \
+        ${LOFT_STRICT_STORES:+LOFT_STRICT_STORES="$LOFT_STRICT_STORES"} \
         "$bin" "$@" "$file" 2>&1); rc=$?
   local asserts leak panic refusals
   asserts=$(echo "$out" | grep -c "assertion failed")
@@ -253,6 +269,20 @@ if [ ! -x "$TGT/debug/loft" ]; then
   build "$WT" "$TGT" >/dev/null || { echo "the control does not build" >&2; exit 1; }
 fi
 CONTROL="$TGT/debug/loft"
+# The control build is a full debug `target/` (~2 GB: the native leg links `libloft.rlib` and
+# its dependency rlibs, so the binary alone is not enough).  Kept per ref and never pruned,
+# these reached 364 GB and filled the disk (2026-09-05).  Keep the LOFT_FALSIFY_KEEP most
+# recently USED controls (default 4) — this one is stamped now — and remove the rest, their
+# worktrees with them.
+touch "$TGT" "$WT" 2>/dev/null
+keep="${LOFT_FALSIFY_KEEP:-4}"
+for old in $(ls -td "$CACHE"/*-target 2>/dev/null | tail -n +$((keep + 1))); do
+  case "$old" in */head-target|*/shared-target) continue;; esac
+  sha=${old##*/}; sha=${sha%-target}
+  git -C "$ROOT" worktree remove --force "$CACHE/$sha" >/dev/null 2>&1 || rm -rf "$CACHE/$sha"
+  rm -rf "$old"
+done
+git -C "$ROOT" worktree prune >/dev/null 2>&1
 # A separate target dir on purpose: the main one may be mid-`make ci`, and cargo's build
 # lock is per target dir — building into it stalls a gate that is already running.
 HERE=$(build "$ROOT" "$CACHE/head-target") || { echo "this tree does not build" >&2; exit 1; }

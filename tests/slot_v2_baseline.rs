@@ -412,6 +412,9 @@ fn test() {
 // text buffer shares, so scope teardown frees only what it should, and a
 // clean run IS the assertion — the symptom was a corrupted aliased slot.
 
+// The slice bound discharges its `find` (`?? 0`): since @PLN153 phase 3 a nullable INDEX is
+// an `(N-Store)` slot and warns, and this fixture pins the SLOT layout with no diagnostics
+// expected — the discharge keeps the program's shape and its silence.
 #[test]
 fn p185_late_local_after_inner_loop() {
     code!(
@@ -424,7 +427,7 @@ fn p185_late_local_after_inner_loop() {
         for i in 0..3 {
             body += \"{i}\";
         }
-        key = path[path.find(\"/\") + 1..path.len() - 5];
+        key = path[(path.find(\"/\") ?? 0) + 1..path.len() - 5];
         out += `
           {key}
         `;

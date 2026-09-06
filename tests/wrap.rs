@@ -1488,6 +1488,15 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
 /// limit is far above anything the corpus needs (the deepest real case is two).
 const MAX_PEEL: u32 = 8;
 
+/// @PLN154 phase 5 — did the stack shadow report anything while THIS script ran?
+///
+/// The count is process-wide (a `par` arm has its own `State` and its own frame), so the
+/// per-script answer is a difference against the count before the script started.  Always
+/// `false` when the shadow is not armed, which is every ordinary run.
+fn stack_verify_gate(before: u64) -> bool {
+    loft::stack_verify::enabled() && loft::stack_verify::violations() > before
+}
+
 /// `override_src` is the peeled re-run (loft#1242): the same file with the cells an error touched
 /// blanked out, so the rest parses and runs. `depth` counts the peels; `collected` accumulates
 /// EVERY round's diagnostics, because that union is what the declarations are checked against.
@@ -1519,6 +1528,9 @@ fn run_test_inner(
     // Idempotent: installs SIGSEGV/SIGABRT handler once per test
     // process so crashes print the last-executed opcode + PC.
     loft::crash_report::install("wrap");
+    // @PLN154 phase 5 — the shadow's tally before this script, so the gate below reads the
+    // difference rather than the process total.
+    let shadow_before = loft::stack_verify::violations();
     println!("run {entry:?}");
     // `loft_suite` runs the whole corpus in ONE process, so a fault that depends
     // on accumulated arena state (loft#920) has to be attributed to the script
@@ -1642,6 +1654,10 @@ fn run_test_inner(
         loft::use_analysis::warn_dead_stores(&p.data, &mut diagnostics, &path);
         loft::use_analysis::warn_double_move(&p.data, &mut diagnostics, &path);
         loft::use_analysis::warn_lost_temp_writes(&p.data, &mut diagnostics, &path);
+        // loft#1397 — here for the reason the note above gives, and for the screen it buys:
+        // a false positive from this lint would otherwise be invisible to the 1200-file
+        // corpus, which is the only thing that reads that many programs.
+        loft::use_analysis::warn_variant_overwritten(&p.data, &mut diagnostics, &path);
     }
     // Scope check and bytecode generation can panic on compiler bugs.
     // When the file has @EXPECT_FAIL annotations, tolerate the panic.
@@ -1841,6 +1857,18 @@ fn run_test_inner(
                  allocator's guard stopped it.  The stderr line names the op and the \
                  nearest source span; the cause is a variable holding a BORROWED record \
                  ref that scope cleanup treated as owning a heap store."
+            )));
+        }
+        // @PLN154 phase 5 — the stack-shadow gate.  The corpus runs IN-PROCESS here, so
+        // `main.rs`'s non-zero exit never fires for it; the count is read per script
+        // instead, which is also what gives a report the file it belongs to.  Silent and
+        // free unless `LOFT_VERIFY_STACK` armed the shadow, and the findings themselves
+        // were already printed at their own read sites.
+        if stack_verify_gate(shadow_before) {
+            return Err(Error::other(format!(
+                "{path}: the stack shadow reported an uninitialised, mistyped or stale \
+                 slot read — the lines above name the read; run \
+                 `LOFT_VERIFY_STACK=1 loft --interpret {path}` to see them alone"
             )));
         }
         // Part B — leak gate: a heap store left unfreed at program exit is a

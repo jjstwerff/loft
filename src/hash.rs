@@ -363,22 +363,34 @@ fn hash_free_pos(claim: u32, rec: &DbRef, stores: &[Store], keys: &[Key]) -> u32
     BUCKET0 + index * SLOT_BYTES
 }
 
-/// Return the 0-based bucket that currently holds arena index `want`.
-fn hash_rec_pos(claim: u32, want: u32, rec: &DbRef, stores: &[Store], keys: &[Key]) -> u32 {
+/// The 0-based bucket that currently holds arena index `want`, or `None` when no bucket does.
+///
+/// Probes from the key's home bucket and stops at the first EMPTY slot, which ends every probe
+/// chain (deletion shifts entries back, so there are no tombstones to step over) — a record
+/// the table holds is never past one.  It used to run the whole table and, for a record the
+/// table did NOT hold, wrap back to the home bucket and answer THAT, which [`remove`] then
+/// zeroed: a null element of a linked group handed to the unlink loop — a record whose key
+/// reads as zero and that no view holds — took a live entry with it under every seed whose
+/// zero-key bucket happened to be occupied, one run in twenty.
+fn hash_rec_pos(claim: u32, want: u32, rec: &DbRef, stores: &[Store], keys: &[Key]) -> Option<u32> {
     let count = elms(keys::store(rec, stores), claim);
     let seed = read_seed(keys::store(rec, stores), claim);
     let hash_val = keys::hash(rec, stores, keys, seed);
     let mut index = (hash_val % u64::from(count)) as u32;
     for _ in 0..count {
-        if keys::store(rec, stores).get_u32_raw(claim, BUCKET0 + index * SLOT_BYTES) == want {
-            break;
+        let val = keys::store(rec, stores).get_u32_raw(claim, BUCKET0 + index * SLOT_BYTES);
+        if val == want {
+            return Some(index);
+        }
+        if val == 0 {
+            return None;
         }
         index += 1;
         if index >= count {
             index = 0;
         }
     }
-    index
+    None
 }
 
 #[must_use]
@@ -466,8 +478,12 @@ pub fn remove(hash_ref: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key])
     if gone == 0 {
         return;
     }
-    // Find the slot holding the entry and zero it (create the hole).
-    let mut hole = hash_rec_pos(claim, gone, rec, stores, keys);
+    // Find the slot holding the entry and zero it (create the hole).  A record the table
+    // does not hold leaves nothing — a remove of an absent record is a no-op, never a hole
+    // where some other entry sat.
+    let Some(mut hole) = hash_rec_pos(claim, gone, rec, stores, keys) else {
+        return;
+    };
     keys::mut_store(hash_ref, stores).set_u32_raw(claim, BUCKET0 + hole * SLOT_BYTES, 0);
     // Walk forward from hole+1 and pull each element back if its probe distance
     // to the hole is shorter than its probe distance to its current slot.

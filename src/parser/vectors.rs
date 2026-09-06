@@ -7,55 +7,127 @@ use super::{
 };
 use crate::data::Deps;
 
+/// The narrow-integer element KIND of a vector element type, with the `min` its ops take —
+/// `None` for a wide (8-byte) element and for anything that is not an integer.
+///
+/// loft#1036 — the width comes from `byte_width` (through `vector_narrow_width`), the ONE
+/// range→width home, exactly as the index READ (`get_val`) derives it.  Keying on
+/// `forced_size` alone made an element declared `integer limit(10, 255)` answer `None`, so
+/// its write fell back to a wide `OpSetInt` that never applied the `- min` ENCODE the 1-byte
+/// `OpGetByte` read decodes with — every element read back exactly `lo` too high.
+///
+/// `narrow_vec` stays keyed on `forced_size`: it does not pick the WIDTH, it picks the
+/// raw-vs-full ENCODING for a 2-byte element (`ShortRaw` for a `u16`-style alias,
+/// `ShortFull` for a range that merely fits), and the storage side
+/// (`Data::narrow_vector_content`) registers the matching Part.
+fn narrow_elm_kind(elm_tp: &Type) -> Option<(crate::data::NarrowIntKind, i32)> {
+    // A nullable narrow element (`vector<u8?>`) reserves a sentinel, so it needs the
+    // nullable store op — a raw `OpSetByte` would write null's low byte `0`,
+    // indistinguishable from the value 0.
+    let (spec, nullable) = match elm_tp {
+        Type::Integer(spec) => (*spec, false),
+        Type::Optional(inner) => match &**inner {
+            Type::Integer(spec) => (*spec, true),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let narrow_vec = spec.forced_size.is_some() && spec.vector_narrow_width(nullable).is_some();
+    let n = spec.vector_narrow_width(nullable)?;
+    let kind = crate::data::NarrowIntKind::of(n, nullable, narrow_vec, spec.unsigned_wide());
+    Some((kind, spec.usable_min(kind.reserves_sentinel())))
+}
+
+/// The store op that writes one NARROW-integer vector element — a `vector<u8>`, `<u16>`, or a
+/// 4-byte `integer` subtype, nullable or not.  `None` for any other element type, leaving the
+/// caller on its wide `set_field` / `OpSetInt` path.
+///
+/// Every site that BUILDS a vector routes its element write through here — the concrete
+/// literal, append and slice through [`Parser::narrow_elm_set`], and a GENERIC body's
+/// `out += [v]` through the monomorph rewrite (`primitive_setter_call`) — so the store op is
+/// the exact twin of the index READ for each width and nullability: `OpSetByte` /
+/// `OpSetShortRaw` / `OpSetInt4` for raw elements, `OpSetByteNullable` / `OpSetShort` for
+/// nullable ones.  A site that misses it emits the wide 8-byte `OpSetInt` into a 1-byte
+/// slot, so one write covers eight element slots — the slice half of #624, and the monomorph
+/// half of loft#1378, whose setter keyed on the ALIAS def's `forced_size` and so wrote every
+/// narrow element of a generic `vector<T>` eight bytes wide (`200 0` for two `u8`s).
+pub(crate) fn narrow_elm_write(
+    elm_tp: &Type,
+    elm: Value,
+    val: &Value,
+    data: &crate::data::Data,
+) -> Option<Value> {
+    let (kind, min) = narrow_elm_kind(elm_tp)?;
+    let d = data.def_nr(kind.set_op());
+    if d == u32::MAX {
+        return None;
+    }
+    let pos = Value::Int(0);
+    Some(if kind.takes_min() {
+        Value::Call(d, vec![elm, pos, Value::Int(min), val.clone()])
+    } else {
+        Value::Call(d, vec![elm, pos, val.clone()])
+    })
+}
+
+/// The read twin of [`narrow_elm_write`]: the element slot `code` unpacked at the width and
+/// encoding its type stores, for a GENERIC body's `v[i]` (`wrap_vector_get_val`).  `None` for
+/// a wide element, which reads through `OpGetInt`.
+pub(crate) fn narrow_elm_read(
+    elm_tp: &Type,
+    code: Value,
+    data: &crate::data::Data,
+) -> Option<Value> {
+    let (kind, min) = narrow_elm_kind(elm_tp)?;
+    let d = data.def_nr(kind.get_op());
+    if d == u32::MAX {
+        return None;
+    }
+    let pos = Value::Int(0);
+    Some(if kind.takes_min() {
+        Value::Call(d, vec![code, pos, Value::Int(min)])
+    } else {
+        Value::Call(d, vec![code, pos])
+    })
+}
+
 // Lambda and vector expression parsing.
 
+/// Which argument of an element read is its INDEX, for the ops that have one.
+///
+/// The two families differ in arity — `OpGetVector(r, size, index)` carries the element size
+/// and `OpVectorRef(r, index)` does not — so the position is per op and not per family.
+/// Reading it off the wrong one is not a wrong PLACE, because a missing argument declines,
+/// but it is a place not named: the read then keeps pointing at the destination being built.
+/// Each nullable peer reads at the same position as the op it mirrors.
+fn element_index_arg(name: &str) -> Option<usize> {
+    match name {
+        "OpGetVector" | "OpGetVectorNullable" => Some(2),
+        "OpVectorRef" | "OpVectorRefNullable" => Some(1),
+        _ => None,
+    }
+}
+
+/// One step of a PLACE — what `s.f`, `v[0]` and `v[i]` each contribute to the identity of the
+/// location a build is assigned to, so *"is this read the destination?"* is an equality.
+///
+/// A nullable element read is the same place as a plain one, which is why both spellings
+/// normalise to the element steps rather than carrying the op.  An element step is admitted
+/// only for an index one statement cannot change — a constant, or a variable, since no
+/// expression inside a single statement rewrites one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum PlaceStep {
+    Field(i32),
+    ElemConst(i32),
+    ElemVar(u16),
+    Capture(i32),
+}
+
 impl Parser {
-    /// The store op that writes one NARROW-integer vector element — a `vector<u8>`,
-    /// `<u16>`, or a 4-byte `integer` subtype, nullable or not.  Returns `None` for
-    /// any other element type, leaving the caller on its wide `set_field` path.
-    ///
-    /// Every site that BUILDS a vector routes its element write through here, so the
-    /// store op is the exact twin of the index READ (`get_val`) for each width and
-    /// nullability: `OpSetByte` / `OpSetShortRaw` / `OpSetInt4` for raw elements,
-    /// `OpSetByteNullable` / `OpSetShort` for nullable ones.  A site that misses it
-    /// emits the wide 8-byte `OpSetInt` into a 1-byte slot, so one write covers eight
-    /// element slots — the slice half of #624, where `v[a..b]` on a `vector<u8>` kept
-    /// only the first element and zero-filled the rest.
+    /// The store op that writes one NARROW-integer vector element the concrete build sites
+    /// emit — [`narrow_elm_write`] with the element in a local; see its doc for the contract.
     pub(crate) fn narrow_elm_set(&mut self, elm_tp: &Type, elm: u16, val: &Value) -> Option<Value> {
-        // A nullable narrow element (`vector<u8?>`) reserves a sentinel, so it needs
-        // the nullable store op — a raw `OpSetByte` would write null's low byte `0`,
-        // indistinguishable from the value 0.
-        let (spec, nullable) = match elm_tp {
-            Type::Integer(spec) => (*spec, false),
-            Type::Optional(inner) => match &**inner {
-                Type::Integer(spec) => (*spec, true),
-                _ => return None,
-            },
-            _ => return None,
-        };
-        // loft#1036 — the width comes from `byte_width`, the ONE range→width home,
-        // exactly as the READ (`get_val`) derives it.  This site asked
-        // `vector_narrow_width`, which was keyed on `forced_size` alone, so an
-        // element declared `integer limit(10, 255)` answered `None` here and the
-        // caller fell back to a wide `OpSetInt` that never applied the `- min`
-        // ENCODE the 1-byte `OpGetByte` read decodes with — every element read back
-        // exactly `lo` too high (12 stored, 22 returned), and the error vanished at
-        // `lo == 0`, which is why the common spellings looked fine.
-        //
-        // `narrow_vec` stays keyed on `forced_size`: it does not pick the WIDTH, it
-        // picks the raw-vs-full ENCODING for a 2-byte element (`ShortRaw` for a
-        // `u16`-style alias, `ShortFull` for a range that merely fits), and the
-        // storage side (`Data::narrow_vector_content`) registers the matching Part.
-        let narrow_vec = spec.forced_size.is_some() && spec.vector_narrow_width(nullable).is_some();
-        let n = spec.vector_narrow_width(nullable)?;
-        let kind = crate::data::NarrowIntKind::of(n, nullable, narrow_vec, spec.unsigned_wide());
-        let pos = Value::Int(0);
-        Some(if kind.takes_min() {
-            let m = Value::Int(spec.usable_min(kind.reserves_sentinel()));
-            self.cl(kind.set_op(), &[Value::Var(elm), pos, m, val.clone()])
-        } else {
-            self.cl(kind.set_op(), &[Value::Var(elm), pos, val.clone()])
-        })
+        narrow_elm_write(elm_tp, Value::Var(elm), val, &self.data)
     }
 
     /// Refuse a vector concatenation whose two sides store their INTEGER elements
@@ -341,7 +413,9 @@ impl Parser {
         precedence: usize,
         is_or: bool,
     ) {
-        if !self.convert(code, tp, &Type::Boolean) && !self.first_pass {
+        // An operand of `&&`/`||` is READ as a boolean, not stored — @FR-N-Store admits it,
+        // as `convert_condition` does for the same reading in an `if`.
+        if !self.convert_admitting(code, tp, &Type::Boolean) && !self.first_pass {
             self.can_convert(tp, &Type::Boolean);
         }
         let mut second_code = Value::Null;
@@ -354,7 +428,9 @@ impl Parser {
             precedence + 1,
         );
         self.known_var_or_type(&second_code, &second_pos);
-        if !self.convert(&mut second_code, &second_type, &Type::Boolean) && !self.first_pass {
+        if !self.convert_admitting(&mut second_code, &second_type, &Type::Boolean)
+            && !self.first_pass
+        {
             self.can_convert(&second_type, &Type::Boolean);
         }
         // `&&`/`||` do not route through `call_op_as`, so its deferral counter cannot see an
@@ -3048,26 +3124,25 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
                     // at — clearing it would empty the value the loop is about to read.
                     // The snapshot is taken before that clear, which is what makes the
                     // idiom survive a surrounding loop.  Same cure, same reason, as the
-                    // trailing self-reference `v = a + v` in `create_vector`.
-                    let src_tp = Type::Vector(Box::new(in_t.clone()), Deps::none());
-                    let src = self.create_unique("comp_src", &src_tp);
-                    self.vars.defined(src);
-                    let mut snap = self.vector_db(in_t, src);
-                    let elem_tp = self.append_elem_tp(in_t);
-                    snap.push(self.cl(
-                        "OpAppendVector",
-                        &[Value::Var(src), Value::Var(vec), Value::Int(elem_tp)],
-                    ));
-                    // Reads only: the loop's WRITES are built from `vec_expr` below and
-                    // never appear in these five, so this rename cannot redirect an append.
-                    for part in [
+                    // trailing self-reference `v = a + v` in `create_vector`; one home with
+                    // the literal's snapshot (`snapshot_read_destination`).
+                    let mut snap = Vec::new();
+                    let mut parts = [
                         &mut fill,
                         &mut create_iter,
                         &mut for_next,
                         &mut if_step,
                         &mut body,
-                    ] {
-                        crate::parser::collections::rename_var(part, vec, src);
+                    ];
+                    if let Some(snapshot) = self.snapshot_read_destination(
+                        vec,
+                        &Value::Var(vec),
+                        is_var,
+                        false,
+                        in_t,
+                        &mut parts,
+                    ) {
+                        snap.extend(snapshot);
                     }
                     snap.extend(ops);
                     (snap, *handle)
@@ -3401,8 +3476,20 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
         } else {
             Type::Vector(Box::new(in_t.clone()), Deps::frame(parent_tp.depend()))
         };
-        let (tp, ls) =
+        // A literal that READS its destination reads what the destination held when the
+        // statement began (`I-Comp`, @FR-O-Detach) — take the snapshot before the build.
+        let snapshot = {
+            let mut parts: Vec<&mut Value> = res.iter_mut().collect();
+            self.snapshot_read_destination(vec, val, is_var, is_field, &in_t, &mut parts)
+        };
+        let (tp, mut ls) =
             self.build_vector_list(val, parent_tp, elm, vec, &res, &in_t, tp, is_var, is_field);
+        if let Some(snapshot) = snapshot {
+            self.build_snapshot_len = snapshot.len();
+            for (i, op) in snapshot.into_iter().enumerate() {
+                ls.insert(i, op);
+            }
+        }
         self.lexer.token("]");
         if block {
             *val = v_block(ls, tp.clone(), "Vector");
@@ -3895,7 +3982,7 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
     /// answers "different place" for `s.inner.v` on the left and `s.inner.v` on the right —
     /// the nesting is what makes it bite, since a one-level `s.v` has only a bare `Var`
     /// under it.
-    pub(crate) fn field_place(&self, v: &Value) -> Option<(u16, Vec<i32>)> {
+    pub(crate) fn field_place(&self, v: &Value) -> Option<(u16, Vec<PlaceStep>)> {
         match v.unspan() {
             Value::Var(x) => Some((*x, Vec::new())),
             Value::Call(d, args) if *d == self.data.def_nr("OpGetField") => {
@@ -3903,11 +3990,144 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
                     return None;
                 };
                 let (root, mut path) = self.field_place(args.first()?)?;
-                path.push(*off);
+                path.push(PlaceStep::Field(*off));
+                Some((root, path))
+            }
+            // An ELEMENT step, so `xs[0].items` is a place of its own rather than nothing.
+            // Both spellings of the read are the SAME place — a nullable read of an element
+            // is that element — so they normalise to one step; the index decides which
+            // element, and only an index this statement cannot change is admitted: a
+            // constant, or a variable, which no expression inside one statement rewrites.
+            // Anything else (a computed index) is not named and falls back to declining, as
+            // every unnameable destination here does.
+            Value::Call(d, args) if let Some(at) = element_index_arg(self.data.def(*d).name()) => {
+                let step = match args.get(at)?.unspan() {
+                    Value::Int(i) => PlaceStep::ElemConst(*i),
+                    Value::Var(i) => PlaceStep::ElemVar(*i),
+                    _ => return None,
+                };
+                let (root, mut path) = self.field_place(args.first()?)?;
+                path.push(step);
+                Some((root, path))
+            }
+            // A CAPTURED collection.  A closure reaches its capture through
+            // `OpGetDbRef(__closure, <offset>)` — @PLN93's build-into-target writes straight
+            // through it — so the destination is neither a variable nor a field chain, and a
+            // build inside the closure could not be told from a read of something else.  It
+            // IS a place: the closure record and the slot the capture sits in.
+            Value::Call(d, args) if self.data.def(*d).name() == "OpGetDbRef" => {
+                let Value::Int(off) = args.get(1)?.unspan() else {
+                    return None;
+                };
+                let (root, mut path) = self.field_place(args.first()?)?;
+                path.push(PlaceStep::Capture(*off));
                 Some((root, path))
             }
             _ => None,
         }
+    }
+
+    /// The snapshot a collection build takes of a destination it READS, so its reads resolve
+    /// through what the destination held when the statement began.
+    ///
+    /// `(I-Comp)` says a build reads what its destination held when the statement BEGAN, never
+    /// the result being built, whichever part does the reading and however many times the
+    /// statement runs.  A LITERAL is the same build without the loop and is held to the same
+    /// sentence.  Building THROUGH the destination breaks it the moment the destination is
+    /// detached — the `=` repoint (`vector_db`), a field's `OpClearVector` — or grown (`+=`):
+    /// every read inside the parts then resolves through the empty or partially-built result,
+    /// so `v = [v[1], v[0]]` answered `[0, 0]` and `v += [len(v), len(v)]` appended `2, 3`.
+    /// Enforces @FR-O-Detach: the detach is sequenced AFTER every read of the destination by
+    /// the value being built — here by hoisting those reads onto a copy taken before the
+    /// first write, which is the same hoist the comprehension's deferred repoint already made
+    /// for its own five parts.
+    ///
+    /// Returns the ops that take the snapshot — to run BEFORE anything detaches or grows the
+    /// destination — having renamed every read of the destination in `parts` to the snapshot.
+    /// Flat ops, not a block: the snapshot temp is read by the build's own parts, and a block
+    /// would scope its `let` away from them on `--native`.  A literal puts them at the HEAD of
+    /// its ops and records their count in [`Parser::build_snapshot_len`], which the sites that
+    /// insert a detach at the head of a build's ops read as their insertion point.  `None`
+    /// when nothing reads the destination, and always on pass 1: the snapshot is a pass-2
+    /// temp like every other materialising temp here.
+    ///
+    /// Two destinations are left alone.  A KEYED one: its literal is built THROUGH it by
+    /// construction (loft#703) and a vector copy is not its kind.  And a field reached through
+    /// an ELEMENT (`xs[i].items`), which [`Self::field_place`] cannot name — the root-variable
+    /// fallback `comprehension_needs_own_buffer` takes is over-wide (a sibling field matches),
+    /// so renaming on it would redirect reads of the sibling too.
+    pub(crate) fn snapshot_read_destination(
+        &mut self,
+        vec: u16,
+        dest: &Value,
+        is_var: bool,
+        is_field: bool,
+        in_t: &Type,
+        parts: &mut [&mut Value],
+    ) -> Option<Vec<Value>> {
+        if self.first_pass || (vec != u16::MAX && self.keyed_local(vec)) {
+            return None;
+        }
+        // Any destination that is not a bare VARIABLE is named by its PLACE, whether the
+        // caller called it a field or not.  A CAPTURED collection is neither a variable nor a
+        // field — a closure reaches it through `OpGetDbRef(__closure, <offset>)` — so gating
+        // the place on `is_field` left it with no read test at all and the build read its own
+        // emptied result (loft#1391).  A field whose place cannot be named still declines, as
+        // it did.
+        let field_place = match dest.unspan() {
+            Value::Var(_) => None,
+            _ if is_field => Some(self.field_place(dest)?),
+            _ => self.field_place(dest),
+        };
+        let reads = {
+            let ro: Vec<&Value> = parts.iter().map(|p| &**p).collect();
+            match &field_place {
+                Some(place) => ro
+                    .iter()
+                    .any(|v| v.any_node(&mut |n| self.field_place(n).is_some_and(|p| p == *place))),
+                None => {
+                    self.comprehension_reads_target(vec, is_var, &ro)
+                        || self.comprehension_needs_own_buffer(vec, dest, is_var, is_field, &ro)
+                }
+            }
+        };
+        if !reads {
+            return None;
+        }
+        let src_tp = Type::Vector(Box::new(in_t.clone()), Deps::none());
+        let src = self.create_unique("build_src", &src_tp);
+        self.vars.defined(src);
+        let mut snap = self.vector_db(in_t, src);
+        let elem_tp = self.append_elem_tp(in_t);
+        snap.push(self.cl(
+            "OpAppendVector",
+            &[Value::Var(src), dest.clone(), Value::Int(elem_tp)],
+        ));
+        // Reads only: the build's WRITES are emitted from `vec` / `dest` after this, so the
+        // rename cannot redirect an append.
+        if let Some(place) = field_place {
+            for part in parts.iter_mut() {
+                part.map_nodes(&mut |n| {
+                    if self.field_place(n).is_some_and(|p| p == place) {
+                        *n = Value::Var(src);
+                    }
+                });
+            }
+        } else {
+            // A `&` link shares the destination's store, so a read spelled through the link
+            // is a read of the same place and has to be redirected with the destination's
+            // own — `b = [(r[2] ?? 0), (r[0] ?? 0)]` under `r = &b`.  Renaming only the
+            // destination's name left those reads pointing at the store the build is about
+            // to clear, and the literal answered zeros.
+            let mut names = vec![vec];
+            names.extend(self.vector_link_partner_vars(vec));
+            for name in names {
+                for part in parts.iter_mut() {
+                    crate::parser::collections::rename_var(part, name, src);
+                }
+            }
+        }
+        Some(snap)
     }
 
     /// Does a comprehension being built into `vec` READ `vec` itself?
@@ -3938,7 +4158,37 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
             && vec != u16::MAX
             && vec == self.assign_target
             && self.assign_replaces
-            && parts.iter().any(|v| v.reads_var(vec))
+            && (parts.iter().any(|v| v.reads_var(vec)) || self.parts_read_a_vector_link(vec, parts))
+    }
+
+    /// Do these parts read the destination through a `&` LINK rather than by its own name?
+    ///
+    /// A vector link shares the source's `DbRef`, so `r = &a` makes `r` and `a` one place and
+    /// `a = [for i in 0..r.len() { (r[i] ?? 0) * 2 }]` reads what it is assigning.
+    /// `(I-Comp)` is stated over the PLACE, not the spelling — and the clear that empties the
+    /// destination reaches the link too, so without this the loop reads an emptied vector and
+    /// the build answers `[]`.
+    fn parts_read_a_vector_link(&self, vec: u16, parts: &[&Value]) -> bool {
+        self.vector_link_partner_vars(vec)
+            .into_iter()
+            .any(|pv| parts.iter().any(|v| v.reads_var(pv)))
+    }
+
+    /// The variables a `&` link makes one place with `vec` — the source of a link, or every
+    /// link taken to a source.
+    fn vector_link_partner_vars(&self, vec: u16) -> Vec<u16> {
+        if vec == u16::MAX {
+            return Vec::new();
+        }
+        let name = self.vars.name(vec).to_string();
+        let Some(partners) = self.amp_vector_link_partners.get(&(self.context, name)) else {
+            return Vec::new();
+        };
+        partners
+            .iter()
+            .map(|p| self.vars.var(p))
+            .filter(|v| *v != u16::MAX && *v != vec)
+            .collect()
     }
 
     /// Does a comprehension need to be built into a BUFFER of its own, rather than through
@@ -4204,14 +4454,12 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
         // WARNS with the store proceeding; a narrow one has no room and errors) and it already
         // declines on a nullable target, which is what keeps `vector<t?>` and the synthetic
         // `vector<__nullable<S>>` quiet.
+        // @FR-N-Store: the element is a slot; both halves of the rule are asked by the store
+        // face at the `convert` below (lenient — loft#1232 — so a narrow element warns).  The
+        // arms between here and there that bypass `convert` are the nullable-wrapper
+        // spellings, whose slot holds absence by construction.
         let elem_index = res.len();
-        self.n_store_violation_inner(
-            &t,
-            in_t,
-            &format!("element {elem_index} of this vector literal"),
-            None,
-            true,
-        );
+        let elem_slot = format!("element {elem_index} of this vector literal");
         if let (Type::Reference(t_nr, _), Type::Reference(in_nr, _)) = (&t, &in_t.clone())
             && let (Type::Enum(t_e, true, _), Type::Enum(in_e, true, _)) = (
                 self.data.def(*t_nr).returned(),
@@ -4280,7 +4528,7 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
             // two spellings of the SAME type — an error that aborted the run before pass 2
             // could re-check against the resolved element.  Say nothing; pass 2 decides.
             // The struct-field store guard (`objects.rs`) already works this way.
-        } else if !self.convert(&mut p, &t, in_t) {
+        } else if !self.convert_store_lenient(&mut p, &t, in_t, &elem_slot, None) {
             if declared {
                 // @P315 — the element type is DECLARED (typed local / struct
                 // field).  A value that does not convert TO it must be cast
@@ -4937,17 +5185,32 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
     /// Only a NAMED non-argument local is copied.  A vector ARGUMENT aliases the caller by design
     /// (`@FR-B-Ref-Alias` — a parameter reaches the source), so copying it here would change what
     /// the caller sees; and a member that is already a fresh value has no source to diverge from.
-    fn tuple_member_owned_copy(&mut self, val: &mut Value, tp: &Type) -> Option<Type> {
+    pub(crate) fn tuple_member_owned_copy(&mut self, val: &mut Value, tp: &Type) -> Option<Type> {
         if self.first_pass {
             return None;
         }
-        let v = match val.unspan() {
-            Value::Var(v) => *v,
+        // `@FR-T-Cons`: a heap element is COPIED into the tuple.  The source is a heap LOCAL,
+        // or a member read off a tuple local — the whole-tuple bind and the destructure lower
+        // onto this same copy (loft#1361), so the member of a tuple PARAMETER copies too:
+        // `u = p` is a plain bind, and `@FR-B-Copy` has no parameter carve-out (`w = v` off a
+        // vector parameter copies today).  A bare heap
+        // ARGUMENT as a literal member keeps its documented alias.  Anything else is a fresh
+        // value with no source to diverge from.
+        let src = match val.unspan() {
+            Value::Var(v) => {
+                if *v >= self.vars.count() || self.vars.is_argument(*v) {
+                    return None;
+                }
+                Value::Var(*v)
+            }
+            Value::TupleGet(base, i) => {
+                if *base >= self.vars.count() {
+                    return None;
+                }
+                Value::TupleGet(*base, *i)
+            }
             _ => return None,
         };
-        if v >= self.vars.count() || self.vars.is_argument(v) {
-            return None;
-        }
         // The KEYED half of `D-tup-4`, closed with the copy the keyed family already has.
         // `OpReplaceKeyed` is what a STRUCT literal emits for a keyed member (`S { h: a }`),
         // and a tuple RETURN copies through the synthetic `__tuple<…>` record — so both
@@ -4959,18 +5222,26 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
         // so the store type is the same either way, but a tuple's element slot is `τ?` when
         // the source is, and a dense-typed copy loses its ownership dep entering that slot —
         // which leaks the copy's store.
-        if self.keyed_local(v) {
-            let keyed_tp = self.vars.tp(v).clone();
+        // The backing is created OWNED.  The member's type may carry the deps of the tuple it
+        // was read from — a copied tuple's member depends on the literal's own backing — and a
+        // backing that inherited them would be read as a borrow and never freed.
+        let owned_create = tp.with_deps(&Deps::none());
+        // The backing for a KEYED or STRUCT member is a function-scope work ref (`__ref_N`),
+        // the same temp an inline record literal mints: declared at the body's top and freed
+        // at function exit, so a copy built inside an ARGUMENT tuple (`show((s, 5))`) is
+        // released too.  A block-scoped local was the block's own value and nothing freed it
+        // there.  The vector branch's store is its `__vdb`, which already has that discipline.
+        if is_keyed(tp) {
+            let keyed_tp = owned_create.clone();
             let kt = self.keyed_known_type(&keyed_tp)?;
-            let o = self.create_unique("tupcopy", &keyed_tp);
+            let o = self.vars.work_refs(&keyed_tp, &mut self.lexer);
             if o == u16::MAX {
                 return None;
             }
-            self.vars.defined(o);
             let db = self.cl("OpDatabase", &[Value::Var(o), Value::Int(i32::from(kt))]);
             let copy = self.cl(
                 "OpReplaceKeyed",
-                &[Value::Var(v), Value::Var(o), Value::Int(i32::from(kt))],
+                &[src, Value::Var(o), Value::Int(i32::from(kt))],
             );
             let ops = vec![v_set(o, Value::Null), db, copy, Value::Var(o)];
             // DEPENDING on `o`, exactly as the vector branch's result does: that dep is what
@@ -4979,11 +5250,79 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
             *val.unspan_mut() = crate::data::v_block(ops, owned_tp.clone(), "tuple_member_copy");
             return Some(owned_tp);
         }
+        // A STRUCT (or struct-enum) member: the record is copied into a frame-local backing
+        // the same way (`OpDatabase` + `OpCopyRecord`, the shape a whole-value struct bind
+        // emits).  A nullable source copies only when it holds a record — a null stays null,
+        // which `OpCopyRecord` alone would turn into a default record.
+        if let Some(d_nr) = match tp.base() {
+            Type::Reference(d, _) | Type::Enum(d, true, _) => Some(*d),
+            _ => None,
+        } {
+            // A member typed by a generic's TYPE VARIABLE is not copied here.  Its record
+            // row is the template placeholder (`__typevar_T`), which no record may be
+            // allocated with (loft#1070's guard), and what the member IS — a scalar with
+            // nothing to copy, or a record — is decided per instantiation, after this parse.
+            // So the generic keeps the pre-copy layout, the element slot holding the local's
+            // handle: `formal/tuples.md` D-tup-9 (loft#1365) records that a struct-bound `T`
+            // therefore still aliases, and names the monomorph-time copy as the cure.
+            let kt = self.data.def(d_nr).known_type();
+            if kt == u16::MAX {
+                return None;
+            }
+            let o = self.vars.work_refs(&owned_create, &mut self.lexer);
+            if o == u16::MAX {
+                return None;
+            }
+            let db = self.cl("OpDatabase", &[Value::Var(o), Value::Int(i32::from(kt))]);
+            let copy = self.cl(
+                "OpCopyRecord",
+                &[src.clone(), Value::Var(o), Value::Int(i32::from(kt))],
+            );
+            let fill = if matches!(tp, Type::Optional(_))
+                && let Some(is_null) = self.null_test(src, tp, false)
+            {
+                crate::data::v_if(
+                    is_null,
+                    Value::Null,
+                    crate::data::v_block(vec![db, copy], Type::Void, "tuple_member_copy_fill"),
+                )
+            } else {
+                crate::data::v_block(vec![db, copy], Type::Void, "tuple_member_copy_fill")
+            };
+            let ops = vec![v_set(o, Value::Null), fill, Value::Var(o)];
+            let owned_tp = owned_create.depending(o);
+            *val.unspan_mut() = crate::data::v_block(ops, owned_tp.clone(), "tuple_member_copy");
+            return Some(owned_tp);
+        }
+        // A nested TUPLE member with a heap leaf: hold the inner tuple once, then copy each
+        // of ITS heap members through this same function — the copy is one level deep per
+        // call and recursion reaches every leaf.
+        if let Type::Tuple(elems) = tp
+            && elems.iter().any(|e| !crate::data::is_scalar(e.base()))
+        {
+            let h = self.create_unique("tuphold", &owned_create);
+            if h == u16::MAX {
+                return None;
+            }
+            self.vars.defined(h);
+            let mut members: Vec<Value> = Vec::with_capacity(elems.len());
+            let mut types = elems.clone();
+            for (i, t) in elems.iter().enumerate() {
+                let mut m = Value::TupleGet(h, i as u16);
+                if let Some(owned) = self.tuple_member_owned_copy(&mut m, t) {
+                    types[i] = owned;
+                }
+                members.push(m);
+            }
+            let owned_tp = Type::Tuple(types);
+            let ops = vec![v_set(h, src), Value::Tuple(members)];
+            *val.unspan_mut() = crate::data::v_block(ops, owned_tp.clone(), "tuple_member_copy");
+            return Some(owned_tp);
+        }
         let Type::Vector(b, _) = tp else {
             return None;
         };
         let elm = (**b).clone();
-        let owned_create = Type::Vector(Box::new(elm.clone()), Deps::none());
         let o = self.create_unique("tupcopy", &owned_create);
         if o == u16::MAX {
             return None;
@@ -4994,10 +5333,7 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
         // reused one — the same reason the match-arm copy beside this one clears.
         ops.push(self.cl("OpClearVector", &[Value::Var(o)]));
         let elem_tp = self.append_elem_tp(&elm);
-        ops.push(self.cl(
-            "OpAppendVector",
-            &[Value::Var(o), Value::Var(v), Value::Int(elem_tp)],
-        ));
+        ops.push(self.cl("OpAppendVector", &[Value::Var(o), src, Value::Int(elem_tp)]));
         ops.push(Value::Var(o));
         let owned_tp = Type::Vector(Box::new(elm), Deps::frame1(o));
         *val.unspan_mut() = crate::data::v_block(ops, owned_tp.clone(), "tuple_member_copy");
@@ -5029,18 +5365,29 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
             return None;
         }
         // The block ends `OpAppendVector(backing, source, elem_tp); backing` for a VECTOR
-        // member and `OpReplaceKeyed(source, backing, tp); backing` for a KEYED one, and the
-        // SOURCE is the only part of either that the record's own copy still needs.  The source
-        // sits at a DIFFERENT argument position in the two, which is why this cannot be a
+        // member, `OpReplaceKeyed(source, backing, tp); backing` for a KEYED one and
+        // `OpCopyRecord(source, backing, tp)` (inside the fill block) for a STRUCT one, and the
+        // SOURCE is the only part of any of them that the record's own copy still needs.  The
+        // source sits at a DIFFERENT argument position, which is why this cannot be a
         // name-agnostic `args.get(1)`.
-        b.operators.iter().rev().find_map(|op| match op.unspan() {
-            Value::Call(d, args) => match self.data.def(*d).name() {
-                "OpAppendVector" => args.get(1).cloned(),
-                "OpReplaceKeyed" => args.first().cloned(),
+        // The STRUCT branch nests its `OpCopyRecord` one block down (the fill, guarded by a
+        // null test when the source is nullable); its source is the first argument too.
+        fn source_in(data: &crate::data::Data, ops: &[Value]) -> Option<Value> {
+            ops.iter().rev().find_map(|op| match op.unspan() {
+                Value::Call(d, args) => match data.def(*d).name() {
+                    "OpAppendVector" => args.get(1).cloned(),
+                    "OpReplaceKeyed" | "OpCopyRecord" => args.first().cloned(),
+                    _ => None,
+                },
+                Value::Block(inner) if inner.name == "tuple_member_copy_fill" => {
+                    source_in(data, &inner.operators)
+                }
+                Value::If(_, t, f) => source_in(data, std::slice::from_ref(t.as_ref()))
+                    .or_else(|| source_in(data, std::slice::from_ref(f.as_ref()))),
                 _ => None,
-            },
-            _ => None,
-        })
+            })
+        }
+        source_in(&self.data, &b.operators)
     }
 
     pub(crate) fn vector_db(&mut self, assign_tp: &Type, vec: u16) -> Vec<Value> {

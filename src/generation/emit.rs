@@ -340,19 +340,36 @@ impl Output<'_> {
                     return write!(w, "var_{var_name}");
                 } else if let Type::RefVar(inner) = variables.tp(var)
                     && matches!(
-                        **inner,
+                        inner.base(),
                         Type::Integer(..)
                             | Type::Float
                             | Type::Single
                             | Type::Boolean
                             | Type::Character
+                            | Type::Text(_)
                     )
                 {
                     // @PLN87 L1 — a local scalar `&`-link holds `*mut T` (raw); deref
-                    // to read the linked source's current value.
-                    if matches!(**inner, Type::Boolean) {
+                    // to read the linked source's current value.  loft#1371 — a local
+                    // `&text` link holds `*mut String` and reads as a borrow of it, the
+                    // same shape the `&text` PARAMETER reads through.
+                    // loft#1372 — the read side asks the SLOT too.
+                    if matches!(inner.base(), Type::Boolean) {
                         return write!(w, "unsafe {{ *var_{var_name} == 1 }}");
                     }
+                    if matches!(inner.base(), Type::Text(_)) {
+                        return write!(w, "unsafe {{ &*var_{var_name} }}");
+                    }
+                    return write!(w, "unsafe {{ *var_{var_name} }}");
+                } else if let Type::RefVar(inner) = variables.tp(var)
+                    && matches!(inner.base(), Type::Reference(..))
+                    && self.local_record_link.contains(&var)
+                {
+                    // loft#1371 — a local `&struct` link built from `OpCreateStack` holds
+                    // `*mut DbRef`; deref to read the source slot's CURRENT record.  Only
+                    // the links this function actually built that way: a `RefVar` local
+                    // that aliases another `RefVar` (the #257 shape) still holds the
+                    // pointer it copied.
                     return write!(w, "unsafe {{ *var_{var_name} }}");
                 } else if matches!(variables.tp(var).base(), Type::Text(_))
                     && !self.tuple_text_to_string
@@ -409,7 +426,18 @@ impl Output<'_> {
                     if elem_is_bool {
                         write!(w, "((")?;
                     }
+                    // A member the scope pass rewrote as `Insert([statements…, value])` — a
+                    // heap local's declaration hoisted to the enclosing statement ahead of the
+                    // block that binds it — is a statement list with a value tail, which
+                    // inside a tuple is legal Rust only as a block expression.
+                    let as_block = e.unspan().kind() == ValueType::Insert;
+                    if as_block {
+                        write!(w, "{{ ")?;
+                    }
                     self.output_code_node(w, e)?;
+                    if as_block {
+                        write!(w, " }}")?;
+                    }
                     if elem_is_bool {
                         write!(w, ") as u8)")?;
                     }
@@ -1719,6 +1747,27 @@ impl Output<'_> {
         // Boolean and the gate stays closed.
         let bool_unify = !matches!(false_v, Value::Null)
             && matches!(self.infer_type(IrNode::Native(true_v)), Some(Type::Boolean));
+        // `(F-Block)` in `formal/calls.md` — an `if` in STATEMENT position discards what its
+        // arms yield, and the work still runs.  The interpreter has always done that; the
+        // native emitter rendered each arm as a Rust expression, so `if c { println("x") }
+        // else { 5 }` handed rustc a `()` arm beside an `i64` one and the user got a raw
+        // E0308 for a program loft accepts (loft#1381).
+        //
+        // A VOID arm beside a non-void one is exactly that position and nothing else: an `if`
+        // used as a VALUE has arms the parser already made agree, and a void one could not be
+        // read.  So the two arms are made to yield `()` by discarding each with a `;`, which
+        // is what a statement means.
+        // Both arms must be POSITIVELY typed: an arm the emitter cannot type is not evidence
+        // of a statement, and reading "unknown" as void fired this on six tuple files whose
+        // arms `infer_type` answers `None` for — each then lost the value the `if` was there
+        // to produce (E0308 on `--native`, measured over the corpus).
+        let stmt_discard = match (self.arm_result(true_v), self.arm_result(false_v)) {
+            (Some(t), Some(f)) => {
+                matches!(t, Type::Void) != matches!(f, Type::Void)
+                    && !matches!(false_v, Value::Null)
+            }
+            _ => false,
+        };
         // For `text_string_unify` we emit `{ (<branch>).to_string() }` around
         // each arm so the if-expression unifies on `String`.  Rust requires
         // braces for if-arms regardless of inner expression form, so even if
@@ -1731,6 +1780,10 @@ impl Output<'_> {
             // operand that lifted a value-struct-returning call → `<lift>; <predicate>`), so
             // `(( stmt; expr ) as u8)` is invalid Rust. `({ … } as u8)` is valid either way.
             write!(w, " {{({{")?;
+        } else if stmt_discard {
+            // An outer block whose single statement is the arm: `{ <arm>; }` yields `()`
+            // whatever the arm yields, and a `Block` arm brings its own braces inside it.
+            write!(w, " {{")?;
         } else if b_true {
             write!(w, " ")?;
         } else if text_unify {
@@ -1765,7 +1818,14 @@ impl Output<'_> {
             write!(w, ")}} else ")?;
         } else if bool_unify {
             write!(w, "}} as u8)}} else ")?;
-        } else if let Value::Block(_) = *true_v {
+        } else if stmt_discard {
+            write!(w, ";}} else ")?;
+        } else if b_true {
+            // The SAME test that decided not to open a brace for this arm: a `Block` emits its
+            // own `{ … }`, and `b_true` peels a `Span` to see it.  Asked here on the bare value,
+            // a span-wrapped arm — the `join-arm-owner` block a `match` arm's minting call is
+            // lowered into — opened no brace of its own and then closed one, and every
+            // `s = match k { 9 => mk(7), _ => s }` was an unbalanced `}` rustc refused.
             write!(w, " else ")?;
         } else {
             write!(w, "}} else ")?;
@@ -1776,7 +1836,7 @@ impl Output<'_> {
             write!(w, "{{&*(")?;
         } else if bool_unify {
             write!(w, "{{({{")?;
-        } else if !b_false {
+        } else if stmt_discard || !b_false {
             write!(w, "{{")?;
         }
         self.indent += u32::from(!b_false || text_string_unify || bool_unify);
@@ -1797,6 +1857,8 @@ impl Output<'_> {
             write!(w, ")}}")?;
         } else if bool_unify {
             write!(w, "}} as u8)}}")?;
+        } else if stmt_discard {
+            write!(w, ";}}")?;
         } else if !b_false {
             write!(w, "}}")?;
         }
@@ -1805,6 +1867,32 @@ impl Output<'_> {
             write!(w, " }}")?;
         }
         Ok(())
+    }
+
+    /// What an `if` ARM yields, as the emitter can see it: a `Block`'s declared result, or
+    /// the inferred type of anything else.
+    ///
+    /// A block's own `result` rather than `infer_type` because the two disagree on exactly the
+    /// case that matters — an arm block holding a discarded value is typed by its declaration,
+    /// and inference reads the last operator.
+    fn arm_result(&mut self, v: &Value) -> Option<Type> {
+        match v.unspan() {
+            Value::Block(bl) => Some(bl.result.clone()),
+            // loft#1382 — an `else if` CHAIN: the arm is a nested `if`, which `infer_type`
+            // does not answer for, so the outer gate saw "cannot type" and declined while the
+            // inner one had already discarded its own arms.  The outer `if` then had a
+            // value arm beside a `()` one and rustc rejected it.  Answer by the same rule the
+            // gate applies: a nested `if` with exactly one void arm is discarded and yields
+            // `()`, so it is VOID to whoever encloses it; otherwise it answers what its arms
+            // agreed on.
+            Value::If(_, then_arm, else_arm) if !matches!(else_arm.unspan(), Value::Null) => {
+                let then_tp = self.arm_result(then_arm)?;
+                let else_tp = self.arm_result(else_arm)?;
+                let discarded = matches!(then_tp, Type::Void) ^ matches!(else_tp, Type::Void);
+                Some(if discarded { Type::Void } else { then_tp })
+            }
+            other => self.infer_type(IrNode::Native(other)),
+        }
     }
 
     fn pre_declare_branch_vars(

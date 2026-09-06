@@ -112,6 +112,12 @@ semantics live in [binding.md](binding.md); here it is just one more thing `⤳`
   NEVER wrap, saturate, or an out-of-range value (that would be UB).  Nullability is
   RANGE-DRIVEN: an op is non-null when its result provably fits, τ? when it could miss.
   (N-Index)    Γ ⊢ v ⇒ vector<τ>, Γ ⊢ i ⇒ Integer   ⟹   Γ ⊢ v[i]  ⇒ τ?       (OOB — no elem)
+               EXCEPT an index trusted BY CONTRACT — a constant, an active `for` variable, a
+               read guarded by `i < len(v)`, integer arithmetic over those (@PLN102 D1,
+               `index_provably_fit`) — which reads τ NON-NULL; a genuine overrun there
+               faults to null at run time (C80) and no rule above the runtime sees it.  So a
+               nullability cell built on `v[9]` measures nothing: it must index by a plain
+               variable.
   (N-Div)      Γ ⊢ a,b ⇒ Integer                     ⟹   Γ ⊢ a/b, a%b ⇒ Integer?  (÷0 undefined)
   (N-Parse)    Γ ⊢ parse_τ(s)                          ⟹   Γ ⊢ …     ⇒ τ?           (invalid)
   (N-Arith)    Γ ⊢ a,b ⇒ Integer,  op ∈ {+,-,*}      ⟹   Γ ⊢ a op b ⇒ Integer[r]
@@ -135,7 +141,13 @@ semantics live in [binding.md](binding.md); here it is just one more thing `⤳`
   (N-Store)    storing  e:τ?  into a  τ  slot without discharge is REJECTED — a WARNING for
                most τ (the null is representable-and-distinct in τ's non-null form), a hard
                ERROR only for narrow widths (u8…u32, § Null-flow below, where the null would
-               collide with a real value); discharge first (`?? d` / `match`) either way
+               collide with a real value); discharge first (`?? d` / `match`) either way.
+               A SLOT is every position that holds a τ: a local, a field, a collection
+               element, a tuple member, a call argument, a return, an INDEX (`v[i]`,
+               `s[a..b]` — a null index reads null).  Reading a τ? is not storing it: a
+               comparison, a null test, a condition, `??`'s subject, `match`, a
+               null-transparent callee and an `if` arm meeting its sibling's type
+               (`(N-Join)`) say nothing.
 
   inference — declared vs inferred storage (the "by definition vs by use" split)
   (N-Decl)     a DECLARED slot `x: τ` is a COMMITMENT: `x = e` checks `e ⇐ τ`. If e:τ? it is
@@ -156,11 +168,13 @@ semantics live in [binding.md](binding.md); here it is just one more thing `⤳`
 >
 > | code | result | why |
 > |---|---|---|
-> | `a: integer = 2;  a = v[i]` | **type error** | `a` declared non-null `(N-Decl)`; `v[i]:integer?` can't store `(N-Store)` — write `a = v[i] ?? 0` or declare `a: integer?` |
+> | `a: integer = 2;  a = v[i]` | **warning**, `a` stays `integer` and holds the null | `a` declared non-null `(N-Decl)`; `v[i]:integer?` is `(N-Store)`'s store — a WARNING at full width (an ERROR for `a: u8`) — write `a = v[i] ?? 0` or declare `a: integer?` |
 > | `a = 2;  a = v[i]`          | `a : integer?` | inferred → `(N-Join)` widens to optional |
 >
 > Exactly parallel to declared integer width (`a: u8 = 2; a = big` also errors — a declared
-> type is a commitment; an inferred one widens by join).
+> type is a commitment; an inferred one widens by join).  The declared row's severity is
+> `(N-Store)`'s own, not a stricter one: the declared local was the one slot the compiler
+> refused at every width while every other slot warned (`D-Decl-Sev`, closed 2026-09-05).
 
 **In words.** Nullability is a property of **operations, not storage**. `null` is the
 **one universal value for "no representable result"** — division by zero, out-of-bounds

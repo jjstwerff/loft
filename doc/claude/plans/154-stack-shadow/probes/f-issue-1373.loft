@@ -1,0 +1,13 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#1373 — a view of a vector element is stale once the vector grows past its
+// allocation.  The shadow must name the READ, and no other slot.
+//
+struct S { n: integer }
+fn main() {
+  v: vector<S> = [S { n: 1 }];
+  d: S = v[0];
+  for i in 0..200 { v += [S { n: i + 10 }]; }
+  println("d={d.n} first={v[0].n}");
+}

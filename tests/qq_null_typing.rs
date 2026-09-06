@@ -45,7 +45,11 @@ fn run(body: &str, backend: &str, qq_fix: bool, tag: &str) -> (bool, String) {
     let _ = std::fs::remove_file(&script);
     (
         out.status.success(),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
     )
 }
 
@@ -63,33 +67,41 @@ const NULLABLE_SLOT: &str =
 const CHAIN_TO_NONNULL: &str = "fn main() {\n  x = \"z\" as integer?;\n  a = 10; b = 0;\n\
   y: integer = x ?? (a / b) ?? 7;\n  print(\"y={y}\");\n}\n";
 
-// ── FIRE: the unsound store is now rejected (both backends), gate restores the old accept ────────
+// ── FIRE: the unsound store is now reported (both backends), gate restores the old silence ──────
+//
+// The coalesce with a nullable fallback types `integer?`, and that `integer?` into the DECLARED
+// `y: integer` is `(N-Store)`'s WARNING at full width — the store proceeds and `y` holds the null
+// (@PLN153 phase 3b: it used to be a hard error).  The channel is the diagnostic naming the slot,
+// not the exit code.
 
-fn assert_rejected(body: &str, tag: &str) {
+const NSTORE_REPORT: &str = "a nullable `integer?` is stored into the local `y`";
+
+fn assert_reported(body: &str, tag: &str) {
     for backend in ["--interpret", "--native"] {
-        let (ok_fix, _) = run(body, backend, true, &format!("{tag}_fix_{backend}"));
+        let (ok_fix, out_fix) = run(body, backend, true, &format!("{tag}_fix_{backend}"));
         assert!(
-            !ok_fix,
-            "[{backend}] `{tag}`: a nullable `??` fallback into a non-null slot must REJECT"
+            ok_fix && out_fix.contains(NSTORE_REPORT),
+            "[{backend}] `{tag}`: a nullable `??` fallback into a non-null slot must be REPORTED \
+             and the program must run; got ok={ok_fix}, output:\n{out_fix}"
         );
-        // The gate opts out → the (unsound) program compiles again, proving this is the fix's reject,
-        // not a pre-existing one from an unrelated rule.
-        let (ok_off, _) = run(body, backend, false, &format!("{tag}_off_{backend}"));
+        // The gate opts out → the coalesce types non-null again and nothing is reported, proving
+        // this is the fix's report, not a pre-existing one from an unrelated rule.
+        let (ok_off, out_off) = run(body, backend, false, &format!("{tag}_off_{backend}"));
         assert!(
-            ok_off,
-            "[{backend}] `{tag}`: LOFT_NO_QQ_NULL must restore the pre-fix accept"
+            ok_off && !out_off.contains(NSTORE_REPORT),
+            "[{backend}] `{tag}`: LOFT_NO_QQ_NULL must restore the pre-fix silence; output:\n{out_off}"
         );
     }
 }
 
 #[test]
-fn null_literal_into_nonnull_rejects() {
-    assert_rejected(NULL_LIT_INTO_NONNULL, "null_lit");
+fn null_literal_into_nonnull_is_reported() {
+    assert_reported(NULL_LIT_INTO_NONNULL, "null_lit");
 }
 
 #[test]
-fn nullable_var_into_nonnull_rejects() {
-    assert_rejected(NULLABLE_VAR_INTO_NONNULL, "nullable_var");
+fn nullable_var_into_nonnull_is_reported() {
+    assert_reported(NULLABLE_VAR_INTO_NONNULL, "nullable_var");
 }
 
 // ── OK: non-null fallback discharges; nullable slot / inferred bind accept ────────────────────────

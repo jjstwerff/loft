@@ -374,6 +374,25 @@ impl DbRef {
         self.store_nr == u16::MAX
     }
 
+    /// The VALUE spelling of this reference: [`DbRef::NULL`] when it names no record,
+    /// itself otherwise.
+    ///
+    /// Enforces @FR-L-Null for a reference that leaves its slot as a value — a local, a
+    /// parameter, a return, the subject of `??` or `?`: absence there is `nullref` and
+    /// nothing else.  A slot spells absence its own way (a zero record pointer, a
+    /// discriminant of 0, [`DbRef::ABSENT_REC`]) and a read that names no record — an index
+    /// past the end, a keyed miss, a zero child pointer — would otherwise hand that slot
+    /// spelling up as a `DbRef` with the container's live `store_nr` and `rec == 0`.  A
+    /// handle test reads the `store_nr` alone (`OpRefIsNull`), a bind copies from the
+    /// record it names, and the two disagreed about one value: `x = v[i]` past the end was
+    /// present to `x == null`, and the bind's copy was a record of garbage (loft#1374).  So
+    /// every read that can name no record answers through this at the point the value is
+    /// minted, and no consumer has to know a second spelling.
+    #[must_use]
+    pub const fn or_null(self) -> DbRef {
+        if self.rec == 0 { DbRef::NULL } else { self }
+    }
+
     /// The record id a COLLECTION FIELD stores to mean *absent* (loft#917).
     ///
     /// [`DbRef::NULL`] says absent in the `store_nr`, which a field cannot use: a field
@@ -407,7 +426,7 @@ impl DbRef {
         }
     }
 
-    pub fn push<T>(&mut self, stores: &mut [Store], value: T) {
+    pub fn push<T: 'static>(&mut self, stores: &mut [Store], value: T) {
         *stores[self.store_nr as usize].addr_mut::<T>(self.rec, self.pos) = value;
         self.pos += size_of::<T>() as u32;
     }
@@ -608,6 +627,16 @@ pub fn no_variant_field_warning() -> bool {
 /// **Default ON**; `LOFT_NO_LOST_TEMP_WRITE` opts out. One cached env read. See
 /// `use_analysis::warn_lost_temp_writes`.
 #[must_use]
+/// loft#1397: a `match` / `is` payload binding whose subject's PLACE is overwritten with a
+/// DIFFERENT variant while the binding is still read.  `(B-Disturb)` makes the VALUE right —
+/// an overwrite is not a disturbance — so what this reports is the read loft#980's
+/// `variant-field-unchecked` exists to prevent, at the one spelling exempt from it.
+/// `use_analysis::warn_variant_overwritten`.
+pub fn variant_overwritten_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| !env_set("LOFT_NO_VARIANT_OVERWRITTEN"))
+}
+
 pub fn lost_temp_writes_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| !env_set("LOFT_NO_LOST_TEMP_WRITE"))
@@ -987,6 +1016,38 @@ pub fn pln25_dn3_enabled() -> bool {
 pub fn nullflow_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| !env_set("LOFT_NO_NULLFLOW"))
+}
+
+/// The per-RULE faces of [`nullflow_enabled`] (@PLN153 phase 2).  Ten sites read the flag,
+/// and they decide four different rules; a site that reads the bare flag says nothing about
+/// which, so the sites drifted apart — three of them re-spelled the N-Store narrow test by
+/// hand.  Each face below is the flag under the rule's name and nothing more, so
+/// `@FR-N-Prop`'s sites are a grep and the flip stays one switch.
+///
+/// @FR-N-Prop — null PROPAGATES through a value-preserving op (`n + 5`, `abs(n)`, the
+/// null-transparent math fns): the result is `τ?` when an operand is.
+pub fn nprop_enabled() -> bool {
+    nullflow_enabled()
+}
+
+/// @FR-N-Domain — a domain-PARTIAL op types `τ?` (float `/` and `%`, `sqrt`, `ln`, `pow`…);
+/// the stdlib declares them so, and a provably in-domain constant argument peels it.
+pub fn ndomain_enabled() -> bool {
+    nullflow_enabled()
+}
+
+/// @FR-N-Cast — a bare `text as τ` is an ASSERTION a parse cannot make, so it is refused and
+/// the checked `as τ?` is the spelling; `(N-Parse)` folds into it.
+pub fn ncast_asserts() -> bool {
+    nullflow_enabled()
+}
+
+/// @FR-N-Store — the warn/error SPLIT: a nullable into a FULL-WIDTH non-null slot warns (the
+/// slot reserves its null distinctly, the store proceeds), a NARROW one errors (no bit
+/// pattern for null).  `narrow` is the caller's width test; this is the one place the flag
+/// decides which side of the split a site is on.
+pub fn nstore_softens(narrow: bool) -> bool {
+    nullflow_enabled() && !narrow
 }
 
 /// `LOFT_NO_STEER=1` (@PLN102 arc C — the recommended-idiom steer channel) — DEFAULT ON, opt OUT.

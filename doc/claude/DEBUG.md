@@ -512,6 +512,28 @@ lands (protocol step 7) — e.g. `302-vector-buffer-delivery.loft` /
 
 ## Introspection CLI (`--introspect`)
 
+**Is a refactor byte-identical?  `scripts/introspect_diff.sh <before-loft> <after-loft>
+[--env VAR=VALUE]…`** runs `introspect` (IR + bytecode + generated Rust, and stderr) with both
+compilers over every corpus file (`tests/scripts`, `tests/docs`, `examples`) and prints one
+line per DIFFERING file plus `IDENTICAL n/m` or `DIFFERENT k of m`; exit 0 / 1 / 2 (usage).
+A refactor that claims to change nothing is verified by this and by nothing weaker — the suite
+asserts VALUES, so a compiler that emits differently and computes the same values passes it.
+Read the verdict from the script's exit, not a pipeline's; an empty corpus is a usage error,
+not a verdict (a copy run outside the tree once read `IDENTICAL 0/0`); both binaries are
+absolutised (a relative `target/debug/loft` resolved inside the file's directory and read as
+DIFFERENT on every file); and both PARSE (`LOFT_NO_CACHE=1`) — `introspect` now always does,
+because a warm bundle carries no variable table and rendered every variable as `name(65535)`.
+@PLN153 phase 2 is its first customer: `IDENTICAL 1268/1268` under the default and under
+`LOFT_NO_NULLFLOW=1` for the null-flow fold.
+
+**Where does a nullable get peeled?  `LOFT_TRACE_UNWRAP=1`** prints one line per `τ? ⤳ τ`
+peel and per bare-`null` conversion inside `Parser::convert` — the types, whether the caller
+admitted it as a TEST (`admit=`), the slot it is stored into (`what=`), and the caller's
+`file:line` (`#[track_caller]`).  It is the census that located @FR-N-Store's one home
+(@PLN153 phase 3: 6014 peels over the corpus, all through one arm), and the first thing to
+run when a store warns with the generic wording *"into a slot"* — that names the lowering
+that has not said which slot it is.
+
 `loft --introspect <file>` packages the dump primitives behind one
 flag, dumping bytecode + generated Rust + slot tables + per-fn type
 tables to stdout (or per-section files).  No env vars, no test
@@ -1144,6 +1166,10 @@ struct fields.
 | `LOFT_LOG=poison_free` | Overwrites a store's buffer with `0xDEADBEEF` on free. | Suspected use-after-free of a *whole store*.  No effect ⇒ not a freed-store UAF. |
 | `LOFT_UAF_GEN=1` (+ `LOFT_UAF_SRC=1`) | Detector (c): stamps every DbRef pushed on the operand stack with its store's generation and reports at the matching pop when the slot was freed since.  `_SRC` adds the freeing pc + op. | The freed-then-**reused** read `LOFT_POISON` is blind to (the new occupant is live, so the bytes look fine).  **Scope: only the window between a push and its pop** — a ref that goes stale sitting in a FRAME slot is invisible to it, which is why it never saw loft#723. |
 | `LOFT_UAF_GEN_INJECT=1` | Ages every ref just after its push stamps it, so each is stale while live.  The positive control for the row above. | Before believing a silent `LOFT_UAF_GEN` run.  A detector that cannot fire and a clean corpus look identical; under injection ~471/548 corpus scripts report, against 0 without it. |
+| `LOFT_STACK_CENSUS=1` (@PLN154 phase 0) | **Which code writes the interpreter stack.** After every operator it diffs the stack store's live frame against a snapshot and subtracts the spans `put_stack` declared, so a write through a route nobody has listed is counted like any other — the ground truth is the memory, not an inventory of callers.  Reports the share of changed bytes that arrived through `put_stack` and the opcodes responsible for the rest.  `LOFT_STACK_CENSUS_MAX_OPS=N` reports after `N` ops and stops, which is what makes a corpus sweep tractable: without it the few scripts that run tens of millions of ops eat the wall clock and then report nothing, because the timeout kills them before exit. | **"Is this accessor the chokepoint?"** — asked of the stack before a shadow keys its tags there.  Measured over 1106 corpus programs: `put_stack` carries 74.5 % of the bytes and is 1 of 33 write sites, and **no program** is covered by it alone.  Read the shares as a FLOOR — a byte written and restored inside one op, or written with the value it already held, does not change and so is invisible to a diff; pair it with the static site count.  `--interpret`, main dispatch loop only; ~20x, so a probe and never a sweep in CI. |
+| `LOFT_VERIFY_STACK=1` (@PLN154 phases 1-3) | **A frame slot nothing wrote, a HANDLE read as a value, or a handle whose record has MOVED — each reported at the READ.** One tag word per stack byte, carried by the stack `Store` itself: a write through `Store::addr_mut::<T>` tags the bytes it covers with `T`'s family and width, a byte move (`copy_block`, `addr_span_mut`) carries the tags with the bytes, and a slot that leaves the live frame — a pop, a `reserve_frame`, any route that lowers the stack pointer — loses them.  The check sits at `get_stack` / `get_var`, never at `Store::addr`, which is what the debugger and the frame renderer read stale slots with on purpose.  **Tag low, check high.**  Three findings: a span NO write reached; a `DbRef` read as a value or a value read as one; and a handle whose record was relocated by a container outgrowing its allocation — `Store::resize`'s claim/copy/delete logs the move, and the dispatch loop then walks the live frame reading only the slots the shadow already says are the base of a handle, so the scan is exact rather than a guess at which aligned words are references.  A width disagreement is COUNTED, not reported — the frame carries composite slots the compiler addresses field by field (the 20-byte fn-ref slot read as an `i64` and a `DbRef`, `OpStep`'s two `u32`s, a `boolean` consumed at its stepped 8-byte slot), and a width rule reported 43 of the first 180 corpus programs. | **The definite-assignment class `LOFT_POISON` was built for, plus the monomorph-layout class.**  Reach for it when a value appears from nowhere, when a result differs between RUNS, when a free refuses on a frame word, when a generic answers a plausible number its concrete twin does not, or when a value bound out of a container goes wrong only once that container GROWS.  Calibrated both ways: silent on all 1106 runnable corpus programs at HEAD; four sites on `64437246` (the nullable-local pre-init control), `handle 12` read as `i64` on loft#1028's, four sites on loft#1016's; and one site each on loft#1373 / #1377 / #1384, which are OPEN, so HEAD is the broken build for those.  Its reach ENDS at the frame: loft#1070's control answers `4294967198` and the shadow is silent, because the wrong layout is in a heap RECORD and the slot holds a correct handle.  `--interpret` only. |
+| `LOFT_VERIFY_STACK_TRACE=1` | Names every handle-tagged frame slot the stale scan read, with the relocations it was compared against. | **When a stale check is SILENT and you want to know which half was silent.**  The summary says whether anything moved and whether any slot named it; this says which slot.  It is what found the scan's own addressing bug — the shadow is indexed absolutely (`rec * 8 + fld`) and `Store::addr` takes the FIELD, so counting the record twice made every "handle" it printed a `store=8 rec=3414097922`. |
+| `LOFT_VERIFY_STACK_INJECT=1` | Suppresses the tag at the write hook, so every checked read reports.  The positive control for the row above. | Before believing a silent `LOFT_VERIFY_STACK` run — the same reason `LOFT_UAF_GEN_INJECT` exists.  A trivial three-line program reports 14 distinct sites under it and none without. |
 | `LOFT_NO_SLOT_REUSE=1` **+** `LOFT_POISON=1` | No freed slot is ever reclaimed, so a freed store stays freed *and* poisoned. | **Ground truth for "is this reported stale read real?"** — with reuse off, a genuine stale read must land on `0xDEADBEEF`.  Clean + correct here ⇒ the report is a false positive.  This is what convicted the `LOFT_UAF_GEN` offset-keyed-stamp bug. |
 | `LOFT_STRICT_STORES=1` (@PLN130 F8) | **Strict store lifetime, and both faults are ERRORS.** A freed store stays dead (it implies `LOFT_NO_SLOT_REUSE`) and any read or write through a reference naming it is reported AT the access; a store still live at exit is reported too; a non-zero exit if either fired, on **both** backends. Reports developer detail — store slot, type, rec/pos, and `killed by the free of \`<var>\``, plus the created/last-op/freed/now pcs on `--interpret` (generated Rust has no pc, so native omits them rather than printing `pc=0` four times). | **The frame-slot blindness the row above names.** `LOFT_UAF_GEN` only watches the push→pop window, so a ref that goes stale sitting in a variable reported nothing — it scored 0 on @PLN130 probe 36, which poison proves is dangling. Exactness comes from no-reuse: an unrecycled slot cannot be legitimately re-occupied, so `free == true` at an access is unambiguous — no stamps, no `DbRef` widening, no false positives to explain away. **For PROBES only**: never reusing a slot walks a long run off the end of the `u16` store space, which is exactly why it is opt-in. Calibrated both ways (fires 4× on probe 36; silent across 40 clean scripts on both backends) — check both directions before trusting a silent run. |
 | `LOFT_COPY_MANIFEST=1` (@PLN130 F5) | **The copy-diagnostic completeness guard.** Every generator records each deep copy it WRITES — at the branch that writes it, past every early return, so a last-use move or an adopt is never miscounted — and the guard diffs that manifest against `use_analysis`'s verdicts, reporting the copies **no diagnostic accounts for**. Compile-time only; nothing reaches a compiled program. Origins: `InterpRecordBind` / `InterpCallReturn` / `InterpTupleBind` (`state/codegen.rs`) and `NativeRecordBind` / `NativeCallReturn` (`generation/dispatch.rs`, the latter a runtime adopt-or-copy so rendered as *may*-copy). | **"Does the copy report cover everything?"** — a question the report itself cannot answer, because a copy it never classified is exactly the one it stays silent about. Validate a manifest against KNOWN-uncovered cases, never by reading the code: instrumenting the plausibly-named `gen_set_first_ref_copy` left the probe silent (it fires zero times in the corpus) while the real emitter is `gen_set_first_ref_call_copy` — a hole that only a calibrated guard catches. The uncovered set is **not empty today** (29 sites over a 90-script sample), which is why this is opt-in rather than a gate; @PLN130 decision 3 makes an `Avoidable` copy a legitimate resting state so long as it is STATED. |
@@ -1363,6 +1389,23 @@ reader and the cure is at the writer. loft#457's dep said `out` borrows `__vdb_1
 runtime `out` held the adopted `__ref_N`; the lie surfaced at the free as a use-after-free, and
 a session of patching the free side (witness-pairing, dep-strip, explicit free, a narrowed
 predicate) only grew complexity. The fix was in the return delivery, so the dep stopped lying.
+
+**After two feature streams JOIN, the defect is in their PRODUCT and in neither factor — so
+probe the seam, because a green gate on the join says nothing about it.** 2026-09-05 joined
+loft#1361 (a whole-tuple bind COPIES its heap member) with loft#1362 (a whole-value copy MOVES
+the drop).  Each branch was green, `make ci` on the join was green, and `t = (s, 5); u = t`
+released one resource TWICE on both backends with nothing said.  Neither guard could see it:
+the tuple guard carried no `OpDrop` and the drop guard carried no tuple, so the broken cell was
+the one cell that needed both.  The cheap instrument is a probe whose cells cross the two
+features deliberately; the expensive alternative is meeting it in a consumer.
+
+**Attribute a joined defect across FOUR builds before deciding whose it is.**  The same
+session: 2026.8.0 released once everywhere, branch A alone was worst (four shapes doubled, one
+tripled), branch B alone was clean — because without A's copy one record wears both names —
+and the join healed three of the four.  Read from the join alone it looked like the pick had
+broken something; the four-build matrix showed it was A's own regression that B's work had
+mostly absorbed.  Building the two parents costs two compiles and settles a question that
+otherwise gets argued.
 
 **A leak on one backend can be a wrong ANSWER on the other, and the leak is the harmless-looking
 half.** loft#1081 was filed from `--interpret` as "a vector-valued `if` leaks a store per

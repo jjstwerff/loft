@@ -1105,14 +1105,15 @@ fn write_variables(out: &mut String, f: &crate::variables::Function) {
         write_type(out, v.type_def);
         let _ = write!(
             out,
-            ",\"stack_pos\":{},\"uses\":{},\"argument\":{},\"stack_allocated\":{},\"skip_free\":{},\"captured\":{},\"caller_hidden_buf\":{}}}",
+            ",\"stack_pos\":{},\"uses\":{},\"argument\":{},\"stack_allocated\":{},\"skip_free\":{},\"captured\":{},\"caller_hidden_buf\":{},\"owner_witness\":{}}}",
             v.stack_pos,
             v.uses,
             v.argument,
             v.stack_allocated,
             v.skip_free,
             v.captured,
-            v.caller_hidden_buf
+            v.caller_hidden_buf,
+            v.owner_witness
         );
     }
     out.push_str("],\"names\":[");
@@ -1257,6 +1258,7 @@ fn variables_from_parsed(
             skip_free: as_bool(field(it, "skip_free")?)?,
             captured: as_bool(field(it, "captured")?)?,
             caller_hidden_buf: as_bool(field(it, "caller_hidden_buf")?)?,
+            owner_witness: as_u16(field(it, "owner_witness")?)?,
         });
     }
     let names_arr = field(p, "names")?;

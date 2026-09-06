@@ -119,6 +119,10 @@ with `strace` on the PATH, runs `make` under a signals-only trace so the sender'
 `make` dies (`target/gate-killer-snapshot.txt`). `scripts/ci-run.sh status` then answers
 KILLED with the sender named, instead of a verdict-less `result.txt`.
 
+**And ask `df -h /` before a gate.**  A full disk fails the NATIVE corpus with `FAIL
+unknown-mode` after `low space` lines, which reads as a code fault; `make sweep-scratch`
+reclaims loft's own scratch (TESTING.md § Scratch hygiene).
+
 **Run a 19-second triple FIRST when the change touches parser diagnostics, guards or docs.**
 `make ci` stops at its first failure, so each cycle surfaces exactly ONE new problem and costs
 the full ten minutes to do it. Measured over one afternoon's work on the nullable-collection
@@ -393,7 +397,7 @@ does not belong on a PR, however cheap it is.**
 |---|---|---|
 | **per PR** (`ci.yml`) | full suite ubuntu + macOS, ASan UAF/OOB (ubuntu), `stack_align_guard`, browser build+probe, Clippy, Format, Doc hygiene, CodeQL, feature catalogue, contract-goldens drift, API compat, several advisory doc jobs | `pull_request` |
 | **push to main** | everything above **plus the real `Test (windows-latest)` leg** (~53 min) | `push: main` |
-| **nightly 04:00** (`miri.yml`) | Miri ×2, ASan UAF/OOB ×2, ASan interpreter leak ×2, POISON arena-UAF, TSan, native-backend ASan, debug-assertions, valgrind memcheck sweep (release binary, both backends), release-gate sweeps (the ignored ownership fuzz replay + SI-2 check), toolchain matrix (beta+nightly), doc index hygiene, library health, stale-plan audit | `schedule` |
+| **nightly 04:00** (`miri.yml`) | Miri ×2, ASan UAF/OOB ×2, ASan interpreter leak ×2, POISON arena-UAF, STACK-SHADOW frame-slot gate, TSan, native-backend ASan, debug-assertions, valgrind memcheck sweep (release binary, both backends), release-gate sweeps (the ignored ownership fuzz replay + SI-2 check), toolchain matrix (beta+nightly), doc index hygiene, library health, stale-plan audit | `schedule` |
 | **nightly 04:30** | `registry-validation` — every published package installed + tested on both backends | `schedule` |
 | **nightly 06:17 + on `src/**`,`default/**`** | `revalidate-libs` — every published lib against this loft, plus the warning dashboard | `schedule`, `push`, `pull_request` |
 | **nightly 07:00** | `lib-branch-report` — unmerged branches across the library repos | `schedule` |
@@ -827,7 +831,13 @@ best ratio, because macOS duplicates ubuntu exactly and costs ~50 % more to do i
   the library-CI unification had just finished undoing.) On a PR the ASan job runs
   **macOS only** — `ci.yml` already gates every PR with an ubuntu ASan job.
 - **Phase 4** — `notify` now files an issue only for `miri / asan / poison /
-  debug-asserts`, never from a PR; `daily-status` writes the single digest.
+  stack-shadow / debug-asserts`, never from a PR; `daily-status` writes the single digest.
+  @PLN154's `stack-shadow` joined that list on the rule the job list states: a gate absent
+  from `needs` reads as green and AUTO-CLOSES the issue, so a gate whose finding means *the
+  language is broken* goes in with the gate.  It costs ~2x the in-process interpreter
+  corpus (67-93 s against ~50 s for `loft_suite` locally, the spread being box contention), needs no sanitizer and no nightly
+  toolchain, and covers the residence POISON cannot describe: poison needs the slot to hold
+  a distinguishable byte pattern, and a recycled frame slot holds a plausible one.
 
 ## See also
 

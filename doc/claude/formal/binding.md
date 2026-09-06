@@ -105,6 +105,16 @@ different type former doing a different job (`B-Ref-StoredRef`).
                       a = 3; b = &a; a = 5;  b == 5
   (B-Ref-Write)   writing a `&τ` variable writes the SOURCE — the NORTH STAR:
                       a = 3; b = &a; b = 4;  a == 4
+                  At a HEAP τ the write REPLACES the source's contents; it does not
+                  re-point the link, and the value it displaces is released:
+                      c = "a"; pc = &c; pc = "z";        c == "z"
+                      d = S{n:1}; pd = &d; pd = S{n:2};  d.n == 2, the first record freed
+                      e = [1]; pe = &e; pe = [2, 2];     len(e) == 2, in e's OWN store
+                  That is this rule read at τ = a heap value rather than a second rule,
+                  and it is what the `&τ` PARAMETER write-back has always done
+                  ([calls.md](calls.md) F-ParamRef).  It went unstated long enough for the
+                  LOCAL bind to answer three different ways — a silent copy for a text, a
+                  re-point for a vector, an orphaned record for a struct (loft#1371).
   (B-Ref-Uniform) a `&τ` variable is used EXACTLY like a τ variable — read, write,
                   field/element mutate — and every operation goes through the link via
                   the EXISTING mutation code.  The TYPE carries the linkage; no
@@ -121,9 +131,12 @@ rule `C-Ref` in [types.md](types.md): a `&τ` is accepted wherever a `τ` is.)
 
 ```
   (B-Copy)        a PLAIN bind COPIES the source — a scalar (`d = a`) AND a heap
-                  WHOLE-VALUE (`d = v`, `d = self.data`): the bound variable is
-                  INDEPENDENT, and mutating it does NOT reach the source.  This is
-                  [heap.md](heap.md) H-Copy (`fv = e.items; fv[0]=99` leaves `e.items[0]`).
+                  WHOLE-VALUE (`d = v`, `d = self.data`, a struct-enum `c = e`): the
+                  bound variable is INDEPENDENT, and mutating it does NOT reach the
+                  source.  This is [heap.md](heap.md) H-Copy (`fv = e.items; fv[0]=99`
+                  leaves `e.items[0]`).  A struct-enum value is a heap RECORD exactly as
+                  a struct is — `Type::heap_def_nr` names both — and a `(C-Var)` widening
+                  `c: E = s` from a variant is a copy like any other.
   (B-Ref-Alias)   the `&τ` annotation makes ANY binding — scalar OR heap — a live LINK
                   to the source instead of a copy.  `d = &v` / `d = &self.data` ALIAS the
                   vector: `d[i] = x` (and `d += …`) write THROUGH to the source, which is
@@ -143,7 +156,8 @@ rule `C-Ref` in [types.md](types.md): a `&τ` is accepted wherever a `τ` is.)
   (B-View-Base)   a projection off a BORROWED base is a VIEW at EVERY element type — not only
                   a struct-typed one.  `for b in bv { c = b.vecf; … }` aliases exactly as
                   `c = b.strf` does, and so does a tuple element.  Ownership of the BASE is the
-                  axis: off an OWNED base a COLLECTION projection copies (B-Copy, `af = bx.v`)
+                  axis: off an OWNED base a COLLECTION projection copies (B-Copy, `af = bx.v`,
+                  and `af = bx.v ?? d` the same — D-own-35)
                   while a STRUCT projection views (B-View); off a BORROWED base everything
                   views.  `classify_vec_bind`'s `depend().is_empty()` is where the parser asks
                   it, and @PLN25 p379 depends on the write-through (`cells = sc.v;
@@ -152,17 +166,28 @@ rule `C-Ref` in [types.md](types.md): a `&τ` is accepted wherever a `τ` is.)
                   (`c = o.inner.v`) are VIEWS whatever the element type — #426's RESOLUTION,
                   whose FILED premise (*"these must COPY"*) was recorded as the wrong read:
                   under the reference-default model a binding to a heap value aliases the
-                  source, in-place mutation writes through, and the view survives a source
-                  realloc.  Guarded by `85-store-lifetime-reference-default-views.loft` and
-                  `294-vector-element-view-semantics.loft`.
-  (B-Disturb)     three events END the place a reference names, and they are the same
-                  three for every rule below: REMOVING from the container (`v.remove(i)`
+                  source and in-place mutation writes through.  A view survives the realloc
+                  of a container it does NOT name — `a = vv[0]; vv[0] += [9]` grows the INNER
+                  vector and `a`, which names the outer element SLOT, reads the repointed
+                  handle (`85-store-lifetime-reference-default-views.loft` cell A, and this
+                  is the only realloc it measures).  The realloc of the container the view
+                  DOES name ends the place instead, and is B-Disturb's fourth event.
+                  Also guarded by `294-vector-element-view-semantics.loft`.
+  (B-Disturb)     four events END the place a reference names, and they are the same
+                  four for every rule below: REMOVING from the container (`v.remove(i)`
                   renumbers every later position — collections.md Col-Remove),
-                  RE-KEYING an element (writing a key field: the record moves, or
-                  becomes reachable by no key), and REASSIGNING the container itself
-                  (`bx = T{…}` leaves the place with nothing to point at).  Overwriting
-                  a place is NOT disturbing it: `o.inner = Box{…}` writes INTO the place
-                  `o.inner` already occupies, so a view of it survives.
+                  GROWING it (an append, an insert or a keyed add: a container that
+                  outgrows its allocation is copied into a larger record and every
+                  element moves), RE-KEYING an element (writing a key field: the record
+                  moves, or becomes reachable by no key), and REASSIGNING the container
+                  itself (`bx = T{…}` leaves the place with nothing to point at).
+                  Overwriting a place is NOT disturbing it: `o.inner = Box{…}` writes
+                  INTO the place `o.inner` already occupies, so a view of it survives.
+                  ANY growth disturbs, not only one that provably crosses the capacity:
+                  whether it reallocates is an allocator fact the author cannot see, and
+                  a rule that answered differently on either side of it would give one
+                  program two meanings (measured — `d: S = v[0]` read `1` after two
+                  appends and `4294967296` after two hundred, loft#1373).
   (B-Ref-Reshape) DISTURBING a container while a `&` reference into it is still LIVE is
                   a COMPILE-TIME ERROR.  These are the shapes where B-Ref-Alias could
                   not hold, and declining them is what makes B-Ref-Alias unconditional
@@ -195,11 +220,11 @@ COLLECTION projection off an OWNED base — which is exactly `OWNERSHIP_MODEL §
 `af = bx.v`.
 
 **The whole boundary is pinned in one place:**
-`tests/scripts/bind-copies-or-views-the-whole-boundary.loft`, eleven cells, measured identical on
-both backends.  Ask it rather than re-deriving: the cells existed before, scattered across four
+`tests/scripts/bind-copies-or-views-the-whole-boundary.loft`, seventeen cells, measured identical
+on both backends.  Ask it rather than re-deriving: the cells existed before, scattered across four
 files, and no single one said what the rule was.
 
-Both kinds of alias last exactly as long as the place they name, and the three things
+Both kinds of alias last exactly as long as the place they name, and the four things
 that end a place are the same for both (B-Disturb). What differs is the answer. A plain
 view gets a **copy** and is told so: it already meant value semantics, so losing
 write-through is consistent. A `&` gets an **error**, because it did not — the author
@@ -330,7 +355,21 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 
 ## Deviations
 
-**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
+**OPEN: 0** — D-bind-20 CLOSED 2026-09-06 (loft#1393): a view whose container is itself a
+view is a place inside the OUTER container, so a disturbance of that one ends it; D-bind-19
+CLOSED 2026-09-06 (the `@FR-O-Owner` walk): a struct-ENUM PAYLOAD view is a view like any
+other, and `(B-View)` materialises it; D-bind-18 CLOSED 2026-09-06 (loft#1392): a VECTOR link
+follows a rebind of its SOURCE, as `(B-Ref-Alias)` says a live link must.  D-bind-17 CLOSED
+2026-09-06 (loft#1372): a `&` link now carries a NULLABLE
+slot, so `(B-Ref-Intro)`'s *`&τ` for every τ* holds with no τ excluded.  `Optional(τ)` shares
+`τ`'s storage, so a `&τ?` has the same representation as its `&τ` twin and the absence rides
+the slot's own sentinel; what was missing was not a mechanism but one spelling of the SLOT
+behind a link, at the nine sites that each asked the link's inner type bare.  The entry read:
+*`&τ?` is declined — a link to a NULLABLE slot (`q = &x` with `x: integer?`,
+`fn f(p: &integer?)`) is refused where its type is built, until the read and write lowerings
+carry the wrapper on both backends; before the refusal the local bind was a silent copy.*
+
+Every deviation this doc has carried is closed; the record is in
 [binding-history.md](binding-history.md).
 
 > **A zero here is a claim to re-measure, and this is what the oracle covers.** The `&`

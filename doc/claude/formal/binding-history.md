@@ -6,13 +6,192 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — D-bind-11 and D-bind-16 CLOSED 2026-09-03 (below); D-bind-12, D-bind-13,
+OPEN: **0** — D-bind-23 OPENED AND CLOSED 2026-09-06 (loft#1399: a branch arm projecting a COLLECTION got no copy, so `--interpret` read the reassigned container where `--native` was right; below); D-bind-22 OPENED AND CLOSED 2026-09-06 (loft#1396: a binding whose value is a
+BRANCH with a projecting arm was named by nothing, so it never materialised — closed by naming
+it through the branch and giving the projecting ARM its own temp, below); D-bind-21 OPENED AND CLOSED 2026-09-06 (loft#1394: a view BOUND INSIDE a
+branch arm whose container is reassigned in the SAME arm was never materialised, because
+the walk read a `Set` with a value-branch right-hand side whole — below); D-bind-20 OPENED AND CLOSED 2026-09-06 (loft#1393: a view OF A VIEW was not shaken when the outer container was disturbed, below); D-bind-19 OPENED AND CLOSED 2026-09-06 (the `@FR-O-Owner` walk: a struct-ENUM PAYLOAD view was invisible to `(B-View)`'s materialise clause, because the chain that names aprojection's container could not see through the variant check the lowering wraps its subject
+in — below); D-bind-18 OPENED AND CLOSED 2026-09-06 (loft#1392: a vector link did not follow a
+rebind of its SOURCE, below); D-bind-11 and D-bind-16 CLOSED 2026-09-03 (below); D-bind-12, D-bind-13,
 D-bind-14 and D-bind-15 each opened and CLOSED the same day.
 D-const-2 opened and CLOSED the same day (2026-09-01), found by the Store Locks
 reference review.
 B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
 opened and closed 2026-08-05); B-Ref-AnnotationOnly is enforced in every position, not
 only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
+
+> **D-bind-23 — OPENED AND CLOSED (2026-09-06, loft#1399) — a branch arm projecting a
+> COLLECTION got no copy.**  loft#1396 gave a projecting arm its own temp and matched
+> `Reference` and struct-`Enum`, answering `None` for a `Vector`; the deps-strip route that
+> would otherwise reach a collection is (correctly) not taken for a branch-valued binding, so
+> nothing copied.  `--interpret` read the NEW container, `--native` answered correctly off
+> empty deps — a split `(O-NoDiverge)` forbids, with `(B-View-Base)` settling the value:
+> *a projection is a VIEW at every element type, not only a struct-typed one*.  Closed by the
+> same buffer-and-refill a whole-vector copy already uses (`ArmBind::CopyVector`).
+>
+> **The root was TREE-DEPENDENT, and that is the entry's lesson.**  Filed against the sibling
+> branch it read *"the walk never names a collection view"*, which is true there and false on
+> the tree that merges: the union of the two `leaf` gates at the loft#1396 pick — that branch's
+> `value_view_container` over this one's `.base()` + `Vector` type list — is what made naming
+> and copy land together, so here the binding IS named (`LOFT_DEBUG_F8` prints it) and only the
+> copy was missing.  The same patch measured INERT on the branch where nothing is named, was
+> reverted there as dead, and is live here.  An experiment that measures inert is not thereby
+> wrong; recording WHY it was inert is what let this one be recognised rather than re-derived.
+>
+> **The boundary is inverted between the two kinds, and reading it the record way is how this
+> fix looks over-wide when it is not.**  For a RECORD tail an undisturbed projection ALIASES
+> and must keep doing so.  For a COLLECTION tail it does not: `(B-Copy)` makes a whole-value
+> vector bind a copy, so a write through it reaching nothing is the documented answer in the
+> branch spelling exactly as in the plain one.
+>
+> That is a LANGUAGE fact and not a property of this tree, which matters here because the ROOT
+> above was tree-dependent and the two could be confused.  It was measured independently on the
+> sibling branch, which carries neither half of the collection work: a record tail aliases in
+> both spellings there too, a collection tail copies in both.  The BRANCH was never the axis
+> for either kind — what the shipped 2026.9.0 shows is that release being inconsistent between
+> the two spellings for a collection, aliasing the branch form while copying the plain one.
+>
+> **The general form, worth more than this cell.**  The control for *"did this fix copy too
+> much?"* is not the same cell for every element type, because what a plain bind already does
+> differs BY type.  The comparison that settles it is the PLAIN spelling of the SAME tail on
+> the SAME build — not the same shape on an older build, which is what made the release look
+> like the authority when it was the thing under suspicion.
+>
+> Guard `a-collection-projection-arm-of-a-branch-materialises` (9 cells), falsified at
+> c22c318f: interpret one assertion failure -> 0, native INERT — which is the right verdict for
+> a backend divergence, since only one side can move.
+>
+> ⚠ **The pairing that makes all of this work was never designed, and nothing but a comment
+> names it.**  `ViewWalk::leaf`'s gate now asks two questions that arrived from different
+> branches for different defects: a TYPE LIST — which bindings can be views at all, widened to
+> `Vector` (through `.base()`) for loft#1377 — and `value_view_container` — which container a
+> value views, widened through a branch for loft#1396.  They met at a cherry-pick, and the
+> union is what lets a COLLECTION view be both named and copied.  Narrowing either silently
+> un-fixes a shipped defect, and both directions were MEASURED rather than reasoned — each
+> narrowing made, built, and the guards run:
+>
+> | narrowing | 1377 | 1396 | 1399 |
+> |---|---|---|---|
+> | drop `Type::Vector` from the type list | FAIL | ok | FAIL |
+> | drop the namer to `base_container_var` | ok | FAIL | FAIL |
+>
+> loft#1399 is lost either way, and by two different routes — without the type list it is not a
+> view at all, without the namer it is not a branch it can see through.  Each issue has a guard,
+> so the three together are the line's regression net; no guard names the PAIRING, which is why
+> the site itself now does.
+
+> **D-bind-22 — OPENED AND CLOSED (2026-09-06, loft#1396) — a binding whose value is a BRANCH
+> with a projecting arm was outside the materialise clause.**  `x = if k > 0 { h.inner } else
+> { mk(0) }` followed by `h = Hold{…}` read the NEW container on both backends as a first bind,
+> and on `--native` alone as a reassignment — the wrong answer with an `(O-NoDiverge)` split on
+> top of it.  The walk that NAMES views asked which container the value projects from, and asked
+> it of the whole `if`, which projects from nothing; the binding was therefore never named, and
+> the machinery downstream had nothing to act on.
+>
+> The naming now looks THROUGH a branch (`scopes::value_view_container`): a container named by
+> any arm, none where two arms name different ones.  **The copy is per ARM, not per statement**,
+> and that split is the entry's substance.  `(O-Complete)` asks for the fact per binding and per
+> PATH; only the projecting arm needs a store of its own, so `Scopes::arm_bind` — the arm-lift
+> machinery that already binds a call or a variable tail into a `__lift_N` temp — gains the
+> projection case, gated on the walk having named the binding.  An arm whose container is never
+> disturbed keeps aliasing, which is what `(B-View)` is for.
+>
+> ⚠ **The whole-statement cure was built first and is measured WRONG.**  Stripping a
+> branch-valued binding's deps makes it the OWNER of a store it only views, and the emitters
+> have no whole-statement copy to pair with that — `container_element_base` answers `None` for
+> an `If` — so its scope-exit free names the CONTAINER's store, which is loft#778's class.  It
+> was backed out whole before the per-arm form replaced it, and the naming helper carries that
+> in its own doc so the next reader does not re-derive it.
+>
+> Guard `tests/scripts/a-projection-arm-of-a-branch-materialises-when-its-container-is-reassigned.loft`
+> (6 cells: the first bind, the reassignment, the minting arm, the unbranched control, an
+> UNDISTURBED arm that must still alias, and a loop whose every pass reads the container as it
+> then stands).  The chained spelling — `t = dv.tiles; prev = if … { t.proto } … ; dv = …` — is
+> NOT closed here and is not this deviation: the same chain without a branch is equally wrong,
+> which is loft#1393's view-of-a-view.
+
+> **D-bind-21 — OPENED AND CLOSED (2026-09-06, loft#1394) — a view bound INSIDE a branch arm
+> did not see its container's reassignment in the same arm.**  `(B-Disturb)` × `(B-View)` are
+> the same sentence wherever the two statements sit, and the walk that names views to
+> materialise reads statements in source order — but it handled a `Set` whose right-hand side
+> is a value branch WHOLE, through the `leaf` arm its own doc calls *"deliberately coarse in
+> both directions"*.  So the bind and the disturbance were one indivisible step:
+> `got = match sh { Holder{inner} => { sh = Empty{z: 0}; inner.a }, _ => -1 }` answered 0 on
+> `--interpret` and 1 on `--native`, and `got = if c { x = h.inner; h = Hold{…}; x.a }` — a
+> plain STRUCT view, no enum in sight — answered the NEW container's value on BOTH backends.
+> The coarseness is right for a form whose internal order is unknown; a `Set`'s is not, so one
+> is walked in the order it runs: the value, then the target's own establishment at the point
+> the slot is written.
+>
+> Two facts had to travel with the deps.  A materialised view stops being a view, so the
+> never-free mark it was given as one is LIFTED (`Function::clear_skip_free`) — a `match`/`is`
+> payload binding is marked by the parser, and stripping only the deps left it owning a store
+> nothing released.  And a binding carrying NO deps is admitted beside one that names the
+> container: the `is` spelling of a payload capture carries none where its `match` twin does,
+> and there is nothing to strip but still a mark to lift and emitters to steer.
+>
+> Guard `tests/scripts/a-view-bound-inside-a-branch-arm-sees-its-containers-reassignment.loft`
+> (9 cells, four controls — including a LOOP, whose second pass must read the first pass's
+> value rather than the frozen materialised one).  Two shapes filed rather than folded in:
+> **loft#1396**, a view that IS an arm's value (`x = if k > 0 { h.inner } else { … }`), where
+> both halves of the naming can be made to see it but the emitters have no per-arm copy — the
+> widening was measured, found unsound alone (a binding made owner of a store it only views,
+> whose scope-exit free names the container's) and backed out; and **loft#1397**, the
+> OVERWRITE cousin (`w.st = Empty{…}`), which this doc's own clause settles as *not* a
+> disturbance — the value is right and what is missing is loft#980's warning, whose exemption
+> for a per-arm binding assumes the variant cannot change under it.
+
+> **D-bind-19 — OPENED AND CLOSED (2026-09-06, the `@FR-O-Owner` walk) — a struct-ENUM
+> PAYLOAD view was outside the materialise clause.**  `(B-Disturb)` names reassigning the
+> container as one of the three events that end a place, and `(B-View)` materialises a view
+> live across one — a copy taken at the bind, and the author told.  `x = tw.inner` on a struct
+> does both since @PLN130 F8; `x = sh.inner` on a struct-ENUM did neither: the interpreter read
+> the REASSIGNED subject's bytes at the payload's offset (`Empty { z: 0 }` answered as the old
+> `Pay`, so `x.a` was `0`), `--native` answered the old payload by another route, and nothing
+> was said on either backend.
+>
+> One derivation was short of one shape, in four readers.  A payload projection does not name
+> its subject directly — `sh.inner` lowers to `OpGetField(if <tag == Holder> { sh } else
+> { OpNullRefSentinel() }, …)` — so every chain that peels a projection to its container
+> variable bottomed out at `None`.  Two of those chains were byte-identical copies documented
+> as "mirroring" each other (`scopes::base_container_var`, which the walk that NAMES a view to
+> materialise reads; `generation::container_element_base`, which the emitters that COPY it
+> read), so the peel had to be written twice to work once — and a walk that names a container
+> the emitter cannot is a copy the compiler reports and does not make.  Both now call
+> `use_analysis::projection_container_var`, beside the `is_projection_op` list whose own doc
+> already named them as readers of one shape.
+>
+> Three sites more, found by the same peel:
+> * the establishment test (`scopes::established_stores`) did not count a struct-enum
+>   reassignment at all — the literal builds into a `__ref_p2_N` work-ref and hands the
+>   variable that BLOCK, and only the block's own `OpDatabase` was read, which names the
+>   compiler work-ref and is filtered out.  A block whose tail is a heap `Var` establishes,
+>   the same fact the bare-`Var` arm beside it already carried;
+> * the materialise arm made the binding an OWNER without consulting `@FR-O-Override`, the
+>   veto its var-copy sibling three hundred lines below already asks.  A `match`/`is` payload
+>   binding is marked never-free by the parser precisely because it is a view, so materialising
+>   one leaked a record per call on `--native` while answering no differently — measured as a
+>   regression of this walk's own first cut, and the guard now holds it;
+> * `@FR-O-Oracle` itself classified a payload view `Owned` (its `If` arm resolved the subject
+>   through the subject's OWN definitions, found a mint and answered `None`), which is the
+>   over-free direction its own caveat names.  Its user-visible face was the `lost-write`
+>   WARNING telling an author a write that lands was lost — the tier that gates a library's CI
+>   (loft#1395).  The same peel, in the oracle's borrow-base walk; Check A stays clean over the
+>   1247-file corpus and the fuzz corpus.
+>
+> Guard `tests/scripts/a-payload-view-materialises-when-its-subject-is-reassigned.loft`
+> (falsified at 5f4ac074: interpret 2 assertion failures → 0; native INERT, which is what a
+> backend-divergence guard can be).  ⚠ The peel tests BOTH arms, and the sentinel one by the
+> OP IT CALLS: a first cut that read "one arm is a `Var`" also claimed `a?` discharging a
+> nullable parameter (`if a.rec != 0 { a } else { <mint> }`), which turned a generic's return
+> delivery from an adopt into a copy nobody freed — one leaked record per call, caught by
+> `1026-generic-discharged-null-return` under the wrap harness's leak gate and by nothing
+> else.  Same class as loft#1379: recognise a lowering by what it BUILDS, never by node shape.  RESIDUAL, filed as loft#1394: a payload binding written
+> INSIDE a `match`/`is` arm whose subject is reassigned in the same arm is still invisible —
+> the walk handles a `Set` whose right-hand side is a value branch whole, through the `leaf`
+> arm its own doc calls "deliberately coarse in both directions", so the bind and the
+> disturbance are never separated in time.  Reaching it needs the walk's ordering model, not
+> another classifier.
 
 > **D-bind-16 — CLOSED 2026-09-03 (opened the same day, loft#1321) — `(B-Copy)` did not hold
 > when the right-hand side is a branch JOIN.**
@@ -591,6 +770,95 @@ The rules doc used to carry these beside its `OPEN` line — closure summaries, 
 the times the count read 0 over a live entry.  They are timeline, so they moved here
 unchanged; [binding.md](binding.md) now states only what is open.
 
+### D-bind-18 — OPENED AND CLOSED (2026-09-06, loft#1392): a vector link followed the link's own whole-value write but not the source's
+
+`(B-Ref-Alias)` makes a `&`-annotated binding *a live LINK to the source instead of a copy*,
+and `(B-Ref-Uniform)` says a `&τ` variable is used exactly like a `τ` variable.  A vector link
+is not a stack deref: it SHARES the source's `DbRef` — the lowering a `&vector` parameter takes
+— so a fresh backing on EITHER side re-points one of the two and the link stops being live.
+loft#1371 gave the link side its cure (`@FR-B-Ref-Write`): a whole-value write THROUGH the link
+clears the shared store and refills it in place.  The source's own whole-value write is the
+same question one step out, and had none:
+
+```loft
+v = [1, 2];
+q = &v;
+v = [7, 8, 9];
+println("q={len(q)} v={len(v)}");     // q=2 v=3 — q is still on the store v held at the bind
+```
+
+Both backends, silently.  The struct and text spellings follow a rebind (`OpCreateStack`,
+loft#1371) and a link to a struct FIELD follows one because a field rebuild is in place
+already, so the vector local was the one shape left.
+
+**Closed by registering the SOURCE in the same set as the link**, so its rebuild clears and
+refills the shared store.  Two things that fall out of it, and both are the rule rather than
+the repair:
+
+* The registration is gated to PASS 2.  The set outlives a pass, so a registration made when
+  the link is parsed reaches the source's own DECLARATION when pass 2 re-reads the body from
+  the top — dropping the allocation that gives the source a backing store at all.  Measured:
+  `v = []` after a link compiled to a clear of a variable `--native` had never declared.
+  Pass 2 reads in order, so the declaration is parsed before the link registers.
+* `(I-Comp)` is stated over the PLACE, not the spelling.  Once the source rebuilds in place,
+  the clear reaches the link too — so a build that reads the destination THROUGH the link
+  (`a = [for i in 0..r.len() { (r[i] ?? 0) * 2 }]` under `r = &a`) reads what it is emptying.
+  It used to work by accident, because the fresh backing left the link on the old store.  The
+  link's partner is now part of both halves of `snapshot_read_destination`: the read TEST
+  (`parts_read_a_vector_link`) and the RENAME, which redirects reads spelled through the link
+  onto the snapshot with the destination's own.  The corpus caught this — the alias CONTROL in
+  `1194-a-comprehension-reads-its-destination` answered `[]`.
+
+Guard `a-vector-link-follows-a-rebind-of-its-source` (14 cells: the rebind in both spellings,
+twice, and to empty; the three writes through the link and the three through the source; a
+comprehension and a literal reading through the link; and the struct-field, text and no-link
+controls), falsified at 3360fb93 — exit 1 -> 0 on both backends.
+
+### D-bind-17 — CLOSED (2026-09-06, loft#1372, @PLN153 phase 4): a `&` link carries a nullable slot
+
+`(B-Ref-Intro)` admits `&τ` for every τ; `(B-Ref-Write)` and `(B-Ref-Uniform)` make a `&τ`
+variable a τ variable that writes the source; `(F-ParamRef)` makes a `&` parameter the
+write-back channel.  Nothing restricts τ, so `&integer?` should link a nullable slot.  It does
+not: a link's inner type is asked BARE at every read and write site — `??` sees `&integer?`
+and refuses its default, `+` and a copy-out see a non-null slot and warn, the interpreter's
+write dispatch has no arm for the wrapper, native's parameter type does not match the write —
+and the `&` of a nullable LOCAL fell past the scalar and record arms of the lowering and bound
+a silent COPY: `q = &x; q = 7` left `x: integer?` at 5 on both backends, with nothing said.
+The parameter's body was refused on its write and on its read with retype messages that named
+neither the link nor a cure.
+
+Found by @PLN153 phase 4's `optional` screen: the lowering's `is_scalar` closure and record
+test were two of the 353 bare shape tests, and the cell built to reach them was the finding.
+The entry stood OPEN for a day, with both spellings declined where the link type is built
+(`@FR-B-Ref-Reshape`: a link loft cannot honour is refused, never downgraded).
+
+**CLOSED 2026-09-06.**  The answer was the shape the entry named — one spelling of "the slot
+behind a link" that every site asks through — and it is `Type::base()`, because `Optional(τ)`
+shares `τ`'s storage exactly: a `&τ?` has the SAME representation as its `&τ` twin, and the
+absence rides the slot's own sentinel.  There was no new mechanism to build, only nine sites
+each asking the link's inner type BARE and so matching no arm for the wrapper:
+
+- the interpreter's `RefVar` READ and WRITE dispatch (`state/codegen.rs`), which panicked
+  *"Unknown reference variable type"*;
+- native's local-link bind and read arms (`generation/dispatch.rs`, `generation/emit.rs`),
+  which emitted a binding with no right-hand side at all;
+- native's `&`-parameter write-back — the displacement test, the text coercion and the
+  boolean one — where a `&text?` wrote `*var_p = "z"` with no `.to_string()`;
+- the `??` subject (`parser/operators.rs`), which peeled `Optional` but not the LINK, typed
+  its own result `&integer?`, and reported every default as the author's error;
+- the retype check (`variables/mod.rs`), which refused `&integer? = 7`;
+- the argument match (`parser/mod.rs`), which compared the parameter's referent against an
+  argument reading as plain `τ`, failed, and passed the argument BY VALUE — the callee then
+  deref'd an integer as a stack ref;
+- the bare-`null` conversion, which found no `OpConv…FromNull` returning a link type and
+  DROPPED the store in silence, so `q = null` left the source at its old value.
+
+Guard: `tests/scripts/1372-a-reference-links-a-nullable-slot.loft`, plus
+`tests/scripts/153-a-link-to-a-nullable-slot-carries-its-slot.loft` — this entry's own decline
+guard, whose cells stayed and whose expectation flipped from the refusal to the answer the
+rules always gave.  The whole-value write through a `&` link to a text, a struct or a vector —
+the NON-nullable controls of the same matrix — is loft#1371, closed apart.
+
 ### D-bind-16 / D-bind-11 closure summaries
 
 **D-bind-16 CLOSED 2026-09-03** (loft#1321): `(B-Copy)` is read ARM BY ARM at a branch join.
@@ -615,6 +883,67 @@ so a `&(…)` whose elements are not all scalars is a reference to the `__tuple<
 linked tuple LOCAL is built as that record, and the rule is written down as `(T-Ref-Rep)` in
 [tuples.md](tuples.md).  A nullable, fn-ref or nested-tuple element stays refused and the
 refusal names it.
+
+- **D-bind-18 — a view was stale once its container GREW, and the rule said it survived**
+  (2026-09-06, loft#1373).  `(B-Disturb)` listed three place-ending events and an append was
+  not among them, so the materialise walk never fired: `d: S = v[0]` followed by two hundred
+  appends read `4294967296` on both backends with strict stores silent — while the SAME code
+  with two appends read `1`, because nothing had reallocated yet.  One shape, two answers,
+  decided by an allocator fact the author cannot see.
+
+  **What made it look settled, and was the finding.**  `(B-View-Depth)` said in as many words
+  that a view *"survives a source realloc"* and named
+  `85-store-lifetime-reference-default-views.loft` for it.  Measured: that guard's cell A
+  appends to the INNER vector of a `vector<vector<integer>>`, so its view — which names the
+  OUTER element SLOT — reads the repointed handle and survives.  The realloc of the container
+  the view NAMES was never measured, and at that level the guard's own shape answers
+  `len(b) == 0`.  A rule sentence resting on a cell that measures one level in is the
+  `(N-Idem)` "OPEN: 0" shape again: the claim was re-measurable and had not been re-measured.
+
+  **Status — CLOSED.**  `(B-Disturb)` gains GROWING as its fourth event; the existing answer
+  applies unchanged (the view MATERIALISES and the author is told, `(B-View)`), and
+  `(B-Ref-Reshape)` refuses a `&` INTO a container that grows while the link is live.  ANY
+  growth disturbs rather than only one that provably crosses the capacity, because the
+  alternative gives one program two meanings.  `scopes.rs::grown_containers` is the fourth
+  event's home, apart from `reshaped_containers` only so the ADVICE can name the right
+  statement — a reader told "removing an element renumbers the others" goes looking for a
+  `remove` that is not in the function.  The five growth spellings all name their container
+  at arg 0 and are read through one shared walk (`containers_named_by`).
+
+  The in-versus-to distinction `(B-Ref-Alias)` needs was already in one place and needed no
+  new test: `base_container_var` answers `None` unless the right-hand side is a PROJECTION, so
+  `pe = &e; e += [4]` and `pv = &o.v; pv += [3]` keep compiling while `c = &v[0]; v += [x]`
+  is refused.  Measured against the sibling checkout's `&` cells and `503-vector-reference-alias`.
+  Guard: `tests/scripts/1373-growing-a-container-ends-the-places-inside-it.loft`, eight cells
+  on both backends with four controls (the inner-realloc shape 85 measures, a nested field
+  read, a view dead at the growth, and a view with no disturbance at all — the last is the
+  boundary a fix that materialised everything would cross).  ⚠ **It shipped for one commit with a spurious materialise, and the fix's own guard could not
+  see it.**  `OpNewRecord(parent, tp, fld)` names its container in TWO parts, and reading the
+  parent alone shook every view rooted at that variable whichever field it named:
+  `moros_editor`'s `undo_pop` reads `e = s.us_entries[idx]` and appends to `s.us_redo`, so each
+  undo entry came out of a copy, the undo stack silently stopped recording, and `undo_depth`
+  answered 0 where 3 was due — a program's meaning changed, with only an advice.  A
+  field-qualified growth was left UNCOLLECTED for one commit (`fld == u16::MAX` is the
+  whole-variable append), which is the honest direction while the question cannot be answered:
+  a missed disturbance costs a materialise, a spurious one costs a program its meaning.  It is
+  answered now (loft#1384): a struct FIELD is a container of its own, so the walk compares
+  PLACES rather than variables — `base_container_place` gives the view its `(var, byte offset)`,
+  `Stores::field_position` converts the growth's field NUMBER into that same offset, and
+  `same_place` matches them with `u32::MAX` on either side meaning the whole variable, so
+  reassigning the parent still ends every place inside it.  The `&`-refusal path has no store
+  to convert with and keeps the conservative answer, which for a REFUSAL is the safe direction.  What
+  caught it was `make ci`'s `moros_editor` html smoke, the only thing in the tree exercising
+  that shape, and it is NOT in the corpus the emission diff walks (`tests/fixtures/libs` is
+  outside it) — so a four-file diff read as a small blast radius while a library was broken.
+  The COLLECTION-typed twin was filed rather than
+  bundled and closed one commit later (loft#1377): it needed the copy EMITTED rather than the
+  dep stripped, because a collection bind decides copy-vs-view at PARSE time
+  (`classify_vec_bind`) and cannot hear a scope-pass strip.  The emitted shape is the one a
+  whole-vector copy already takes — a `__lift_N` buffer refilled by `OpReplaceVector` — and the
+  local NAMES it rather than owning it, which a loop makes load-bearing: left owning, the
+  local's scope-exit free released the buffer and the next iteration refilled a freed store
+  (`rec=3735928559` under the arena poison).  `Contract: strained` — the rule
+  gained an event.
 
 ### the status line formal/README.md's area table carried until 2026-09-04
 

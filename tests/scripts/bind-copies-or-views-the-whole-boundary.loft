@@ -10,10 +10,11 @@
 // (D-bind-12's collection half; a nested field read; a vector index read).  This file is the
 // answer to "does THIS bind copy?", and every cell is measured identical on both backends.
 //
-// The rule, over these fifteen cells:
+// The rule, over these seventeen cells:
 //
-//   COPY  a whole VALUE (`d = v`, `p = o`) and every scalar — nullable or dense, since
-//         `@FR-L-Null` makes `τ?` the same storage and the rule is written for every `τ`
+//   COPY  a whole VALUE (`d = v`, `p = o`, a struct-enum `c = e`) and every scalar —
+//         nullable or dense, since `@FR-L-Null` makes `τ?` the same storage and the rule is
+//         written for every `τ`
 //   COPY  a ONE-LEVEL projection off an OWNED base whose type is a COLLECTION (`af = bx.v`)
 //   VIEW  a ONE-LEVEL projection off an OWNED base whose type is a STRUCT  (B-View: the one
 //         place aliasing is the default, because it names an interior place)
@@ -32,14 +33,17 @@
 // boundary file is only as wide as the axes its subjects range over, and "does THIS bind
 // copy?" is not answerable from cells that all spell their subject the same way.
 //
-// @falsified-at: dad9b359 — interpret exit 1 -> 0, interpret 2 assertion failures -> 0,
-//   native exit 1 -> 0, native 1 assertion failures -> 0.  The moving cells are the four
-//   nullable ones added below; the original eleven pass on that build and on this one, which
-//   is what makes them the boundary rather than further instances.
+// @falsified-at: 12e58a4d — interpret exit 1 -> 0, native exit 1 -> 0.  The moving cells are
+//   the two struct-enum ones (the nullable one is a REFUSAL on that build, so the exit moves
+//   before any assertion can); the earlier fifteen pass on that build and on this one, which
+//   is what makes them the boundary rather than further instances.  Before that, at dad9b359,
+//   the four nullable cells were the ones that moved (interpret 2 assertion failures -> 0,
+//   native 1 -> 0) — the original eleven never have.
 
 struct BdIn { k: integer }
 struct BdHold { vecf: vector<integer>, strf: BdIn }
 struct BdOut { inner: BdHold }
+enum BdSh { BdCi { n: integer }, BdSq { n: integer } }
 
 // ── COPY: a whole value ──────────────────────────────────────────────────────────────
 fn test_whole_var_vector_copies() {
@@ -54,6 +58,16 @@ fn test_whole_var_struct_copies() {
   c = s;
   s = BdIn { k: 9 };
   assert(c.k == 1, "whole struct bind aliased: {c.k}");
+}
+
+// A struct-enum value is a heap RECORD like a struct (`Type::heap_def_nr` names both), and
+// its whole-value bind copies the same way.  Both backends agree only since the walk that
+// added this cell: the interpreter aliased here while `--native` copied.
+fn test_whole_var_struct_enum_copies() {
+  e: BdSh = BdCi { n: 1 };
+  c = e;
+  e.n = 9;
+  assert(c.n == 1, "whole struct-enum bind aliased: {c.n}");
 }
 
 fn test_scalar_copies() {
@@ -146,6 +160,13 @@ fn test_whole_var_nullable_struct_copies() {
   c = s;
   s.k = 9;
   assert((c ?? BdIn { k: 0 }).k == 1, "nullable whole struct bind aliased");
+}
+
+fn test_whole_var_nullable_struct_enum_copies() {
+  e: BdSh? = BdCi { n: 1 };
+  c = e;
+  e.n = 9;
+  assert((c ?? BdSq { n: -1 }).n == 1, "nullable whole struct-enum bind aliased");
 }
 
 fn test_whole_var_nullable_keyed_copies() {

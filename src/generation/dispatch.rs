@@ -197,74 +197,41 @@ impl Output<'_> {
             // store).  But when it has an entry-buffer witness, a CONDITIONAL
             // reassignment must free the orphaned fn-owned intermediate — guarded
             // (below) against the witness so the caller's buffer is never freed.
+            // @FR-O-Proxy asks free — the fact-reading half is `Function::owns_displaced_store`,
+            // the ONE spelling both backends read (@FR-O-NoDiverge; the interpreter's twin is
+            // `state/codegen.rs`'s `owned_ref`).  Until it had one home this list was kept "the
+            // interpreter's verbatim" by hand, and four rounds of drift are in its history: the
+            // keyed kinds, the VECTOR destination (`x: vector<T> = []; for i in 0..N { x = m(i) }`
+            // held one store per iteration while the interpreter stayed flat), the override
+            // veto, and the detach.  What this side adds is native's own: the Rust local must
+            // already be DECLARED (a reassignment, not the first bind); the right-hand side must
+            // PRODUCE a store — a call in either spelling, an inline object `Insert`, a
+            // `Block` that builds one (the `nullable_unwrap_copy` / `ncc` materialisers,
+            // `chosen = v[i] ?? d`), or a value-`if` whose arms do (`s = if c { mk(7) } else
+            // { s }`: the interpreter stashes and post-frees that shape through `rhs_reads_v`,
+            // and without it here the store the then arm displaced leaked on this backend
+            // alone — the `_old != place` guard is what makes the else arm, which hands back
+            // the same store, a no-op), where a bare `Var` rhs is a copy whose own arm frees
+            // what it displaces — which is true, but only became true for the NULLABLE bare
+            // `Var` with loft#1369: that arm deferred back to here, and the two exclusions
+            // closed a circle in which nothing freed the displaced store (loft#1328: `CallRef`
+            // is the second call spelling and was missing — one store per iteration to frame
+            // exit and a `store table exhausted` abort at 70 000 iterations on this backend
+            // alone, an accept/reject split the rule forbids); and a
+            // retbuf-attr return-local frees only with an entry-buffer witness, guarded below so
+            // the caller's buffer is never the store released.  The displaced free is guarded by
+            // `_old != place` and released through `free_displaced`, which declines a
+            // free-protected store.
             let owned_ref_reassign = self.declared.contains(&var)
-                // The five KEYED kinds are here for the reason the interpreter's twin
-                // (`state/codegen.rs`'s `owned_ref`) carries: a keyed local's handle is the same
-                // store-backed slot, so `c = null` — which lowers to `OpNullRefSentinel`, not to
-                // the in-place clear — displaced its store with nothing naming it.  Read through
-                // `base()`, because a dense keyed local cannot be assigned the sentinel at all.
-                // Both backends leaked identically here, which is @FR-O-NoDiverge holding: they
-                // read the same fact and it was short by the same kinds.
-                // A VECTOR destination belongs here for the same reason, and was the one kind
-                // this side never carried: `x: vector<T> = []; for i in 0..N { x = m(i) }` over
-                // a fn-ref held one store per iteration, released only at frame exit, while the
-                // interpreter's twin stayed flat.  @FR-O-NoDiverge is what settles it — the two
-                // backends read the SAME deps facts, so a shape test present on one side and
-                // absent on the other is the divergence the rule forbids, not a judgement call
-                // this side gets to make.  The list is now the interpreter's verbatim, `base()`
-                // and all, so the peel covers the nullable destination too.
-                && (matches!(
-                    variables.tp(var).base(),
-                    Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
-                ) || crate::parser::vectors::is_keyed(variables.tp(var).base()))
-                && !variables.is_captured(var)
-                // D-own-16 residual, the native twin of `state/codegen.rs`'s
-                // `borrows_one_argument`.  Both backends must read the SAME fact
-                // (@FR-O-NoDiverge); leaving this side short is how the two came to disagree
-                // about the keyed kinds.  The displaced free is guarded by `_old != place`
-                // and released through `free_displaced`, which declines a free-protected
-                // store, so the caller's argument survives the first round.
-                && (variables.tp(var).depend().is_empty() || {
-                    let d = variables.tp(var).depend().clone();
-                    d.len() == 1
-                        && d[0] != var
-                        && matches!(variables.tp(var), Type::Optional(_))
-                        && variables.is_argument(d[0])
-                        && !variables.is_argument(var)
-                })
-                // @FR-O-Proxy asks free — the empty dep list is only a PROXY for ownership, so a
-                // free taken on it must consult @FR-O-Override.  The interpreter's twin
-                // (`state/codegen.rs`'s `owned_ref`) already does; this one did not, which
-                // made the two backends read different facts for the same decision — the
-                // asymmetry @FR-O-NoDiverge exists to forbid.  Latent when found (no shape
-                // reproduced a fault, including under LOFT_POISON / LOFT_STRICT_STORES),
-                // and closed because the rule is what says which fact a free may read.
-                && !variables.is_skip_free(var)
-                // A fresh-store-producing rhs: a call in EITHER spelling, an inline
-                // object `Insert`, or a `Block` that builds a new store (the
-                // `nullable_unwrap_copy` / `ncc` materialisers — `chosen = v[i] ?? d`).
-                // A bare `Var` rhs (a borrow / move) is excluded — `depend().is_empty()`
-                // above already gates out borrowed locals.
-                //
-                // loft#1328 — `CallRef` is the second spelling and it was missing, so a local
-                // rebound from a CLOSURE call displaced its store with nothing freeing it:
-                // `x: P? = null; for i in 0..N { x = m(i) }` held one store per iteration to
-                // frame exit.  Not a leak the exit gate can see — everything is freed when the
-                // frame ends — but the PEAK grows with N, and at 70 000 iterations `--native`
-                // aborts with `store table exhausted` where the interpreter completes. That is
-                // an accept/reject split, which @FR-O-NoDiverge forbids: the interpreter's twin
-                // reaches this through `state/codegen.rs`'s `owned_ref`, which keys on the
-                // DESTINATION and so never had a spelling to miss.
+                && variables.owns_displaced_store(var, to, self.data)
                 && matches!(
                     to.unspan(),
-                    Value::Call(_, _) | Value::CallRef(_, _) | Value::Insert(_) | Value::Block(_)
+                    Value::Call(_, _)
+                        | Value::CallRef(_, _)
+                        | Value::Insert(_)
+                        | Value::Block(_)
+                        | Value::If(_, _, _)
                 )
-                // …and a DETACH is not one of them, though it is spelled as a call.  The
-                // shapes above are listed as "a fresh-store-producing rhs"; the null
-                // sentinel produces no store, so the free this gate emits — of the store the
-                // binding moves OFF — has nothing licensing it (loft#1331,
-                // `crate::data::is_null_sentinel_detach`).
-                && !crate::data::is_null_sentinel_detach(var, to, self.data, variables)
                 && (!is_retbuf_attr || self.retbuf_witness.contains(&var));
             if owned_ref_reassign {
                 let name = sanitize(variables.name(var));
@@ -356,15 +323,21 @@ impl Output<'_> {
                 // twin of the interp stash + `OpFreeRefIfDistinct` at the RefVar-set
                 // site (codegen.rs).  Heap inner type only; a `RefVar(Text)` buffer
                 // has no such displaced store.
+                // loft#1372 — through `base()` at every one of these: a `&τ?` PARAMETER has
+                // the same representation as its `&τ` twin (`Optional(τ)` shares `τ`'s
+                // storage), so the displacement question, the text coercion and the boolean
+                // one are all the SLOT's.  Asked bare, a `&text?` write-back emitted
+                // `*var_p = "z"` with no `.to_string()` and rustc rejected it.
+                let inner_slot = inner.base();
                 let amp_owned_writeback = (matches!(
-                    **inner,
+                    inner_slot,
                     Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                ) || crate::parser::vectors::is_keyed(inner))
+                ) || crate::parser::vectors::is_keyed(inner_slot))
                     && matches!(
                         crate::use_analysis::ownership_of(self.data, self.def_nr, to),
                         crate::use_analysis::Own::Owned
                     );
-                let needs_text_coerce = matches!(**inner, Type::Text(_));
+                let needs_text_coerce = matches!(inner_slot, Type::Text(_));
                 // A `&boolean` slot holds the tri-state STORAGE byte (`u8`: 0/1/255,
                 // null-capable) while an expression like `!b` produces a two-state
                 // `bool`, so the write needs the same conversion `OpSetBoolean` carries
@@ -372,7 +345,7 @@ impl Output<'_> {
                 // `*var_b = (…) != 1;` into a `&mut u8` and rustc rejected it — the
                 // second half of loft#655, invisible until the interpreter half was
                 // fixed and compilation got far enough to reach it.
-                let needs_bool_coerce = matches!(**inner, Type::Boolean);
+                let needs_bool_coerce = matches!(inner_slot, Type::Boolean);
                 if amp_owned_writeback {
                     write!(w, "{{ let _old_disp = *var_{name}; *var_{name} = ")?;
                 } else {
@@ -413,16 +386,27 @@ impl Output<'_> {
         // `&integer` PARAMETER already uses).  First-Set (the `OpCreateStack` value)
         // (re)binds the reference to the source local; any other value is a
         // write-THROUGH (`*var_b = …`).
+        // A local `&text` link joins them (loft#1371): a text local is a `String`, so the
+        // link is `*mut String` and every read derefs it, exactly as the scalar link does.
+        // The `&mut String` a `&text` PARAMETER carries cannot serve here — it would freeze
+        // the source local for the link's whole life, and loft allows reading `c` while
+        // `pc` links it.
+        // loft#1372 — through `base()`: `Optional(τ)` shares `τ`'s storage exactly, so a
+        // `&τ?` local link has the same representation as its `&τ` twin and the null rides
+        // the slot's own sentinel.  Asked bare, `Optional` matched no arm, the bind emitted
+        // no right-hand side at all (`let mut var_q: … =  as …;`) and rustc reported it —
+        // which is why @FR-B-Ref-Intro's `&τ` for every τ had to be declined here too.
         if !variables.is_argument(var)
             && let Type::RefVar(inner) = variables.tp(var)
             && matches!(
-                **inner,
+                inner.base(),
                 Type::Integer(..)
                     | Type::Float
                     | Type::Single
                     | Type::Boolean
                     | Type::Character
                     | Type::Tuple(_)
+                    | Type::Text(_)
             )
         {
             let name = sanitize(variables.name(var));
@@ -431,7 +415,9 @@ impl Output<'_> {
             // Rust's borrow checker forbids), matching the interpreter and loft's
             // internal unchecked-aliasing model.  Scalars don't move, so the pointer
             // stays valid for the source's scope.
-            let base = rust_type(inner, &Context::Variable);
+            // The SLOT's Rust type, for the same reason: a `&integer?` local is a
+            // `*mut i64` exactly as a `&integer` one is (loft#1372).
+            let base = rust_type(inner.base(), &Context::Variable);
             // Dispatch on the construction VALUE, which is in the IR (so it survives a
             // snapshot round-trip) — no per-variable flag needed: an `OpGetField` value
             // is an L3 struct-field link, `OpGetVector`/`OpVectorRef` an L4 element link,
@@ -495,14 +481,23 @@ impl Output<'_> {
                 // write-THROUGH to the linked source
                 // Write half of the same conversion the read does (loft#655): the
                 // slot is the `u8` storage byte, the RHS is a `bool`.
-                let bool_link = matches!(**inner, Type::Boolean);
+                let bool_link = matches!(inner.base(), Type::Boolean);
+                // A text RHS yields a `&str` or a `String`; the slot is a `String`.  The
+                // same coercion the `&text` PARAMETER write-back carries.
+                let text_link = matches!(inner.base(), Type::Text(_));
                 write!(w, "unsafe {{ *var_{name} = ")?;
                 if bool_link {
                     write!(w, "u8::from(")?;
                 }
+                if text_link {
+                    write!(w, "(")?;
+                }
                 self.output_code_inner(w, to)?;
                 if bool_link {
                     write!(w, ")")?;
+                }
+                if text_link {
+                    write!(w, ").to_string()")?;
                 }
                 write!(w, " }}")?;
             }
@@ -515,7 +510,7 @@ impl Output<'_> {
         // `o` is the same L7 edge the #257 alias has.
         if !variables.is_argument(var)
             && let Type::RefVar(inner) = variables.tp(var)
-            && matches!(**inner, Type::Reference(..))
+            && matches!(inner.base(), Type::Reference(..))
             && let Value::Call(d_nr, cargs) = to.unspan()
             && self.data.def(*d_nr).name() == "OpCreateStack"
             && let [src_arg] = cargs.as_slice()
@@ -523,12 +518,39 @@ impl Output<'_> {
         {
             let name = sanitize(variables.name(var));
             let src_name = sanitize(variables.name(*src));
+            // loft#1371 — a `*mut DbRef` into the source's slot, not the source's DbRef by
+            // VALUE.  By value the link could carry a read and an interior write but never
+            // a WHOLE-VALUE one: `pd = S { n: 2 }` re-pointed the alias and left `d` alone,
+            // so `@FR-B-Ref-Write` held on the interpreter (a real stack ref) and not here.
+            // The same raw-pointer shape the scalar and text links use, for the same
+            // reason: the source local stays readable while the link is alive.
+            self.local_record_link.insert(var);
             if self.declared.contains(&var) {
-                write!(w, "var_{name} = var_{src_name}")?;
+                write!(w, "var_{name} = std::ptr::addr_of_mut!(var_{src_name})")?;
             } else {
                 self.declared.insert(var);
-                write!(w, "let mut var_{name}: DbRef = var_{src_name}")?;
+                write!(
+                    w,
+                    "let mut var_{name}: *mut DbRef = std::ptr::addr_of_mut!(var_{src_name})"
+                )?;
             }
+            return Ok(());
+        }
+        // loft#1371 — a WRITE through a local `&struct` link (`pd = S { n: 2 }`).  The bind
+        // just above is the only value that re-points the link; every other value writes
+        // THROUGH it, which is `@FR-B-Ref-Write`.  The store it DISPLACES has to be released
+        // or it orphans — the same stash / install / free-if-distinct the `&` PARAMETER
+        // write-back does, and aliasing-safe for the same reason: the old `DbRef` is taken
+        // by value, so a self-reading right-hand side keeps it live across the evaluation
+        // and a same-store install degrades to a no-op.
+        if !variables.is_argument(var)
+            && self.local_record_link.contains(&var)
+            && to != &Value::Null
+        {
+            let name = sanitize(variables.name(var));
+            write!(w, "unsafe {{ let _old_disp = *var_{name}; *var_{name} = ")?;
+            self.output_code_inner(w, to)?;
+            write!(w, "; OpFreeRefIfDistinct(cell, _old_disp, *var_{name}); }}")?;
             return Ok(());
         }
         // #257: aliasing a `&ref` param into a fresh local (`snap = s`), both
@@ -1032,21 +1054,42 @@ impl Output<'_> {
             // Allocating first and copying second would be worse than the panic — it leaves
             // the destination holding the record allocated for it, PRESENT where its source
             // was absent.  Same shape and same predicate as the element-read arm above
-            // (loft#823): `rec == 0` is the absence test every store accessor uses, and it
-            // covers both spellings — the true sentinel and an index past a live container.
-            if matches!(variables.tp(*src), Type::Optional(_)) {
-                // On the absent arm the placeholder must go back: at a FIRST bind that is
-                // the `null_named` store allocated just above, while a REASSIGNMENT is
-                // already wrapped by `output_set`'s `_old_*` stash, which frees the
-                // displaced store itself — freeing here too would free it twice.
-                let release = if first_bind {
-                    format!(
-                        "if var_{name}.store_nr != u16::MAX \
+            // (loft#823): `rec == 0` is the absence test every store accessor uses.  WHICH
+            // binds may carry absence is `Variables::bind_admits_absence`'s question, asked of
+            // BOTH sides and shared with the interpreter's record bind — a source typed
+            // non-null can still hold `nullref`, and a nullable destination has to receive it
+            // as absence.
+            if variables.bind_admits_absence(var, *src) {
+                // On the absent arm the placeholder must go back: writing `DbRef::NULL`
+                // DISPLACES whatever the destination held, and nothing downstream releases
+                // it.  At a FIRST bind that is the `null_named` store allocated just above.
+                // At a REASSIGNMENT it is whatever the destination held, and this is the ONE
+                // site that can free it — `output_set`'s `_old_*` stash wraps only a
+                // right-hand side that PRODUCES a store (`Call` / `CallRef` / `Insert` /
+                // `Block`), and this arm's is a bare `Var`, which is none of those.
+                //
+                // The two sites used to name EACH OTHER as the one that frees — the stash
+                // says a bare `Var` "is a copy whose own arm frees what it displaces", and
+                // this comment said a reassignment "is already wrapped by `output_set`'s
+                // `_old_*` stash".  For `x = <nullable Var>` at a reassignment neither did,
+                // so the record the destination held orphaned once per call whose source was
+                // absent AT RUNTIME (loft#1369 — the `x: S? = z; x = y` shape, native only:
+                // the interpreter's twin frees it).  The ELSE arm needs nothing, which is why
+                // only the null side lost a store: `OpDatabase(cell, var_x, …)` recycles the
+                // slot's existing store rather than displacing it.
+                //
+                // Gated on the same predicate the stash asks (@FR-O-Proxy), so @FR-O-Borrow
+                // still holds through it: a destination that only VIEWS a parameter owns no
+                // store and frees nothing here.
+                let release =
+                    if first_bind || variables.owns_displaced_store(var, to_unspanned, self.data) {
+                        format!(
+                            "if var_{name}.store_nr != u16::MAX \
                          {{ OpFreeRef(cell, var_{name}, \"{name}(absent)\"); }} "
-                    )
-                } else {
-                    String::new()
-                };
+                        )
+                    } else {
+                        String::new()
+                    };
                 let target = copy_target(&format!("var_{name}"), first_bind);
                 write!(
                     w,

@@ -43,6 +43,19 @@ friction after every edit, and that is how a check gets switched off.  **A bare
 make check-rlib          # all three, each with its own cure; skips a target that isn't installed
 ```
 
+**And run it BEFORE the suite, not after the verdict** — afterwards it cannot save the
+run, only tell you the cycle was wasted.  `find_problems.sh` was the trap: it rebuilds
+the six cdylibs and BOTH wasm rlibs and prints them as timing rows, so its own output
+reads as *the rlibs are handled* — while the one it skipped was
+`target/release/libloft.rlib`, the only one an ordinary `cargo build --bin loft` loop
+makes stale — two of the three rlibs, with the missing one hidden behind the two rows
+naming the ones it did build;
+a full `4594 passed` was read off a run whose native half linked a library four commits
+behind the fix it was gating (2026-09-06).  It now schedules that build too, so
+`--bg` needs no pre-flight either.  The general form: ask what an instrument did NOT
+refresh, because a partial refresh that reports its successes misleads more than one
+that refreshes nothing.
+
 **Waiting for a backgrounded `make ci` — do not race the file it writes.** The recipe
 truncates `result.txt` and writes `.ci-running` only after `make` has started, so a wait
 loop armed in the same breath as the launch sees NEITHER yet, exits immediately, and
@@ -577,7 +590,16 @@ requires one on every file added under `tests/scripts/`, against the ratchet in
 `tests/falsified.baseline`; `// @falsified-at: none — <reason>` is the honest opt-out for a
 file that genuinely cannot fail on any earlier build.
 
-⚠ **Two shapes it cannot score, and both report INERT — which reads as "your guard measures
+**A defect only an instrument can see is scored with the instrument armed.**  `LOFT_POISON=1
+LOFT_STRICT_STORES=1 make falsify GUARD=… REF=…` passes both through to the control and to
+this tree.  Measured need: a stale work-ref reclaiming, in place, a store number another
+record had since taken (QUALITY.md B7u) read as `INERT` in plain mode on every shape tried —
+the allocator hands the stale buffer its own freed number back — and as six assertion
+failures under the arena poison.  A guard falsified that way says so beside its line, and
+names the CI leg that runs with the instrument (the nightly poison sweep), because on the
+plain suites it passes on every build.
+
+⚠ **Three shapes it cannot score, and all report INERT — which reads as "your guard measures
 the wrong thing" when the truth is "this tool cannot see this kind of fix".**
 
 *A guard with no `main`.*  `falsify` runs the file as a PROGRAM, so a file whose cells are
@@ -585,6 +607,18 @@ each their own entry point (the `tests/scripts/` convention) runs NOTHING there 
 `0|0` on both sides.  The tell is **zero assertion failures on the CONTROL** — a real control
 almost always has some.  Give such a guard a `main()` that calls its cells; the suite runner
 is happy either way.
+
+*A guard whose subject is a WARNING.*  `expect_channel` counts only `@EXPECT_ERROR` and
+`@EXPECT_FAIL`, and `entry_modes` routes only those two through `--tests`; a guard declaring
+`@EXPECT_WARNING` that also has a `main` — which a leak or value guard wants — gets a direct
+run, where nothing matches warnings at all.  Both trees read `expect -`, and the guard is
+INERT however loudly it fires.  Measured on
+`a-payload-binding-warns-when-its-subject-is-given-another-variant.loft` (loft#1397): INERT
+from the tool, `0 -> 2` reports by hand.  Score such a guard BY HAND until this grows a
+warning channel — run it on both builds and count the reports — and say so in the
+`@falsified-at` line, so the next reader does not re-run the tool expecting a verdict.
+Note the interaction with the shape above: giving a leak guard a `main` is the CURE there and
+is what triggers this one.
 
 *A fix in a `lib/*.loft` library.*  `falsify` swaps the BINARY and passes `--path <worktree>/`
 for the stdlib, but `use <name>` resolves to the repo-relative `lib/<name>.loft` — strace shows
@@ -630,6 +664,38 @@ because picking it wrongly is the first of those and the easiest to repeat.
 Comparing a compiler arm's effect under `--tests` on a `main`-ful guard answered
 "4 passed / 4 passed" — which reads as *this changes nothing* and means *neither side ran
 the thing that changes*.
+
+**The control builds are cached, and the cache prunes itself.**  Each ref costs about 2 GB
+under `~/.cache/tmp/loft-falsify/<ref>` and `<ref>-target` (the native leg links
+`libloft.rlib` and its dependency rlibs, so the binary alone is not enough), beside a
+`head-target` and a `shared-target`.  Kept forever, they held 364 GB on 2026-09-05 and filled
+the root filesystem, and `make ci` failed in the NATIVE corpus with `FAIL unknown-mode` after
+four `loft: low space in /var/tmp/loft-test-scratch-… — reclaimed … MB` lines — a disk-full
+symptom that reads like a code fault.  The script now keeps the `LOFT_FALSIFY_KEEP` (default 4)
+most recently used controls and removes the rest with their worktrees.  A gate that fails on an
+unrelated suite right after "low space" lines is the disk: `df -h /`, then § Scratch hygiene.
+
+### Scratch hygiene — what loft writes to a temp directory, and what removes it
+
+Every native compile, html export and test probe lands in the temp directory (`TMPDIR`; under
+`make ci` the per-checkout `/var/tmp/loft-test-scratch-<id>`), and each family has one rule
+that removes it.  Measured 2026-09-05 before the rules existed: 434 GB under one `~/.cache/tmp`.
+
+| what | who writes it | what removes it |
+|---|---|---|
+| `loft_native_bin_<pid>`, `loft_native_<pid>.rs` | a `--native` run's compile | the run itself when it ends normally; a run killed from OUTSIDE (a `timeout` wrapper, a harness kill, Ctrl-C) cannot, so **every native compile first sweeps the artefacts of dead processes** (`platform::reclaim_dead_native_scratch`, silent).  Sixteen thousand of them, 151 GB, had accumulated with nothing looking |
+| `loft_test_native_<stem>_bin` / `.key` / `.rs` | `--tests --native`, a per-file binary cache keyed by stem | the low-space reclaim (aged entries) and `sweep_scratch.sh --days` |
+| `<dir>/.loft/cache/<entry>` | the program cache a test writes beside its probe — every probe has a fresh name, so the cache only grows (13 GB in one test's dir) | `sweep_scratch.sh` (entries older than a day) |
+| `loft_html_*`, `loft_p*`, `loft_rebuild_*`, `loft-*` | the html, probe, rebuild and serve suites | `sweep_scratch.sh` (older than a day) |
+| `~/.cache/tmp/loft-falsify/<ref>{,-target}` | `make falsify` control builds | the script itself, LRU to `LOFT_FALSIFY_KEEP` |
+| `~/.cache/tmp/claude-<uid>/<project>/<session>` | the agent harness's per-session scratch (170 GB, 284 sessions) | `make sweep-scratch` (older than two weeks) |
+| `target/debug/deps` | cargo: every test binary of every dependency hash ever built (76–110 GB per checkout) | `make sweep-target` (`cargo sweep --time 14`) |
+
+`make ci` runs `scripts/sweep_scratch.sh` on its own scratch at the start of every gate (it
+used to keep seven days); `make sweep-scratch` runs it on the checkout's scratch and on
+`TMPDIR` with the session prune, and prints `df` after.  Both touch only loft's own names,
+only dead pids or aged entries, and never a sibling checkout's gate scratch.  A run of `df -h /`
+before a gate is cheaper than reading a `FAIL unknown-mode` as a code fault.
 
 ### The set a suite RUNS is not the set it CONTAINS (`LOFT_TRACE_ASSERTS`)
 
@@ -2867,6 +2933,76 @@ A guard that cannot fail is worse than no guard: it is a standing claim that the
 is checked. `make falsify` catches the commonest case — a guard that never failed on the
 build it was written to catch — but it only answers for the commit you name. These are the
 shapes that survive it, each one measured here rather than imagined.
+
+**A reproduction that hits a WARM CACHE measures nothing — and the tell is the clock.**  A
+red `make ci` named a native cell that took **2.2 s** in the gate; every attempt to reproduce
+it took **51 ms**.  On that basis it was reported "not reproducible" three ways — 20 serial
+runs, 48 at 16-way concurrency, the whole test binary under nextest — and all of it was
+vacuous: the runs hit a warm artifact cache and never reached the publish path that breaks.
+A pass 40× faster than the failure is not a pass, it is a different experiment.  Two matching
+traps rode along: the cache lives in `<script dir>/.loft/cache/`, **not** under `TMPDIR`, so
+"reproduced with the gate's own `TMPDIR`" was another empty cell; and a harness notice about
+low memory (it kills background tasks on its own budget) was read as a statement about the
+BOX while `free` showed 55–59 GB available at that very moment.  **State the failure's cost —
+wall-clock, or a counter like *did it compile?* — and check the repro matches it BEFORE
+reporting a negative.**
+
+**Racing a race is usually not a falsifiable guard; assert the PROPERTY the race violates.**
+The obvious guard for the cache-publish race — N concurrent cold-cache runs of one source,
+assert all succeed — **passed on the pre-fix build** (18 runs): the window is too narrow to
+hit on demand, so it measured nothing while looking like a regression test.  The deterministic
+reading is the **inode**.  `fs::copy` opens the destination with truncate and streams into the
+SAME inode, which is exactly what lets a reader's already-accepted file empty out underneath
+it; `rename` swaps a different inode in and a process still exec'ing the old one keeps a
+complete file.  So `publish(a); i1 = ino(dest); publish(b); i2 = ino(dest); assert_ne!(i1, i2)`
+— no timing, and it fails on the pre-fix publish with the same inode on both sides.  Keep the
+old implementation in the test file as a POSITIVE CONTROL (`assert_eq!` on the copy form) so
+the probe proves it discriminates without an inverse edit of the product.  If the racing test
+is kept for the end-to-end shape it still covers, its header must say it does NOT reproduce
+the defect and name the guard that does — an inert experiment recorded is reusable, an inert
+experiment mislabelled is a false green.
+
+**A "did this copy too much?" control is not the same cell for every element type, and the
+wrong one argues for reverting a correct fix.**  The natural control for an over-wide copy is
+*an undisturbed view must still ALIAS — a write through it reaches the container*.  That is
+right for a RECORD tail and INVERTED for a COLLECTION one: `(B-Copy)` makes a whole-value
+vector bind a copy, so a write through it reaching nothing is the documented answer, in the
+branch spelling exactly as in the plain one.  Read the record way, loft#1399's fix looked like
+the over-wide version it had been warned against — a shipped release answered 3 where the
+branch answered 2 — and the next step would have been to revert something correct.
+
+What settles it is the PLAIN spelling of the SAME tail on the SAME build, not the same shape on
+an older build.  The release turned out to be the inconsistent side: it aliases a collection
+projection in the branch spelling while copying it in the plain one.  Two habits fall out of
+that.  When the shipped binary is the thing under suspicion, isolate by inverse-editing your
+own change out and rebuilding rather than trusting it as the only oracle — that is what showed
+the difference predated the edit entirely.  And pin BOTH boundaries as cells, so the next
+reader does not have to re-derive which kind aliases.
+
+**A one-of-a-kind fixture makes a positional read look right.**  Reading a tuple member's
+backing work-ref off the element type's dep list, `deps.first()` passed every cell of a matrix
+whose tuples had ONE droppable member — and the lists are UNIONED across a tuple's heap
+members, so every element carries the same list and `first()` names the FIRST member whatever
+you ask about.  The two-member cell is the only shape that can tell a correct pairing from a
+coincidence: it released one resource twice and the other once.  Whenever an index, an offset
+or a position is being read, one cell has to carry TWO of the thing being indexed.
+
+**Undoing a lowering means undoing its TYPE, and a value-only matrix cannot see the half you
+left.**  A monomorph pass that removed a tuple-member copy unwrapped the VALUE and left the
+element's dep on the backing whose copy was gone; every value cell still answered correctly and
+the store was freed by nobody.  It surfaced only because the probe printed the run's leak line
+beside the values.  A guard over a lowering that can be undone asserts value AND leak, or it is
+measuring one half of the change.
+
+**A CONSTANT index is trusted by contract, so a nullability cell built on it never
+produces the `τ?` it means to test.**  `(N-Index)` types `v[i]` as `τ?`, but `v[9]`, `v[k]`
+under `for k in …`, `v[i]` behind `if i < len(v)` and arithmetic over those are trusted
+(@PLN102 D1) and read NON-NULL — the overrun faults to null at run time, in band.  The
+phase-1 `(N-Join)` hold cell wrote `j = 2; j = dv[9]; assert(j == null)` and passed on every
+build: `dv[9]` was an `integer`, nothing was widened, and the assert read the sentinel the
+runtime left in the slot.  With a plain variable index the same program was REFUSED (the
+widen did not exist).  A cell that needs a `τ?` from an index reads it through a variable
+the compiler cannot prove in range — and the receipt is the cell compiling at all.
 
 **The HARNESS does not run the program the way a user does, so a `tests/scripts/*.loft`
 guard can be vacuous for a whole CLASS of defect.** `loft --tests` discovers and calls the

@@ -578,7 +578,8 @@ fn emit_slots(w: &mut dyn Write, data: &Data, end_def: u32, opts: &Options) -> s
 /// `__retbuf` parameter and `buf` was allocated at a shallower loop depth, then flag
 /// any `OpFreeRef` of that var deeper than `buf`'s allocation.
 fn per_iteration_frees(data: &Data, def: &crate::data::Definition) -> Vec<(String, String)> {
-    let free_nr = data.def_nr("OpFreeRef");
+    let sets = data.op_sets();
+    let free_nrs = &sets.unconditional_ref_frees;
     let db_nr = data.def_nr("OpDatabase");
     // var -> loop depth at which its store was allocated
     let mut alloc_depth: HashMap<u16, u32> = HashMap::new();
@@ -599,7 +600,7 @@ fn per_iteration_frees(data: &Data, def: &crate::data::Definition) -> Vec<(Strin
         node: &Value,
         depth: u32,
         data: &Data,
-        free_nr: u32,
+        free_nrs: &std::collections::HashSet<u32>,
         db_nr: u32,
         vars: &crate::variables::Function,
         alloc: &mut HashMap<u16, u32>,
@@ -616,7 +617,7 @@ fn per_iteration_frees(data: &Data, def: &crate::data::Definition) -> Vec<(Strin
                         op,
                         depth + 1,
                         data,
-                        free_nr,
+                        free_nrs,
                         db_nr,
                         vars,
                         alloc,
@@ -627,14 +628,14 @@ fn per_iteration_frees(data: &Data, def: &crate::data::Definition) -> Vec<(Strin
             }
             Value::Iter(_, create, next, extra) => {
                 walk(
-                    create, depth, data, free_nr, db_nr, vars, alloc, aliases, out,
+                    create, depth, data, free_nrs, db_nr, vars, alloc, aliases, out,
                 );
                 for part in [next, extra] {
                     walk(
                         part,
                         depth + 1,
                         data,
-                        free_nr,
+                        free_nrs,
                         db_nr,
                         vars,
                         alloc,
@@ -658,7 +659,7 @@ fn per_iteration_frees(data: &Data, def: &crate::data::Definition) -> Vec<(Strin
                     }
                     _ => {}
                 }
-                walk(rhs, depth, data, free_nr, db_nr, vars, alloc, aliases, out);
+                walk(rhs, depth, data, free_nrs, db_nr, vars, alloc, aliases, out);
             }
             // `OpDatabase(Var(v), …)` mints a store INTO v in place — it is not a
             // `Set`, which an earlier version of this check assumed and so never saw
@@ -668,7 +669,7 @@ fn per_iteration_frees(data: &Data, def: &crate::data::Definition) -> Vec<(Strin
                     alloc.entry(*v).or_insert(depth);
                 }
             }
-            Value::Call(d, args) if *d == free_nr && args.len() == 1 => {
+            Value::Call(d, args) if free_nrs.contains(d) && args.len() == 1 => {
                 if let Value::Var(v) = args[0].unspan()
                     && let Some(&(buf, bd)) = aliases.get(v)
                     && depth > bd
@@ -685,7 +686,7 @@ fn per_iteration_frees(data: &Data, def: &crate::data::Definition) -> Vec<(Strin
                 }
             }
             other => other.for_each_child(&mut |c| {
-                walk(c, depth, data, free_nr, db_nr, vars, alloc, aliases, out);
+                walk(c, depth, data, free_nrs, db_nr, vars, alloc, aliases, out);
             }),
         }
     }
@@ -694,7 +695,7 @@ fn per_iteration_frees(data: &Data, def: &crate::data::Definition) -> Vec<(Strin
         def.code(),
         0,
         data,
-        free_nr,
+        free_nrs,
         db_nr,
         &def.variables,
         &mut alloc_depth,
