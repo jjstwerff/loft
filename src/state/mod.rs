@@ -2705,6 +2705,15 @@ impl State {
         self.ensure_stack(self.stack_step(size_of::<T>() as u32));
         #[cfg(feature = "stack_align_guard")]
         self.check_stack_align::<T>(self.stack_cur.pos + self.stack_pos);
+        // @PLN154 phase 0 — tell the census this span arrived through the typed writer.
+        // Absolute offset, the same `rec * 8 + fld` arithmetic `addr_mut` does below, so
+        // the claim and the byte diff cannot be in different coordinate systems.
+        if crate::stack_census::enabled() {
+            crate::stack_census::claim(
+                self.stack_cur.rec * 8 + self.stack_cur.pos + self.stack_pos,
+                size_of::<T>() as u32,
+            );
+        }
         let m = self
             .database
             .store_mut(&self.stack_cur)
@@ -5445,6 +5454,9 @@ impl State {
             .as_deref()
             .is_some_and(|d| d.prof.as_ref().is_some_and(|p| p.alloc_armed()));
         let mut last_allocs = self.database.stores_allocated;
+        // @PLN154 phase 0 — hoisted like `alloc_paths_on` above: one never-taken branch
+        // per op when the census is not armed.
+        let census_on = crate::stack_census::enabled();
         while self.code_pos < bytecode_len {
             if reload_on {
                 reload_tick -= 1;
@@ -5484,11 +5496,48 @@ impl State {
                 trail_op[trail_head] = op;
                 trail_head = (trail_head + 1) % 16;
             }
-            if op == 255 {
+            // @PLN154 phase 0 — snapshot the stack store, run the op, diff.  The
+            // ground truth is the memory: a write through a route nobody has listed is
+            // counted the same as one through `put_stack`, which is the whole point of
+            // measuring rather than auditing the callers.
+            let census_span = if census_on {
+                let origin = (self.stack_cur.rec * 8 + self.stack_cur.pos) as usize;
+                // Watch the frame, not the buffer.  The whole buffer is the sound
+                // region and it is what this started as, but the allocator's slack
+                // above the frame grows without bound and diffing it cost 42x on
+                // `1248b`, which puts the corpus out of reach.  `stack_high` is the
+                // frame's high-water mark, and `MARGIN` covers the reserve an op makes
+                // before the mark catches up; a write past that is reported as
+                // `beyond the watched span` rather than being silently dropped.
+                const MARGIN: usize = 4096;
+                let end = (origin + self.stack_high as usize + MARGIN)
+                    .min(self.database.store(&self.stack_cur).raw_bytes().len());
+                let bytes = self.database.store(&self.stack_cur).raw_bytes();
+                crate::stack_census::before_op(bytes, origin, end);
+                (origin, end)
+            } else {
+                (0, 0)
+            };
+            let ran_opcode: u16 = if op == 255 {
                 let ext = self.code::<u8>();
-                OPERATORS[255 + ext as usize](self);
+                let opc = 255 + u16::from(ext);
+                OPERATORS[opc as usize](self);
+                opc
             } else {
                 OPERATORS[op as usize](self);
+                u16::from(op)
+            };
+            if census_on {
+                let bytes = self.database.store(&self.stack_cur).raw_bytes();
+                crate::stack_census::after_op(ran_opcode, bytes, census_span.0, census_span.1);
+                if crate::stack_census::budget_spent() {
+                    // The budget is a corpus-sweep instrument: report on what ran and
+                    // leave, so a program with tens of millions of ops still contributes
+                    // its routes instead of being killed by a timeout with nothing said.
+                    crate::stack_census::report(Some(data));
+                    crate::loft_eprintln!("stack census: op budget spent — stopping here");
+                    std::process::exit(0);
+                }
             }
             // @PLN140 arc C — the op just ran; if it took stores, record the path
             // that reached them.
