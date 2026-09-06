@@ -586,7 +586,7 @@ failures under the arena poison.  A guard falsified that way says so beside its 
 names the CI leg that runs with the instrument (the nightly poison sweep), because on the
 plain suites it passes on every build.
 
-⚠ **Two shapes it cannot score, and both report INERT — which reads as "your guard measures
+⚠ **Three shapes it cannot score, and all report INERT — which reads as "your guard measures
 the wrong thing" when the truth is "this tool cannot see this kind of fix".**
 
 *A guard with no `main`.*  `falsify` runs the file as a PROGRAM, so a file whose cells are
@@ -594,6 +594,18 @@ each their own entry point (the `tests/scripts/` convention) runs NOTHING there 
 `0|0` on both sides.  The tell is **zero assertion failures on the CONTROL** — a real control
 almost always has some.  Give such a guard a `main()` that calls its cells; the suite runner
 is happy either way.
+
+*A guard whose subject is a WARNING.*  `expect_channel` counts only `@EXPECT_ERROR` and
+`@EXPECT_FAIL`, and `entry_modes` routes only those two through `--tests`; a guard declaring
+`@EXPECT_WARNING` that also has a `main` — which a leak or value guard wants — gets a direct
+run, where nothing matches warnings at all.  Both trees read `expect -`, and the guard is
+INERT however loudly it fires.  Measured on
+`a-payload-binding-warns-when-its-subject-is-given-another-variant.loft` (loft#1397): INERT
+from the tool, `0 -> 2` reports by hand.  Score such a guard BY HAND until this grows a
+warning channel — run it on both builds and count the reports — and say so in the
+`@falsified-at` line, so the next reader does not re-run the tool expecting a verdict.
+Note the interaction with the shape above: giving a leak guard a `main` is the CURE there and
+is what triggers this one.
 
 *A fix in a `lib/*.loft` library.*  `falsify` swaps the BINARY and passes `--path <worktree>/`
 for the stdlib, but `use <name>` resolves to the repo-relative `lib/<name>.loft` — strace shows

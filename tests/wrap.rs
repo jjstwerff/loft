@@ -1654,6 +1654,10 @@ fn run_test_inner(
         loft::use_analysis::warn_dead_stores(&p.data, &mut diagnostics, &path);
         loft::use_analysis::warn_double_move(&p.data, &mut diagnostics, &path);
         loft::use_analysis::warn_lost_temp_writes(&p.data, &mut diagnostics, &path);
+        // loft#1397 — here for the reason the note above gives, and for the screen it buys:
+        // a false positive from this lint would otherwise be invisible to the 1200-file
+        // corpus, which is the only thing that reads that many programs.
+        loft::use_analysis::warn_variant_overwritten(&p.data, &mut diagnostics, &path);
     }
     // Scope check and bytecode generation can panic on compiler bugs.
     // When the file has @EXPECT_FAIL annotations, tolerate the panic.

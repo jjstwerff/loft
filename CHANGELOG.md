@@ -147,6 +147,14 @@ named every variable `65535` with a `-` where its slot number and span belong �
 the same command on the same file did not print the same thing.  `introspect` now always
 parses; ordinary runs keep the cache.
 
+**Replacing an enum inside a struct while you are still reading its payload now warns.**
+`match w.st { Holder{inner} => { w.st = Empty{z: 0}; inner.a }, … }` reads `Empty`'s field
+through `inner`, because writing into a place does not move what points at it — that is what
+the language documents, and both backends agree. What was missing is that nothing said so, at
+the one spelling the equivalent warning deliberately skips: a per-arm binding was taken to be
+proof that the variant could not change underneath it. It can. The value is unchanged; you are
+told, and told to copy the payload out first.  (loft#1397)
+
 **A value kept from one loop pass to the next is the value from that pass.**  Reading a list
 out of a returned struct in two steps — `t = dv.tiles; prev = t.proto;` — left `prev` reading
 the CURRENT pass's data on the next turn, so a loop comparing consecutive steps answered

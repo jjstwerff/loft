@@ -189,6 +189,17 @@ const CODES: &[(&str, &str)] = &[
          struct S { a: vector<E>, tick: integer, b: hash<E[k]> }\n\
          fn main() { s = S { }; s.a += [E { k: 1 }]; print(\"{len(s.b)}\"); }",
     ),
+    // loft#1397 — the arm is entered as `Holder`, the subject's PLACE is then given `Empty`,
+    // and the per-arm binding keeps reading the slot: `Empty`'s `z` at `Holder`'s offset.
+    (
+        "variant-overwritten-binding",
+        "struct P1397 { a: integer }\n\
+         enum S1397 { Holder { inner: P1397 }, Empty { z: integer } }\n\
+         struct W1397 { st: S1397, t: text }\n\
+         fn main() { w = W1397 { st: Holder { inner: P1397 { a: 1 } }, t: \"w\" };\n\
+           g = match w.st { Holder{inner} => { w.st = Empty { z: 0 }; inner.a }, _ => -1 };\n\
+           print(\"{g}\"); }",
+    ),
     // loft#980 — `n` is declared by `Named` only, and the value is an `Anon`; nothing
     // between the two checks the tag, so the read answers `Anon`'s bytes.
     (

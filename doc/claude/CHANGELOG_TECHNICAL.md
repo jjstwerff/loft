@@ -49,6 +49,32 @@ Filed: loft#1394 (a payload binding written inside the arm, which needs the walk
 model), loft#1392, loft#1395.  formal: binding-history D-bind-19, IMPLEMENTATIONS.md's
 `@FR-O-Oracle` row.
 
+### A payload binding warns when its subject's place is given another variant (2026-09-06, loft#1397)
+
+`(B-Disturb)` is explicit that overwriting a place is NOT disturbing it, so a `match` / `is`
+payload binding still names the payload slot and reads what is there now — both backends, and
+the VALUE is what the rules give.  The issue offered two ways out and only one is admissible:
+the other rewrites that clause for one type former, and the rules do not change to match the
+code.  So the cure is the DIAGNOSTIC.
+
+loft#980's `variant-field-unchecked` exists for this hazard and is deliberately quiet for
+`match` / `is` bindings, because those are per-arm and are the cure it names — an exemption
+whose premise is that the variant cannot change under the binding.
+`use_analysis::warn_variant_overwritten` reports where it does, keyed on the ARM's OWN tag test
+rather than a discriminant re-derived in the lint, so it cannot drift from the numbering the
+parser emits: the condition names the place and the tag in one node, and the overwrite is an
+`OpSetEnum` on that same place with a different one.  Both spellings reach it — `match` hands
+the test bare, `is` yields it as the tail of an `Insert`.  The binding is recognised by its
+`_mv_` name rather than through `mv_field_origin`, which is cleared when the two passes are
+joined.
+
+A LOCAL subject never arrives: `sh = Empty{…}` builds into a work-ref and repoints the local,
+so its `OpSetEnum` names a different place, and that shape is a reassignment `(B-View)` already
+materialises.  Guard `a-payload-binding-warns-when-its-subject-is-given-another-variant`
+(both spellings plus four controls — the same variant, an unrelated field, the copy-out cure,
+and the local subject), falsified at 26c5609b.  Zero reports over `tests/scripts`, `tests/docs`
+and `default/`.  `LOFT_NO_VARIANT_OVERWRITTEN` turns it off; DIAGNOSTICS.md carries its row.
+
 ### A view of a view is a place inside the outer container (2026-09-06, loft#1393)
 
 `(B-Disturb)` ends a view's place when its CONTAINER is disturbed, and a chain names ONE place

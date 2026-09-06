@@ -36,6 +36,15 @@
 # `a-nullable-return-joins-its-branch-arms.loft`, whose leaking cell `make ci` failed on while
 # this reported `0|0|none|none|0` for both trees (QUALITY.md B6p).  Until `--tests` grows a leak
 # check, score a leak guard by giving it a `main` and running it under `--interpret`.
+#
+# ⚠ A SECOND CHANNEL IS BLIND, for the mirror-image reason.  `expect_channel` counts only
+# `@EXPECT_ERROR` / `@EXPECT_FAIL`, and `entry_modes` routes only those two to `--tests`.  A
+# guard whose subject is a WARNING declares `@EXPECT_WARNING` and, if it also has a `main`
+# (which a leak or value guard wants), gets a direct run — where nothing matches warnings at
+# all.  Both trees then read `expect -` and the guard is reported INERT however loudly it
+# fires.  Measured 2026-09-06 on `a-payload-binding-warns-when-its-subject-is-given-another-\
+# variant.loft`: INERT here, 0 -> 2 reports by hand.  Until this grows a warning channel,
+# score such a guard by hand — run it on both builds and count the reports.
 set -uo pipefail
 
 usage() {
