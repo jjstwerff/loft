@@ -408,6 +408,15 @@ pub struct Parser {
     /// at the arm-agreement gate.  Separate from `stmt_if_pending` because that one is
     /// consumed at the construct and this one has to survive into the arms.
     pub(crate) arms_of_statement_construct: bool,
+    /// loft#1386 — some arm of the `match` being parsed yields NOTHING.
+    ///
+    /// A void arm is exempt from the arm-type unification on purpose: in STATEMENT position
+    /// `@FR-F-Block` discards what any arm yields, so the arms need not agree.  In VALUE
+    /// position there is no value on that path at all, and the exemption made the whole match
+    /// take the other arms' type and answer `null` — a value the program never wrote.  Set as
+    /// the arms are joined and read once at the end, because "the running result is void" and
+    /// "an arm was void" are different facts: the result starts void before any arm.
+    pub(crate) match_void_arm: bool,
     /// @PLN87 B-Ref-AnnotationOnly — true while the parser is positioned at the HEAD
     /// of a place where `&` may legally appear: the whole right-hand side of a plain
     /// `=` binding, or the start of a statement (where the D-bind-7 guard reports a
@@ -1335,6 +1344,7 @@ impl Parser {
             stmt_if_pending: false,
             pending_arm_mismatch: None,
             arms_of_statement_construct: false,
+            match_void_arm: false,
             amp_head: AmpHead::default(),
             assign_target: u16::MAX,
             assign_replaces: false,

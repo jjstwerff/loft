@@ -4213,6 +4213,37 @@ impl Parser {
     #[allow(clippy::too_many_lines)]
     // @F29 — pattern matching (enum/scalar/tuple, guards, or-patterns, exhaustiveness)
     pub(crate) fn parse_match(&mut self, code: &mut Value) -> Type {
+        // loft#1382 / loft#1386 — statement position comes from the caller (`parse_block`'s
+        // loop is what sees the `;`), and the void-arm fact is scoped to THIS match so a
+        // nested one cannot leak into its parent's verdict.
+        let is_stmt = std::mem::replace(&mut self.stmt_if_pending, false);
+        let outer_arms = std::mem::replace(&mut self.arms_of_statement_construct, is_stmt);
+        let outer_void = std::mem::replace(&mut self.match_void_arm, false);
+        let r = self.parse_match_inner(code);
+        // @FR-F-Block discards a STATEMENT's arms, so a void one there is no defect.  In
+        // VALUE position the path that ran yields nothing, and the exemption let the match
+        // take the other arms' type: `v = match k { 1 => { 5 }, _ => { println(…) } }`
+        // answered `v = null` with nothing said, where the `if` twin is refused (loft#1386).
+        if !self.first_pass
+            && !self.arms_of_statement_construct
+            && self.match_void_arm
+            && !matches!(r, Type::Void | Type::Null | Type::Never)
+        {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "expected {}, got void on a match arm — this `match` is used as a VALUE, so \
+                 every arm has to produce one; give the arm a value, or make the `match` a \
+                 statement by ending it with `;`",
+                r.name(&self.data),
+            );
+        }
+        self.match_void_arm = outer_void;
+        self.arms_of_statement_construct = outer_arms;
+        r
+    }
+
+    fn parse_match_inner(&mut self, code: &mut Value) -> Type {
         // One charge for the whole construct — arm count is not complexity (a 12-arm flat
         // dispatch reads straight down); its arms deepen via `parse_block("match_arm")`.
         if !self.first_pass {
@@ -4406,6 +4437,7 @@ impl Parser {
                 // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
                 // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
                 result_type = self.join_arm_into(&result_type, &arm_body, &arm_type);
+                self.match_void_arm |= matches!(arm_type, Type::Void);
                 if result_type == Type::Void || result_type == Type::Null {
                     result_type = arm_type.clone();
                 } else if !self.first_pass
@@ -4901,6 +4933,7 @@ impl Parser {
             // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
             // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
             result_type = self.join_arm_into(&result_type, &arm_body, &arm_type);
+            self.match_void_arm |= matches!(arm_type, Type::Void);
             if result_type == Type::Void || result_type == Type::Null {
                 result_type = arm_type.clone();
             } else if !self.first_pass
@@ -5156,6 +5189,7 @@ impl Parser {
         // loft#978 — see the arm sites above: the wildcard is an arm like any other.
         let joined = self.join_arm_into(result_type, &arm_code, &arm_type);
         *result_type = joined;
+        self.match_void_arm |= matches!(arm_type, Type::Void);
         if *result_type == Type::Void {
             *result_type = arm_type.clone();
         } else if !self.first_pass
@@ -7906,6 +7940,7 @@ impl Parser {
             // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
             // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
             result_type = self.join_arm_into(&result_type, &arm_code, &arm_type);
+            self.match_void_arm |= matches!(arm_type, Type::Void);
             if result_type == Type::Void || result_type == Type::Null {
                 result_type = arm_type.clone();
             }
@@ -8951,6 +8986,7 @@ impl Parser {
             // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
             // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
             result_type = self.join_arm_into(&result_type, &arm_code, &arm_type);
+            self.match_void_arm |= matches!(arm_type, Type::Void);
             if result_type == Type::Void {
                 result_type = arm_type.clone();
             }
@@ -9268,6 +9304,7 @@ impl Parser {
             // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
             // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
             result_type = self.join_arm_into(&result_type, &arm_body, &arm_type);
+            self.match_void_arm |= matches!(arm_type, Type::Void);
             if result_type == Type::Void {
                 result_type = arm_type.clone();
             }

@@ -9,6 +9,36 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### loft#1386: a value-position `match` needs a value from every arm (2026-09-06)
+
+`@FR-F-Block` discards a block's value *"only where the BLOCK itself is a statement — a
+`;`-terminated one"*.  A `match` used as a VALUE is not that, so every arm has to produce one.
+
+A void arm is exempt from the arm-type unification — right in STATEMENT position, which is
+loft#1382's half — and in VALUE position that exemption let the whole `match` take the OTHER
+arms' type and answer `null`: a value the program never wrote and the type never declared, with
+no diagnostic on `--interpret` and a raw rustc E0308 naming a generated `.rs` file on
+`--native`.  The `if` twin was refused in the parser all along, so one construct answered where
+the other refused, for the same program.
+
+It refuses now, in the parser, so the rustc error is no longer reachable.  Of the two available
+answers the accepting one is silent-wrong, which is what the freeze axis picks.
+
+Two things the fix needed beyond the rule:
+
+* **Statement position, from loft#1382's flag.**  `parse_match` takes and clears
+  `stmt_if_pending` exactly as `parse_if` does, so the same one-token peek in `parse_block`'s
+  loop serves both constructs.
+* **"An arm was void" is not "the running result is void".**  The result starts `Void` before
+  any arm and is promoted by the first one, so the fact is carried in its own scoped flag,
+  set as the arms are joined and read once at the end of the construct.  There are SIX arm-join
+  sites — the enum arms, the wildcard, and the scalar, vector and tuple forms — and a fix at one
+  is a fix for one form.
+
+Eight cells on both backends: both arm orders in value position, a three-arm case with the void
+one in the middle, the statement cells in both orders, all-void, all-value, and the `if` twin.
+
+
 ### loft#1382: a statement `if` discards EITHER arm's value (2026-09-06)
 
 `@FR-F-Block` discards a block's value *"only where the BLOCK itself is a statement — a
