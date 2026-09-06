@@ -481,7 +481,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 408 | 384 | **24** |
+| 409 | 385 | **24** |
 
 The `@FR-O-Complete` walk (B7u) added one peeling site — `scopes::adopted_work_refs` reads a
 right-hand side's `If` arms, `Block` and `Insert` tails through their `Span` to find the
@@ -2460,7 +2460,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 722 | 362 | 5 | **355** |
+| 724 | 362 | 5 | **357** |
 
 The `@FR-O-Complete` walk (B7u) moved one function from opaque to seeing-through:
 `scopes::needs_pre_init`, which names the locals that get a null before a branch and the
