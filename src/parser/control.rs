@@ -1679,6 +1679,11 @@ impl Parser {
         let Some(tail) = l.last() else {
             return false;
         };
+        self.is_borrowing_branch(tail)
+    }
+
+    /// [`Self::tail_is_borrowing_branch`] asked of one value.
+    fn is_borrowing_branch(&self, tail: &Value) -> bool {
         fn arm_params(v: &Value, vars: &crate::variables::Function, out: &mut Vec<u16>) -> bool {
             match v.unspan() {
                 Value::If(_, t, f) => {
@@ -10241,6 +10246,67 @@ impl Parser {
     /// (@FR-O-Oracle, a pure borrow), every such leaf is copied into one fresh local the frame
     /// then returns, so the caller adopts a mint as it does for the concrete twin.  Runs in the
     /// MONOMORPH's frame, like the other two.
+    /// loft#1387 / `@FR-F-Ret` — give a MONOMORPH's return tail the per-arm copy the
+    /// non-generic path takes (loft#1368).
+    ///
+    /// A return whose tail is a value BRANCH over two or more PARAMETERS hands back each
+    /// arm's own borrow, and a caller can witness only one of them, so the other arm is
+    /// adopted and a write through the result reaches the caller's argument.  `parse_block`
+    /// binds such a tail to a local — the bind copies each arm through its own temp
+    /// (`@FR-B-Copy`) — but that is SKIPPED inside a generic TEMPLATE: a local minted in a
+    /// body that is then CLONED into every monomorph reaches codegen in the clone with no
+    /// slot.  The monomorph does not re-parse its block either, so it took neither, and the
+    /// shape a generic makes easiest to write was the one left aliasing.
+    ///
+    /// Runs in the MONOMORPH's frame like the other post-substitution rewrites: the local
+    /// belongs to the function the code lands in, and minting it here gives it that
+    /// function's own slot.
+    pub(crate) fn bind_monomorph_join_return(&mut self, d_nr: u32) {
+        let ret = self.data.def(d_nr).returned().clone();
+        if !matches!(ret.base(), Type::Reference(_, _) | Type::Enum(_, true, _)) {
+            return;
+        }
+        let saved_ctx = self.context;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = d_nr;
+        let mut code =
+            std::mem::replace(&mut self.data.definitions[d_nr as usize].code, Value::Null);
+        if let Value::Block(bl) = &mut code
+            && let Some(last) = bl.operators.len().checked_sub(1)
+        {
+            // The tail arrives either already wrapped in a `Return` or as the bare branch —
+            // a monomorph's body is the substituted TEMPLATE's, whose delivery has not run.
+            let branch_is_tail = match bl.operators[last].unspan() {
+                Value::Return(inner) => self.is_borrowing_branch(inner),
+                other => self.is_borrowing_branch(other),
+            };
+            if branch_is_tail {
+                let tmp = self.create_unique("__ret_join", &ret);
+                self.vars.defined(tmp);
+                let wrapped = matches!(bl.operators[last].unspan(), Value::Return(_));
+                let branch = match bl.operators[last].unspan_mut() {
+                    Value::Return(inner) => std::mem::replace(&mut **inner, Value::Var(tmp)),
+                    other => std::mem::replace(other, Value::Var(tmp)),
+                };
+                bl.operators[last] = crate::data::v_set(tmp, branch);
+                bl.operators.push(if wrapped {
+                    Value::Return(Box::new(Value::Var(tmp)))
+                } else {
+                    Value::Var(tmp)
+                });
+            }
+        }
+        self.data.definitions[d_nr as usize].code = code;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = saved_ctx;
+    }
+
     pub(crate) fn promote_monomorph_vector_return(
         &mut self,
         d_nr: u32,

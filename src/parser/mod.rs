@@ -7164,6 +7164,10 @@ impl Parser {
         // vector COPIES, and a `-> T` that hands a vector argument up returns a copy of it.
         let holders: Vec<u32> = bindings.iter().map(|(h, _)| *h).collect();
         self.promote_monomorph_vector_return(d_nr, tmpl_vars, &holders);
+        // loft#1387 — and the two-source join twin: a return whose tail is a value branch
+        // over two parameters is FRESH (`@FR-F-Ret`), which the non-generic path gets in
+        // `parse_block` and a monomorph can only get here.
+        self.bind_monomorph_join_return(d_nr);
         // loft#845 — a `"{v}"` on a `vector<T>` was emitted against the row the TEMPLATE
         // could see, which is a vector over the type variable's own storage.  Substitution
         // replaces the type and leaves that row behind, so the dump walked a

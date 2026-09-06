@@ -481,7 +481,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 407 | 383 | **24** |
+| 408 | 384 | **24** |
 
 The `@FR-O-Complete` walk (B7u) added one peeling site — `scopes::adopted_work_refs` reads a
 right-hand side's `If` arms, `Block` and `Insert` tails through their `Span` to find the

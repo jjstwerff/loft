@@ -40,9 +40,15 @@ A correction to the filed scope: the DENSE `-> S` return was documented as the c
 workaround and aliases identically, so the axis is a value branch over parameters, not the
 `?`.  The issue's `wa:` label is now `wa:partial`.
 
-**Not closed for a GENERIC instance.**  The rewrite is skipped inside a generic TEMPLATE —
-its body is cloned into each monomorph, and a local minted there reaches codegen in the clone
-with no slot — and the monomorph does not re-parse the block.  Filed apart.
+**The GENERIC instance is closed beside it (loft#1387).**  The rewrite cannot run in a
+TEMPLATE — its body is cloned into every monomorph, and a local minted there reaches codegen
+in the clone with no slot (`generic-monomorph-null-and-element` catches exactly that) — and
+the monomorph does not re-parse its block, so it took neither.  `bind_monomorph_join_return`
+applies the same rewrite to the MONOMORPH's body, in its own frame, where the local gets that
+function's slot; it joins the `promote_monomorph_*` family that already runs there for the
+text, tuple and vector returns.  The tail arrives either wrapped in a `Return` or as the bare
+branch, because a monomorph's body is the substituted template's and its delivery has not run,
+so both shapes are handled.
 
 Eight cells on both backends; guard `tests/scripts/1368-…loft`, `@falsified-at: 964bab93`.
 
