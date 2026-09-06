@@ -133,6 +133,44 @@ is outside it — so a four-file diff, five green subject suites and a green fal
 clean while a library was broken.  Control added to the guard:
 `a_sibling_fields_growth_does_not_disturb_this_view`.  `Refs #1384`.
 
+### loft#1382: a statement `if` discards EITHER arm's value (2026-09-06)
+
+`@FR-F-Block` discards a block's value *"only where the BLOCK itself is a statement — a
+`;`-terminated one"*, and `@FR-F-Drop` adds that the work still runs.  Neither says which SIDE
+of an `if` the discarded value sits on, so both orders are statements.  Only one compiled: a
+void THEN arm makes the expected type `void`, which accepts any else arm, while a void ELSE
+arm reached the arm-agreement gate as `void ⤳ integer`, licensed by nothing.
+
+Position is knowable only by the caller — `parse_block`'s statement loop is what sees the `;`
+— so it is handed down: a one-token peek marks a statement that BEGINS with `if`/`match`,
+`parse_if` takes and clears it (an `else if` chain recurses through `parse_if_expecting` and
+keeps it; a value-`if` nested in a statement one does not inherit it), and the gate reads it.
+
+Three things constrain it, each found by the suite rather than by reasoning:
+
+* A leading `if` does not prove statement position — a function TAIL begins its statement too,
+  and there the arms must still agree (`parse_errors::wrong_if`).  Looking AHEAD for the `;`
+  is the obvious answer and is wrong: scanning to the end of the construct re-lexes it, and
+  reverting left the parser mis-positioned on 250 tests.  So the gate RECORDS the mismatch and
+  the statement loop reports it unless a `;` followed.  Recording TYPES rather than a rendered
+  message keeps `validate_convert`'s two-defs-one-name case (loft#1094) intact.
+* Only a VOID arm.  The corpus pins `if c { 2 } else { "a" };` as a refusal — two VALUES of
+  different types is a mistake wherever it sits.
+* Position AND a void arm together.  Keying on the arm type ALONE breaks twenty tests:
+  `Type::Void` on an arm is also what a block reports when its value travels through a BUFFER.
+
+The arm keeps its OWN type in statement position, which the native side needs: loft#1381's
+discard gate fires on exactly one arm being void, and handing it the then arm's type made both
+read non-void.  `arm_result` also learned to type a nested chain-`if` — `infer_type` does not
+answer for one, so the outer gate declined while the inner had already discarded, leaving a
+value arm beside a `()` one.
+
+Nine cells on both backends.  It also restores the statement `else if` chain that
+loft#1379/#1380's arm conversion had narrowed.
+
+
+### loft#1368: a return that may borrow one of two sources is FRESH (2026-09-06)
+### A value-`if` is not a coalesce, and an `else if` chain converts at its arms (2026-09-06, `@FR-E-Uncomp-NN` walk, loft#1379 / loft#1380)
 ### A statement `if` discards what its arms yield, on `--native` too (2026-09-06, loft#1381)
 
 `(F-Block)` says a block's value is discarded "where the BLOCK itself is a statement — a

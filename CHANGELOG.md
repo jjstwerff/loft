@@ -20,6 +20,30 @@ record alive when `maybe` turned out to be nothing — once per time it happened
 programs only.  A long-running loop that reassigned such a variable grew for as long as it
 ran.
 
+**Writing an `if` statement the other way round now works.**
+`if k == 1 { println("one") } else { 5 };` compiled, while the mirror
+`if k == 1 { 5 } else { println("one") };` was rejected — the same statement with its arms
+swapped. Both are statements, both throw the value away, and both now compile.
+
+**A function that returns one of two things now hands back a value of its own.**
+`fn pick(p, q, first) -> Node? { if first { p } else { q } }` gave the caller the *second*
+argument itself, so writing to the result changed the caller's own variable — while the first
+argument was correctly copied. Both are copies now, and so is the plain `-> Node` version,
+which had the same problem despite being the documented way around it, and so is the generic
+`fn pick<T>(p: T, q: T, …) -> T?`.
+
+**A generic function used at two integer widths now works in either order.**  Calling the
+same generic with a `u8` and then a `u16` was rejected — *"cannot implicitly narrow u16 to
+u8"*, pointing at the second call — while writing the two calls the other way round compiled
+fine.  The two widths were being treated as one specialisation. They are now two, and the
+order you write them in no longer matters.
+
+**A `&` reference can link a value that may be absent.**  `fn bump(p: &integer?)` and
+`q = &x` where `x: integer?` were refused outright — you had to link the non-null value and
+carry the absence beside it.  Both now work, read and write, on both backends: reading gives
+the source's current value (`p ?? 0` and the rest), writing reaches the source, and writing
+`null` clears it.
+
 **…and so does a `&` link to a field or a list element.**  `pi = &o.i; pi = S { n: 2 }`
 left `o.i` alone, while `pi.n = 2` through the same link worked — so the link looked
 correct right up to the moment you replaced the whole value.  Both now write the thing the

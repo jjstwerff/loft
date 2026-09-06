@@ -1872,6 +1872,19 @@ impl Output<'_> {
     fn arm_result(&mut self, v: &Value) -> Option<Type> {
         match v.unspan() {
             Value::Block(bl) => Some(bl.result.clone()),
+            // loft#1382 — an `else if` CHAIN: the arm is a nested `if`, which `infer_type`
+            // does not answer for, so the outer gate saw "cannot type" and declined while the
+            // inner one had already discarded its own arms.  The outer `if` then had a
+            // value arm beside a `()` one and rustc rejected it.  Answer by the same rule the
+            // gate applies: a nested `if` with exactly one void arm is discarded and yields
+            // `()`, so it is VOID to whoever encloses it; otherwise it answers what its arms
+            // agreed on.
+            Value::If(_, then_arm, else_arm) if !matches!(else_arm.unspan(), Value::Null) => {
+                let then_tp = self.arm_result(then_arm)?;
+                let else_tp = self.arm_result(else_arm)?;
+                let discarded = matches!(then_tp, Type::Void) ^ matches!(else_tp, Type::Void);
+                Some(if discarded { Type::Void } else { then_tp })
+            }
             other => self.infer_type(IrNode::Native(other)),
         }
     }
