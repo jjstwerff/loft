@@ -2956,6 +2956,19 @@ is checked. `make falsify` catches the commonest case — a guard that never fai
 build it was written to catch — but it only answers for the commit you name. These are the
 shapes that survive it, each one measured here rather than imagined.
 
+**A probe whose SETUP contains the thing it tests for measures the setup.**  This is the one
+that survives "measure first", because the probe runs first and still answers the wrong
+question — a probe written from a hypothesis inherits the hypothesis.  Measured 2026-09-07,
+while checking whether a bracketed `pgrep -f "[x]…"` waiter self-matches: both the bracketed
+and the unbracketed form went into ONE shell invocation, so the wrapper's `argv` carried the
+plain string, the bracketed regex matched it, and the run reported *"the bracket self-matches"*
+— the exact failure the probe existed to detect, committed by the probe. Split apart, one
+per invocation, the bracketed form exits on the first poll and the plain one loops forever:
+the opposite conclusion. The tell is that the probe and its subject share a channel — the same
+command line, the same directory, the same cache, the same process. **Ask what the setup itself
+puts into the channel being read, and run one cell per invocation when the answer is "the thing
+I am looking for".**  A positive AND a negative control in one run is the commonest way in.
+
 **A reproduction that hits a WARM CACHE measures nothing — and the tell is the clock.**  A
 red `make ci` named a native cell that took **2.2 s** in the gate; every attempt to reproduce
 it took **51 ms**.  On that basis it was reported "not reproducible" three ways — 20 serial

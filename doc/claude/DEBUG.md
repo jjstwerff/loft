@@ -1622,6 +1622,14 @@ Killing them made it pass in 3s.  So before bisecting one of these:
 pgrep -af "target/test-tmp/.loft/cache/eh_"      # stale servers from an earlier run
 ```
 
+⚠ **Run it AFTER a gate as well as before, because the reap is unconditional.**  Measured on
+both checkouts 2026-09-07: a gate that finished `ALL GATES PASSED` left `eh_s5_*` and `eh_s7_*`
+alive behind it, one pair still running 1h40m later.  Nothing reaps a server that outlived the
+run that started it — `make sweep-scratch` reclaims the artefacts, not the processes.  A GREEN
+run is exactly the case where nobody looks, and the orphan is then charged to whoever runs
+next.  Kill by PID after matching `readlink /proc/<pid>/cwd` against your own checkout; a
+`pkill -f` pattern took out a peer's own process group ([CODE.md](CODE.md)).
+
 **Identical timing across runs is the tell** — that is a deadline expiring, not logic
 failing.  Real logic bugs vary by a few ms; a deadline does not.
 
