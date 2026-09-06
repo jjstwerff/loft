@@ -59,6 +59,14 @@ aliased it — and then leaked the copy.  `(O-NoDiverge)` forbids the split eith
 binding still names the slot and 0 is the answer.  The `match` twin gave 0 on both backends
 throughout, which is what located the gap at the SITE rather than at the rule.
 
+⚠ **These two sites have now diverged TWICE on the same axis**, which is the thing to carry
+forward rather than either fix.  The `@FR-O-Owner` walk found the `is` capture carrying no dep
+where the `match` twin does, from the MATERIALISE side — its gate had to admit an empty list to
+cover it (loft#1394's D-bind-19).  This entry is the same asymmetry from the OWNERSHIP side: an
+empty list is `(O-Proxy)`'s reading of OWNED, so the same missing dep that made a view
+invisible to one walk made it a copy to the other backend.  A third reader of these two sites
+should assume the asymmetry rather than discover it.
+
 **Closed by giving the `is` site the same dep**, under the same shape test #429 states: a
 `Reference` / `Vector` / `Enum` payload takes a frame dep on `match_borrow_source`'s answer, a
 SCALAR takes none (it carries no `DbRef`), and a TEXT payload is untouched — it is an owned copy

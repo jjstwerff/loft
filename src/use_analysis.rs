@@ -4206,6 +4206,23 @@ pub fn warn_variant_overwritten(
                 line,
                 col,
             );
+            // A diagnostic says what is wrong; the fix says what to write instead, and that is
+            // the half a reader acts on.  CONDITIONAL, and the condition is real rather than a
+            // formality: the cure depends on which value the author wanted.  Copying the
+            // payload out keeps the one the arm MATCHED; an author who meant to read what the
+            // subject holds now wants the opposite edit — re-enter the match after the write —
+            // and no tool can tell those apart from the source.
+            diags.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: format!("copy the payload out first: `x = {field};` then read `x`"),
+                condition: Some(format!(
+                    "if `{field}` is meant to be the payload this arm matched, rather than \
+                     whatever `{subject}` holds after the write"
+                )),
+                edit: None,
+                concept: "pattern matching",
+                concept_ref: "@F29",
+            });
         }
     }
 }
