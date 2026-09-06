@@ -1779,8 +1779,15 @@ impl Stores {
             let tags = if self.store(from).shadow_armed() {
                 self.store(from).shadow_tags(src, len as usize)
             } else {
-                vec![1u8; len as usize]
+                // Heap bytes carry no tag, and they are real data: opaque, so they match
+                // whatever the destination is read as.
+                self.store_mut(to)
+                    .shadow_write(at, len as usize, crate::stack_verify::OPAQUE);
+                Vec::new()
             };
+            if tags.is_empty() {
+                return;
+            }
             self.store_mut(to).shadow_set_tags(at, &tags);
         }
     }
