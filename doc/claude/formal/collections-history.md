@@ -6,7 +6,7 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-> **D-col-2 — OPENED AND CLOSED (2026-09-06, loft#1402) — a by-INDEX removal kept what the
+> **D-col-3 — OPENED AND CLOSED (2026-09-06, loft#1402) — a by-INDEX removal kept what the
 > element OWNED.**  `(Col-Remove)` deletes one element and LOFT.md says `v#remove` "removes
 > exactly one element, releases what that element owned".  `Stores::remove_vector_at`'s UNLINKED
 > branch shifted the bytes and released nothing, so `v.remove(i)` and `e#remove` retained one
@@ -38,6 +38,11 @@
 > the backends, so each cell runs one workload at two sizes and asserts the two agree.
 > `collect_store_leaks` cannot see this at all — the records are retained inside a LIVE store,
 > so nothing is unfreed at exit.  Found in the `@FR-Col-Remove` walk (QUALITY.md B8f).
+>
+> Filed as `D-col-2`, which loft#1385 had already taken and closed the same day; renumbered
+> here.  The same collision happened to this issue's sibling in [binding.md](binding.md),
+> twice — a deviation number is picked from the rules doc, which carries only the OPEN ones,
+> so the closed ones it cannot see are exactly the ones a new entry collides with.
 
 - **`C-Order`** (hash bucket-walk) — already a decided edge in concurrency.md; `Col-Order` references it.
 - **`D-key-1`** (keyed slice = iterator) — a shipped decided edge (the value-position crash was fixed to a

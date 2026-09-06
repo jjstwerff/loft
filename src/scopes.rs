@@ -196,7 +196,7 @@ struct Scopes<'s> {
     displaced_owned: HashSet<u16>,
     /// @PLN130 F2/F8 — view bindings live across a disturbance of their container, and which
     /// disturbance it was.  See [`collect_views_to_materialise`].
-    views_to_materialise: HashMap<u16, ViewCause>,
+    views_to_materialise: HashMap<u16, Disturbance>,
     /// loft#721 — fn-ref variable -> the definition it was assigned, or
     /// `u32::MAX` when more than one definition reaches it.  A `CallRef`'s callee
     /// is a runtime value, so this local fact is what lets the lift ask the
@@ -314,8 +314,10 @@ fn same_place(view: (u16, u32), disturbed: (u16, u32)) -> bool {
 /// ownership oracle and both emitters read: peeling an arbitrary `if` there would claim `a?` on
 /// a nullable parameter, whose lowering is an `if` with a `Var` arm, and answer `Borrowed` for
 /// a value the callee minted.
-fn value_view_place(value: &Value, data: &Data, function: &Function) -> Option<(u16, u32)> {
-    view_place_in(value, data, function, &[], 0)
+fn value_view_places(value: &Value, data: &Data, function: &Function) -> Vec<(u16, u32)> {
+    let mut out = Vec::new();
+    view_place_in(value, data, function, &[], 0, &mut out);
+    out
 }
 
 /// [`value_view_place`] with the bindings a surrounding value block made in scope, and a depth
@@ -333,28 +335,37 @@ fn view_place_in<'a>(
     function: &Function,
     env: &[(u16, &'a Value)],
     depth: u32,
-) -> Option<(u16, u32)> {
-    if depth > 16 {
-        return None;
+    out: &mut Vec<(u16, u32)>,
+) {
+    // Bounded on both axes: the depth stops a self-referential binding (`Set(x, Var(x))`) from
+    // walking forever, and the width stops a deeply nested branch from making the open-view
+    // frame grow with the number of arms rather than with the number of bindings.
+    if depth > 16 || out.len() >= 8 {
+        return;
     }
     match value.unspan() {
-        Value::If(_, t, e) => match (
-            view_place_in(t, data, function, env, depth + 1),
-            view_place_in(e, data, function, env, depth + 1),
-        ) {
-            (Some((a, fa)), Some((b, fb))) if a == b => {
-                Some((a, if fa == fb { fa } else { ANY_FIELD }))
+        // BOTH arms, not their intersection.  A binding whose arms project from DIFFERENT
+        // containers is a view of each on the path that takes it, and either being disturbed
+        // ends it — asked for one answer this arm said `None`, so `c = if k { w[0] } else
+        // { v[1] } ; v.remove(0)` kept reading the container it no longer belongs to, on both
+        // backends and in silence (loft#1401's matrix).  A view is recorded once per place it
+        // can name, which the open-view frame already holds as one entry per pair, so nothing
+        // downstream had to learn a new shape.
+        //
+        // Two arms naming the same container at DIFFERENT fields stay two places rather than
+        // collapsing to `ANY_FIELD`: `(B-Disturb)` ends a place, and a disturbance of a third
+        // field of that container ends neither of them.
+        Value::If(_, t, e) => {
+            view_place_in(t, data, function, env, depth + 1, out);
+            view_place_in(e, data, function, env, depth + 1, out);
+        }
+        Value::Block(b) => block_tail_place(&b.operators, data, function, env, depth, out),
+        Value::Insert(ops) => block_tail_place(ops, data, function, env, depth, out),
+        Value::Var(x) => {
+            if let Some((_, bound)) = env.iter().rev().find(|(v, _)| v == x) {
+                view_place_in(bound, data, function, env, depth + 1, out);
             }
-            (Some(p), None) | (None, Some(p)) => Some(p),
-            _ => None,
-        },
-        Value::Block(b) => block_tail_place(&b.operators, data, function, env, depth),
-        Value::Insert(ops) => block_tail_place(ops, data, function, env, depth),
-        Value::Var(x) => env
-            .iter()
-            .rev()
-            .find(|(v, _)| v == x)
-            .and_then(|(_, bound)| view_place_in(bound, data, function, env, depth + 1)),
+        }
         // A place inside a COMPILER-GENERATED container is not a place any disturbance can
         // name, so it is a MINT for this question rather than a view.  A vector literal is
         // the shape that matters: it lowers to a hidden `__vdb_N` backing local and reads its
@@ -365,8 +376,14 @@ fn view_place_in<'a>(
         // and loft#1399 came back.  `(B-Disturb)` is about places the author can disturb, and
         // nothing in the program can reassign a `__vdb_N`; `Self::resolve_view_root` stops at
         // one for the same reason and says so.
-        other => crate::use_analysis::view_source_place(data, other)
-            .filter(|(c, _)| !function.is_compiler_generated(*c)),
+        other => {
+            if let Some(place) = crate::use_analysis::view_source_place(data, other)
+                .filter(|(c, _)| !function.is_compiler_generated(*c))
+                && !out.contains(&place)
+            {
+                out.push(place);
+            }
+        }
     }
 }
 
@@ -378,18 +395,22 @@ fn block_tail_place<'a>(
     function: &Function,
     env: &[(u16, &'a Value)],
     depth: u32,
-) -> Option<(u16, u32)> {
-    let tail = ops
+    out: &mut Vec<(u16, u32)>,
+) {
+    let Some(tail) = ops
         .iter()
         .rev()
-        .find(|o| !matches!(o.unspan(), Value::Line(_)))?;
+        .find(|o| !matches!(o.unspan(), Value::Line(_)))
+    else {
+        return;
+    };
     let mut inner: Vec<(u16, &'a Value)> = env.to_vec();
     for op in ops {
         if let Value::Set(v, val) = op.unspan() {
             inner.push((*v, val.as_ref()));
         }
     }
-    view_place_in(tail, data, function, &inner, depth + 1)
+    view_place_in(tail, data, function, &inner, depth + 1, out);
 }
 
 /// Tell the author that a view was COPIED out of its container, in the sentence its cause
@@ -522,12 +543,40 @@ fn lift_view_deps(arg: &Value, data: &Data) -> Option<Vec<u16>> {
 /// whenever the callee removes from the container, which changes what `&` means (@PLN87) rather
 /// than fixing a bug. Filed as [loft#779](https://github.com/loft-lang/loft/issues/779); the
 /// decided answer is to REFUSE that program, not to copy behind the author's back.
-fn reshaped_containers(code: &Value, data: &Data) -> HashSet<u16> {
-    containers_named_by(code, data, &|name| match name {
+fn reshaped_containers(code: &Value, data: &Data, function: &Function) -> HashSet<(u16, u32)> {
+    let mut out = places_named_by(code, data, &|name| match name {
         "OpRemove" => Some(1),
         "OpRemoveVector" => Some(0),
         _ => None,
-    })
+    });
+    // @FR-Col-RemoveDense — a KEYED removal reaches all five keyed kinds through ONE op, and
+    // only one of them renumbers, so this has to be keyed on the KIND and not on the op.
+    //
+    // `@FR-Col-RemoveKeyed`: `hash`, `index`, `spatial` and `trie` give each element a record
+    // of its own, so removing one leaves every other key reachable AT THE SAME ADDRESS —
+    // measured, a view of another element reads correctly after the removal and a write
+    // through it still lands, which is why collecting them here would materialise a binding
+    // whose write is fine today.  A `sorted` is the INLINE keyed kind: its elements sit in key
+    // order in one dense array, so a removal shifts every later position exactly as a
+    // vector's does, and `@FR-Col-RemoveDense` names the two by-value kinds together.
+    //
+    // The same split `Stores::remove_vector_at`'s `is_linked` gate makes for the LEAK half of
+    // this rule (loft#1402): one `sorted` leaked through `#remove` and not through
+    // `[key] = null`, and here it goes stale through `[key] = null` where `hash` does not.
+    // Two symptoms, one boundary.
+    //
+    // Read off the container VARIABLE's type, so a `sorted` reached through a FIELD is not
+    // collected — a lower bound, kept because the projection carries its element type rather
+    // than its collection kind and guessing there would shake the dense kinds' siblings.
+    for place in places_named_by(code, data, &|name| match name {
+        "OpHashRemove" => Some(0),
+        _ => None,
+    }) {
+        if place.1 == ANY_FIELD && matches!(function.tp(place.0).base(), Type::Sorted(_, _, _)) {
+            out.insert(place);
+        }
+    }
+    out
 }
 
 /// Every container variable `code` GROWS — @FR-B-Disturb's fourth place-ending event.
@@ -613,26 +662,46 @@ fn grown_containers(
     out
 }
 
-/// The container variables `code` names at the argument `which` picks, for the ops it picks.
+/// The PLACES `code` disturbs at the argument `which` picks, for the ops it picks.
 ///
-/// One walk shared by [`reshaped_containers`] and [`grown_containers`], so the two questions
-/// differ only in their op list and cannot drift in how they read an argument.  Only a
-/// container named by a plain `Var` is collected, which is what makes both answers a lower
-/// bound: a disturbance reached through some other expression keeps today's behaviour rather
-/// than inventing a new one.
-fn containers_named_by(
+/// A whole VARIABLE ends every place inside it (`ANY_FIELD`); a FIELD of one ends the places
+/// inside THAT field only.  The distinction is the whole reason this answers places rather
+/// than variables: `p.va.remove(0)` and `p.vb.remove(0)` both name `p`, and treating either as
+/// "everything in `p`" materialises a view whose write lands today.  `grown_containers` records
+/// the measurement — collecting the PARENT for a field-qualified growth shook every view rooted
+/// at the same variable, and `moros_editor`'s undo stack silently stopped recording.
+///
+/// Before loft#1401's matrix this collected ONLY a plain `Var`, so a removal reached through a
+/// field was not a disturbance at all: `c = p.va[1]; p.va.remove(0)` read the element that
+/// shifted in, on both backends and in silence, where the same code with `va` in a local
+/// materialises and says so.  The VIEW side already named the place `(p, off_va)` —
+/// [`value_view_place`] resolves a projection chain to its outermost field — so only this half
+/// was short and the two never met.
+///
+/// A container reached through anything else — a call result, an element of an element — is
+/// still uncollected, and that stays the lower bound it always was: a missed disturbance costs
+/// a materialise, a spurious one costs a program its meaning.
+fn places_named_by(
     code: &Value,
     data: &Data,
     which: &dyn Fn(&str) -> Option<usize>,
-) -> HashSet<u16> {
-    let mut out: HashSet<u16> = HashSet::new();
+) -> HashSet<(u16, u32)> {
+    let mut out: HashSet<(u16, u32)> = HashSet::new();
     code.walk(&mut |v| {
         let Value::Call(d, args) = v else { return };
         let Some(at) = which(data.def(*d).name()) else {
             return;
         };
-        if let Some(Value::Var(c)) = args.get(at).map(Value::unspan) {
-            out.insert(*c);
+        let Some(arg) = args.get(at) else { return };
+        match arg.unspan() {
+            Value::Var(c) => {
+                out.insert((*c, ANY_FIELD));
+            }
+            other => {
+                if let Some(place) = base_container_place(other, data) {
+                    out.insert(place);
+                }
+            }
         }
     });
     out
@@ -935,7 +1004,7 @@ fn collect_views_to_materialise(
     function: &Function,
     data: &Data,
     database: &crate::database::Stores,
-) -> HashMap<u16, ViewCause> {
+) -> HashMap<u16, Disturbance> {
     let out = ViewWalk::run(code, function, data, None, Some(database), 0);
     if !out.is_empty() && std::env::var_os("LOFT_DEBUG_F8").is_some() {
         let mut names: Vec<String> = out
@@ -948,7 +1017,12 @@ fn collect_views_to_materialise(
             names.join(" ")
         );
     }
-    out.into_iter().map(|(v, d)| (v, d.cause)).collect()
+    // The whole `Disturbance` is kept, not just its cause: it already carries the CONTAINER
+    // that was disturbed, and the two report sites used to re-derive one from the right-hand
+    // side instead.  That was a restatement — and once a binding can view more than one
+    // container it is also a wrong answer, because the RHS names both and only one of them was
+    // disturbed.  One home for the fact, named where it was observed.
+    out
 }
 
 /// The state of [`collect_views_to_materialise`]'s in-order walk.
@@ -1121,8 +1195,8 @@ impl ViewWalk<'_> {
 
     /// Shake for everything `stmt` disturbs, at any depth inside it.
     fn disturb(&mut self, stmt: &Value) {
-        self.shake(
-            &reshaped_containers(stmt, self.data),
+        self.shake_places(
+            &reshaped_containers(stmt, self.data, self.function),
             ViewCause::Reshaped,
             None,
         );
@@ -1222,10 +1296,25 @@ impl ViewWalk<'_> {
             // widening the type list ALONE was measured unsound.  The guards for those three
             // issues are this line's regression net; nothing names the pairing itself, so it
             // is named here.  `binding-history.md` D-bind-23 carries the history.
-            if matches!(
-                self.function.tp(*v).base(),
-                Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
-            ) && let Some((container, field)) = value_view_place(rhs, self.data, self.function)
+            // A binding the loop ITERATES is not materialised: the iteration depends on its
+            // identity, so a store of its own makes the loop walk a COPY while the body's
+            // `#remove` empties the original — which does not terminate.  Measured: once a
+            // removal reached through a FIELD became a disturbance (`D-bind-26`),
+            // `for e in d.items { e#remove; }` shook the loop's own source temp — a view of
+            // `(d, off_items)` by every test this walk applies — and `903-loop-remove` went
+            // from 0.06s to a 300s corpus timeout.
+            //
+            // ⚠ The obvious wider rule is WRONG here, and was measured wrong: *"a view the
+            // author cannot name"* excludes a `match` PAYLOAD binding too, which the parser
+            // renames to `_mv_<field>_N` and which the author very much wrote — so
+            // `a-payload-binding-warns-when-its-subject-is-given-another-variant` read its
+            // subject's new variant.  The fact belongs on the variable the lowering created,
+            // not on the shape of its name.
+            if !self.function.is_iteration_source(*v)
+                && matches!(
+                    self.function.tp(*v).base(),
+                    Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
+                )
             {
                 // The view belongs to the frame that owns its VARIABLE. Re-binding an outer
                 // local inside a nested block gives a view that outlives the block, and
@@ -1242,8 +1331,16 @@ impl ViewWalk<'_> {
                 // backends and with nothing said, where the one-expression spelling
                 // materialises and says so (loft#1393).  Resolve through the views already
                 // open, which is the same walk one level out.
-                let (container, field) = self.resolve_view_root(container, field);
-                self.open[idx].push((*v, container, field));
+                // One entry per PLACE the value can name.  The frame already holds a
+                // `(view, container, field)` triple per pair, so a binding that views two
+                // containers is two entries and `shake_places` matches either — no new shape,
+                // and `record_target`'s own `retain` clears them all when the slot is rebound.
+                for (container, field) in value_view_places(rhs, self.data, self.function) {
+                    let (container, field) = self.resolve_view_root(container, field);
+                    if !self.open[idx].contains(&(*v, container, field)) {
+                        self.open[idx].push((*v, container, field));
+                    }
+                }
             }
         }
     }
@@ -6588,7 +6685,6 @@ impl Scopes<'_> {
             && function.tp(v).depend().iter().all(|d| *d == container)
         {
             let vname = function.name(v).to_string();
-            let cname = function.name(container).to_string();
             let deps: Vec<u16> = function.tp(v).depend().clone();
             for d in deps {
                 function.make_independent(v, d);
@@ -6630,7 +6726,12 @@ impl Scopes<'_> {
                 }
             }
             let fname = data.def(self.d_nr).original_name();
-            report_materialised_view(cause, &vname, &cname, &fname);
+            // The container the ADVICE names is the one that was DISTURBED, carried on the
+            // walk's own answer.  `cname` above is the one the binding's deps name, which the
+            // strip needs and the sentence does not: for a binding that views two containers
+            // they are different, and only one of them was reassigned.
+            let cname = function.name(cause.container).to_string();
+            report_materialised_view(cause.cause, &vname, &cname, &fname);
         }
         // Companion to the !adopts_fresh_store (deep-copy) branch above for the
         // var-to-var deep-copy path.  When `Set(v, Var(src))` and
@@ -6704,12 +6805,11 @@ impl Scopes<'_> {
             // is the measured reason loft#1401's second cure was backed out.
             if self.lift_join_arm_tails(&mut rw, home, v, function, data)
                 && let Some(cause) = self.views_to_materialise.get(&v).copied()
-                && let Some((container, _)) = value_view_place(value, data, function)
             {
                 report_materialised_view(
-                    cause,
+                    cause.cause,
                     function.name(v),
-                    function.name(container),
+                    function.name(cause.container),
                     &data.def(self.d_nr).original_name(),
                 );
             }
@@ -11982,7 +12082,7 @@ fn owner_witness_locals(
     function: &Function,
     data: &Data,
     d_nr: u32,
-    materialised_views: &HashMap<u16, ViewCause>,
+    materialised_views: &HashMap<u16, Disturbance>,
 ) -> Vec<u16> {
     let mut defs: Option<crate::use_analysis::Defs> = None;
     let mut minted: HashSet<u16> = HashSet::new();

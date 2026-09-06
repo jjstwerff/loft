@@ -9,6 +9,114 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `(B-Disturb)` ends every place a view can name (2026-09-07, D-bind-25/26/27)
+
+Three neighbours of loft#1401, found by its boundary matrix and each failing IDENTICALLY in the
+plain spelling and the `??` one — which is what said they were not that issue's discharge defect.
+Each is a silent wrong answer on both backends.
+
+**A `sorted` removal is a reshape.**  Measured per keyed kind: `hash` and `index` answer the
+right element after another key is removed and a write through the view still lands; `sorted`
+reads the element that shifted in.  The four own-record kinds leave every other key reachable at
+the same address (`(Col-RemoveKeyed)`), while a `sorted` is the INLINE keyed kind whose elements
+sit in key order in one dense array — `(Col-RemoveDense)`, beside the vector.  All five remove
+through `OpHashRemove`, so the reshape is keyed on the KIND; adding the op flat would have
+materialised the four that are correct today.  Same boundary loft#1402 crossed from the other
+side, where a `sorted` LEAKED through `#remove` while `[key] = null` stayed flat.
+
+**A removal reached through a FIELD is a disturbance.**  `p.va.remove(0)` names its container as
+a projection and only a plain `Var` was collected, so `c = p.va[1]` kept reading the element that
+shifted in — while the same code with `va` in a local materialises and says so.  The collector
+now answers PLACES: a whole variable ends everything inside it, a field ends that field only.
+The precision IS the fix — `grown_containers` records what a variable-granular version costs
+(`moros_editor`'s undo stack silently stopped recording), and two controls pin it.
+
+**A branch over two containers names both.**  `c = if k { w[0] } else { v[1] }` is a view of each
+on the path that takes it, and the walk answered `None` whenever the arms disagreed.  A view is
+now recorded once per PLACE, which the open-view frame already held as one entry per pair, so
+nothing downstream learned a new shape.  With more than one place, the ADVICE could no longer
+re-derive its container from the right-hand side — that names both and only one was disturbed —
+so `views_to_materialise` carries the whole `Disturbance`, which already held the container it
+was observed at.
+
+Landing the field half needed a third rule: **a binding the loop ITERATES is not materialised.**
+The iteration depends on the temp's IDENTITY, so `for e in d.items { e#remove; }` shook the
+loop's own source, walked a COPY while the body emptied the original, and never terminated —
+`903-loop-remove` went from 0.06s to a 300s corpus timeout.  The obvious wider rule (*a view the
+author cannot name*) was measured WRONG: the parser renames author bindings too, and a `match`
+payload must still materialise, so a name test traded the hang for a silent wrong answer.  It is
+a MARKER on the variable the lowering creates (`Function::is_iteration_source`).
+
+Guard: `a-disturbance-ends-every-place-a-view-can-name` (12 cells, both backends, falsified at
+f4403e62).  SEVEN are controls, because widening a disturbance is the direction that silently
+loses a write; each has a FIRING twin in the same file, so none can read green by never being
+reached.
+
+### A `??`-discharged projection is the view its plain spelling is (2026-09-06, loft#1401, D-bind-24)
+
+`c = v[1] ?? Box{n:0}; v.remove(0)` left `c` aliasing POSITION 1, which `(Col-RemoveDense)` had
+just renumbered: it read the value that shifted in and a write through it still reached the
+container — both backends, in silence, where the plain `c = v[1]` materialises and says so.
+`(N-Index)` types `v[i]` as `τ?`, so `??` is the discharge the language REQUIRES for a non-null
+binding.
+
+Filed as one hole; it was four, and each alone leaves the defect standing.  NAMING — a `??`
+lowers to a value block that hoists its subject into a temp and hands that temp back, so the
+walk saw a bare `Var`; a tail is now resolved through the block's OWN bindings, which covers
+`??`, `?? return` and a `match` subject in one step, and the walk answers a PLACE so container
+and field come from one derivation.  COPY — per ARM, as loft#1396/#1399 supply it for a
+branch-valued binding, gated on the walk having named the binding.  `?? return` — its absent
+path leaves by an early return, so the tail is an unconditional `Var` and `is_value_branch` read
+that as "not a branch".  SPELLING — a discharged `v[i]` arrives as `OpGetVectorNullable`, a
+projection by every structural test that is deliberately off `is_projection_op` because the deps
+PROXY strands a store on it; that hazard belongs to the proxy, so `view_source_place` is the
+reading for a walk that only NAMES a place.
+
+The report now follows the COPY rather than the strip, so `(H-Materialise)`'s "and the author is
+told" holds whichever mechanism supplied the store.  The first cut regressed loft#1399 — a `[]`
+MINT arm named the hidden `__vdb_N` it reads its own store out of, and two arms naming different
+containers name none — closed by treating a compiler-generated container as no place at all,
+which `resolve_view_root` already did.  Guard:
+`a-discharged-projection-materialises-like-its-plain-twin` (15 cells, three of them ALIAS
+controls, both backends).  `Fixes #1401`.
+
+### A vector removal releases what the element owned (2026-09-06, loft#1402, D-col-3)
+
+`v.remove(i)` and the in-loop `e#remove` retained one record per removal: 2000 add+remove cycles
+at a population of ZERO held 2004 records where the keyed baseline holds 4.  `remove_vector_at`'s
+UNLINKED branch shifted the bytes and released nothing, so one `sorted` leaked through `#remove`
+and not through `[key] = null`.  Its own doc said why it thought it needn't — "there is no
+separate record to free" — true of the element's own record and false of its CLAIMS.  Walked now
+through `get_vector`, the same index→element map `remove_vector` walks, and released BEFORE the
+shift because an inline element IS the slot.
+
+It could not land alone: while loft#1401 left a `??`-discharged binding viewing the removed
+element, releasing that element's children emptied a value the program was still reading, and
+`445-generic-tree-walk` failed — rightly.  Guard:
+`a-vector-removal-releases-what-the-element-owned` (10 cells, both backends); its oracle is
+FLATNESS rather than a count, because the absolute record count differs between the backends and
+`collect_store_leaks` cannot see a record retained inside a LIVE store.  `Fixes #1402`.
+
+### `(N-Store)` is asked at the assignment target (2026-09-06, loft#1404, D-Null-Assign)
+
+The fifth position loft#1313's heap half did not reach.  `s.rec = null` did not happen —
+`s.rec.n` still read 5 where the literal `S{rec: null}` reads 0 — and `v[i] = null` was a no-op,
+both silent on both backends.  The filed scope was wrong: `x = null` at a heap target spells FIVE
+things and three are not stores, so widening the ask to `is_dbref` would have reported correct
+code.  Measured at the lowering, a keyed `c[key] = null` is `OpHashRemove` (`(Col-Remove)`'s
+delete), `s.coll = null` is `OpClearVector`/`OpClearKeyed` (that field's clear), and a
+`reference<T>` POINTER field is `OpSetDbRef(sentinel)` — a store that LANDS.  Only the two
+dropped writes build `OpCopyRecord(null, …)`, so the ask went to `copy_ref` and needs no
+container, keyed or pointer-marker test.  A gate at the parse site needed all three and still got
+the pointer field wrong, because #328's share marker is not on the resolved target type by then.
+
+The VALUE is unchanged and that is settled: a dense field has no discriminant to spend on
+absence, so the cure the message already named — declare it `τ?` — is the real one.  The
+CONSEQUENCE clause is now the reporting position's, because "the slot holds null" is measured
+true for a scalar and for a record travelling as a HANDLE and false here; the four shipped
+positions keep their wording to the byte.  Six cells in `tests/heap_nstore.rs`, four of them
+negative controls.  `Fixes #1404`.
+
 ### The native cache publishes a whole binary or none of it (2026-09-06)
 
 `--native` compiles into a per-process scratch dir and publishes to a SHARED, content-keyed

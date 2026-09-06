@@ -1372,6 +1372,28 @@ denser per-run table.
 
 ## Hang guard (`LOFT_MAX_OPS`)
 
+> **Reach for `perf` FIRST when the hang is in a build you already have.**  This guard needs a
+> rebuild with debug-assertions flipped on (below), which is minutes; a running process can be
+> sampled in seconds and needs nothing:
+>
+> ```bash
+> <the hanging command> & BGPID=$!
+> sleep 6 && perf record -F 199 -g -p $BGPID -o /tmp/hang.data -- sleep 6
+> kill -9 $BGPID; perf report -i /tmp/hang.data --stdio --no-children | head -15
+> ```
+>
+> `gdb -p` is the reflex and it gave NOTHING here (ptrace is restricted on this box), so `perf`
+> is the one to try first.  What it buys over a timeout is the same thing `LOFT_MAX_OPS` buys —
+> the loop, not just the fact — and it works on a release build.
+>
+> ⚠ **And read the answer as a LOCATION, not a cause.**  A hang whose samples are all in
+> `State::execute_argv` is an interpreter loop that is not terminating; it does not follow that
+> the DEFECT is in the interpreter.  Measured (D-bind-26): a compile-time analysis decided to
+> materialise the temp a `for` loop iterates, so the loop walked a copy while its body emptied
+> the original — the whole fault was in `scopes.rs`, with no compile-time symptom at all, and
+> the corpus reported only two 300s timeouts.  When the samples name a runtime loop, ask what
+> COMPILED that loop differently, and bisect the change set by building and timing.
+
 The third sibling, and the only one that is **debug-assertions only**. The
 interpreter counts executed operations and, on reaching the ceiling, panics with the
 last sixteen ops — each resolved to `function+offset: OpName`. That trail is the

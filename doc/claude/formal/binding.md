@@ -355,7 +355,10 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 
 ## Deviations
 
-**OPEN: 0** — the closed ones: D-bind-24 CLOSED 2026-09-06 (loft#1401): a projection
+**OPEN: 0** — the closed ones: D-bind-25/26/27 CLOSED 2026-09-07: `(B-Disturb)` ends a place
+for a `sorted` removal (`(Col-RemoveDense)` — the INLINE keyed kind), for a removal reached
+through a FIELD, and for every place a branch's arms can name rather than only an agreed one;
+D-bind-24 CLOSED 2026-09-06 (loft#1401): a projection
 discharged with `??` is the view its plain spelling is, so it materialises where that one does;
 D-bind-20 CLOSED 2026-09-06 (loft#1393): a view whose container is itself a
 view is a place inside the OUTER container, so a disturbance of that one ends it; D-bind-19

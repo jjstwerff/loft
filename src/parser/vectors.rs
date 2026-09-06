@@ -2738,6 +2738,9 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
         let mut fill = Value::Null;
         if matches!(in_type, Type::Vector(_, _)) {
             let vec_var = self.create_unique("vector", &in_type);
+            // The loop iterates THIS temp, so its identity is load-bearing: materialising it
+            // would walk a copy while the body's `#remove` empties the original.
+            self.vars.set_iteration_source(vec_var);
             in_type = in_type.depending(vec_var);
             fill = v_set(vec_var, expr);
             expr = Value::Var(vec_var);

@@ -2472,7 +2472,13 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 729 | 364 | 5 | **360** |
+| 730 | 365 | 5 | **360** |
+
+D-bind-25 added one function on the SEEING-THROUGH side — `730 | 365 | 5 | 360` —
+`scopes::reshaped_containers`, which now asks a keyed removal's container which KIND it is so a
+`sorted` (the inline one, `@FR-Col-RemoveDense`) counts as a reshape where the four own-record
+kinds do not.  It reads through `.base()`, so a `sorted<E[k]>?` answers as its dense twin does:
+the `?` says the slot may be absent and says nothing about how the kind renumbers.
 
 loft#1403 added one function on the OPAQUE side — `729 | 364 | 5 | 360` — the `snapshot_kind`
 helper that names the three SNAPSHOT-iterating collection kinds (`Type::Hash | Type::Trie |
@@ -6211,6 +6217,39 @@ stays kind-neutral where two such fields make it undecidable rather than guessin
 gets its own cure spelling, since its key is coordinate axes.  The message is a pinned surface
 — `tests/issues.rs`, `the-reference-quotes-its-refusals-word-for-word.loft` and CAVEATS.md all
 quote it — and all three moved with it, which is what that script exists to force.
+
+**Both are CLOSED now, in the order the walk said** (loft#1401 then loft#1402), and the
+closing found more than the walk had. loft#1401 was FOUR holes, not the one cure the analysis
+above scopes: the naming (a discharge block's tail names the temp it hoisted, so a tail is now
+resolved through the block's OWN bindings), the per-arm copy, `is_value_branch` (a `?? return`
+tail is an unconditional `Var` rather than an `if`, so that arm never reached the copy at all),
+and `OpGetVectorNullable` not counting as a projection for the naming question — it meets
+`is_projection_op`'s criterion and is deliberately off that list because the deps PROXY strands
+a store on it, which is a fact about the proxy and not about the notion. A fifth cell, a
+binding assigned twice, needed the `multi_assigned` bail lifted for a NAMED binding: that guard
+is about the type-level dep list, which the lift already declines to rewrite for one.
+
+⚠ **And the first cut regressed loft#1399**, which is the paragraph above earning its keep from
+the other side. Letting a block tail resolve through its own bindings also let a `[]` MINT arm
+name the hidden `__vdb_N` it reads its own store out of — a projection by every structural test
+— and two arms naming different containers name none, so the whole binding stopped being a
+view. A place inside a compiler-generated container is not a place any disturbance can name;
+`resolve_view_root` already stopped at one for exactly that reason. **The corpus caught it and
+no targeted suite did**, which is the same sentence this section already ends on.
+
+The matrix that closed loft#1401 left THREE more silent-wrong cells, all of them failing
+IDENTICALLY in their plain spelling — so none was a discharge defect, and each was its own
+finding: a `sorted` removal renumbers positions (`Col-RemoveDense`) and was not recorded as a
+disturbance, where `hash` and `index` are measured correct; a removal whose container is
+reached through a FIELD was not recorded either; and a value branch whose two arms view
+DIFFERENT containers named neither.  **All three are closed** (D-bind-25/26/27), and the shape
+they share is worth the line: the VIEW side of `(B-Disturb)` had been made precise three times
+over — through a branch, through a chain of views, through a discharge block — while the
+DISTURBANCE side still answered whole variables from a two-op list.  A rule enforced by two
+walks that must MEET is only as good as its shorter half, and every fix that widened one of
+them left the pair further apart.  The disturbance side now answers places too, and the advice
+reads its container off the walk's own answer instead of re-deriving one from the right-hand
+side — which was a restatement before more than one place made it a wrong answer.
 
 **The lesson.**  A leak fix can be load-bearing for a silent wrong.  This one reads as
 obviously right in isolation, has a one-line cure at a chokepoint the rule names, passes 262/262

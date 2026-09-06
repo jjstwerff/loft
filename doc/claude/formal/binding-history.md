@@ -6,7 +6,11 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — D-bind-24 OPENED AND CLOSED 2026-09-06 (loft#1401: a projection discharged
+OPEN: **0** — D-bind-27 OPENED AND CLOSED 2026-09-07: a value branch whose arms view
+DIFFERENT containers names EVERY place it can read, not none; D-bind-26 OPENED AND CLOSED
+2026-09-07: a removal reached through a FIELD is a disturbance of that field's place;
+D-bind-25 OPENED AND CLOSED 2026-09-07: a `sorted` removal renumbers, so it ends the
+places its container holds (below, all three).  D-bind-24 OPENED AND CLOSED 2026-09-06 (loft#1401: a projection discharged
 with `??` was not a view the materialise walk could see, so it kept aliasing an element
 position a `remove` had renumbered; below).  D-bind-23 OPENED AND CLOSED 2026-09-06 (loft#1399: a branch arm projecting a COLLECTION got no copy, so `--interpret` read the reassigned container where `--native` was right; below); D-bind-22 OPENED AND CLOSED 2026-09-06 (loft#1396: a binding whose value is a
 BRANCH with a projecting arm was named by nothing, so it never materialised — closed by naming
@@ -21,6 +25,86 @@ reference review.
 B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
 opened and closed 2026-08-05); B-Ref-AnnotationOnly is enforced in every position, not
 only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
+
+> **D-bind-25, D-bind-26, D-bind-27 — OPENED AND CLOSED (2026-09-07) — three places
+> `(B-Disturb)` names that the walk could not see.**  All three came out of loft#1401's
+> boundary matrix, and all three failed IDENTICALLY in the plain spelling and the `??` one —
+> which is what said they were not that issue's discharge defect but its neighbours.  Each is
+> a silent wrong answer on both backends, and each has its own root.
+>
+> **D-bind-25 — a `sorted` removal is a reshape.**  Measured, one shape per keyed kind:
+> `hash` and `index` answer the right element after another key is removed and a write through
+> the view still lands; `sorted` reads the element that shifted in.  `(Col-RemoveKeyed)` is why
+> — the four own-record kinds leave every other key reachable AT THE SAME ADDRESS, while a
+> `sorted` is the INLINE keyed kind whose elements sit in key order in one dense array, so
+> `(Col-RemoveDense)` covers it beside the vector.  `reshaped_containers` listed
+> `OpRemove`/`OpRemoveVector` and a keyed removal emits `OpHashRemove`, which serves all five
+> kinds — so the fix is keyed on the KIND, not on the op.  Adding the op flat would have
+> materialised the four that are correct today, which is the harmful direction.  **This is the
+> same boundary loft#1402 crossed from the other side**: there a `sorted` LEAKED through
+> `#remove` while `[key] = null` stayed flat, here it goes STALE through `[key] = null` while
+> `hash` does not.  One split, two symptoms, and `remove_vector_at`'s `is_linked` gate is the
+> third place it shows.
+>
+> **D-bind-26 — a removal reached through a FIELD is a disturbance.**  `p.va.remove(0)` emits
+> `OpRemoveVector(OpGetField(p, off_va, …), …)`, and the collector took the op's argument only
+> when it was a plain `Var`.  The VIEW side was already precise — `value_view_place` resolves a
+> projection chain to `(p, off_va)` — so only this half was short and the two never met, while
+> the same code with `va` in a LOCAL materialises and says so.  Closed by answering PLACES: a
+> whole variable ends everything inside it, a field ends that field only.
+>
+> ⚠ **And that precision is the fix, not a refinement of it.**  `grown_containers` carries the
+> measurement on its own half: collecting the PARENT for a field-qualified growth shook every
+> view rooted at the same variable, and `moros_editor`'s `undo_pop` read each entry out of a
+> copy — the undo stack silently stopped recording, `undo_depth` answering 0 where 3 was due.
+> A variable-granular version of this fix is that bug.  Two controls pin it: a sibling member
+> REMOVED and a sibling member GROWN must both leave the view aliasing.
+>
+> ⚠ **And it cost a third rule to land: a binding the loop ITERATES is not materialised.**
+> With a field-reached removal counting as a disturbance,
+> `for e in d.items { e#remove; }` shook the loop's OWN source temp — a view of
+> `(d, off_items)` by every test this walk applies — so the loop walked a COPY while the body
+> emptied the original, and never terminated.  `903-loop-remove` went from 0.06s to a 300s
+> corpus TIMEOUT, taking both corpus binaries with it.  The iteration depends on that temp's
+> IDENTITY, so giving it a store of its own is not a copy of a value but a different loop.
+>
+> ⚠⚠ **The obvious wider rule was measured WRONG, and that is the entry's second lesson.**
+> *"A view the AUTHOR cannot name is not a binding `(B-View)` is about"* reads well, matches
+> `resolve_view_root`'s stop at a compiler-generated CONTAINER, and is false: the parser renames
+> author bindings too, and a `match` PAYLOAD (`_mv_<field>_N`) is a view the author very much
+> wrote and must still materialise.  Shipped as a name test it made
+> `a-payload-binding-warns-when-its-subject-is-given-another-variant` read its subject's NEW
+> variant — trading a hang for a silent wrong answer.  So the fact is a MARKER on the variable
+> the lowering created (`Function::is_iteration_source`, set at the two sites that build the
+> temp), not a property of how its name is spelled.
+>
+> The bisect is worth the sentence too, because the symptom pointed away from the cause: the
+> hang was in `State::execute_argv` — the INTERPRETER — while the defect was a compile-time
+> analysis deciding to copy something the interpreter's loop depended on, with no compile-time
+> symptom at all.  `gdb -p` had nothing to attach to; `perf record -p <pid> -g` named the loop
+> in seconds, and three build-and-time steps named which of the three changes owned it.
+>
+> **D-bind-27 — a branch over two containers names both.**  `c = if k { w[0] } else { v[1] }`
+> is a view of `w` on one path and of `v` on the other, and the `If` arm answered `None`
+> whenever the arms disagreed — the documented rule, and the right answer for a walk that
+> records one container per view.  It is now recorded once per PLACE, which the open-view frame
+> already held as one `(view, container, field)` entry per pair, so nothing downstream learned
+> a new shape and `shake_places` matches either.  Two arms naming one container at DIFFERENT
+> fields stay two places rather than collapsing to `ANY_FIELD`: a disturbance of a third field
+> ends neither.
+>
+> With more than one place per view, the ADVICE could no longer re-derive its container from
+> the right-hand side — that names both and only one was disturbed.  `views_to_materialise` now
+> carries the whole `Disturbance`, which already held the container it was observed at, so the
+> sentence names what actually moved.  The re-derivation was a restatement before it was a
+> wrong answer; this is the same one-home correction QUALITY.md's register keeps recording.
+>
+> Guarded by `a-disturbance-ends-every-place-a-view-can-name` (11 cells, both backends,
+> falsified at f4403e62).  SIX of the eleven are controls — the four own-record keyed kinds, a
+> sibling member removed, a sibling member grown, and an undisturbed branch — because widening
+> a disturbance is the direction that silently loses a write.  Each control has a FIRING twin
+> in the same file, so none of them can read green by never being reached: `LOFT_DEBUG_F8=1`
+> names exactly the four positive cells and none of the controls.
 
 > **D-bind-24 — OPENED AND CLOSED (2026-09-06, loft#1401) — a projection discharged with
 > `??` was not a view the materialise walk could see.**  `(B-View)` and [heap.md](heap.md)
@@ -73,7 +157,7 @@ only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
 > 2f471b15 on both backends).  Three of its cells are ALIAS controls — an undisturbed
 > discharge, a use before the disturbance, and a disturbance of another member — because
 > over-materialising is not the smaller error: it silently loses a write that lands today.
-> Unblocks [collections.md](collections.md) `D-col-2` (loft#1402), which could not release a
+> Unblocks [collections.md](collections.md) `D-col-3` (loft#1402), which could not release a
 > removed element's children while such a binding still viewed it.  Found in the
 > `@FR-Col-Remove` walk (QUALITY.md B8f).
 

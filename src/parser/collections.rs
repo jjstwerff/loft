@@ -3024,6 +3024,8 @@ use #count instead"
             }
             if matches!(in_type, Type::Vector(_, _)) {
                 let vec_var = self.create_unique("vector", &in_type);
+                // The loop iterates THIS temp — see `Function::iteration_source`.
+                self.vars.set_iteration_source(vec_var);
                 // On the second pass in_type may carry __vdb_N dependencies that
                 // were not present on the first pass (vector_db only runs on pass 2).
                 // Update the temp variable's type so that get_free_vars sees the
