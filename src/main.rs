@@ -11754,6 +11754,17 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
             std::process::exit(1);
         }
     }
+    // @PLN154 phase 5 — the same reason, one lever over: every finding is reported at its
+    // own site during the run, and the count becomes a non-zero exit here so the shadow can
+    // be a GATE rather than something someone has to read the output of.  A sweep that has
+    // to grep stderr is a sweep that goes green when the format changes.
+    if loft::stack_verify::enabled() {
+        let n = loft::stack_verify::violations();
+        if n > 0 {
+            eprintln!("[stack-verify] FAILED: {n} stack-slot violation(s)");
+            std::process::exit(1);
+        }
+    }
     if let Some(err) = runtime_err {
         // The typed-error block plus the call chain captured at raise time, through the
         // renderer the generated binary also uses (`RuntimeError::report_and_exit`).

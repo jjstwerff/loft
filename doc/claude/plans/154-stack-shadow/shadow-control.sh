@@ -25,6 +25,12 @@ ROOT=$(git rev-parse --show-toplevel)
 SHA=$(git rev-parse --short "$REF") || exit 2
 OUT="${2:-${TMPDIR:-/tmp}/loft-shadow}"
 WT="$OUT/$SHA"; TGT="$OUT/$SHA-target"
+# The stdlib the control binary must be pointed at, kept BESIDE the target rather than in
+# the worktree: a sweep removes each worktree as it goes to bound the disk, and a cached
+# binary whose `--path` names a deleted tree does not fail — it exits 1 with "cannot load
+# standard library" and a sweep scores that SILENT.  A few hundred kilobytes buys the
+# difference between a measurement and a vacuous one.
+STD="$TGT/stdlib-root"
 
 # The shadow's own commits, newest last.  Found by their subject so a rebase does not
 # silently pin an old copy.
@@ -80,7 +86,9 @@ PY
       grep -E '^error' -A8 "$log" >&2
       exit 2
     fi
+    rm -rf "$STD"; mkdir -p "$STD"; cp -r default "$STD/default"
   ) || { echo "control build failed: $WT" >&2; exit 2; }
 fi
+[ -d "$STD/default" ] || { echo "control has no stdlib copy: $STD" >&2; exit 2; }
 echo "$TGT/release/loft"
-echo "$WT/"
+echo "$STD/"
