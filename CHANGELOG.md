@@ -14,6 +14,15 @@ invariants, internal phase numbers)?  See
 
 ## 2026-09
 
+**A `match` arm now has to answer in the type its siblings answer in.**  Every arm was parsed
+without knowing what type the `match` as a whole was expected to produce, so an arm of another
+type was neither converted nor refused: a `float` destination with an integer arm read the
+integer's BITS as a float, an `integer` destination with a `2.5` arm read the float's bits as
+an integer, and `250 + 10` landed in a `u8` local holding 260.  All of it silent, on both
+backends, and for every kind of subject you can match on.  Arms now convert to the type their
+siblings answer in, exactly as an `else` block converts to its `if`'s — so the integer arm
+becomes a real `2.0`, and the ones that cannot convert are reported and name the arm.
+
 **Removing an item from a collection inside an optional record now updates its index.**  A
 struct held inside a `vector<Room?>` has collections of its own; removing an item from one of
 them left the removed item findable through the sibling lookup, so a search still returned

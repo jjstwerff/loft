@@ -401,6 +401,12 @@ pub struct Parser {
     /// either drops it (a `;` followed: the value is discarded, so the arms need not agree) or
     /// reports it.
     pub(crate) pending_arm_mismatch: Option<ArmMismatch>,
+    /// Set when `parse_match_arm_body` has already reported an arm whose value its
+    /// siblings' type cannot hold.  The cross-arm `match_arm_types_unify` gate asks the
+    /// same question less precisely (`is_same` collapses every `Integer(_)`, so it cannot
+    /// see a narrowing), so it stays silent for an arm the conversion already named
+    /// rather than reporting the same mistake twice.
+    pub(crate) arm_convert_reported: bool,
     /// loft#1382 — the arms currently being parsed belong to a construct in STATEMENT
     /// position, so their types need not agree with each other.
     ///
@@ -1343,6 +1349,7 @@ impl Parser {
             amp_pending: false,
             stmt_if_pending: false,
             pending_arm_mismatch: None,
+            arm_convert_reported: false,
             arms_of_statement_construct: false,
             match_void_arm: false,
             amp_head: AmpHead::default(),
@@ -5590,6 +5597,15 @@ impl Parser {
     }
 
     fn validate_convert(&mut self, context: &str, test_type: &Type, should: &Type, pos: &Position) {
+        // The block CONTEXT doubles as the internal name `parse_block` and `block_result`
+        // key on, so the one that reads as a token gets a reader's spelling here — the
+        // message says *"on a match arm"* beside the twin's *"on else"*, and the keying
+        // stays untouched.
+        let context = if context == "match_arm" {
+            "a match arm"
+        } else {
+            context
+        };
         if !self.first_pass && !self.can_convert(test_type, should) {
             // Plan-07 phase 6 (partial) — "expected E, got G on context"
             // reads the same direction as English ("we expected this,

@@ -1850,7 +1850,13 @@ impl Parser {
             // expects `Unknown`).  Every other caller's expected type is a DECLARED one.
             // The three carve-outs below are about the sibling, not about the keyword, so
             // they read this and not `context == "else"` (loft#1380).
-            let arm_of_sibling = context == "else" || (context == "if" && !result.is_unknown());
+            // A `match` ARM is an else arm too (loft#1380's twin): the destination checks the
+            // whole construct, so each arm converts to the type its siblings answer in, with
+            // the same carve-outs — the sibling-variant join, the statement-position discard,
+            // the honest nullability.  Gated on a KNOWN expected type exactly as `if` is: the
+            // first concrete arm has nothing to agree with and names the type instead.
+            let arm_of_sibling = context == "else"
+                || ((context == "if" || context == "match_arm") && !result.is_unknown());
             let tuple_rewritten = !self.first_pass
                 && (context == "return from block" || arm_of_sibling)
                 && matches!(t, Type::Tuple(_))
@@ -4427,11 +4433,8 @@ impl Parser {
                 let arm_write_state = self.vars.save_and_clear_write_state();
                 self.vars.clear_write_state();
                 let mut arm_body = Value::Null;
-                let arm_type = if self.lexer.peek_token("{") {
-                    self.parse_block("match_arm", &mut arm_body, &Type::Unknown(0))
-                } else {
-                    self.expression(&mut arm_body)
-                };
+                let arm_expected = Self::match_arm_expected(&result_type);
+                let arm_type = self.parse_match_arm_body(&arm_expected, &mut arm_body);
                 self.vars.restore_write_state(&arm_write_state);
                 // loft#978 — every arm can deliver this match's value, so the result carries
                 // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
@@ -4443,6 +4446,7 @@ impl Parser {
                 } else if !self.first_pass
                     && arm_type != Type::Void
                     && arm_type != Type::Null
+                    && !self.arm_convert_reported
                     && !match_arm_types_unify(&result_type, &arm_type)
                 {
                     diagnostic!(
@@ -4896,11 +4900,8 @@ impl Parser {
             let arm_write_state = self.vars.save_and_clear_write_state();
             self.vars.clear_write_state();
             let mut arm_body = Value::Null;
-            let mut arm_type = if self.lexer.peek_token("{") {
-                self.parse_block("match_arm", &mut arm_body, &Type::Unknown(0))
-            } else {
-                self.expression(&mut arm_body)
-            };
+            let arm_expected = Self::match_arm_expected(&result_type);
+            let mut arm_type = self.parse_match_arm_body(&arm_expected, &mut arm_body);
             self.vars.restore_write_state(&arm_write_state);
             // @PLN85 match_return (LOFT_JOIN_OWN): if this arm yields a borrowed-view
             // vector field binding DIRECTLY (`Filled { items } => { items }`), wrap it in
@@ -4939,6 +4940,7 @@ impl Parser {
             } else if !self.first_pass
                 && arm_type != Type::Void
                 && arm_type != Type::Null
+                && !self.arm_convert_reported
                 && !match_arm_types_unify(&result_type, &arm_type)
             {
                 diagnostic!(
@@ -5176,16 +5178,107 @@ impl Parser {
 
     /// Parse a wildcard (`_`) arm in a match expression.
     /// Returns the arm and whether it is exhaustive (no guard).
+    /// The type a match arm is expected to answer in: what the arms have agreed on so
+    /// far, or `Unknown` while nothing is settled yet.
+    ///
+    /// `Void` and `Null` are "not settled": a `null`-first arm must not pin the result
+    /// (`match c { false => null, true => S{…} }` answers `S`), and a `Void` result is
+    /// either the initial value or a statement `match` whose arms yield nothing — the
+    /// same "expect nothing" an `else if` chain passes down for a `Void` then arm.
+    fn match_arm_expected(result_type: &Type) -> Type {
+        if result_type.is_unknown() || matches!(result_type, Type::Void | Type::Null) {
+            Type::Unknown(0)
+        } else {
+            result_type.clone()
+        }
+    }
+
+    /// Parse one match arm's body in the type its SIBLING arms answer in.
+    ///
+    /// A match arm is an else arm: `@FR-N-Decl` checks the destination against the whole
+    /// construct, so every arm converts to the construct's type at its own tail exactly as
+    /// `parse_block("else", …)` converts an `if`'s else arm.  Without the expected type an
+    /// arm was neither converted nor refused — a float arm's bits read as an integer, an
+    /// integer arm's as a float, and `250 + 10` reached a `u8` local holding 260, silently
+    /// on both backends and for every subject kind (loft#1380's `match` twin).
+    ///
+    /// A `{ … }` arm is a block, and `block_result` performs the conversion with the
+    /// carve-outs it already applies to `else`.  A BARE arm (`1 => x`) has no block tail,
+    /// so the same conversion is asked here through the same `convert_admitting` /
+    /// `validate_convert` pair, and the carve-outs are restated in the same order.
+    fn parse_match_arm_body(&mut self, expected: &Type, arm_code: &mut Value) -> Type {
+        // Cleared AFTER the body is parsed on both paths, never at entry: a nested `match`
+        // inside this arm runs its own arms through here, so a flag set at entry would still
+        // carry that inner arm's answer when THIS one is asked about.  From each clear to the
+        // gate that reads it nothing else parses, so the field describes exactly this arm.
+        if self.lexer.peek_token("{") {
+            let tp = self.parse_block("match_arm", arm_code, expected);
+            // A block arm reports through `block_result`, which hands back the EXPECTED type
+            // on a failure — so the cross-arm gate sees the arms agreeing and stays silent
+            // without being told.  Cleared all the same: the field is this arm's answer, not
+            // the previous arm's, and a caller must not have to know which path reports.
+            self.arm_convert_reported = false;
+            return tp;
+        }
+        let at = self.lexer.pos().clone();
+        let t = self.expression(arm_code);
+        self.arm_convert_reported = false;
+        if self.first_pass || expected.is_unknown() {
+            return t;
+        }
+        // A void or null arm carries no value for the siblings to disagree about; a bare
+        // `null` lowers to the result type's sentinel once the result is settled.
+        if matches!(t, Type::Void | Type::Null) {
+            return t;
+        }
+        // @FR-C-Var — two variants of one enum join to the ENUM and nothing is licensed
+        // between them, so the arm keeps its own shape and the join above still sees that
+        // the two differ.  `block_result` carves the same case out for `else`.
+        if self.sibling_variants(&t, expected) {
+            return t;
+        }
+        // A struct-enum pattern binding yields a BORROW — `Ship { carrier } => carrier` is
+        // `&text` — while a sibling arm commonly yields the owned twin (`_ => "none"`).  That
+        // is one type modulo ownership: the caller reads the value either way, which is why
+        // `match_arm_types_unify` strips the wrapper rather than requiring the two to agree.
+        // So it is not a conversion question, and asking `convert` for it re-points the
+        // sibling arm's value — the extractor pattern's wildcard stopped answering its own
+        // literal (`tests/scripts/35-nested-match.loft`).  A `&τ` on EITHER side is passed
+        // through: an arm whose borrow also needs a width change keeps the gap the wrapper
+        // already had, and narrowing it further needs the borrow to convert, not this site.
+        if matches!(t, Type::RefVar(_)) || matches!(expected, Type::RefVar(_)) {
+            return t;
+        }
+        // @FR-F-Block — the arms of a construct in STATEMENT position yield nothing anybody
+        // reads, so their types need not agree.
+        if self.arms_of_statement_construct && matches!(expected, Type::Void) {
+            return t;
+        }
+        if !self.convert_admitting(arm_code, &t, expected) {
+            self.validate_convert("match_arm", &t, expected, &at);
+            self.arm_convert_reported = true;
+            return t;
+        }
+        // loft#1103 — the SHAPE is the expected type's, the NULLABILITY the arm's own:
+        // `(N-Join)` makes the construct optional iff some arm is.
+        let honest = expected.with_deps_of(&t);
+        if crate::keys::pln25_dn1_enabled()
+            && matches!(t, Type::Optional(_))
+            && !matches!(honest, Type::Optional(_))
+        {
+            Type::optional(honest)
+        } else {
+            honest
+        }
+    }
+
     fn parse_match_wildcard_arm(&mut self, result_type: &mut Type) -> (EnumArm, bool) {
         let guard_opt = self.parse_optional_guard();
         let is_exhaustive = guard_opt.is_none();
         self.expect_match_arm_arrow();
         let mut arm_code = Value::Null;
-        let arm_type = if self.lexer.peek_token("{") {
-            self.parse_block("match_arm", &mut arm_code, &Type::Unknown(0))
-        } else {
-            self.expression(&mut arm_code)
-        };
+        let arm_expected = Self::match_arm_expected(result_type);
+        let arm_type = self.parse_match_arm_body(&arm_expected, &mut arm_code);
         // loft#978 — see the arm sites above: the wildcard is an arm like any other.
         let joined = self.join_arm_into(result_type, &arm_code, &arm_type);
         *result_type = joined;
@@ -5194,6 +5287,7 @@ impl Parser {
             *result_type = arm_type.clone();
         } else if !self.first_pass
             && arm_type != Type::Void
+            && !self.arm_convert_reported
             && !match_arm_types_unify(result_type, &arm_type)
         {
             diagnostic!(
@@ -5270,11 +5364,8 @@ impl Parser {
         }
         self.expect_match_arm_arrow();
         let mut arm_code = Value::Null;
-        let arm_type = if self.lexer.peek_token("{") {
-            self.parse_block("match_arm", &mut arm_code, &Type::Unknown(0))
-        } else {
-            self.expression(&mut arm_code)
-        };
+        let arm_expected = Self::match_arm_expected(result_type);
+        let arm_type = self.parse_match_arm_body(&arm_expected, &mut arm_code);
         let block = v_block(vec![arm_code], arm_type.clone(), "struct_match");
         if *result_type == Type::Void {
             *result_type = arm_type;
@@ -7927,11 +8018,8 @@ impl Parser {
 
             self.expect_match_arm_arrow();
             let mut arm_code = Value::Null;
-            let arm_type = if self.lexer.peek_token("{") {
-                self.parse_block("match_arm", &mut arm_code, &Type::Unknown(0))
-            } else {
-                self.expression(&mut arm_code)
-            };
+            let arm_expected = Self::match_arm_expected(&result_type);
+            let arm_type = self.parse_match_arm_body(&arm_expected, &mut arm_code);
             // A `null`-first arm must NOT pin the result to `Null` — promote to
             // the first CONCRETE arm's type (else `match c { false => null, true
             // => S{…} }` resolves to `Null`, `build_scalar_chain` can't type the
@@ -8977,11 +9065,8 @@ impl Parser {
             // delegated to `parse_block("block", …, &Type::Void)`, which DROPS the trailing
             // result expression (`{ c = 5; c }` → `c = 5; drop c`) — the block then yielded void,
             // so native delivered 0 (interpret happened to still surface the value).
-            let arm_type = if self.lexer.peek_token("{") {
-                self.parse_block("match_arm", &mut arm_code, &Type::Unknown(0))
-            } else {
-                self.expression(&mut arm_code)
-            };
+            let arm_expected = Self::match_arm_expected(&result_type);
+            let arm_type = self.parse_match_arm_body(&arm_expected, &mut arm_code);
             // loft#978 — every arm can deliver this match's value, so the result carries
             // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
             // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
@@ -9268,11 +9353,8 @@ impl Parser {
             let arm_write_state = self.vars.save_and_clear_write_state();
             self.vars.clear_write_state();
             let mut arm_body = Value::Null;
-            let arm_type = if self.lexer.peek_token("{") {
-                self.parse_block("match_arm", &mut arm_body, &Type::Unknown(0))
-            } else {
-                self.expression(&mut arm_body)
-            };
+            let arm_expected = Self::match_arm_expected(&result_type);
+            let arm_type = self.parse_match_arm_body(&arm_expected, &mut arm_body);
             self.vars.restore_write_state(&arm_write_state);
 
             // Combine element conditions with AND (short-circuit: if a { b } else { false })

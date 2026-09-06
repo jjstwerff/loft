@@ -9,6 +9,55 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A match arm converts to the type its siblings answer in — loft#1380's twin (2026-09-06)
+
+`@FR-N-Decl` — a declared slot checks `e ⇐ τ`, and a construct's type is what its destination
+checks against.  loft#1380 closed that for an `else if` CHAIN by parsing the chain's then block
+with the enclosing then arm's type (`parse_if_expecting`).  Every `match` arm site still passed
+`&Type::Unknown(0)`, so `parse_block`'s tail conversion had nothing to convert TO and a bare arm
+was never converted at all:
+
+- `f: float = match k { 1 => 1.5, _ => n }` read the integer's bits as a float (`1e-323`);
+- `x: integer = match k { 1 => 1, _ => 2.5 }` read the float's bits as an integer;
+- `c: u8 = match k { 1 => a, 2 => a + b, _ => b }` put **260** in a `u8`.
+
+Silent on `--interpret`; on `--native` the first two handed rustc an `i64` in an `f64` position
+and leaked a raw `error[E0308]`.  The third was silent on both.  The `if` twin of each is
+refused, and loft#1380's own body recorded the `match` spelling as a VERIFIED workaround — it
+was not one.
+
+Present for every subject kind.  The enum and struct-enum paths do carry a cross-arm
+`match_arm_types_unify` gate, but it asks `Type::is_same`, which collapses every `Integer(_)` to
+one type — so the narrowing cell was silent there too, and the scalar, vector and tuple paths
+carry no gate at all.
+
+**The fix.** One home: `parse_match_arm_body` parses an arm with `match_arm_expected(&result_type)`
+— what the arms have agreed on so far, `Unknown` while nothing is settled — and all seven arm
+sites route through it.  `"match_arm"` joins `arm_of_sibling` in `block_result`, so a `{ … }` arm
+converts at its tail with the carve-outs already applied to `else` (the literal-fit exemption,
+the sibling-variant join, the honest nullability); a BARE arm is converted through the same
+`convert_admitting` / `validate_convert` pair, with those carve-outs restated in the same order.
+
+Two carve-outs are load-bearing and were found by measurement, not by reading:
+
+- **A `&τ` on either side is passed through.** A struct-enum pattern binding yields a borrow
+  (`Ship { carrier } => carrier` is `&text`) while a sibling arm yields the owned twin
+  (`_ => "none"`); `match_arm_types_unify` strips the wrapper for exactly this reason. Asking
+  `convert` for it re-pointed the wildcard arm's value — `35-nested-match.loft`'s extractor
+  stopped answering its own literal.
+- **The cross-arm gate stays silent for an arm the conversion already named** (`arm_convert_reported`,
+  cleared after the body is parsed so a nested `match` cannot leave its inner arm's answer
+  behind). The two ask the same question and the conversion asks it more precisely; without the
+  flag a kind mismatch reported twice.
+
+`validate_convert` renders the `match_arm` context as *"a match arm"*: the string doubles as the
+internal name `parse_block` and `block_result` key on, so the keying is untouched and the reader
+gets *"expected float, got text on a match arm"* beside the twin's *"on else"*.
+
+Guards: `tests/scripts/1380c-a-match-arm-answers-in-its-siblings-type.loft` (the cells that run —
+subject kind, arm kind, arm taken, destination) and `1380d-a-match-arm-of-another-type-is-refused.loft`
+(ten refusals, one diagnostic each). Both falsified at `14b50b1f` on both backends.
+
 ### The seam between the store-lifetime and group-walk streams: two rules that had never met (2026-09-06)
 
 Neither defect below exists in either stream alone.  `@FR-Col-Group`'s element-level write
