@@ -242,60 +242,25 @@ struct Scopes<'s> {
 /// cannot name one definition must not lift — see `callref_owned_return`.
 /// @PLN130 F2 — the container variable an element/field read ultimately reads OUT of.
 ///
-/// Peels the whole accessor chain, because a view can sit more than one level down:
-/// `outs[2].inner` is `OpGetField(OpGetVector(outs, …), …)`, and looking only at the
-/// outermost call's first argument finds another call rather than `outs`. Stopping there
-/// left the nested case unrecognised — no materialise and, worse, no warning, which is the
-/// one outcome the model does not allow.
-///
-/// Returns `None` when the chain does not bottom out in a plain variable; the caller then
-/// leaves the binding exactly as it is today rather than guessing.
+/// One line, because the derivation is [`crate::use_analysis::projection_container_var`]'s:
+/// the EMITTER that copies a materialised view reads the same home
+/// (`generation::container_element_base`), and a walk that named a container the emitter
+/// cannot is a copy the compiler reports and does not make.
 fn base_container_var(value: &Value, data: &Data) -> Option<u16> {
-    base_container_place(value, data).map(|(v, _)| v)
+    crate::use_analysis::projection_container_var(data, value)
 }
 
-/// The PLACE an element/field read ultimately reads out of: the base variable, and the byte
-/// OFFSET of the field it projects through — `ANY_FIELD` when it projects through none, so the
-/// place is the variable itself.
-///
-/// [`base_container_var`]'s answer is this one with the offset dropped, and the offset is what
-/// tells `w.a` from `w.b`.  Both are containers of their own that happen to share a parent
-/// variable, and a disturbance of one does not end the places inside the other: reading the
-/// parent alone shook every view rooted at it whichever field it named, which silently emptied
-/// `moros_editor`'s undo stack (loft#1373's own regression, and loft#1384 is the case that
-/// costs).
-///
-/// The offset comes from the LAST `OpGetField` before the base variable — `w.a[0]` is
-/// `OpGetVector(OpGetField(w, 16, …), 88, idx)`, so the place is `(w, 16)` — and a chain with
-/// no field read, `v[0]` on a local, is `(v, ANY_FIELD)`.  A deeper chain (`w.inner.a[0]`)
-/// answers its OUTERMOST field, which is the one a disturbance of `w` can name; the inner
-/// steps are a lower bound, as everything in this walk is.
+/// The PLACE an element/field read ultimately reads out of — the one home is
+/// [`crate::use_analysis::projection_container_place`], which carries both the variant-check
+/// peel a struct-enum payload projection needs and the field OFFSET that tells `w.a` from
+/// `w.b`.  This wrapper exists so the view walk reads it by the name the walk talks about.
 fn base_container_place(value: &Value, data: &Data) -> Option<(u16, u32)> {
-    let mut cur = value;
-    let mut field = ANY_FIELD;
-    loop {
-        let Value::Call(d, args) = cur.unspan() else {
-            return None;
-        };
-        if !crate::use_analysis::is_projection_op(data, *d) {
-            return None;
-        }
-        if data.def(*d).name() == "OpGetField"
-            && let Some(Value::Int(off)) = args.get(1).map(Value::unspan)
-        {
-            field = *off as u32;
-        }
-        match args.first().map(Value::unspan) {
-            Some(Value::Var(c)) => return Some((*c, field)),
-            Some(inner) => cur = inner,
-            None => return None,
-        }
-    }
+    crate::use_analysis::projection_container_place(data, value)
 }
 
 /// The offset of a place that is a whole VARIABLE rather than one of its fields — and the
 /// wildcard on both sides of a match, since disturbing a variable ends every place in it.
-const ANY_FIELD: u32 = u32::MAX;
+use crate::use_analysis::ANY_FIELD;
 
 /// Do a view's place and a disturbance's place name the same storage?  Equal offsets, or
 /// either side naming the whole variable.
@@ -1430,6 +1395,23 @@ fn established_stores(stmt: &Value, function: &Function, data: &Data) -> HashSet
                     Type::Reference(_, _) | Type::Enum(_, true, _)
                 ),
                 Value::Call(f, _) => data.def(*f).name.starts_with("n_"),
+                // A struct-ENUM literal builds into a work-ref and hands the variable that
+                // block: `sh = { OpDatabase(__ref_p2_2, …); …; __ref_p2_2 }`.  The tail is
+                // the same `Var` establishment the first arm names, one wrapper out — and
+                // read only through the wrapper's own `OpDatabase`, which names the COMPILER
+                // work-ref and is filtered out, no reassignment of a struct-enum local
+                // established anything.  A payload view of it then survived the subject's
+                // reassignment with no materialise and no warning, where the plain-struct
+                // twin (which builds in place, `OpDatabase(h)`) materialises and says so.
+                // `Value::tail` stops at an `If`, so a `??` or a branch-valued right-hand
+                // side still answers "no" here.
+                Value::Block(_) | Value::Insert(_) => matches!(
+                    rhs.tail().unspan(),
+                    Value::Var(src) if matches!(
+                        function.tp(*src),
+                        Type::Reference(_, _) | Type::Enum(_, true, _)
+                    )
+                ),
                 _ => false,
             };
             if establishes {
@@ -6310,6 +6292,15 @@ impl Scopes<'_> {
             function.tp(v).base(),
             Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
         ) && let Some(cause) = self.views_to_materialise.get(&v).copied()
+            // Not a NEVER-FREE binding (@FR-O-Override), the guard the var-copy materialise
+            // arm below already carries.  The strip makes the binding an OWNER — that is how
+            // native mints `_own_store_<v>` at the bind — and a binding marked never-free
+            // then holds a store nothing releases.  Reached once the container namer learned
+            // to peel a variant check: a `match`/`is` payload binding (`_mv_<field>_N`) is
+            // marked never-free by the parser precisely because it is a view, and
+            // materialising one leaked a record per call on `--native` while answering no
+            // differently.  A binding the marking pass owns is that pass's to release.
+            && !function.is_skip_free(v)
             && let Some(container) = base_container_var(unspanned_value, data)
             && function.tp(v).depend().contains(&container)
         {

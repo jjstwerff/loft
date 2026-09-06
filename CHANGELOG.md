@@ -95,6 +95,13 @@ The **say-what-you-do** release. Two threads, and they turned out to be one: eve
 the language reference was read against the compiler that ships, and most of what came back
 was not a wrong sentence but a promise nothing was keeping.
 
+**A view of an enum's payload is copied when its subject is replaced, and the compiler says
+so.**  `x = sh.inner` followed by `sh = Empty{…}` used to read the NEW subject's bytes through
+the old view — `x.a` answered `0` where the payload said `1` — while the same code written
+against a plain struct has copied and warned for a month.  Both now behave the same way and
+both tell you.  The same blindness was making the compiler warn that a write through such a
+view was "lost" when it was not, which gated library builds; that is gone too.
+
 **A value that may be null is reported wherever it lands in a slot that cannot hold one.**
 `t: (integer, integer) = (v[i], 1)`, `H { f: w[i] }` with a vector field, and `s[at + 1..]`
 after a `find` — a tuple member, a vector field and an index or key — said nothing when the

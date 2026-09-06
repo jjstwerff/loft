@@ -481,9 +481,10 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 409 | 385 | **24** |
+| 408 | 384 | **24** |
 
-The `@FR-O-Complete` walk (B7u) added one peeling site — `scopes::adopted_work_refs` reads a
+Joining the `@FR-O-Owner` walk onto the loft#1389/#1390/#1392 tree re-measures it once more:
+**408 · 384 · 24** — neither side's number, as every join so far.  The `@FR-O-Complete` walk (B7u) added one peeling site — `scopes::adopted_work_refs` reads a
 right-hand side's `If` arms, `Block` and `Insert` tails through their `Span` to find the
 construction work-refs a binding adopts.  loft#1356 added two peeling sites (the eager factory's tail scan reads a `Return` and a `Set` through their `Span`), loft#1362 two (`scopes::in_place_rebuild` reads the statement-level `OpDatabase` through its `Span`, and `copy_hands_off` walks a nested destination place through each level's), loft#1357 one, and the projection-view marking one (`scopes::nullable_view_locals` reads each `Set`'s source through its `Span` to match a `Value::TupleGet` or a projection `Value::Call`) — the statement scan in `scopes::convert` takes a `Span` off an `if` whose condition consumes a `??` temp, so it can put the evaluated condition back under the same position.  The `@FR-O-Witness` walk (B7v) added two peeling sites — `scopes::sink_set_into_arms` reads an `if`/`match`'s arms, `Block` and `Insert` tails through their `Span` to lower a value-branch reassignment to the statement form.  `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -1496,7 +1497,12 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 46 | **12** | 34 |
+| 45 | **12** | 33 |
+
+Re-measured on the tree that holds both streams: **45 · 12 · 33**.  The `@FR-O-Owner` walk
+folded two byte-identical container-namer loops into one home and the loft#1384 place walk
+joined it there, so neither branch's row survives the join — the audit classifies FUNCTIONS,
+and a merged body is one function however many branches touched it.
 
 (`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
 so the row cannot go stale — the same arrangement the `unspan` table has.)
@@ -5910,6 +5916,79 @@ gap in the definition, not in the code.
 beside the snapshot for one question; `create_vector`'s `__trail_tmp` materialisation of a
 concat operand is a third copy of the snapshot idea; native's same-store test has three
 inline spellings beside `PASSTHROUGH`.
+
+#### B8b — `@FR-O-Owner` walked: one question with four namers, and the payload view none of them could see (2026-09-06)
+
+**The split.**  The rule's eight citations ask one question — *who owns this store* — and the
+walk's yield was not in them.  Its channels are what a matrix can vary: ZERO owners is a leak
+(`LOFT_STRICT_STORES`, `LOFT_NATIVE_LEAK_CHECK`), TWO owners is an alias visible through a
+mutation or a double free (`LOFT_POISON`).  20 cells over the axes the rule's own guards never
+crossed: ownership THROUGH a container in and out (append, keyed insert, field assign, element
+assign, nested vector, two containers, a field displaced in a loop), the NRVO buffer under a
+loop / a conditional / an early return of a mint / an early return of a parameter, a view whose
+BASE is replaced, and a `&` local link.  Both backends, both leak channels.
+
+**The negative result, 17 cells.**  Every container in-and-out cell copies exactly as
+`(B-Copy)` says and frees once; the four NRVO shapes are flat over 20 and 50 calls with no
+leak on either backend; a returned element view and a returned field view are both copied.
+That half of the rule is measured, not assumed.
+
+**Fixed — one question, four namers, and a shape none of them could see.**  A struct-ENUM
+payload projection does not name its subject directly: `sh.inner` lowers to `OpGetField(if
+<tag == Holder> { sh } else { OpNullRefSentinel() }, …)`.  Every chain that peels a projection
+to its container variable stopped at that `if`, so `(B-View)`'s materialise clause did not
+apply to a payload view live across its subject's reassignment — the interpreter read the NEW
+subject's bytes at the payload's offset (`x.a` = `0` where the payload said `1`), `--native`
+answered the old payload by another route, and nothing was said on either backend, where the
+plain-struct twin has copied and warned since @PLN130 F8.  Two of those chains were
+byte-identical and each documented as *"mirroring"* the other, which is what made one peel
+into two: `use_analysis::projection_container_var` is the home now, beside the
+`is_projection_op` list whose own doc already named its four readers.  Three sites fell out of
+the same peel — `established_stores` did not count a struct-enum reassignment at all (the
+literal hands the variable a BLOCK tailing in a work-ref, and only the block's own
+`OpDatabase` was read, which names the compiler temp); the materialise arm made a binding an
+owner without asking `@FR-O-Override`, the veto its var-copy sibling already asks, which
+leaked a record per call for a never-free `_mv_` binding until the guard was added (my own
+first cut, caught by A/B against the baseline); and the ORACLE classified a payload view
+`Owned` — the over-free direction its own caveat names — whose user-visible face was the
+`lost-write` warning telling an author a landing write was lost, on the tier that gates a
+library's CI.  Guard `a-payload-view-materialises-when-its-subject-is-reassigned` (6 cells,
+three controls), falsified at 5f4ac074; oracle Check A clean over the 1247-file corpus and
+the fuzz corpus; `binding-history.md` D-bind-17.
+
+**The peel's own false positive, and what caught it.**  The first cut read the variant check
+as *"one arm names a variable"*, which is also the shape of `a?` discharging a nullable
+parameter (`if a.rec != 0 { a } else { <mint> }`).  Claiming that one turned a generic's
+return delivery from an adopt into a copy nobody freed — one leaked record per call.  No
+targeted suite saw it: `--tests` does not leak-check, the file's own values were unchanged,
+and only `wrap.rs`'s per-file gate under `make ci` reported it.  The test now names the OP the
+other arm calls (`OpNullRefSentinel`), which is the same lesson loft#1379 taught three days
+earlier from the other side — a lowering is recognised by what it BUILDS, never by node shape
+alone.  Two independent instruments were needed to place it: the full gate to see it at all,
+and an IR diff against the baseline binary to name the delivery that had changed.
+
+**Filed.**  loft#1392 — a `&` link to a VECTOR or TEXT local reads the store the source held
+at the bind, so a rebind of the source leaves the link stale on both backends (the struct
+spelling is loft#1371's, right on the sibling's branch; the scalar link follows its source, so
+the kinds disagree).  loft#1394 — the payload binding written INSIDE a `match`/`is` arm whose
+subject is reassigned there is still invisible, because the walk handles a `Set` whose
+right-hand side is a value branch whole, through the `leaf` arm its own doc calls
+*"deliberately coarse in both directions"*; reaching it needs the walk's ordering model rather
+than another classifier, and its field-subject twin needs `field_place` (loft#1391's shape).
+loft#1395 — the `lost-write` false positive, filed because it is user-facing and its fix is on
+an unmerged branch.
+
+**Convergence.**  One root under all four fixed sites — the unpeelable variant check — and the
+route table SHRANK as it went: the peel closed the direct spelling, the establishment test and
+the oracle in one move, and what remains (loft#1394) is a different mechanism in a different
+part of the walk, not a fifth namer.  The `&`-link finding is unrelated and was filed rather
+than folded in.
+
+**Whether the rules covered the cells.**  `(B-View)` × `(B-Disturb)` settled every fixed
+cell — the payload spelling was never in doubt, only invisible.  `@FR-O-Oracle`'s caveat
+predicted its own defect in words (*"a projection local is mis-classed `Owned`"*) and had no
+site enforcing the prediction.  `(B-Ref-Alias)` covers loft#1392 and the code disagrees with
+it per KIND, which is a deviation rather than a gap.
 
 #### B2 — open, and the owner's call
 

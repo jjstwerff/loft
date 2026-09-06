@@ -6,13 +6,69 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — D-bind-18 OPENED AND CLOSED 2026-09-06 (loft#1392: a vector link did not follow a rebind of its SOURCE, below); D-bind-11 and D-bind-16 CLOSED 2026-09-03 (below); D-bind-12, D-bind-13,
+OPEN: **0** — D-bind-19 OPENED AND CLOSED 2026-09-06 (the `@FR-O-Owner` walk: a struct-ENUM
+PAYLOAD view was invisible to `(B-View)`'s materialise clause, because the chain that names a
+projection's container could not see through the variant check the lowering wraps its subject
+in — below); D-bind-18 OPENED AND CLOSED 2026-09-06 (loft#1392: a vector link did not follow a
+rebind of its SOURCE, below); D-bind-11 and D-bind-16 CLOSED 2026-09-03 (below); D-bind-12, D-bind-13,
 D-bind-14 and D-bind-15 each opened and CLOSED the same day.
 D-const-2 opened and CLOSED the same day (2026-09-01), found by the Store Locks
 reference review.
 B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
 opened and closed 2026-08-05); B-Ref-AnnotationOnly is enforced in every position, not
 only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
+
+> **D-bind-19 — OPENED AND CLOSED (2026-09-06, the `@FR-O-Owner` walk) — a struct-ENUM
+> PAYLOAD view was outside the materialise clause.**  `(B-Disturb)` names reassigning the
+> container as one of the three events that end a place, and `(B-View)` materialises a view
+> live across one — a copy taken at the bind, and the author told.  `x = tw.inner` on a struct
+> does both since @PLN130 F8; `x = sh.inner` on a struct-ENUM did neither: the interpreter read
+> the REASSIGNED subject's bytes at the payload's offset (`Empty { z: 0 }` answered as the old
+> `Pay`, so `x.a` was `0`), `--native` answered the old payload by another route, and nothing
+> was said on either backend.
+>
+> One derivation was short of one shape, in four readers.  A payload projection does not name
+> its subject directly — `sh.inner` lowers to `OpGetField(if <tag == Holder> { sh } else
+> { OpNullRefSentinel() }, …)` — so every chain that peels a projection to its container
+> variable bottomed out at `None`.  Two of those chains were byte-identical copies documented
+> as "mirroring" each other (`scopes::base_container_var`, which the walk that NAMES a view to
+> materialise reads; `generation::container_element_base`, which the emitters that COPY it
+> read), so the peel had to be written twice to work once — and a walk that names a container
+> the emitter cannot is a copy the compiler reports and does not make.  Both now call
+> `use_analysis::projection_container_var`, beside the `is_projection_op` list whose own doc
+> already named them as readers of one shape.
+>
+> Three sites more, found by the same peel:
+> * the establishment test (`scopes::established_stores`) did not count a struct-enum
+>   reassignment at all — the literal builds into a `__ref_p2_N` work-ref and hands the
+>   variable that BLOCK, and only the block's own `OpDatabase` was read, which names the
+>   compiler work-ref and is filtered out.  A block whose tail is a heap `Var` establishes,
+>   the same fact the bare-`Var` arm beside it already carried;
+> * the materialise arm made the binding an OWNER without consulting `@FR-O-Override`, the
+>   veto its var-copy sibling three hundred lines below already asks.  A `match`/`is` payload
+>   binding is marked never-free by the parser precisely because it is a view, so materialising
+>   one leaked a record per call on `--native` while answering no differently — measured as a
+>   regression of this walk's own first cut, and the guard now holds it;
+> * `@FR-O-Oracle` itself classified a payload view `Owned` (its `If` arm resolved the subject
+>   through the subject's OWN definitions, found a mint and answered `None`), which is the
+>   over-free direction its own caveat names.  Its user-visible face was the `lost-write`
+>   WARNING telling an author a write that lands was lost — the tier that gates a library's CI
+>   (loft#1395).  The same peel, in the oracle's borrow-base walk; Check A stays clean over the
+>   1247-file corpus and the fuzz corpus.
+>
+> Guard `tests/scripts/a-payload-view-materialises-when-its-subject-is-reassigned.loft`
+> (falsified at 5f4ac074: interpret 2 assertion failures → 0; native INERT, which is what a
+> backend-divergence guard can be).  ⚠ The peel tests BOTH arms, and the sentinel one by the
+> OP IT CALLS: a first cut that read "one arm is a `Var`" also claimed `a?` discharging a
+> nullable parameter (`if a.rec != 0 { a } else { <mint> }`), which turned a generic's return
+> delivery from an adopt into a copy nobody freed — one leaked record per call, caught by
+> `1026-generic-discharged-null-return` under the wrap harness's leak gate and by nothing
+> else.  Same class as loft#1379: recognise a lowering by what it BUILDS, never by node shape.  RESIDUAL, filed as loft#1394: a payload binding written
+> INSIDE a `match`/`is` arm whose subject is reassigned in the same arm is still invisible —
+> the walk handles a `Set` whose right-hand side is a value branch whole, through the `leaf`
+> arm its own doc calls "deliberately coarse in both directions", so the bind and the
+> disturbance are never separated in time.  Reaching it needs the walk's ordering model, not
+> another classifier.
 
 > **D-bind-16 — CLOSED 2026-09-03 (opened the same day, loft#1321) — `(B-Copy)` did not hold
 > when the right-hand side is a branch JOIN.**

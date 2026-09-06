@@ -2589,6 +2589,21 @@ impl<'a> Ownership<'a> {
             Value::Call(d, args) if self.projections.contains(d) => {
                 match args.first().map(Value::unspan) {
                     Some(Value::Var(b)) => Some(*b),
+                    // A struct-ENUM payload projection names its subject through a
+                    // variant check — `sh.inner` is `OpGetField(if <tag> { sh } else
+                    // { sentinel }, …)` — so the subject is one wrapper further out
+                    // than a struct field's.  Stop at it exactly as the `Var` arm above
+                    // does ([`projection_container_var`] peels the same shape for the
+                    // materialise walk and the emitters).  Without the peel the `If` arm
+                    // below resolved the subject THROUGH its own definitions, found a
+                    // mint, and answered `None` — so a payload view classified `Owned`,
+                    // the over-free direction this doc's own caveat names, and the
+                    // `lost-write` lint told the author a write that lands was lost.
+                    Some(Value::If(_, t, e))
+                        if variant_check_subject(self.data, t, e).is_some() =>
+                    {
+                        variant_check_subject(self.data, t, e)
+                    }
                     // nested `o.inner.rows`
                     Some(inner) => self.borrow_base_guarded(inner, func, defs, visited),
                     None => None,
@@ -3047,6 +3062,113 @@ pub fn is_projection_op(data: &Data, d_nr: u32) -> bool {
         data.def(d_nr).name(),
         "OpGetField" | "OpGetVector" | "OpVectorRef" | "OpGetRecord"
     )
+}
+
+/// The container VARIABLE a projection chain ultimately reads out of — the ONE derivation of
+/// *which container did this view come out of?*
+///
+/// `OpGetVector` / `OpVectorRef` are `v[i]`, `OpGetField` is `s.f`; all of them yield a `DbRef`
+/// sharing `store_nr` with the container, which is what makes binding one a borrow rather than
+/// an owner.  The whole chain is peeled, because a view can sit several levels down
+/// (`outs[2].inner`): looking only at the outermost call's first argument finds another call.
+///
+/// A struct-ENUM base is peeled too.  A payload projection does not name its subject directly
+/// — `sh.inner`, and a `match`/`is` payload binding, lower to `OpGetField(if <tag == Holder>
+/// { sh } else { OpNullRefSentinel() }, …)` — so the chain bottomed out at `None` and no
+/// reader could name the subject: the view-materialise walk saw no container to be disturbed,
+/// and a payload view live across a reassignment of its subject was neither copied nor
+/// reported, where the plain-struct twin is both.  Only the shape the lowering emits is
+/// peeled — exactly one arm names a variable and the other is the null sentinel — so a user
+/// `if` choosing between two containers still answers `None`.
+///
+/// `None` when the chain does not bottom out in a plain variable, notably a field of a CALL
+/// result (`return mk().a.b`), whose base is a temporary rather than a container someone else
+/// owns: materialising there is a different question, and answering it here broke
+/// `tests/scripts/85-store-lifetime-return-field-of-local`.  Every caller then leaves the
+/// binding exactly as it is rather than guessing.
+///
+/// Two readers had this loop byte-for-byte — `scopes::base_container_var` and
+/// `generation::container_element_base`, each documented as "mirroring" the other — and the
+/// mirror is what the peel above had to be written into twice to work at all: the walk that
+/// NAMES a view to materialise and the emitter that COPIES it must agree, or the compiler
+/// reports a copy it did not make.
+#[must_use]
+pub fn projection_container_var(data: &Data, value: &Value) -> Option<u16> {
+    projection_container_place(data, value).map(|(v, _)| v)
+}
+
+/// The offset [`projection_container_place`] reports for a chain that projects through no
+/// field, so the place is the variable itself.
+pub const ANY_FIELD: u32 = u32::MAX;
+
+/// The PLACE a projection ultimately reads out of: the base variable, and the byte OFFSET of
+/// the field it projects through — [`ANY_FIELD`] when it projects through none.
+///
+/// [`projection_container_var`] is this answer with the offset dropped, and the offset is what
+/// tells `w.a` from `w.b`.  Both are containers of their own that happen to share a parent
+/// variable, and a disturbance of one does not end the places inside the other: reading the
+/// parent alone shook every view rooted at it whichever field it named, which silently emptied
+/// `moros_editor`'s undo stack (loft#1373's own regression, and loft#1384 is the case that
+/// costs).
+///
+/// The offset comes from the LAST `OpGetField` before the base variable — `w.a[0]` is
+/// `OpGetVector(OpGetField(w, 16, …), 88, idx)`, so the place is `(w, 16)` — and a chain with
+/// no field read, `v[0]` on a local, is `(v, ANY_FIELD)`.  A deeper chain (`w.inner.a[0]`)
+/// answers its OUTERMOST field, which is the one a disturbance of `w` can name; the inner
+/// steps are a lower bound, as everything in this walk is.
+#[must_use]
+pub fn projection_container_place(data: &Data, value: &Value) -> Option<(u16, u32)> {
+    let mut cur = value;
+    let mut field = ANY_FIELD;
+    loop {
+        if let Value::If(_, t, e) = cur.unspan()
+            && let Some(v) = variant_check_subject(data, t, e)
+        {
+            return Some((v, field));
+        }
+        let Value::Call(d, args) = cur.unspan() else {
+            return None;
+        };
+        if !is_projection_op(data, *d) {
+            return None;
+        }
+        if data.def(*d).name() == "OpGetField"
+            && let Some(Value::Int(off)) = args.get(1).map(Value::unspan)
+        {
+            field = *off as u32;
+        }
+        match args.first().map(Value::unspan) {
+            Some(Value::Var(c)) => return Some((*c, field)),
+            Some(inner) => cur = inner,
+            None => return None,
+        }
+    }
+}
+
+/// The subject of a VARIANT-CHECK `if` — the shape a struct-enum payload projection wraps its
+/// base in: one arm is the subject variable, the other `OpNullRefSentinel()`.
+///
+/// BOTH arms are tested, and the sentinel one by the OP IT CALLS rather than by "not a
+/// variable".  A loose reading claims user nodes: `a?` discharging a nullable parameter lowers
+/// to `if a.rec != 0 { a } else { <mint> }`, which also has one `Var` arm — reading that as a
+/// projection base changed a generic's return delivery from an adopt to a copy nobody freed,
+/// one leaked record per call (caught by `tests/scripts/1026-generic-discharged-null-return`
+/// under the wrap harness's leak gate).  Same class as loft#1379: recognise a lowering by what
+/// it BUILDS, never by node shape alone.
+fn variant_check_subject(data: &Data, then_arm: &Value, else_arm: &Value) -> Option<u16> {
+    let named = |v: &Value| match v.unspan() {
+        Value::Var(c) => Some(*c),
+        _ => None,
+    };
+    let sentinel = |v: &Value| {
+        matches!(v.unspan(), Value::Call(d, args)
+            if args.is_empty() && data.def(*d).name() == "OpNullRefSentinel")
+    };
+    match (named(then_arm), named(else_arm)) {
+        (Some(v), None) if sentinel(else_arm) => Some(v),
+        (None, Some(v)) if sentinel(then_arm) => Some(v),
+        _ => None,
+    }
 }
 
 /// loft#981 / loft#982 — may this call site set `OpCopyRecord`'s `0x8000` source-free

@@ -9,6 +9,27 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A projection's container has one name, so a struct-enum payload view materialises, and the oracle stops calling it owned (2026-09-06, the `@FR-O-Owner` walk)
+
+`use_analysis::projection_container_var` is the one derivation of *which container did this
+view come out of?*, and it peels the variant check a payload projection wraps its subject in
+(`sh.inner` is `OpGetField(if <tag> { sh } else { sentinel }, …)`).  It replaces two
+byte-identical loops that each documented themselves as mirroring the other —
+`scopes::base_container_var` (read by the view-materialise walk) and
+`generation::container_element_base` (read by the emitters) — and is now read by the ownership
+oracle's `borrow_base_guarded` as well, where a payload view classified `Owned`: the
+over-free direction, whose visible face was `lost-write` warning about a write that lands
+(loft#1395).  `scopes::established_stores` counts a `Set` whose right-hand side is a BLOCK
+tailing in a heap `Var` — how a struct-enum literal hands over its work-ref — so a payload
+view now sees its subject's reassignment; and the materialise arm consults `@FR-O-Override`
+before making a binding an owner, the guard its var-copy sibling already carried, without
+which a never-free `_mv_<field>_N` binding leaked a record per call on `--native`.  Guard
+`a-payload-view-materialises-when-its-subject-is-reassigned` (6 cells, three controls),
+falsified at 5f4ac074.  Oracle Check A clean over the 1247-file corpus and the fuzz corpus.
+Filed: loft#1394 (a payload binding written inside the arm, which needs the walk's ordering
+model), loft#1392, loft#1395.  formal: binding-history D-bind-19, IMPLEMENTATIONS.md's
+`@FR-O-Oracle` row.
+
 ### A vector link follows a rebind of its source (2026-09-06, loft#1392)
 
 `(B-Ref-Alias)` / `(B-Ref-Uniform)`: a `&` binding is a live link.  A vector link SHARES the
