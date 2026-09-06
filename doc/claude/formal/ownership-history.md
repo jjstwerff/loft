@@ -87,6 +87,21 @@ and both are answered today by a static fact about the BINDING:
   is overwritten.  A 5-pass loop leaks 4.  The release belongs at the hand-off: a capture slot
   overwritten with a different `DbRef` gives up what it held.
 
+  **The obvious cure was BUILT and measured WRONG, which is why it is not here.**  Freeing the
+  record before the rebuild (`OpFreeRef(w)` ahead of the build's `OpDatabase`) closes every
+  loop cell — the struct 5-pass loop and the vector one both go clean, values unchanged — and
+  the escape argument holds: a capturing closure may not be stored in a collection, a fn-ref
+  struct field takes one capture shape, and a factory's record escapes by RETURNING, which
+  leaves the loop.  What it collides with is the fix ABOVE.  `free_named`'s cascade releases an
+  ADOPTED capture, and the frame now frees the same local's store for a local reassigned after
+  its build — so the two free one store between them.  Measured on `v = build_v(|i| { v[0] + i
+  })` in a 3-pass loop: `--native` answered `1,2` on the third pass where `4,5` is right, the
+  interpreter still answered `4,5`, and the leak was gone on both.  That is the trade this
+  project refuses, and it is `get_free_vars`' own note said out loud: *suppress without adopting
+  and the store is never freed at all, adopt without suppressing and it is freed twice.*  The
+  release is admissible only together with `record_adopts_capture` reading the same verdict
+  `capture_adoption_owns_free` now reads — one decision, as that note requires.
+
 Neither is reachable from a per-binding fact, which is why they are recorded rather than
 patched: a static answer that is right at one of the two sites is wrong at the other.
 
