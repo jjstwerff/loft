@@ -17,8 +17,9 @@
 //
 // One correction to the filed scope, measured here: the DENSE `-> S` return was documented as
 // the clean workaround and aliases identically, so a value branch over parameters is the axis
-// and not the `?`.  A GENERIC instance aliases too and is NOT closed by this — see the cell
-// below and the follow-on issue.
+// and not the `?`.  A GENERIC instance aliased too, for its own reason, and is closed beside
+// it (loft#1387) — the rewrite runs on the MONOMORPH's body because a template cannot carry
+// a minted local into its clones.
 //
 // `pick(a, a, …)` is the boundary from the other side: two parameters, ONE caller argument,
 // so the witness was nameable and that cell was always right.  It must stay right.
@@ -70,16 +71,15 @@ fn main() {
   x4.value = 9;
   assert(g.value == 7, "the third of three sources, g.value={g.value}");
 
-  // A GENERIC instance is NOT covered and still aliases — the rewrite is skipped inside a
-  // generic TEMPLATE (its body is cloned into each monomorph, and a local minted there
-  // reaches codegen in the clone with no slot), and the monomorph does not re-parse the
-  // block.  Filed apart rather than asserted here, so this guard does not go red for a
-  // shape it does not claim.  The call is still made, so the cell breaks loudly if the
-  // generic path starts crashing.
+  // A GENERIC instance (loft#1387).  The rewrite cannot run in the TEMPLATE — its body is
+  // cloned into every monomorph, and a local minted there reaches codegen in the clone with
+  // no slot — and the monomorph does not re-parse its block, so it is applied to the
+  // MONOMORPH's body instead, in its own frame where the local gets a real slot.
   h = Plain1368 { value: 8 };
   i = Plain1368 { value: 11 };
   x5: Plain1368? = pick_g(h, i, false);
-  assert((x5.value ?? -1) == 11, "the generic instance still answers, x5={x5.value ?? -1}");
+  x5.value = 9;
+  assert(i.value == 11, "a generic instance is fresh too, i.value={i.value}");
 
   // ONE argument reaching two parameters: the witness is nameable, and was always right.
   j = Node1368 { value: 12, next: null };
@@ -94,7 +94,7 @@ fn main() {
   assert(k.value == 13, "a single-source return is fresh, k.value={k.value}");
 
   // The returned value is USABLE, not merely disconnected.
-  assert(x2.value == 9 && x3.value == 9, "the result carries the write");
+  assert(x2.value == 9 && x3.value == 9 && x5.value == 9, "the result carries the write");
 
   println("1368 OK");
 }

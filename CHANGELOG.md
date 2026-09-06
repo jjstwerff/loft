@@ -24,7 +24,8 @@ ran.
 `fn pick(p, q, first) -> Node? { if first { p } else { q } }` gave the caller the *second*
 argument itself, so writing to the result changed the caller's own variable — while the first
 argument was correctly copied. Both are copies now, and so is the plain `-> Node` version,
-which had the same problem despite being the documented way around it.
+which had the same problem despite being the documented way around it, and so is the generic
+`fn pick<T>(p: T, q: T, …) -> T?`.
 
 **A generic function used at two integer widths now works in either order.**  Calling the
 same generic with a `u8` and then a `u16` was rejected — *"cannot implicitly narrow u16 to
