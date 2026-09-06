@@ -9,6 +9,29 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A linked group is the SET of collections over one element type, not a hub (2026-09-06, loft#1375, D-col-1)
+
+`{ a: vector<E>, b: vector<E>, h: hash<E[k]> }` made the keyed member a HUB rather than the
+group a set: a write through `h` reached both vectors, a write through either vector reached
+only `h`, and each vector held its own entries plus whatever arrived through the hash — silent
+on both backends, `len` of the short member being a legal `0`.
+
+Filed as a design call and settled by the rule instead.  `(Col-Group)` reads *"provided at least
+one of THEM is keyed"*, where `them` is every collection over that element type in the struct,
+and its second sentence gives the rest by being applied twice.  `Stores::field` asks the keyed
+question of the STRUCT now; and because it runs once per field as the struct is built, a keyed
+member arriving LAST joins the members that were skipped while it was absent — without that
+half `{h, a, b}` and `{a, h, b}` formed the group and `{a, b, h}` did not, the declaration-order
+dependence loft#843 and loft#1158 removed for the pairwise case reappearing one level up.  The
+rule's last sentence is qualified rather than changed: two non-keyed members are independent
+exactly when the struct has no keyed collection over their element type.
+
+Guard: `1375-a-linked-group-is-a-set-not-a-hub.loft`, with the two controls that keep the
+boundary — two plain vectors and NO keyed member stay independent, and a collection over another
+element type is not a member.  Residual filed apart: a dense `vector<E>` beside a nullable
+`vector<E?>` splits into two groups, which is loft#1204's rewrite mechanism rather than this one
+(loft#1385, D-col-2 OPEN).  `Fixes #1375`.
+
 ### (B-Disturb)'s growth event names a whole variable, not a variable's field (2026-09-06, loft#1384)
 
 loft#1373 shipped for one commit with a spurious materialise.  `OpNewRecord(parent, tp, fld)`

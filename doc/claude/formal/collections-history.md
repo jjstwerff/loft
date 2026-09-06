@@ -51,6 +51,38 @@ The rules doc used to carry these beside its `OPEN` line — closure summaries, 
 the times the count read 0 over a live entry.  They are timeline, so they moved here
 unchanged; [collections.md](collections.md) now states only what is open.
 
+### `D-col-1` — CLOSED (2026-09-06, loft#1375): the keyed test was asked of the PAIR
+
+`{ a: vector<E>, b: vector<E>, h: hash<E[k]> }` made the keyed member a HUB rather than the
+group a set.  A write through `h` reached both vectors; a write through either vector reached
+only `h`; each vector held its own entries plus whatever arrived through the hash.  Silent on
+both backends — `len` of the short member is a legal `0`, the failure shape `(Col-Group)`'s own
+paragraph warns about.
+
+**No design call was open, though the issue was filed as one.**  `(Col-Group)` reads *"provided
+at least one of THEM is keyed"*, where `them` is every collection over that element type in the
+struct, and its second sentence settles the rest by being applied twice: if `a` and `h` are one
+record set and `b` and `h` are one record set, then a record entering through `a` is in `h`, and
+a record in `h` is in `b`.  The rule's last sentence needed qualifying rather than deciding —
+two non-keyed members are independent exactly when the struct has NO keyed collection over their
+element type.
+
+**Two halves, and the second is what declaration order needs.**  `Stores::field` asks the keyed
+question of the STRUCT now, not of the pair.  And because it runs once per field as the struct
+is built, a keyed member arriving LAST has to join the members that were skipped while it was
+absent: at the moment the second vector was added the struct held no key and the two were
+correctly independent.  Without that half, `{h, a, b}` and `{a, h, b}` formed the group and
+`{a, b, h}` did not — the declaration-order dependence loft#843 and loft#1158 had already
+removed for the pairwise case, reappearing one level up.
+
+Guard: `tests/scripts/1375-a-linked-group-is-a-set-not-a-hub.loft` — every declaration order,
+every write route, three plain vectors on one keyed member, `sorted` and `index` as the keyed
+kind, a nullable keyed member, and two controls: two plain vectors with NO keyed member stay
+INDEPENDENT (the rule's last sentence, and the cell a fix that linked everything fails), and a
+collection over ANOTHER element type is not a member.  Residual, measured and filed apart:
+a dense vector beside a nullable one splits (D-col-2, loft#1385).  `Contract: settled` — the
+rule already said the set; the test asked about a pair.
+
 ### the status line formal/README.md's area table carried until 2026-09-04
 
 **SCOPE (2026-07-10)** — not yet rules: it inventories the shipped behaviour, names each rule with its anchor, and lists what must be both-backends-verified before it graduates to the normal form at 0 deviations. **`Slice-Open`/`Slice-Cap` now HOLD (2026-08-19, loft#1002)** — the open spatial slices answered the Z-order tail against a rule that already said *outward walk*, and open question 4 (`:n` exact-count) is answered: exactly n from any origin

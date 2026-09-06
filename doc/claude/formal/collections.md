@@ -253,10 +253,15 @@ tests/scripts/48b-spatial-slice.loft (the asserted box/open/cap slices). CAVEATS
                 is written first, not about whether the element is dense (vector<E>) or
                 nullable (vector<E?>), and not about whether a MEMBER itself is nullable
                 (hash<E[k]>? is a collection over E in that struct, so it is a member).
-                Two members neither of which is keyed (two plain vectors) are INDEPENDENT.
+                Membership is the whole SET, not a pair: *at least one of THEM* is a question
+                about every collection over that element type in the struct, and the second
+                sentence settles the rest by being applied twice — if a and h are one record
+                set and b and h are one record set, a record entering through a is in h, and a
+                record in h is in b.  Two members neither of which is keyed are INDEPENDENT
+                exactly when the struct has NO keyed collection over their element type.
 ```
 
-Six fixes are all instances of this one rule, which is why it is written here rather than left
+Seven fixes are all instances of this one rule, which is why it is written here rather than left
 to the issues: `trie`/`spatial` were absent from the pairing test (loft#927); the `others` link
 ran one way, so which member maintained the rest depended on declaration order (loft#843); the
 test asked only whether the field being ADDED was keyed, so a plain `vector<E>` declared second
@@ -264,9 +269,12 @@ formed no group (loft#1158); only `hash` had its element rewritten to a nullable
 `__nullable<E>`, so the other four kinds no longer matched by content; a whole vector VALUE
 (`data = rows()`) reached only the member it was assigned to, because the bulk write never
 passed the per-record chokepoint that maintains the group (loft#1152, and loft#1159 for the
-same route into a KEYED member); and the same nullable-element rewrite asked both of its halves
+same route into a KEYED member); the same nullable-element rewrite asked both of its halves
 with a bare variant test, so a member spelled `hash<S[k]>?` — or a vector spelled
-`vector<S?>?` — fell out of the set entirely (loft#1204).
+`vector<S?>?` — fell out of the set entirely (loft#1204); and the keyed test was asked of the
+PAIR rather than of the STRUCT, so two plain vectors beside a keyed member skipped each other
+and the keyed member became a HUB — a write through it reached both vectors, a write through
+either vector reached only it (loft#1375).
 
 Every one of them **failed silently** — the pairing was never refused, a second independent
 collection was built instead, and `len` of the empty view is a legal value.  That is the shape
@@ -341,7 +349,16 @@ tests/scripts/901-linked-group-fill.loft.
 
 ## 3. Deviations / decided edges
 
-**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
+**OPEN: 1.**
+- **D-col-2** — a struct holding BOTH a dense `vector<E>` and a nullable `vector<E?>` beside a
+  keyed member splits into TWO groups: a write through the dense vector reaches only itself, one
+  through the keyed member reaches the nullable vector and itself.  `(Col-Group)` names that case
+  in as many words (*"not about whether the element is dense or nullable"*).  The mechanism is
+  loft#1204's rather than loft#1375's — `link_shared_nullable_views` rewrites the KEYED member's
+  element to the sibling's `__nullable<E>`, after which the membership test's content comparison
+  no longer matches the dense vector (loft#1385).
+
+Every other deviation this doc has carried is closed; the record is in
 the companion [collections-history.md](collections-history.md).
 
 ## 4. Conformance / oracle plan (how each rule gets pinned — [VERIFICATION.md](VERIFICATION.md))

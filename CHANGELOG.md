@@ -92,6 +92,13 @@ place — mutating `s` afterwards no longer shows through `t.0` when `T` is a st
 generic and the non-generic spelling of the same function had been giving different
 answers, which is the one thing a type variable is supposed never to do.  A `T` bound to a
 vector or a keyed collection is still shared rather than copied (loft#1365).
+**Two lists and a lookup over the same records are all one collection again.**  A struct with
+two plain lists beside a keyed one — `{ a: vector<E>, b: vector<E>, h: hash<E[k]> }` — behaved
+as though the lookup were a hub: adding through it filled both lists, but adding through either
+list reached only the lookup, so each list held part of the data and nothing said so.  All the
+routes now reach all the members, whichever order you declare them in.  Two plain lists with no
+keyed member beside them stay independent, as before.
+
 **An `if` used as a statement no longer trips the native compiler.**  `if c { println("x") }
 else { 5 };` ran fine interpreted and failed to build with `--native`, reporting a Rust type
 error for loft code you wrote.  A statement's value is thrown away — that is what a statement

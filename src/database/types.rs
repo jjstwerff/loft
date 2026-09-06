@@ -287,7 +287,9 @@ impl Stores {
             return 0;
         }
         let mut others = Vec::new();
-        let mut linked = std::collections::HashMap::new();
+        // Which numbers each EXISTING field gains, as a list: a keyed member arriving last has
+        // to give its siblings each other as well as itself (see the `(Col-Group)` block below).
+        let mut linked: std::collections::HashMap<u16, Vec<u16>> = std::collections::HashMap::new();
         if matches!(
             self.types[content as usize].parts,
             Parts::Struct(_) | Parts::EnumValue(_, _) | Parts::Enum(_)
@@ -333,13 +335,41 @@ impl Stores {
             // (loft#843) one level up and the missing `trie`/`spatial` kinds (loft#927) one
             // level over: every one of the three failed SILENTLY, by building a second
             // collection whose `len` is a legal `0`.
+            // The keyed test is on the STRUCT, not on the pair.  `(Col-Group)` reads *"two or
+            // more collections over ONE element type in ONE struct are several routes to a
+            // single record set, provided at least one of THEM is keyed"* — `them` is every
+            // collection over that element type in the struct, and the rule's own second
+            // sentence settles the rest by being applied twice: if `a` and `h` are one record
+            // set and `b` and `h` are one record set, then a record entering through `a` is in
+            // `h`, and a record in `h` is in `b`.
+            //
+            // Asked of the PAIR, two plain vectors beside a keyed member skipped each other,
+            // so `{ a: vector<E>, b: vector<E>, h: hash<E[k]> }` made the hash a HUB rather
+            // than the group a set: a write through `h` reached both vectors, a write through
+            // either vector reached only `h`, and each vector held its own entries plus what
+            // came in through the hash (loft#1375, silent on both backends — `len` of the
+            // short member is a legal value, the failure shape this rule's own paragraph
+            // warns about).
+            //
+            // The rule's last sentence — two members neither of which is keyed are INDEPENDENT
+            // — is unchanged in what it decides and only qualified in when it applies: it
+            // holds where the struct has NO keyed collection over that element type, which is
+            // the `group_has_key == false` case below.
+            let elem = self.content(content);
             let new_is_keyed = Self::is_group_kind(&self.types[content as usize].parts);
+            let mut matched: Vec<u16> = Vec::new();
+            let group_has_key = new_is_keyed
+                || (elem != u16::MAX
+                    && fld.iter().any(|f| {
+                        self.content(f.content) == elem
+                            && Self::is_group_kind(&self.types[f.content as usize].parts)
+                    }));
             for (f_nr, f) in fld.iter().enumerate() {
                 let fld_content = self.content(f.content);
-                if fld_content == u16::MAX || fld_content != self.content(content) {
+                if fld_content == u16::MAX || fld_content != elem {
                     continue;
                 }
-                if !new_is_keyed && !Self::is_group_kind(&self.types[f.content as usize].parts) {
+                if !group_has_key {
                     continue;
                 }
                 if others.is_empty() {
@@ -356,14 +386,36 @@ impl Stores {
                 // over one element type are two VIEWS of one set — neither spelling
                 // is the privileged one (loft#843).
                 others.push(f_nr as u16);
-                linked.insert(f_nr as u16, fld.len() as u16);
+                matched.push(f_nr as u16);
+                linked.entry(f_nr as u16).or_default().push(fld.len() as u16);
+            }
+            // A keyed member arriving LAST has to join the members that were skipped while it
+            // was absent.  `Stores::field` runs once per field as the struct is built, so at
+            // the moment `b` was added to `{ a: vector<E>, b: vector<E>, h: hash<E[k]> }` the
+            // struct held no key and the two vectors were correctly INDEPENDENT; the key
+            // arrives afterwards and makes them one set.  Without this, membership depended on
+            // where the keyed member was WRITTEN — `{h, a, b}` and `{a, h, b}` formed the group
+            // and `{a, b, h}` did not — which is the declaration-order dependence loft#843 and
+            // loft#1158 already removed for the pairwise case.
+            if new_is_keyed {
+                for &x in &matched {
+                    for &y in &matched {
+                        if x != y {
+                            linked.entry(x).or_default().push(y);
+                        }
+                    }
+                }
             }
         }
         if let Parts::Struct(s) | Parts::EnumValue(_, s) = &mut self.types[structure as usize].parts
         {
             for (f_nr, f) in s.iter_mut().enumerate() {
                 if let Some(add) = linked.get(&(f_nr as u16)) {
-                    f.other_indexes.push(*add);
+                    for n in add {
+                        if !f.other_indexes.contains(n) {
+                            f.other_indexes.push(*n);
+                        }
+                    }
                 }
             }
             let num = s.len() as u16;
