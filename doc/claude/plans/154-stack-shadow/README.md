@@ -9,9 +9,13 @@ Tracker: [@PLN154](https://github.com/loft-lang/plans/issues/154).
 
 ## Status
 
-**Phase 0 shipped 2026-09-06 and came back RED in the sense it was cut to allow: the tag
-moves off the accessor and down to `Store::addr_mut::<T>` before phases 1-3 are built.
-Findings: [phase0-census.md](phase0-census.md).  Phases 1-5 open.**
+**Phases 0 and 1 shipped 2026-09-06.  Phase 0 came back RED in the sense it was cut to
+allow — the tag moved off the accessor and down to `Store::addr_mut::<T>` before phases 1-3
+were built ([phase0-census.md](phase0-census.md)).  Phase 1 shipped `LOFT_VERIFY_STACK=1`
+GREEN on its gate, and moved its own falsification target: neither loft#1386 nor loft#1254
+is in the `uninit` state, and the witness is the nullable-local pre-init defect instead
+([phase1-uninit.md](phase1-uninit.md)).  Phases 2-5 open, and phase 2 is where the named
+evidence lives.**
 
 A third of the machinery is already in the tree:
 `LOFT_UAF_GEN` ([`src/keys.rs:1335`](../../../../src/keys.rs)) keeps an offset-keyed shadow
@@ -65,8 +69,8 @@ odd-size adjacency matrix"* — which is the same question asked from the layout
 | Item | Source | Verify | Status |
 |---|---|---|---|
 | **0** — the bypass census | [phase0-census.md](phase0-census.md) | 1106 corpus programs: `put_stack` carries 74.5 % of the bytes, is 1 of 33 write sites, and **no program** is covered by it alone | **Shipped 2026-09-06 — RED** |
-| **1** — `uninit` | @PLN154 | Silent corpus-wide at HEAD on `--interpret`; REPORTS under `make falsify GUARD=<loft#1386's guard> REF=964bab93`.  Ships `LOFT_VERIFY_STACK_INJECT=1` in the same commit | Open — tag at `Store::addr_mut::<T>`, check at `get_stack` / `get_var` (phase 0) |
-| **2** — `width + kind` | @PLN154 | Reports on `tests/scripts/1070-generic-arm-local-type-row.loft`, `1028-generic-null-typed-per-monomorph.loft` and `1016-generic-null-default-instantiation.loft` at the parent of each fixing commit; silent corpus-wide at HEAD | Open — shares phase 1's hook, which already carries `T` |
+| **1** — `uninit` | [phase1-uninit.md](phase1-uninit.md) | 1103 of 1103 runnable corpus programs silent at HEAD on `--interpret`; four distinct sites REPORTED on `64437246` (the nullable-local pre-init control), where loft#1386's control is silent and loft#1254's control moves the `Partial` counter instead.  Ships `LOFT_VERIFY_STACK_INJECT=1` in the same commit | **Shipped 2026-09-06 — GREEN, target moved** |
+| **2** — `width + kind` | @PLN154 | Reports on `tests/scripts/1070-generic-arm-local-type-row.loft`, `1028-generic-null-typed-per-monomorph.loft` and `1016-generic-null-default-instantiation.loft` at the parent of each fixing commit; silent corpus-wide at HEAD.  Phase 1 hands it a measured queue: the `Partial` counter is 1 on loft#1254's control and 0 at HEAD, and non-zero on three corpus programs that are the language's own stepped slots | Open — shares phase 1's hook, which already carries `T`; the legal-pun list is what separates the two |
 | **3** — `stale-on-grow` | @PLN154 | Reports on the guards for loft#1373 / #1377 / #1384 at their recorded `@falsified-at:` refs; silent corpus-wide at HEAD | Open |
 | **4** — yield vs. the falsification corpus | this README | The 277 guards carrying a real `@falsified-at:` ref, each run under the shadow on the build it was written to catch.  The yield is the REPORT; the gate is the other direction — a shadow report on a build its guard calls clean is a false positive, and is red | Open |
 | **5** — arm it in the nightly | [CI_BUDGET.md](../../CI_BUDGET.md) | The sweep itself: it goes red on a false positive phase 4 did not cover | Open |
@@ -82,7 +86,12 @@ odd-size adjacency matrix"* — which is the same question asked from the layout
    [phase0-census.md](phase0-census.md).
 2. **1 → 2 are one mechanism widened**, each validated on its own: `uninit` is the absence of
    a tag, `width + kind` is the tag.  The tag is free at the write — `put_stack` is generic
-   over `T`, and `LOFT_UAF_GEN` already reads `TypeId::of::<T>()` there.
+   over `T`, and `LOFT_UAF_GEN` already reads `TypeId::of::<T>()` there.  Phase 1 measured
+   how much of the plan's own evidence falls on each side of that line, and the answer is
+   that **the width half carries it**: an eval slot is stepped to eight bytes while a
+   `boolean` writes one, so a slot is nearly always recycled with *something* in it and the
+   pure-absence state is narrow.  Phase 1 counts the `Partial` reads it declines to report,
+   which is phase 2's queue.
 3. **3 is a second mechanism** — a hook at the grow/realloc site plus a shadow scan — and does
    not depend on 2.  It can be taken before 2 if the stale class is the more urgent one.
 4. **4 after every detector phase it measures**, and it is the phase that decides whether 5
@@ -119,6 +128,8 @@ native is silent too and #1070 is wrong on both backends.
 
 ## See also
 
+- [phase1-uninit.md](phase1-uninit.md) — what `uninit` witnesses, measured on three control
+  builds: the one guard that is in the state, and the two issue-named defects that are not.
 - [DEBUG.md](../../DEBUG.md) § the detector table — every existing lever this one sits beside,
   and the `LOFT_UAF_GEN` / `LOFT_STRICT_STORES` / `LOFT_POISON` division of labour.
 - [SLOTS.md](../../SLOTS.md) — the frame layout the shadow mirrors.
