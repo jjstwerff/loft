@@ -251,7 +251,28 @@ struct Scopes<'s> {
 /// Returns `None` when the chain does not bottom out in a plain variable; the caller then
 /// leaves the binding exactly as it is today rather than guessing.
 fn base_container_var(value: &Value, data: &Data) -> Option<u16> {
+    base_container_place(value, data).map(|(v, _)| v)
+}
+
+/// The PLACE an element/field read ultimately reads out of: the base variable, and the byte
+/// OFFSET of the field it projects through — `ANY_FIELD` when it projects through none, so the
+/// place is the variable itself.
+///
+/// [`base_container_var`]'s answer is this one with the offset dropped, and the offset is what
+/// tells `w.a` from `w.b`.  Both are containers of their own that happen to share a parent
+/// variable, and a disturbance of one does not end the places inside the other: reading the
+/// parent alone shook every view rooted at it whichever field it named, which silently emptied
+/// `moros_editor`'s undo stack (loft#1373's own regression, and loft#1384 is the case that
+/// costs).
+///
+/// The offset comes from the LAST `OpGetField` before the base variable — `w.a[0]` is
+/// `OpGetVector(OpGetField(w, 16, …), 88, idx)`, so the place is `(w, 16)` — and a chain with
+/// no field read, `v[0]` on a local, is `(v, ANY_FIELD)`.  A deeper chain (`w.inner.a[0]`)
+/// answers its OUTERMOST field, which is the one a disturbance of `w` can name; the inner
+/// steps are a lower bound, as everything in this walk is.
+fn base_container_place(value: &Value, data: &Data) -> Option<(u16, u32)> {
     let mut cur = value;
+    let mut field = ANY_FIELD;
     loop {
         let Value::Call(d, args) = cur.unspan() else {
             return None;
@@ -259,12 +280,28 @@ fn base_container_var(value: &Value, data: &Data) -> Option<u16> {
         if !crate::use_analysis::is_projection_op(data, *d) {
             return None;
         }
+        if data.def(*d).name() == "OpGetField"
+            && let Some(Value::Int(off)) = args.get(1).map(Value::unspan)
+        {
+            field = *off as u32;
+        }
         match args.first().map(Value::unspan) {
-            Some(Value::Var(c)) => return Some(*c),
+            Some(Value::Var(c)) => return Some((*c, field)),
             Some(inner) => cur = inner,
             None => return None,
         }
     }
+}
+
+/// The offset of a place that is a whole VARIABLE rather than one of its fields — and the
+/// wildcard on both sides of a match, since disturbing a variable ends every place in it.
+const ANY_FIELD: u32 = u32::MAX;
+
+/// Do a view's place and a disturbance's place name the same storage?  Equal offsets, or
+/// either side naming the whole variable.
+fn same_place(view: (u16, u32), disturbed: (u16, u32)) -> bool {
+    view.0 == disturbed.0
+        && (view.1 == disturbed.1 || view.1 == ANY_FIELD || disturbed.1 == ANY_FIELD)
 }
 
 /// What an argument LIFTED into a `__lift_N` temp borrows — the deps its type must carry.
@@ -376,8 +413,14 @@ fn reshaped_containers(code: &Value, data: &Data) -> HashSet<u16> {
 /// request a literal and a sized append make), `OpAppendVector` (`v += w`), `OpInsertVector`
 /// (an insert, which also shifts every later element) and `OpHashAdd` (which can rehash and
 /// move records).
-fn grown_containers(code: &Value, data: &Data) -> HashSet<u16> {
-    let mut out: HashSet<u16> = HashSet::new();
+fn grown_containers(
+    code: &Value,
+    data: &Data,
+    function: &Function,
+    database: Option<&crate::database::Stores>,
+    cleared: &HashSet<(u16, u32)>,
+) -> HashSet<(u16, u32)> {
+    let mut out: HashSet<(u16, u32)> = HashSet::new();
     code.walk(&mut |v| {
         let Value::Call(d, args) = v else { return };
         let name = data.def(*d).name();
@@ -400,17 +443,43 @@ fn grown_containers(code: &Value, data: &Data) -> HashSet<u16> {
         // UNCOLLECTED rather than compared field-wise, which keeps this function the lower
         // bound its sibling's doc claims: a missed disturbance costs a materialise, a spurious
         // one costs a program its meaning.
-        if name == "OpNewRecord"
-            && !matches!(
-                args.get(2).map(Value::unspan),
-                Some(Value::Int(f)) if *f == i32::from(u16::MAX)
-            )
-        {
+        let Some(Value::Var(c)) = args.first().map(Value::unspan) else {
             return;
+        };
+        // `OpNewRecord(parent, tp, fld)` names its container in TWO parts: `fld == u16::MAX`
+        // is an append to the variable itself (`v += [x]`), any other `fld` an append to that
+        // variable's FIELD (`w.a += [x]`).  The field is a NUMBER and a view carries a byte
+        // OFFSET, so the two are converted here — `Stores::field_position` against the
+        // parent's own struct type — and the place is `(w, offset)`.
+        //
+        // Without the store the conversion cannot be made, and the field-qualified growth is
+        // left UNCOLLECTED rather than widened to the parent: reading the parent alone shakes
+        // every view rooted at it whichever field it names, which silently emptied
+        // `moros_editor`'s undo stack when loft#1373 first shipped.  A missed disturbance
+        // costs a materialise; a spurious one costs a program its meaning.
+        let mut place = ANY_FIELD;
+        if name == "OpNewRecord" {
+            let fld = match args.get(2).map(Value::unspan) {
+                Some(Value::Int(f)) => *f,
+                _ => return,
+            };
+            if fld != i32::from(u16::MAX) {
+                let Some(db) = database else { return };
+                let parent = data.type_def_nr(function.tp(*c).base());
+                if parent == u32::MAX {
+                    return;
+                }
+                let off = db.field_position(data.def(parent).known_type(), fld as u16);
+                if off == u16::MAX {
+                    return;
+                }
+                place = u32::from(off);
+                if cleared.contains(&(*c, place)) {
+                    return;
+                }
+            }
         }
-        if let Some(Value::Var(c)) = args.first().map(Value::unspan) {
-            out.insert(*c);
-        }
+        out.insert((*c, place));
     });
     out
 }
@@ -736,8 +805,9 @@ fn collect_views_to_materialise(
     code: &Value,
     function: &Function,
     data: &Data,
+    database: &crate::database::Stores,
 ) -> HashMap<u16, ViewCause> {
-    let out = ViewWalk::run(code, function, data, None, 0);
+    let out = ViewWalk::run(code, function, data, None, Some(database), 0);
     if !out.is_empty() && std::env::var_os("LOFT_DEBUG_F8").is_some() {
         let mut names: Vec<String> = out
             .iter()
@@ -759,7 +829,7 @@ struct ViewWalk<'a> {
     /// One frame per open block: the views the block OWNS, and the container each one views.
     /// A view dies when the block that owns its VARIABLE closes — which is where the variable
     /// was first bound, not necessarily where this binding was written (see `bound_at`).
-    open: Vec<Vec<(u16, u16)>>,
+    open: Vec<Vec<(u16, u16, u32)>>,
     /// The frame depth each variable was first BOUND at, which is the block that owns it.
     ///
     /// A view goes into the frame that owns its VARIABLE, not the block the binding statement
@@ -777,6 +847,24 @@ struct ViewWalk<'a> {
     /// `None` stays inside this frame (F2's materialise). See [`reshaped_via_call`] for why the
     /// two questions do not share an answer.
     cross_frame: Option<&'a RemovedParams>,
+    /// Every place this function REBUILDS in whole — `x.a = [9, 9]` emits an
+    /// `OpClearVector` on the field and then exactly the `OpNewRecord`s an append emits, and
+    /// the two are SEPARATE statements, so the pairing cannot be seen one statement at a time.
+    ///
+    /// `(B-Disturb)` is explicit that OVERWRITING a place is not disturbing it — *"`o.inner =
+    /// Box{…}` writes INTO the place `o.inner` already occupies, so a view of it survives"* —
+    /// and without this subtraction `c = b.vecf; b.vecf = [9, 9]` materialised `c`, which
+    /// `bind-copies-or-views-the-whole-boundary` caught on its `(B-View-Base)` cell: the
+    /// seventeen-cell guard that exists to pin exactly this line.
+    ///
+    /// Accumulated for the whole walk rather than per block, which errs the safe way: a place
+    /// cleared once and genuinely GROWN later is a MISSED disturbance, costing a materialise,
+    /// where the other direction costs a program its meaning.
+    cleared: HashSet<(u16, u32)>,
+    /// The store, where the caller has one.  Only the field-NUMBER to byte-OFFSET conversion
+    /// needs it (`grown_containers`); the refusal path runs without and keeps the conservative
+    /// answer, which for a REFUSAL is the safe direction — refusing less, never more.
+    database: Option<&'a crate::database::Stores>,
     /// The source line of the statement being walked, tracked from the `Value::Line` markers
     /// a block interleaves with its operators — the only line information the IR carries.
     line: u32,
@@ -794,6 +882,7 @@ impl ViewWalk<'_> {
         function: &'a Function,
         data: &'a Data,
         cross_frame: Option<&'a RemovedParams>,
+        database: Option<&'a crate::database::Stores>,
         start_line: u32,
     ) -> HashMap<u16, Disturbance> {
         let mut walk = ViewWalk {
@@ -804,6 +893,8 @@ impl ViewWalk<'_> {
             shaken: HashMap::new(),
             out: HashMap::new(),
             cross_frame,
+            database,
+            cleared: HashSet::new(),
             line: start_line,
         };
         walk.walk_block(std::slice::from_ref(code));
@@ -880,7 +971,23 @@ impl ViewWalk<'_> {
             ViewCause::Reshaped,
             None,
         );
-        self.shake(&grown_containers(stmt, self.data), ViewCause::Grown, None);
+        stmt.walk(&mut |v| {
+            let Value::Call(d, args) = v else { return };
+            if self.data.def(*d).name() != "OpClearVector" {
+                return;
+            }
+            if let Some(place) = args
+                .first()
+                .and_then(|a| base_container_place(a, self.data))
+            {
+                self.cleared.insert(place);
+            }
+        });
+        self.shake_places(
+            &grown_containers(stmt, self.data, self.function, self.database, &self.cleared),
+            ViewCause::Grown,
+            None,
+        );
         if let Some(removed) = self.cross_frame {
             for (container, callee) in reshaped_via_call(stmt, self.data, removed) {
                 self.shake(
@@ -908,7 +1015,7 @@ impl ViewWalk<'_> {
         if let Value::Set(v, rhs) = stmt.unspan() {
             self.shaken.remove(v);
             for frame in &mut self.open {
-                frame.retain(|(view, _)| view != v);
+                frame.retain(|(view, _, _)| view != v);
             }
             // Through `base()`: a nullable `S?` view is the same storage behind a
             // nullability marker (@FR-L-Null), so it is at risk exactly as its dense twin is.
@@ -935,7 +1042,9 @@ impl ViewWalk<'_> {
                 // w.inner` in a loop body, `w = Outer{inner: a}` on the next turn.
                 let depth = self.bound_at.get(v).copied().unwrap_or(self.open.len());
                 let idx = depth.min(self.open.len()).saturating_sub(1);
-                self.open[idx].push((*v, container));
+                let field =
+                    base_container_place(rhs.unspan(), self.data).map_or(ANY_FIELD, |(_, f)| f);
+                self.open[idx].push((*v, container, field));
             }
         }
     }
@@ -959,14 +1068,27 @@ impl ViewWalk<'_> {
         if containers.is_empty() {
             return;
         }
-        let hit: Vec<(u16, u16)> = self
+        let places: HashSet<(u16, u32)> = containers.iter().map(|&c| (c, ANY_FIELD)).collect();
+        self.shake_places(&places, cause, via);
+    }
+
+    /// [`Self::shake`] where the disturbance names a PLACE rather than a whole variable — a
+    /// growth of one FIELD does not end the places inside its siblings.  A view and a
+    /// disturbance match when [`same_place`] says they name the same storage.
+    fn shake_places(&mut self, places: &HashSet<(u16, u32)>, cause: ViewCause, via: Option<u32>) {
+        if places.is_empty() {
+            return;
+        }
+        let hit: Vec<(u16, u16, u32)> = self
             .open
             .iter()
             .flatten()
-            .filter(|(_, container)| containers.contains(container))
+            .filter(|(_, container, field)| {
+                places.iter().any(|&p| same_place((*container, *field), p))
+            })
             .copied()
             .collect();
-        for (view, container) in hit {
+        for (view, container, _) in hit {
             let d = Disturbance {
                 cause,
                 line: self.line,
@@ -1154,7 +1276,14 @@ fn def_reshape_refusals(data: &Data, d_nr: u32, removed: &RemovedParams) -> Vec<
     // reference that cannot reach its source is not what `&` asked for.  That includes the
     // GROWTH the walk learned in loft#1373 — `c = &v[0]; v += [x]; c.n` names an element the
     // growth may have moved, which is the same reason the other three are refused.
-    for (view, d) in ViewWalk::run(&def.code, function, data, Some(removed), def.position.line) {
+    for (view, d) in ViewWalk::run(
+        &def.code,
+        function,
+        data,
+        Some(removed),
+        None,
+        def.position.line,
+    ) {
         if !function.is_amp_link(view) {
             continue;
         }
@@ -1768,6 +1897,10 @@ fn run_scan_phase(
     } else {
         HashSet::new()
     };
+    // Computed BEFORE the struct takes its `&mut` on the store: the walk reads the store to
+    // convert a field NUMBER into the byte OFFSET a view carries, and the two borrows cannot
+    // overlap inside one initialiser.
+    let views_to_materialise = collect_views_to_materialise(orig_code, orig_vars, data, database);
     let mut scopes = Scopes {
         database,
         d_nr,
@@ -1799,7 +1932,7 @@ fn run_scan_phase(
         local_owns: HashMap::new(),
         owner_witness: HashMap::new(),
         displaced_owned,
-        views_to_materialise: collect_views_to_materialise(orig_code, orig_vars, data),
+        views_to_materialise,
         fnref_target: collect_fnref_targets(orig_code, orig_vars),
         drop_transferred: collect_drop_transferred(orig_code, orig_vars, data),
         free_transferred: HashSet::new(),

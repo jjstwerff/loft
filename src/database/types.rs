@@ -2987,6 +2987,27 @@ impl Stores {
         }
     }
 
+    /// The byte offset of field number `idx` in struct type `tp` — [`Self::position`]'s twin,
+    /// asked by INDEX rather than by name.
+    ///
+    /// The two spaces exist because the IR names a field both ways: a projection carries the
+    /// OFFSET (`OpGetField(w, 16, …)`) and a container-qualified write carries the field
+    /// NUMBER (`OpNewRecord(w, tp, 1)`).  Anything comparing the two — asking whether a view
+    /// and a disturbance name the same place — has to convert, and this is where.
+    /// `u16::MAX` when `tp` is not a struct or `idx` is past its fields, which every caller
+    /// reads as "cannot say" rather than as an offset.
+    #[must_use]
+    pub fn field_position(&self, tp: u16, idx: u16) -> u16 {
+        if tp == u16::MAX {
+            return u16::MAX;
+        }
+        if let Parts::Struct(f) | Parts::EnumValue(_, f) = &self.types[tp as usize].parts {
+            f.get(idx as usize).map_or(u16::MAX, |fld| fld.position)
+        } else {
+            u16::MAX
+        }
+    }
+
     #[must_use]
     pub fn is_text_type(&self, tp: u16) -> bool {
         self.names.get("text").copied() == Some(tp)

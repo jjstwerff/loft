@@ -92,6 +92,10 @@ place — mutating `s` afterwards no longer shows through `t.0` when `T` is a st
 generic and the non-generic spelling of the same function had been giving different
 answers, which is the one thing a type variable is supposed never to do.  A `T` bound to a
 vector or a keyed collection is still shared rather than copied (loft#1365).
+**A value read out of one field of a record is not disturbed by another field growing.**  The
+copy-on-growth rule now asks WHICH list grew: reading from `w.a` and then appending to `w.a`
+gives you your own copy, while appending to `w.b` leaves your view of `w.a` exactly as it was.
+
 **A list you read out of a list stays yours when the outer list grows.**  The same fix as for
 a record read, now for a list: `b = w[0]` followed by appends to `w` used to leave `b` empty
 once the outer list outgrew its allocation.  `b` is now your own copy, and you are told so.

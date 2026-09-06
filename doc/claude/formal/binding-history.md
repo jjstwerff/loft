@@ -681,10 +681,15 @@ refusal names it.
   `moros_editor`'s `undo_pop` reads `e = s.us_entries[idx]` and appends to `s.us_redo`, so each
   undo entry came out of a copy, the undo stack silently stopped recording, and `undo_depth`
   answered 0 where 3 was due — a program's meaning changed, with only an advice.  A
-  field-qualified growth is now left UNCOLLECTED (`fld == u16::MAX` is the whole-variable
-  append), which is the honest direction: a missed disturbance costs a materialise, a spurious
-  one costs a program its meaning.  The residual is loft#1384 — matching field-wise needs the
-  type table, because the view carries a byte OFFSET and the growth a field NUMBER.  What
+  field-qualified growth was left UNCOLLECTED for one commit (`fld == u16::MAX` is the
+  whole-variable append), which is the honest direction while the question cannot be answered:
+  a missed disturbance costs a materialise, a spurious one costs a program its meaning.  It is
+  answered now (loft#1384): a struct FIELD is a container of its own, so the walk compares
+  PLACES rather than variables — `base_container_place` gives the view its `(var, byte offset)`,
+  `Stores::field_position` converts the growth's field NUMBER into that same offset, and
+  `same_place` matches them with `u32::MAX` on either side meaning the whole variable, so
+  reassigning the parent still ends every place inside it.  The `&`-refusal path has no store
+  to convert with and keeps the conservative answer, which for a REFUSAL is the safe direction.  What
   caught it was `make ci`'s `moros_editor` html smoke, the only thing in the tree exercising
   that shape, and it is NOT in the corpus the emission diff walks (`tests/fixtures/libs` is
   outside it) — so a four-file diff read as a small blast radius while a library was broken.

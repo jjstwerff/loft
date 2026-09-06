@@ -9,6 +9,38 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A struct field is a container of its own: (B-Disturb) asks which field grew (2026-09-06, loft#1384)
+
+loft#1373 could not tell `w.a` from `w.b` and gave the case up rather than get it wrong:
+`OpNewRecord(parent, tp, fld)` names its container in TWO parts, so reading the parent alone
+shook every view rooted at it whichever field it named (which silently emptied `moros_editor`'s
+undo stack), and reading it not at all left `d = w.a[0]` stale when `w.a` itself grew.
+
+The two sides name the field in different SPACES, which is what the middle answer needed: a
+view carries a byte OFFSET (`OpGetVector(OpGetField(w, 16, …), …)`) and a growth a field NUMBER
+(`OpNewRecord(w, tp, 1)`).  `Stores::field_position` is the conversion — the by-INDEX twin of
+`Stores::position`'s by-name — `base_container_place` answers the view's `(var, offset)`, and
+`same_place` matches them, with `u32::MAX` on either side meaning the whole variable so a
+REASSIGNMENT of the parent still ends every place inside it.  The store is threaded into
+`ViewWalk` for the materialise path only; the `&`-refusal path runs without it and keeps the
+conservative answer, which for a refusal is the safe direction — refusing less, never more.
+
+A field APPEND and a field REBUILD emit the SAME `OpNewRecord(w, tp, fld)`, and only a
+preceding `OpClearVector` on that place tells them apart — in a SEPARATE statement, so a
+per-statement disturbance walk cannot pair them.  `(B-Disturb)` says overwriting a place is not
+disturbing it, so reading a rebuild as a growth materialised a view the rule says survives, and
+`bind-copies-or-views-the-whole-boundary` — the seventeen-cell guard `formal/binding.md` names
+as pinning the copy-vs-view line — went red on its `(B-View-Base)` cell.  The cleared places
+are therefore accumulated across the WALK rather than per statement, which errs the safe way: a
+place cleared once and genuinely grown later is a MISSED disturbance, costing a materialise,
+where the other direction costs a program its meaning.
+
+Guard: seven cells, four of them controls — a sibling field's growth, two siblings growing, a
+view dead at the growth, and the whole-variable case loft#1373 already fixed.  The `&W`
+parameter is a cell too, since a field reached through one is the same place.  Verified on both
+backends with the fixture libraries, the eleven-guard view family, and scopes 258/258, parser
+619/619, store 262/262.  `Fixes #1384`.
+
 ### A collection-typed element view materialises like its record twin (2026-09-06, loft#1377)
 
 `(B-View-Depth)` makes a vector INDEX read a VIEW "whatever the element type", and
