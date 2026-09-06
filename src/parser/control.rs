@@ -1411,6 +1411,41 @@ impl Parser {
                 t = Type::Text(Deps::frame1(ret));
             }
         }
+        // loft#1368 / `@FR-F-Ret` — a returned whole heap value is FRESH, never a view of a
+        // parameter.  A function tail that is a value BRANCH hands back each arm's own borrow
+        // (`fn pick(p, q, …) -> Node["p", "q"]?`), and a caller can witness only ONE of them,
+        // so the arm that borrowed the OTHER source was adopted and a write through the result
+        // reached the caller's argument — on both backends, silently.
+        //
+        // Bind the branch to a local FIRST, which is exactly the workaround the issue
+        // documents (`r: Node = if first { p } else { q }; r`) and which works because a bind
+        // COPIES each arm through its own temp (`@FR-B-Copy`, the join-arm lift of loft#1321).
+        // Writing it here means every `-> S` / `-> S?` return gets it, not only the ones whose
+        // author knew to.  The scope pass then sees an ordinary local return, which is the
+        // shape its machinery is already correct for.
+        // Not in a generic TEMPLATE: its body is cloned into each monomorph, and a local
+        // minted here reaches codegen in the clone with no slot (`__ret_join[65535]`).  The
+        // monomorph is parsed as an ordinary function and takes the rewrite there, which is
+        // where the concrete return type is known anyway.
+        let in_generic_template = self.context != u32::MAX
+            && matches!(self.data.def(self.context).def_type(), DefType::Generic);
+        if !self.first_pass
+            && !in_generic_template
+            && context == "return from block"
+            && matches!(
+                result.base(),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            )
+            && self.tail_is_borrowing_branch(&l)
+        {
+            let last = l.len() - 1;
+            let tmp = self.create_unique("__ret_join", result);
+            self.vars.defined(tmp);
+            let branch = std::mem::replace(&mut l[last], Value::Null);
+            l[last] = crate::data::v_set(tmp, branch);
+            l.push(Value::Var(tmp));
+            t = result.clone();
+        }
         t = self.block_result(context, result, &t, &mut l, &last_expr_peek.position);
         // @PLN25/#585: drop any guard-clause fall-through narrowing this block introduced — the
         // proof does not escape the block (see `nn_base` above).
@@ -1627,6 +1662,45 @@ impl Parser {
                 l.push(el);
             }
         }
+    }
+
+    /// Is this block's tail a value BRANCH handing back TWO OR MORE different parameters
+    /// (loft#1368)?
+    ///
+    /// The shape no caller can witness: with one nameable source the caller's guarded bind
+    /// copies correctly, and with two it can name only the first, so the arm that borrowed the
+    /// other is adopted and the write lands on the caller's argument.
+    ///
+    /// Asked of the ARMS, not of the declared return deps.  A MONOMORPH's return type carries
+    /// no deps at all — `t_4Node_pickg` returns a bare `ref(Node)?` where its concrete twin
+    /// returns `Node["p", "q"]?` — so a deps test sees the generic instance as borrowing
+    /// nothing and leaves exactly the shape a generic makes easiest to write unguarded.
+    fn tail_is_borrowing_branch(&self, l: &[Value]) -> bool {
+        let Some(tail) = l.last() else {
+            return false;
+        };
+        fn arm_params(v: &Value, vars: &crate::variables::Function, out: &mut Vec<u16>) -> bool {
+            match v.unspan() {
+                Value::If(_, t, f) => {
+                    let _ = arm_params(t, vars, out);
+                    let _ = arm_params(f, vars, out);
+                    true
+                }
+                Value::Block(bl) => bl
+                    .operators
+                    .last()
+                    .is_some_and(|x| arm_params(x, vars, out)),
+                Value::Var(x) => {
+                    if vars.is_argument(*x) && !out.contains(x) {
+                        out.push(*x);
+                    }
+                    false
+                }
+                _ => false,
+            }
+        }
+        let mut params = Vec::new();
+        arm_params(tail, &self.vars, &mut params) && params.len() > 1
     }
 
     pub(crate) fn block_result(

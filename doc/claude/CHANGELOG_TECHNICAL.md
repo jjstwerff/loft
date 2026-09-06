@@ -10,6 +10,43 @@ All notable changes to the loft language and interpreter.
 ## [Unreleased]
 
 ### A linked group's members must share one element layout (2026-09-06, loft#1385, D-col-2, C117)
+### loft#1368: a return that may borrow one of two sources is FRESH (2026-09-06)
+
+`@FR-F-Ret` — a returned whole heap value is FRESH, never a view of a parameter; the only
+borrow a caller may get back is an explicit `&T`.  A return whose tail is a value BRANCH hands
+back each arm's own borrow, so the callee's declared return names TWO sources
+(`fn pick(p, q, …) -> Node["p", "q"]?`).  The caller's guarded bind can witness only ONE, so
+the arm that borrowed the other compared unequal, read as owned, and was ADOPTED: a write
+through the result reached the caller's argument, on both backends and in silence.
+
+The cure is the workaround written into the compiler.  Binding the branch to a local first
+copies each arm through its own temp (`@FR-B-Copy`, the join-arm lift of loft#1321), so every
+arm hands back a value of its own and no witness is needed — which is exactly why the
+documented workaround (`r: Node = if first { p } else { q }; r`) already worked.  Every
+`-> S` / `-> S?` return now gets it, not only the ones whose author knew to write it.
+
+Three cures were measured and rejected first, and they bound the answer:
+
+* `Own::join(Borrowed{a}, Borrowed{b})` → `Borrowed{a}` breaks `pick(a, a, …)` and makes the
+  workaround leak — `Own::join` serves EVERY branch join, so the callee's own `r = if …` is
+  re-classified and loses its copy.  **No lattice-side cure can work**: the lattice does not
+  know it is looking at a return.
+* → `Borrowed{u16::MAX}` makes BOTH arms alias: every witness-gated consumer reads an
+  unnameable base as "no witness" and declines, and declining means adopt.
+* The lift at `scopes`' `Value::Return` arm never fires — instrumented, that arm sees the
+  function tail zero times.
+
+A correction to the filed scope: the DENSE `-> S` return was documented as the clean
+workaround and aliases identically, so the axis is a value branch over parameters, not the
+`?`.  The issue's `wa:` label is now `wa:partial`.
+
+**Not closed for a GENERIC instance.**  The rewrite is skipped inside a generic TEMPLATE —
+its body is cloned into each monomorph, and a local minted there reaches codegen in the clone
+with no slot — and the monomorph does not re-parse the block.  Filed apart.
+
+Eight cells on both backends; guard `tests/scripts/1368-…loft`, `@falsified-at: 964bab93`.
+
+
 ### loft#1383: a generic at two integer widths is two monomorphs (2026-09-06)
 
 `@FR-G-Mono` says a call with concrete argument types produces ONE specialised copy per
