@@ -142,6 +142,14 @@ named every variable `65535` with a `-` where its slot number and span belong �
 the same command on the same file did not print the same thing.  `introspect` now always
 parses; ordinary runs keep the cache.
 
+**A value kept from one loop pass to the next is the value from that pass.**  Reading a list
+out of a returned struct in two steps — `t = dv.tiles; prev = t.proto;` — left `prev` reading
+the CURRENT pass's data on the next turn, so a loop comparing consecutive steps answered
+*nothing changed* every time.  Written as one expression (`prev = dv.tiles.proto`) it was
+already right and said so; both spellings now copy, and both say so.  A number read the same
+way, or a whole struct one step down, are unchanged.  (loft#1393, reported by the planet
+generator)
+
 **A list built from what it replaces reads the old value, at the last two places it did
 not.**  `xs[0].items = [xs[0].items[1]?, xs[0].items[0]?]` — reversing a list that lives in a
 struct inside a list — answered zeros, and so did the same line inside a closure over the

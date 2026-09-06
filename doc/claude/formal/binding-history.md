@@ -6,7 +6,7 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — D-bind-19 OPENED AND CLOSED 2026-09-06 (the `@FR-O-Owner` walk: a struct-ENUM
+OPEN: **0** — D-bind-20 OPENED AND CLOSED 2026-09-06 (loft#1393: a view OF A VIEW was not shaken when the outer container was disturbed, below); D-bind-19 OPENED AND CLOSED 2026-09-06 (the `@FR-O-Owner` walk: a struct-ENUM
 PAYLOAD view was invisible to `(B-View)`'s materialise clause, because the chain that names a
 projection's container could not see through the variant check the lowering wraps its subject
 in — below); D-bind-18 OPENED AND CLOSED 2026-09-06 (loft#1392: a vector link did not follow a

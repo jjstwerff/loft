@@ -30,6 +30,23 @@ Filed: loft#1394 (a payload binding written inside the arm, which needs the walk
 model), loft#1392, loft#1395.  formal: binding-history D-bind-19, IMPLEMENTATIONS.md's
 `@FR-O-Oracle` row.
 
+### A view of a view is a place inside the outer container (2026-09-06, loft#1393)
+
+`(B-Disturb)` ends a view's place when its CONTAINER is disturbed, and a chain names ONE place
+however many statements it is spelled over.  `base_container_place` resolves a chain inside one
+EXPRESSION; split through a local it did not, so `t = dv.tiles; prev = t.proto` recorded `prev`
+as a view of `t` while the disturbance named `dv`, and `prev` was never shaken — it read the
+CURRENT pass's data, both backends, no advice.  Reported by `planets`, where the loop compared
+consecutive simulation steps and therefore answered *nothing changed* on every step.
+
+`ViewWalk::resolve_view_root` follows the container through the views already open and keeps the
+OUTERMOST field, which is `base_container_place`'s own rule one level out; bounded, stopping at
+the first container that is not an open view.  Guard
+`a-view-of-a-view-is-a-place-inside-the-outer-container` (6 cells), falsified at 00ff5bb5.
+Residual and wrong for a different reason: the same chain whose tail is a value BRANCH, which
+`leaf` takes whole — the ordering half, loft#1394's, measured unmoved by this fix.  formal:
+binding-history.md D-bind-20.
+
 ### A build reads its destination through an element or a capture (2026-09-06, loft#1391)
 
 `(I-Comp)` is *whichever destination*; D-iter-4's snapshot reached the ones

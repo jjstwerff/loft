@@ -1009,9 +1009,49 @@ impl ViewWalk<'_> {
                 let idx = depth.min(self.open.len()).saturating_sub(1);
                 let field =
                     base_container_place(rhs.unspan(), self.data).map_or(ANY_FIELD, |(_, f)| f);
+                // `(B-Disturb)` ends the place a view names when its CONTAINER is disturbed,
+                // and a chain of views names one place however many statements it is spelled
+                // over.  `base_container_place` resolves a chain inside ONE expression
+                // (`dv.tiles.proto` names `dv`); split through a local it does not —
+                // `t = dv.tiles; prev = t.proto` recorded `prev` as a view of `t`, so
+                // reassigning `dv` shook `t` and left `prev` reading the new value, on both
+                // backends and with nothing said, where the one-expression spelling
+                // materialises and says so (loft#1393).  Resolve through the views already
+                // open, which is the same walk one level out.
+                let (container, field) = self.resolve_view_root(container, field);
                 self.open[idx].push((*v, container, field));
             }
         }
+    }
+
+    /// The container a view ultimately names, following views this walk has already opened.
+    ///
+    /// A view whose container is itself a view names a place inside the OUTER container, so a
+    /// disturbance of that outer one ends it: `t = dv.tiles; prev = t.proto` makes `prev` a
+    /// place inside `dv`, exactly as the single-expression `prev = dv.tiles.proto` does.  The
+    /// FIELD that survives is the outermost one — the one a disturbance of the root can name —
+    /// which is the rule [`base_container_place`] states for a chain inside one expression.
+    ///
+    /// Bounded, and it stops at the first container that is not an open view: a view rebound
+    /// to name a chain that leads back to itself would otherwise walk forever, and a lower
+    /// bound is what this walk answers everywhere else.
+    fn resolve_view_root(&self, mut container: u16, mut field: u32) -> (u16, u32) {
+        for _ in 0..16 {
+            let Some(&(_, outer, outer_field)) = self
+                .open
+                .iter()
+                .flatten()
+                .find(|(view, _, _)| *view == container)
+            else {
+                return (container, field);
+            };
+            if outer == container {
+                return (container, field);
+            }
+            container = outer;
+            field = outer_field;
+        }
+        (container, field)
     }
 
     /// Note where each variable is first BOUND, which is [`Self::leaf`]'s frame for a view of it.
