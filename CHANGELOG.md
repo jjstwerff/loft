@@ -92,6 +92,10 @@ place — mutating `s` afterwards no longer shows through `t.0` when `T` is a st
 generic and the non-generic spelling of the same function had been giving different
 answers, which is the one thing a type variable is supposed never to do.  A `T` bound to a
 vector or a keyed collection is still shared rather than copied (loft#1365).
+**A list you read out of a list stays yours when the outer list grows.**  The same fix as for
+a record read, now for a list: `b = w[0]` followed by appends to `w` used to leave `b` empty
+once the outer list outgrew its allocation.  `b` is now your own copy, and you are told so.
+
 **Two lists and a lookup over the same records are all one collection again.**  A struct with
 two plain lists beside a keyed one — `{ a: vector<E>, b: vector<E>, h: hash<E[k]> }` — behaved
 as though the lookup were a hub: adding through it filled both lists, but adding through either

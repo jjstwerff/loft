@@ -913,12 +913,11 @@ impl ViewWalk<'_> {
             // Through `base()`: a nullable `S?` view is the same storage behind a
             // nullability marker (@FR-L-Null), so it is at risk exactly as its dense twin is.
             //
-            // A COLLECTION-typed view is deliberately NOT here, though `(B-View-Depth)` makes
-            // an index read a view "whatever the element type": the walk would record it and
-            // the advice would fire, but the materialise arm this feeds is record-shaped and
-            // no copy happens, so `b = w[0]` on a `vector<vector<integer>>` would be told its
-            // alias was replaced by a copy it did not get.  Measured and backed out
-            // (loft#1377) — a message that lies is worse than the silence it replaces.
+            // A COLLECTION-typed view is here too, because `(B-View-Depth)` makes an index
+            // read a view "whatever the element type" and the materialise arm now has a
+            // collection case (loft#1377): the record path strips the container dep and lets
+            // the BIND copy, which for a collection is decided at PARSE time and cannot hear
+            // a scope-pass strip, so the copy is emitted here instead.
             //
             // A bare `&` link to a whole container is not recorded either, and that is
             // `base_container_var`'s doing rather than this list's: it answers `None` unless
@@ -927,7 +926,7 @@ impl ViewWalk<'_> {
             // needs, and it lives in one place.
             if matches!(
                 self.function.tp(*v).base(),
-                Type::Reference(_, _) | Type::Enum(_, true, _)
+                Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
             ) && let Some(container) = base_container_var(rhs.unspan(), self.data)
             {
                 // The view belongs to the frame that owns its VARIABLE. Re-binding an outer
@@ -6080,9 +6079,10 @@ impl Scopes<'_> {
         // Only fires for a view that is still USED after the reshape. A view whose last use
         // precedes it is not at risk, and materialising it would lose a write that lands
         // today — see `collect_views_to_materialise`.
+        let mut collection_copy: Option<(u16, i32)> = None;
         if matches!(
             function.tp(v).base(),
-            Type::Reference(_, _) | Type::Enum(_, true, _)
+            Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
         ) && let Some(cause) = self.views_to_materialise.get(&v).copied()
             && let Some(container) = base_container_var(unspanned_value, data)
             && function.tp(v).depend().contains(&container)
@@ -6092,6 +6092,32 @@ impl Scopes<'_> {
             let deps: Vec<u16> = function.tp(v).depend().clone();
             for d in deps {
                 function.make_independent(v, d);
+            }
+            // A COLLECTION view needs the copy EMITTED, where a record view only needs its
+            // dep stripped.  The record bind reads the deps at emit time and copies; the
+            // collection bind decides copy-vs-view at PARSE time (`classify_vec_bind`'s
+            // `depend().is_empty()`, the `(B-View-Base)` citation), which runs before this
+            // pass, so a strip here arrives too late to be heard.  The buffer + refill is the
+            // shape a whole-vector copy already takes (`ArmBind::CopyVector`): a `__lift_N`
+            // that owns its store for the function's life and is refilled in place, so a
+            // materialise inside a loop costs one store rather than one per iteration.
+            if let Type::Vector(inner, _) = function.tp(v).base().clone() {
+                let wrapper = format!("main_vector<{}>", inner.name(data));
+                if data.name_type(&wrapper, data.def(self.d_nr).source) != u16::MAX
+                    && let Some(elem) = data.vector_element_type(&inner, self.database)
+                {
+                    let tp = Type::Vector(inner.clone(), Deps::none());
+                    let tmp = self.new_buffer_var(function, &tp);
+                    // The local NAMES the buffer; the buffer owns the store and frees it once
+                    // at function exit.  Left owning, the local's own scope-exit `OpFreeRef`
+                    // releases the buffer's store — harmless at function scope and fatal in a
+                    // LOOP, where the next iteration refills a freed store and the read comes
+                    // back poisoned (`rec=3735928559`).  This is the same borrow the snapshot
+                    // witness takes, for the same reason (@FR-O-Borrow: naming a store is not
+                    // owning it).
+                    function.set_skip_free(v);
+                    collection_copy = Some((tmp, i32::from(elem)));
+                }
             }
             let fname = data.def(self.d_nr).original_name();
             match cause {
@@ -6189,7 +6215,7 @@ impl Scopes<'_> {
         // Set(v, Insert([preamble..., final_call])).
         // This keeps Set(v, Call(...)) as a bare Call, which codegen's
         // gen_set_first_at_tos can handle correctly.
-        let (mut ls, set_value) = if let Value::Insert(mut ops) = scanned {
+        let (mut ls, mut set_value) = if let Value::Insert(mut ops) = scanned {
             if ops.len() >= 2 {
                 let final_val = ops.pop().unwrap();
                 (ops, final_val)
@@ -6208,6 +6234,21 @@ impl Scopes<'_> {
         // which leaves the local owning a store either way — so the deps have to go, or the
         // free that guard exists to make correct is never emitted.
         //
+        // The collection materialise decided above, emitted here because it wraps the SCANNED
+        // right-hand side: `OpReplaceVector(buffer, <the view>, elem)` clears the buffer and
+        // refills it from what the view names, and the local then binds the buffer.  Writes
+        // through the local land in the copy, which is what `(B-View)`'s materialise means and
+        // what the advice already told the author.
+        if let Some((tmp, elem)) = collection_copy {
+            let view = std::mem::replace(&mut set_value, Value::Null);
+            set_value = Value::Insert(vec![
+                Value::Call(
+                    data.def_nr("OpReplaceVector"),
+                    vec![Value::Var(tmp), view, Value::Int(elem)],
+                ),
+                Value::Var(tmp),
+            ]);
+        }
         // Asked against `set_value`, the SCANNED right-hand side, not the raw one: `scan`
         // has just LIFTED any argument the @P290 bracket could not name into a temp, and the
         // witness the join resolves is that temp.  Read before the lift the same call answers

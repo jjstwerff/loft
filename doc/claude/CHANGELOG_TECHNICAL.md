@@ -9,6 +9,30 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A collection-typed element view materialises like its record twin (2026-09-06, loft#1377)
+
+`(B-View-Depth)` makes a vector INDEX read a VIEW "whatever the element type", and
+`(B-Disturb)`'s fourth event makes a growth a place-ending one — so `b = w[0]` on a
+`vector<vector<integer>>` whose container then grows must take its own copy, as `d = v[0]` on a
+`vector<S>` does.  It read `len(b) == 0`, silent on both backends.
+
+The record fix did not carry, and admitting the type to the two gates was measured and backed
+out at the time: the walk then recorded the view and the advice fired over a copy that was
+never made.  Stripping the container dep is enough for a RECORD, whose bind reads the deps at
+emit time; a COLLECTION bind decides copy-vs-view at PARSE time (`classify_vec_bind`'s
+`depend().is_empty()`, the `(B-View-Base)` citation), which runs before the scope pass.  So the
+copy is EMITTED instead, in the shape a whole-vector copy already takes (`ArmBind::CopyVector`):
+a `__lift_N` buffer owning its store for the function's life, refilled in place by
+`OpReplaceVector`, so a materialise inside a loop costs one store rather than one per iteration.
+
+The local NAMES the buffer rather than owning it (`set_skip_free`), and a LOOP is what makes
+that load-bearing: left owning, its scope-exit free released the buffer's store and the next
+iteration refilled a freed one — the guard's loop cell read `rec=3735928559` under the arena
+poison.  Guard: `1377-a-collection-typed-element-view-materialises-too.loft`, with three
+controls — the inner-realloc shape `85` measures, a view with no disturbance at all (which must
+still alias and write through), and a sibling field's growth.  Falsified at 8624960f on both
+backends.  `Fixes #1377`.
+
 ### A linked group is the SET of collections over one element type, not a hub (2026-09-06, loft#1375, D-col-1)
 
 `{ a: vector<E>, b: vector<E>, h: hash<E[k]> }` made the keyed member a HUB rather than the

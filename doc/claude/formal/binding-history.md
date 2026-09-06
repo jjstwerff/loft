@@ -688,10 +688,14 @@ refusal names it.
   caught it was `make ci`'s `moros_editor` html smoke, the only thing in the tree exercising
   that shape, and it is NOT in the corpus the emission diff walks (`tests/fixtures/libs` is
   outside it) — so a four-file diff read as a small blast radius while a library was broken.
-  Residual, filed rather than
-  bundled: a COLLECTION-typed element view is still stale (loft#1377) — the walk records it
-  once the type gate admits it and the advice fires, but the materialise arm is record-shaped,
-  so the author would be told about a copy they did not get.  `Contract: strained` — the rule
+  The COLLECTION-typed twin was filed rather than
+  bundled and closed one commit later (loft#1377): it needed the copy EMITTED rather than the
+  dep stripped, because a collection bind decides copy-vs-view at PARSE time
+  (`classify_vec_bind`) and cannot hear a scope-pass strip.  The emitted shape is the one a
+  whole-vector copy already takes — a `__lift_N` buffer refilled by `OpReplaceVector` — and the
+  local NAMES it rather than owning it, which a loop makes load-bearing: left owning, the
+  local's scope-exit free released the buffer and the next iteration refilled a freed store
+  (`rec=3735928559` under the arena poison).  `Contract: strained` — the rule
   gained an event.
 
 ### the status line formal/README.md's area table carried until 2026-09-04

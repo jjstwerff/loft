@@ -22,12 +22,10 @@
 // the view carries a BYTE OFFSET (`OpGetVector(OpGetField(w, 16, …), …)`) and the growth carries
 // a field NUMBER (`OpNewRecord(w, tp, 1)`), so matching them needs the type table.  loft#1384.
 //
-// NOT closed here, and measured rather than assumed: a COLLECTION-typed element view
-// (`b = w[0]` on a `vector<vector<integer>>`) reads `len(b) == 0` after the same growth.  The
-// walk records it once the gate admits the type and the advice fires — but the materialise arm
-// it feeds is record-shaped, so no copy is made and the author would be told their alias was
-// replaced by a copy they did not get.  Backed out and filed as loft#1377 rather than shipped
-// as a message that lies.
+// The COLLECTION-typed twin (`b = w[0]` on a `vector<vector<integer>>`) is closed too, one
+// commit later and apart: loft#1377, whose guard is beside this one.  It needed the copy
+// EMITTED rather than the dep stripped, because a collection bind decides copy-vs-view at
+// parse time and cannot hear a scope-pass strip.
 //
 // @falsified-at: cbc58429 — interpret exit 1 -> 0, interpret 1 assertion failures -> 0, native exit 1 -> 0, native 1 assertion failures -> 0
 struct S { n: integer }
