@@ -4112,6 +4112,212 @@ pub fn post_scope_lints(
     // steer whose successor does not resolve.
     superseded_fold_diagnostics(data, diags, fallback_file);
     warn_linked_group_append(data, diags, fallback_file);
+    // loft#1397 — a payload binding whose subject's place is overwritten with another variant.
+    warn_variant_overwritten(data, diags, fallback_file);
+}
+
+/// loft#1397 — a `match` / `is` PAYLOAD binding whose subject's PLACE is overwritten with a
+/// DIFFERENT variant while the binding is still read.
+///
+/// `formal/binding.md` `(B-Disturb)` is explicit that overwriting a place is NOT disturbing
+/// it — *"`o.inner = Box{…}` writes INTO the place `o.inner` already occupies, so a view of
+/// it survives"* — so the binding still names the payload slot and reads what is there now.
+/// Both backends agree, and the VALUE is what the rules give.  Nothing here is a lifetime
+/// defect, and the rules do not change to match the code.
+///
+/// What is missing is the DIAGNOSTIC.  loft#980's `variant-field-unchecked` exists for exactly
+/// this hazard — a field only some variants declare, read at a tag the program did not check —
+/// and it is deliberately quiet for `match` / `is` bindings, because those are per-arm and are
+/// the cure it names.  That exemption assumes the variant cannot change under the binding.  It
+/// can: the arm is entered as `Holder`, the subject's place is overwritten with `Empty`, and
+/// the per-arm binding keeps reading `Empty`'s bytes at `Holder`'s offsets.
+///
+/// Keyed on the ARM's own tag test rather than on a variant's discriminant derived here, so
+/// the lint cannot drift from the numbering the parser emits: the condition names the place
+/// and the tag in one node, and the overwrite is an `OpSetEnum` on that same place with a
+/// different one.
+///
+/// A LOCAL subject never reaches this.  `sh = Empty{…}` builds into a work-ref and repoints
+/// the local, so its `OpSetEnum` names a different place — and that shape is a REASSIGNMENT,
+/// which `(B-View)` already materialises and warns about.  Only a place the overwrite clause
+/// covers gets here, which is exactly the case that is correct-but-unwarned.
+///
+/// `warning`, not advice, by the tier rule: the value read is another variant's, typed as this
+/// one's, which is the same wrong result loft#980 reports.
+pub fn warn_variant_overwritten(
+    data: &Data,
+    diags: &mut crate::diagnostics::Diagnostics,
+    fallback_file: &str,
+) {
+    if !crate::keys::variant_overwritten_enabled() {
+        return;
+    }
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) {
+            continue;
+        }
+        // The DEFINITION's file, for the reason `warn_lost_temp_writes` gives: a warning gates
+        // a library's CI, so a dependency's line must not be paired with the consumer's path.
+        let file = if def.position.file.is_empty() {
+            fallback_file
+        } else {
+            def.position.file.as_str()
+        };
+        let mut hits: Vec<(u16, u16, u32, u32)> = Vec::new();
+        find_variant_arms(data, &def.code, &mut |place, tag, arm| {
+            let mut w = VariantWatch {
+                data,
+                function: &def.variables,
+                place,
+                tag,
+                bound: HashSet::new(),
+                stale: false,
+                at: def.position.clone(),
+                hits: Vec::new(),
+            };
+            w.walk(arm);
+            for (b, at) in w.hits {
+                hits.push((b, place.0, at.line, at.pos));
+            }
+        });
+        hits.sort_unstable();
+        hits.dedup_by_key(|(b, _, _, _)| *b);
+        for (binding, base, line, col) in hits {
+            let function = &def.variables;
+            let name = function.name(binding).to_string();
+            let field = name
+                .trim_start_matches("_mv_")
+                .rsplit_once('_')
+                .map_or_else(|| name.clone(), |(n, _)| n.to_string());
+            let subject = function.name(base).to_string();
+            let msg = format!(
+                "`{field}` names the payload of the variant this arm matched, and `{subject}` \
+                 is given a DIFFERENT variant while `{field}` is still read \u{2014} the binding \
+                 keeps naming the same slot, so this reads the new variant's bytes at \
+                 `{field}`'s offset. Copy the payload out before the write (`x = {field};`) \
+                 and read `x`"
+            );
+            diags.add_at_coded(
+                crate::diagnostics::Level::Warning,
+                Some("variant-overwritten-binding"),
+                &msg,
+                file,
+                line,
+                col,
+            );
+        }
+    }
+}
+
+/// Call `f` for every variant-check `if` — the lowering a `match` arm and an `is` both take —
+/// with the PLACE its tag is read from, the tag it tests, and the arm it guards.
+fn find_variant_arms(data: &Data, node: &Value, f: &mut impl FnMut((u16, u32), i32, &Value)) {
+    if let Value::If(cond, then_arm, _) = node.unspan()
+        && let Some((place, tag)) = variant_check(data, cond)
+    {
+        f(place, tag, then_arm);
+    }
+    node.unspan()
+        .for_each_child(&mut |c| find_variant_arms(data, c, f));
+}
+
+/// The place and tag a variant-check condition reads — `OpEqInt(OpConvIntFromEnum(OpGetEnum(P,
+/// 0)), N)`, and the non-struct spelling without the `OpGetEnum`.
+///
+/// An `is` wraps its condition in an `Insert` that first stabilises the subject into a local,
+/// so the tail is taken rather than the whole node.
+fn variant_check(data: &Data, cond: &Value) -> Option<((u16, u32), i32)> {
+    let tail = match cond.unspan() {
+        Value::Block(bl) | Value::Loop(bl) => bl.operators.last()?.unspan(),
+        // The `is` spelling stabilises its subject into a local first and yields the test as
+        // the LAST item of an `Insert`, where `match` hands the test bare.
+        Value::Insert(items) => items.last()?.unspan(),
+        other => other,
+    };
+    let Value::Call(d, args) = tail else {
+        return None;
+    };
+    if data.def(*d).name() != "OpEqInt" || args.len() != 2 {
+        return None;
+    }
+    let Value::Int(tag) = args[1].unspan() else {
+        return None;
+    };
+    let Value::Call(c, cargs) = args[0].unspan() else {
+        return None;
+    };
+    if data.def(*c).name() != "OpConvIntFromEnum" {
+        return None;
+    }
+    let subject = match cargs.first()?.unspan() {
+        Value::Call(g, gargs) if data.def(*g).name() == "OpGetEnum" => gargs.first()?,
+        other => other,
+    };
+    Some((projection_container_place(data, subject)?, *tag))
+}
+
+/// The ordered walk of one variant arm: what is BOUND, when the subject's place stops holding
+/// the variant the arm matched, and which bindings are read after that.
+struct VariantWatch<'a> {
+    data: &'a Data,
+    function: &'a crate::variables::Function,
+    place: (u16, u32),
+    tag: i32,
+    bound: HashSet<u16>,
+    stale: bool,
+    /// The nearest source position seen, so the report lands on the READ rather than on the
+    /// function — a warning a reader cannot locate is a warning they cannot act on.
+    at: crate::lexer::Position,
+    hits: Vec<(u16, crate::lexer::Position)>,
+}
+
+impl VariantWatch<'_> {
+    fn walk(&mut self, node: &Value) {
+        let outer = self.at.clone();
+        if let Some(p) = node.span_pos() {
+            self.at = p.clone();
+        }
+        self.walk_inner(node);
+        self.at = outer;
+    }
+
+    fn walk_inner(&mut self, node: &Value) {
+        match node.unspan() {
+            // The value runs before the target is written, so a read inside it is a read
+            // BEFORE this binding exists.
+            Value::Set(v, rhs) => {
+                self.walk(rhs);
+                // A PAYLOAD binding is named by the parser (`_mv_<field>_N`).  The side
+                // table that records which field each one projects (`mv_field_origin`) is
+                // cleared when the two passes are joined, so the name is the fact that
+                // survives to here — the same one `Variables::is_overwritten_view` reads.
+                if self.function.name(*v).starts_with("_mv_") {
+                    // Re-bound after the overwrite: it names the new variant's payload, which
+                    // is what the program asked for.
+                    self.bound.insert(*v);
+                    self.hits.retain(|(h, _)| h != v);
+                }
+                return;
+            }
+            Value::Var(v) if self.stale && self.bound.contains(v) => {
+                self.hits.push((*v, self.at.clone()));
+            }
+            Value::Call(d, args) if self.data.def(*d).name() == "OpSetEnum" => {
+                if let (Some(p), Some(Value::Enum(m, _))) = (
+                    args.first()
+                        .and_then(|a| projection_container_place(self.data, a)),
+                    args.get(2).map(Value::unspan),
+                ) && p == self.place
+                    && i32::from(*m) != self.tag
+                {
+                    self.stale = true;
+                }
+            }
+            _ => {}
+        }
+        node.unspan().for_each_child(&mut |c| self.walk(c));
+    }
 }
 
 /// Advise when two members of one linked collection GROUP are appended to in the same block

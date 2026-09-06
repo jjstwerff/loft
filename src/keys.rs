@@ -627,6 +627,16 @@ pub fn no_variant_field_warning() -> bool {
 /// **Default ON**; `LOFT_NO_LOST_TEMP_WRITE` opts out. One cached env read. See
 /// `use_analysis::warn_lost_temp_writes`.
 #[must_use]
+/// loft#1397: a `match` / `is` payload binding whose subject's PLACE is overwritten with a
+/// DIFFERENT variant while the binding is still read.  `(B-Disturb)` makes the VALUE right —
+/// an overwrite is not a disturbance — so what this reports is the read loft#980's
+/// `variant-field-unchecked` exists to prevent, at the one spelling exempt from it.
+/// `use_analysis::warn_variant_overwritten`.
+pub fn variant_overwritten_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| !env_set("LOFT_NO_VARIANT_OVERWRITTEN"))
+}
+
 pub fn lost_temp_writes_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| !env_set("LOFT_NO_LOST_TEMP_WRITE"))
