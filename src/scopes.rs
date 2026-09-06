@@ -1075,6 +1075,33 @@ impl ViewWalk<'_> {
             // the right-hand side is a PROJECTION, so `pe = &e` names no container while
             // `pw = &w[0]` names `w`.  That is the in-versus-to distinction `(B-Ref-Alias)`
             // needs, and it lives in one place.
+            // ⚠ THESE TWO TESTS ANSWER DIFFERENT QUESTIONS, AND BOTH ARE LOAD-BEARING.  The
+            // type list says WHICH BINDINGS CAN BE VIEWS AT ALL; `value_view_container` says
+            // WHICH CONTAINER a value views.  They were widened for different defects, on
+            // different branches, and met here at a cherry-pick — so the pairing reads as an
+            // accident of adjacency in the history and is not one.  Narrowing either silently
+            // un-fixes a shipped defect, and none of them fails loudly:
+            //
+            //   * drop `Type::Vector` (or the `.base()` that reaches it through a `τ?`) and a
+            //     COLLECTION view is never named, which is loft#1377 and loft#1399 — the
+            //     latter answers correctly on `--native` either way, so the interpreter goes
+            //     quietly wrong on one backend only;
+            //   * drop `value_view_container` back to `base_container_var` and a BRANCH-valued
+            //     binding names no container — which costs loft#1396 AND loft#1399, since the
+            //     latter's binding is branch-valued too.
+            //
+            // Both narrowings were MEASURED rather than reasoned, by making each one and
+            // running the guards: dropping `Type::Vector` fails
+            // `1377-a-collection-typed-element-view-materialises-too` and
+            // `a-collection-projection-arm-of-a-branch-materialises` while loft#1396's guard
+            // stays green; dropping the namer fails loft#1396's guard AND loft#1399's, because
+            // a branch-valued binding is not named at all without it.
+            //
+            // Naming and copy have to land together — a named binding whose deps are stripped
+            // with no emitter copy owns a store it only views (loft#778's class), which is why
+            // widening the type list ALONE was measured unsound.  The guards for those three
+            // issues are this line's regression net; nothing names the pairing itself, so it
+            // is named here.  `binding-history.md` D-bind-23 carries the history.
             if matches!(
                 self.function.tp(*v).base(),
                 Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)

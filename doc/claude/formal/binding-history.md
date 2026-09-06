@@ -60,6 +60,25 @@ only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
 > Guard `a-collection-projection-arm-of-a-branch-materialises` (9 cells), falsified at
 > c22c318f: interpret one assertion failure -> 0, native INERT — which is the right verdict for
 > a backend divergence, since only one side can move.
+>
+> ⚠ **The pairing that makes all of this work was never designed, and nothing but a comment
+> names it.**  `ViewWalk::leaf`'s gate now asks two questions that arrived from different
+> branches for different defects: a TYPE LIST — which bindings can be views at all, widened to
+> `Vector` (through `.base()`) for loft#1377 — and `value_view_container` — which container a
+> value views, widened through a branch for loft#1396.  They met at a cherry-pick, and the
+> union is what lets a COLLECTION view be both named and copied.  Narrowing either silently
+> un-fixes a shipped defect, and both directions were MEASURED rather than reasoned — each
+> narrowing made, built, and the guards run:
+>
+> | narrowing | 1377 | 1396 | 1399 |
+> |---|---|---|---|
+> | drop `Type::Vector` from the type list | FAIL | ok | FAIL |
+> | drop the namer to `base_container_var` | ok | FAIL | FAIL |
+>
+> loft#1399 is lost either way, and by two different routes — without the type list it is not a
+> view at all, without the namer it is not a branch it can see through.  Each issue has a guard,
+> so the three together are the line's regression net; no guard names the PAIRING, which is why
+> the site itself now does.
 
 > **D-bind-22 — OPENED AND CLOSED (2026-09-06, loft#1396) — a binding whose value is a BRANCH
 > with a projecting arm was outside the materialise clause.**  `x = if k > 0 { h.inner } else
