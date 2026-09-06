@@ -9,6 +9,25 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A `Set` whose value is a branch is walked in the order it runs, so a view bound in an arm sees its container's reassignment (2026-09-06, loft#1394)
+
+`ViewWalk::walk_stmt` gains an arm for a `Set` whose right-hand side is an `If`, `Block` or
+`Insert`: the value's statements are walked first, then the target's own establishment
+(`disturb`, read off the whole statement because a struct-enum literal's mint names a work-ref
+and only the `Set` says which variable took it), then the target is recorded — `leaf`'s third
+step, split out as `record_target`.  Read whole before, a bind inside an arm and the
+reassignment of its container in the same arm were one step, so nothing materialised:
+`got = match sh { Holder{inner} => { sh = Empty{…}; inner.a }, _ => -1 }` answered 0 on
+`--interpret` and 1 on `--native`, and the plain-struct `got = if c { x = h.inner; h = Hold{…};
+x.a }` answered the new container on both.  The materialise arm now also lifts the never-free
+mark it is retiring (`Function::clear_skip_free`) and admits an EMPTY dep list beside one
+naming the container, which is what the `is` spelling of a payload capture carries.  Guard
+`a-view-bound-inside-a-branch-arm-sees-its-containers-reassignment` (9 cells, four controls),
+falsified at 6c09de23.  Filed: loft#1396 (a view that IS an arm's value — the naming can see it,
+the emitters have no per-arm copy, and the widening alone is unsound), loft#1397 (the overwrite
+cousin, which `(B-Disturb)` settles as not a disturbance; what is missing is loft#980's
+warning).  formal: binding-history D-bind-18.
+
 ### A projection's container has one name, so a struct-enum payload view materialises, and the oracle stops calling it owned (2026-09-06, the `@FR-O-Owner` walk)
 
 `use_analysis::projection_container_var` is the one derivation of *which container did this

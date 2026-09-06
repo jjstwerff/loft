@@ -3725,6 +3725,17 @@ impl Function {
     /// Mark a variable so that `get_free_vars` will not emit `OpFreeRef` for it.
     /// Used for borrowed references (e.g. par-loop result variables that point
     /// into the result vector store).
+    /// Lift the never-free mark — the binding has stopped being the borrow it was marked for.
+    ///
+    /// The one caller is `(B-View)`'s materialise: a view live across a disturbance of its
+    /// container is given a store of ITS OWN, and a binding that owns a store must free it.
+    /// Stripping the deps without lifting the mark is what left a materialised `_mv_<field>_N`
+    /// holding a record nothing released.  `@FR-O-Override`'s contract is that a MARKED
+    /// binding is never freed; this retires the marking rather than freeing around it.
+    pub fn clear_skip_free(&mut self, v: u16) {
+        self.variables[v as usize].skip_free = false;
+    }
+
     #[track_caller]
     pub fn set_skip_free(&mut self, v: u16) {
         if let Ok(want) = std::env::var("LOFT_SKIPFREE_TRACE")

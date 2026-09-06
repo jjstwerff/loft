@@ -918,6 +918,32 @@ impl ViewWalk<'_> {
                     }
                 }
             }
+            // A `Set` whose VALUE carries statements — a value `if` or `match`, a block —
+            // runs them BEFORE the target is written, so they are walked in that order and
+            // the target is recorded after.  Read whole by `leaf` instead, a view bound
+            // inside one arm and the reassignment of its container in the SAME arm were
+            // never separated in time: `got = match sh { Holder{inner} => { sh = Empty{…};
+            // inner.a }, … }` was shaken and used in one indivisible step, so nothing
+            // materialised and nothing was said, on both backends (loft#1394).  `leaf`'s own
+            // doc calls that coarseness deliberate in both directions, and it is — for a
+            // form whose internal order is unknown.  A `Set`'s is not: the value first, the
+            // target after.
+            Value::Set(_, rhs)
+                if matches!(
+                    rhs.unspan(),
+                    Value::If(_, _, _) | Value::Block(_) | Value::Insert(_)
+                ) =>
+            {
+                self.note_binding_depth(stmt);
+                self.walk_stmt(rhs);
+                // The TARGET's own establishment comes after its value, because that is when
+                // the slot is written — and it is read off the whole statement, since a
+                // struct-enum literal's mint names a work-ref and only the `Set` says which
+                // variable took it (`established_stores`).  Skipping it here left an enum
+                // subject reassigned inside a branch arm disturbing nothing at all.
+                self.disturb(stmt);
+                self.record_target(stmt);
+            }
             other => self.leaf(other),
         }
     }
@@ -973,10 +999,18 @@ impl ViewWalk<'_> {
         self.disturb(stmt);
         // Reading or writing a shaken view is what makes the disturbance matter.
         self.note_uses(stmt);
-        // A `Set` REPLACES whatever the slot held, so the old binding's troubles end here and
-        // a view bound by this statement is live from here on. Both recorded LAST, so a
-        // statement that re-establishes a container and binds a view of the NEW value does
-        // not mark the fresh view against its own establishment.
+        self.record_target(stmt);
+    }
+
+    /// What a `Set` does to the walk's state once its VALUE has been accounted for — the last
+    /// of [`Self::leaf`]'s three steps, and the only one a value-branch `Set` still owes after
+    /// its arms have been walked in their own order.
+    ///
+    /// A `Set` REPLACES whatever the slot held, so the old binding's troubles end here and a
+    /// view bound by this statement is live from here on.  Recorded LAST, so a statement that
+    /// re-establishes a container and binds a view of the NEW value does not mark the fresh
+    /// view against its own establishment.
+    fn record_target(&mut self, stmt: &Value) {
         if let Value::Set(v, rhs) = stmt.unspan() {
             self.shaken.remove(v);
             for frame in &mut self.open {
@@ -6338,17 +6372,16 @@ impl Scopes<'_> {
             function.tp(v).base(),
             Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
         ) && let Some(cause) = self.views_to_materialise.get(&v).copied()
-            // Not a NEVER-FREE binding (@FR-O-Override), the guard the var-copy materialise
-            // arm below already carries.  The strip makes the binding an OWNER — that is how
-            // native mints `_own_store_<v>` at the bind — and a binding marked never-free
-            // then holds a store nothing releases.  Reached once the container namer learned
-            // to peel a variant check: a `match`/`is` payload binding (`_mv_<field>_N`) is
-            // marked never-free by the parser precisely because it is a view, and
-            // materialising one leaked a record per call on `--native` while answering no
-            // differently.  A binding the marking pass owns is that pass's to release.
-            && !function.is_skip_free(v)
             && let Some(container) = base_container_var(unspanned_value, data)
-            && function.tp(v).depend().contains(&container)
+            // Every dep this binding carries names the container being disturbed — a VIEW
+            // test, not an ownership one, and deliberately not the empty-deps proxy: what
+            // makes the binding a view here is the walk's answer plus `base_container_var`,
+            // and a dep would only be restating it.  A payload binding written
+            // `if sh is Holder { inner }` carries NO dep where its `match` twin does, and one
+            // with nothing to strip still has a mark to lift and emitters to steer, so both
+            // must pass.  A binding whose deps name something ELSE is declined: that one is
+            // not a view of what was disturbed.
+            && function.tp(v).depend().iter().all(|d| *d == container)
         {
             let vname = function.name(v).to_string();
             let cname = function.name(container).to_string();
@@ -6356,6 +6389,16 @@ impl Scopes<'_> {
             for d in deps {
                 function.make_independent(v, d);
             }
+            // The binding has stopped being a view, so the NEVER-FREE mark it was given as
+            // one goes with the deps (@FR-O-Override marks a borrow; this is no longer one).
+            // A `match`/`is` payload binding (`_mv_<field>_N`) is marked by the parser, and
+            // stripping only the deps left it owning a store nothing released — one leaked
+            // record per call on `--native`, measured.  Two facts, one statement: an owner
+            // frees what it owns.
+            function.clear_skip_free(v);
+            // ...and the VECTOR arm below gives it back, for a different fact: there the
+            // local names a buffer that owns the store, so the clear must precede the set or
+            // the local frees the buffer's store at scope exit.
             // A COLLECTION view needs the copy EMITTED, where a record view only needs its
             // dep stripped.  The record bind reads the deps at emit time and copies; the
             // collection bind decides copy-vs-view at PARSE time (`classify_vec_bind`'s

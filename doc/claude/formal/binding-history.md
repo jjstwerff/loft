@@ -6,8 +6,9 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — D-bind-20 OPENED AND CLOSED 2026-09-06 (loft#1393: a view OF A VIEW was not shaken when the outer container was disturbed, below); D-bind-19 OPENED AND CLOSED 2026-09-06 (the `@FR-O-Owner` walk: a struct-ENUM
-PAYLOAD view was invisible to `(B-View)`'s materialise clause, because the chain that names a
+OPEN: **0** — D-bind-21 OPENED AND CLOSED 2026-09-06 (loft#1394: a view BOUND INSIDE a
+branch arm whose container is reassigned in the SAME arm was never materialised, because
+the walk read a `Set` with a value-branch right-hand side whole — below); D-bind-20 OPENED AND CLOSED 2026-09-06 (loft#1393: a view OF A VIEW was not shaken when the outer container was disturbed, below); D-bind-19 OPENED AND CLOSED 2026-09-06 (the `@FR-O-Owner` walk: a struct-ENUMPAYLOAD view was invisible to `(B-View)`'s materialise clause, because the chain that names a
 projection's container could not see through the variant check the lowering wraps its subject
 in — below); D-bind-18 OPENED AND CLOSED 2026-09-06 (loft#1392: a vector link did not follow a
 rebind of its SOURCE, below); D-bind-11 and D-bind-16 CLOSED 2026-09-03 (below); D-bind-12, D-bind-13,
@@ -17,6 +18,37 @@ reference review.
 B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
 opened and closed 2026-08-05); B-Ref-AnnotationOnly is enforced in every position, not
 only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
+
+> **D-bind-21 — OPENED AND CLOSED (2026-09-06, loft#1394) — a view bound INSIDE a branch arm
+> did not see its container's reassignment in the same arm.**  `(B-Disturb)` × `(B-View)` are
+> the same sentence wherever the two statements sit, and the walk that names views to
+> materialise reads statements in source order — but it handled a `Set` whose right-hand side
+> is a value branch WHOLE, through the `leaf` arm its own doc calls *"deliberately coarse in
+> both directions"*.  So the bind and the disturbance were one indivisible step:
+> `got = match sh { Holder{inner} => { sh = Empty{z: 0}; inner.a }, _ => -1 }` answered 0 on
+> `--interpret` and 1 on `--native`, and `got = if c { x = h.inner; h = Hold{…}; x.a }` — a
+> plain STRUCT view, no enum in sight — answered the NEW container's value on BOTH backends.
+> The coarseness is right for a form whose internal order is unknown; a `Set`'s is not, so one
+> is walked in the order it runs: the value, then the target's own establishment at the point
+> the slot is written.
+>
+> Two facts had to travel with the deps.  A materialised view stops being a view, so the
+> never-free mark it was given as one is LIFTED (`Function::clear_skip_free`) — a `match`/`is`
+> payload binding is marked by the parser, and stripping only the deps left it owning a store
+> nothing released.  And a binding carrying NO deps is admitted beside one that names the
+> container: the `is` spelling of a payload capture carries none where its `match` twin does,
+> and there is nothing to strip but still a mark to lift and emitters to steer.
+>
+> Guard `tests/scripts/a-view-bound-inside-a-branch-arm-sees-its-containers-reassignment.loft`
+> (9 cells, four controls — including a LOOP, whose second pass must read the first pass's
+> value rather than the frozen materialised one).  Two shapes filed rather than folded in:
+> **loft#1396**, a view that IS an arm's value (`x = if k > 0 { h.inner } else { … }`), where
+> both halves of the naming can be made to see it but the emitters have no per-arm copy — the
+> widening was measured, found unsound alone (a binding made owner of a store it only views,
+> whose scope-exit free names the container's) and backed out; and **loft#1397**, the
+> OVERWRITE cousin (`w.st = Empty{…}`), which this doc's own clause settles as *not* a
+> disturbance — the value is right and what is missing is loft#980's warning, whose exemption
+> for a per-arm binding assumes the variant cannot change under it.
 
 > **D-bind-19 — OPENED AND CLOSED (2026-09-06, the `@FR-O-Owner` walk) — a struct-ENUM
 > PAYLOAD view was outside the materialise clause.**  `(B-Disturb)` names reassigning the

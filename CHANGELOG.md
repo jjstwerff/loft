@@ -95,6 +95,11 @@ The **say-what-you-do** release. Two threads, and they turned out to be one: eve
 the language reference was read against the compiler that ships, and most of what came back
 was not a wrong sentence but a promise nothing was keeping.
 
+**A view taken inside an `if` or `match` arm is copied when its container is replaced in the
+same arm.**  `got = match sh { Holder{inner} => { sh = Empty{…}; inner.a }, … }` read the new
+subject's bytes; the same two lines written outside a branch have been copied and reported for
+a month.  A plain struct view in that position was wrong on both backends, not just one.
+
 **A view of an enum's payload is copied when its subject is replaced, and the compiler says
 so.**  `x = sh.inner` followed by `sh = Empty{…}` used to read the NEW subject's bytes through
 the old view — `x.a` answered `0` where the payload said `1` — while the same code written

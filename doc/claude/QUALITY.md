@@ -5990,6 +5990,55 @@ predicted its own defect in words (*"a projection local is mis-classed `Owned`"*
 site enforcing the prediction.  `(B-Ref-Alias)` covers loft#1392 and the code disagrees with
 it per KIND, which is a deviation rather than a gap.
 
+#### B8c — loft#1394 closed: a `Set` whose value is a branch is walked in the order it runs (2026-09-06)
+
+The residual B8b filed, taken up when the sibling checkout measured that its OTHER half — the
+place comparison — was not what it needed.  Thirteen cells over the position of the bind (top
+level, inside a `match` arm, inside an `is` capture, inside an `if` arm, an arm's TAIL), the
+container kind (struct-enum payload, plain struct field, vector element), the disturbance
+(reassign to another variant, to the same variant, overwrite a field's place, reassign after
+the statement) and the execution count (once, a loop).
+
+**The rule settled two of them before any code moved.**  The `w.st = Empty{…}` row of the
+filed issue is NOT a defect: `(B-Disturb)` says in as many words that overwriting a place is
+not disturbing it, so a view of it survives and reads what is there now — 0 on both backends
+is the answer the rules give, and the issue body was wrong to list it.  What that row exposes
+is a payload binding outliving its variant, which is loft#980's class reached through the one
+spelling loft#980 exempts (filed apart, **loft#1397**).  And the LOOP cell's expected value was
+my own miscalculation: the second pass legitimately reads what the first pass left, and a fix
+that froze the materialised value would have been wrong.  Both corrections came from reading
+the rule rather than the run.
+
+**Fixed.**  The walk read a `Set` with a value-branch right-hand side WHOLE, through the `leaf`
+arm its own doc calls *"deliberately coarse in both directions"* — right for a form whose
+internal order is unknown, and a `Set`'s is not.  It is now walked in the order it runs: the
+value's statements, then the target's own establishment at the point the slot is written, then
+the target recorded (`leaf`'s third step split out as `record_target`).  Two facts had to
+travel with the deps for a copy to actually happen: a materialised view stops being a view, so
+its never-free mark is lifted; and a binding carrying no deps is admitted beside one naming the
+container, which is what the `is` spelling of a payload capture carries where its `match` twin
+carries a dep.  **The hole was not enum-specific** — a plain struct view bound in an `if` arm
+was wrong on BOTH backends, which the filed body did not say.  Guard
+`a-view-bound-inside-a-branch-arm-sees-its-containers-reassignment` (9 cells, four controls),
+falsified at 6c09de23; `binding-history.md` D-bind-18.
+
+**The widening I measured, and backed out.**  A view that IS an arm's value
+(`x = if k > 0 { h.inner } else { … }`) can be named by both halves — the walk's record site
+and the deps strip — through a branch-aware lookup, and I built it: the walk then reports the
+view and the deps are stripped.  It is unsound alone.  The emitters ask
+`container_element_base`, which answers `None` for an `If`, so nothing copies, and a binding
+whose deps are stripped without a copy becomes the OWNER of a store it only views — its
+scope-exit free then names the container's store, which is loft#778's class.  Backed out whole
+and filed as **loft#1396** with the diagnosis, because the cure is a per-arm materialise in the
+emitters rather than another name.  The same paragraph is why the branch peel stayed out of
+`projection_container_var`, which the oracle reads.
+
+**Convergence.**  Each fix in this walk closed a class and the route table shrank: B8b's peel
+closed the naming, B8c's ordering closed the position, and what is left (loft#1396) is a
+different layer — the emitters — rather than a fourth namer.  Three of the four things filed
+across B8b and B8c are shapes the RULES settle and the code does not yet reach; one
+(loft#1397) is a rule that settles the value and a diagnostic that does not exist.
+
 #### B2 — open, and the owner's call
 
 | decision | evidence | why it is not mine to take |
