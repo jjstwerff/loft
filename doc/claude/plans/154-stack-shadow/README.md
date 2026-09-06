@@ -18,7 +18,9 @@ in the `uninit` state, and the witness is the nullable-local pre-init defect ins
 named guards, on the HANDLE axis — the width axis reports the frame's own composite slots and
 was given up for a measured reason, and loft#1070 is out of a stack shadow's reach because
 its defect is a heap record's layout ([phase2-width-kind.md](phase2-width-kind.md)).
-Phases 3-5 open.**
+Phase 3 shipped the stale-on-grow half GREEN: all three open issues in the class report
+exactly one site, the view, and a five-probe matrix with a no-relocation negative control
+finds no false positive ([phase3-stale.md](phase3-stale.md)).  Phases 4-5 open.**
 
 A third of the machinery is already in the tree:
 `LOFT_UAF_GEN` ([`src/keys.rs:1335`](../../../../src/keys.rs)) keeps an offset-keyed shadow
@@ -74,8 +76,8 @@ odd-size adjacency matrix"* — which is the same question asked from the layout
 | **0** — the bypass census | [phase0-census.md](phase0-census.md) | 1106 corpus programs: `put_stack` carries 74.5 % of the bytes, is 1 of 33 write sites, and **no program** is covered by it alone | **Shipped 2026-09-06 — RED** |
 | **1** — `uninit` | [phase1-uninit.md](phase1-uninit.md) | 1103 of 1103 runnable corpus programs silent at HEAD on `--interpret`; four distinct sites REPORTED on `64437246` (the nullable-local pre-init control), where loft#1386's control is silent and loft#1254's control moves the `Partial` counter instead.  Ships `LOFT_VERIFY_STACK_INJECT=1` in the same commit | **Shipped 2026-09-06 — GREEN, target moved** |
 | **2** — `width + kind` | [phase2-width-kind.md](phase2-width-kind.md) | 1106 corpus programs silent at HEAD on `--interpret`; loft#1028's control reports `handle 12` read as `i64` (and answers `65535`), loft#1016's reports four sites (and answers `4294967198`).  loft#1070's control reproduces and the shadow is silent — its record has the type variable's LAYOUT, so the defect is in a store, not in a frame slot | **Shipped 2026-09-06 — GREEN on 2 of 3; the third is out of scope, measured** |
-| **3** — `stale-on-grow` | @PLN154 | Reports on the guards for loft#1373 / #1377 / #1384 at their recorded `@falsified-at:` refs; silent corpus-wide at HEAD | Open |
-| **4** — yield vs. the falsification corpus | this README | The 277 guards carrying a real `@falsified-at:` ref, each run under the shadow on the build it was written to catch.  The yield is the REPORT; the gate is the other direction — a shadow report on a build its guard calls clean is a false positive, and is red | Open |
+| **3** — `stale-on-grow` | [phase3-stale.md](phase3-stale.md) | All three issues are OPEN, so HEAD *is* the broken build: loft#1373, #1377 and #1384 each report exactly ONE site, the stale view.  Silent corpus-wide, and a five-probe matrix ([probes/](probes/README.md)) with a no-relocation negative control | **Shipped 2026-09-06 — GREEN** |
+| **4** — yield vs. the falsification corpus | [phase4-yield.sh](phase4-yield.sh) | 264 guards carry a real `@falsified-at:` ref across **200 distinct** builds, so the full run is hours of machine time rather than a session: the driver takes the refs covering the most guards first, shares one target directory and removes each worktree as it goes, and a partial run states its own sampling.  The yield is the REPORT; the gate is the other direction — a shadow report on a build its guard calls clean is a false positive, and is red (loft#1373 / #1377 / #1384 excepted: they are still OPEN, so HEAD is a broken build for those) | Driver shipped 2026-09-06; the run is machine time |
 | **5** — arm it in the nightly | [CI_BUDGET.md](../../CI_BUDGET.md) | The sweep itself: it goes red on a false positive phase 4 did not cover | Open |
 
 ## Phase ordering
@@ -95,8 +97,11 @@ odd-size adjacency matrix"* — which is the same question asked from the layout
    `boolean` writes one, so a slot is nearly always recycled with *something* in it and the
    pure-absence state is narrow.  Phase 1 counts the `Partial` reads it declines to report,
    which is phase 2's queue.
-3. **3 is a second mechanism** — a hook at the grow/realloc site plus a shadow scan — and does
-   not depend on 2.  It can be taken before 2 if the stale class is the more urgent one.
+3. **3 is a second mechanism** — a hook at the grow/realloc site plus a shadow scan — and did
+   not depend on 2.  It does depend on 1 and 2 for its EXACTNESS, though, which is worth
+   recording: the scan reads only the slots the shadow already says are the base of a handle,
+   so it never has to treat an aligned word that happens to look like a record id as a
+   reference.  It also needed the store identity phase 0 predicted the plan would owe.
 4. **4 after every detector phase it measures**, and it is the phase that decides whether 5
    is worth its CI minutes.
 
@@ -139,8 +144,12 @@ native is silent too and #1070 is wrong on both backends.
   builds: the one guard that is in the state, and the two issue-named defects that are not.
 - [phase2-width-kind.md](phase2-width-kind.md) — the tag, why the width axis is counted rather
   than reported, and the boundary loft#1070 marks.
+- [phase3-stale.md](phase3-stale.md) — the growth half, and [probes/](probes/README.md), the
+  five-cell matrix that says the silence is earned.
 - [shadow-control.sh](shadow-control.sh) — build a control tree WITH the shadow on it, which
   is what phase 4 needs and what `make falsify` cannot do.
+- [phase4-yield.sh](phase4-yield.sh) — the yield run over the falsification corpus, refs by
+  coverage so a partial run buys the most evidence.
 - [DEBUG.md](../../DEBUG.md) § the detector table — every existing lever this one sits beside,
   and the `LOFT_UAF_GEN` / `LOFT_STRICT_STORES` / `LOFT_POISON` division of labour.
 - [SLOTS.md](../../SLOTS.md) — the frame layout the shadow mirrors.

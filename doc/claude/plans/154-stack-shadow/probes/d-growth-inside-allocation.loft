@@ -1,0 +1,12 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A growth that stays INSIDE the allocation moves no record, so the view stays live: silent,
+// and the run must report zero relocations.
+struct S { n: integer }
+fn main() {
+  v: vector<S> = [S { n: 1 }];
+  d: S = v[0];
+  v += [S { n: 2 }];
+  println("d={d.n}");
+}

@@ -34,6 +34,7 @@
 //! Off by default and off in every release path: when the shadow is not armed the whole
 //! mechanism is one length load and a not-taken branch per store write.
 
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
@@ -106,6 +107,14 @@ pub fn kind_width(kind: u16) -> u32 {
     u32::from(kind & 0xFF)
 }
 
+/// The family of a tag whose handle names a record that has since MOVED.
+///
+/// @PLN154 phase 3.  A stale handle is not a different KIND from a live one — it is the same
+/// twelve bytes, naming a record that is now a free block or somebody else's.  So the tag
+/// keeps its width and its index and changes only its family, and the check reads it in the
+/// same comparison as everything else.
+pub const STALE: u16 = 7 << 8;
+
 /// A tag that matches every read: the raw byte moves — a coroutine frame restored from its
 /// own snapshot, a worker's stack overlaid with its parent's — carry no type, and inventing
 /// one for them would report the restore rather than describe it.
@@ -120,7 +129,87 @@ pub fn kind_name(kind: u16) -> &'static str {
         2 => "text",
         3 => "float",
         4 => "string",
+        7 => "stale handle",
         _ => "word",
+    }
+}
+
+/// A record that moved: `(store, the number it had, the number it has)`.
+type Relocation = (u16, u32, u32);
+
+thread_local! {
+    /// Records that relocated during the current operator.
+    ///
+    /// A list rather than an immediate scan, because [`Store::resize`](crate::store::Store)
+    /// has the two record numbers and no view of the interpreter's frame: it is a `Store`
+    /// method, and the frame lives in another store entirely.  The dispatch loop drains this
+    /// after each operator, which is also the first moment the mutation that caused the move
+    /// has finished updating the containers that legitimately track it.
+    static MOVED: RefCell<Vec<Relocation>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Has a stack shadow actually been armed on some store?
+///
+/// `LOFT_VERIFY_STACK` being SET is not the same as the shadow existing: the shadow is armed
+/// on the interpreter's value-stack store, and a `--native` run never makes one.  Without
+/// this the relocation log would grow for the whole of such a run with nothing ever draining
+/// it — and the summary would close with "no … reads", which is true and misleading.
+static ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Called by `Store::arm_init_shadow`.
+pub fn note_armed() {
+    ARMED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Is a shadow armed on some store?
+#[must_use]
+pub fn armed() -> bool {
+    ARMED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Record that `(store, old)` became `(store, new)`.
+pub fn note_relocation(store: u16, old: u32, new: u32) {
+    if !armed() {
+        return;
+    }
+    MOVED.with_borrow_mut(|m| m.push((store, old, new)));
+    with_verify(|v| v.moves += 1);
+}
+
+/// Note that `n` frame slots were marked stale by the scan.
+pub fn note_marked(n: u64) {
+    with_verify(|v| v.marked += n);
+}
+
+/// Take the relocations recorded since the last drain.
+#[must_use]
+pub fn take_relocations() -> Vec<Relocation> {
+    MOVED.with_borrow_mut(std::mem::take)
+}
+
+/// Is anything waiting?  Cheaper than draining, and the answer is `false` on almost every op.
+#[must_use]
+pub fn any_relocation() -> bool {
+    MOVED.with_borrow(|m| !m.is_empty())
+}
+
+/// Report a read through a handle whose record has moved.
+pub fn report_stale(what: &str, ty: &str, at: u32, rec: u32, pc: u32, line: u32, op: u16) {
+    let ty = ty.rsplit("::").next().unwrap_or(ty);
+    let print = with_verify(|v| {
+        v.stale += 1;
+        if !v.seen.insert((pc, at)) || v.printed >= MAX_REPORTS {
+            return false;
+        }
+        v.printed += 1;
+        true
+    });
+    if print {
+        crate::loft_eprintln!(
+            "stack verify: {what}<{ty}> at frame offset {at} names record {rec}, which has \
+             MOVED since the handle was written — the container grew past its allocation \
+             [pc={pc} op={op} line={line}]"
+        );
     }
 }
 
@@ -131,12 +220,27 @@ pub enum SlotState {
     Unwritten,
     /// A value was written at this base at a different width or kind.  Phase 2's finding.
     Mismatch { wrote: u16 },
+    /// A live handle whose record has since moved.  Phase 3's finding.
+    Stale,
     /// A disagreement that is not a handle crossing a value: a scalar narrower than its
     /// stepped slot, a null sentinel read as the type it stands for, a composite slot read
     /// one field at a time.  Counted, never reported.
     Partial,
     /// Every byte was written, at this width and kind.
     Written,
+}
+
+/// `LOFT_VERIFY_STACK_TRACE=1` — name every handle the phase-3 scan considered.
+///
+/// The question a silent stale check raises is *"did the scan see my view at all"*, and the
+/// summary's `N record relocation(s); M frame slot(s) named one` answers only half of it.
+/// This prints each handle-tagged frame slot the scan read, with the relocations it was
+/// compared against — which is how the scan's own addressing bug was found, a `rec * 8`
+/// counted twice so every "handle" it printed was a `store=8 rec=3414097922`.
+#[must_use]
+pub fn trace() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("LOFT_VERIFY_STACK_TRACE").is_ok_and(|v| v != "0"))
 }
 
 /// How many reports to print before falling silent.  A read inside a loop reports every
@@ -153,6 +257,13 @@ struct Verify {
     partial: u64,
     /// Reads where a handle crossed a value.  Phase 2's finding.
     mismatch: u64,
+    /// Reads through a handle whose record has moved.  Phase 3's finding.
+    stale: u64,
+    /// Records that relocated, and frame slots the scan marked stale because of one.  Printed
+    /// so a silent phase-3 run says which half was silent: no moves at all, or moves that no
+    /// frame slot named.
+    moves: u64,
+    marked: u64,
     /// Reads whose span fell outside the shadow — a plumbing fault in the shadow itself,
     /// not a finding about the program.  Counted rather than reported, so it cannot hide
     /// behind a quiet run.
@@ -257,7 +368,7 @@ pub fn note_out_of_range() {
 /// How many findings this run has seen, of either state.
 #[must_use]
 pub fn violations() -> u64 {
-    with_verify(|v| v.uninit + v.mismatch)
+    with_verify(|v| v.uninit + v.mismatch + v.stale)
 }
 
 /// Print the verdict.  Called at program exit when armed.
@@ -266,21 +377,37 @@ pub fn violations() -> u64 {
 /// trustworthy, and a detector that says nothing when it found nothing is
 /// indistinguishable from one that never ran.
 pub fn report() {
-    let (uninit, mismatch, sites, partial, out_of_range) = with_verify(|v| {
+    let (uninit, mismatch, stale, sites, partial, out_of_range, moves, marked) = with_verify(|v| {
         (
             v.uninit,
             v.mismatch,
+            v.stale,
             v.seen.len(),
             v.partial,
             v.out_of_range,
+            v.moves,
+            v.marked,
         )
     });
-    if uninit == 0 && mismatch == 0 {
-        crate::loft_eprintln!("stack verify: no uninitialised or mistyped stack reads");
+    if !armed() {
+        crate::loft_eprintln!(
+            "stack verify: armed, but no interpreter stack was shadowed — the shadow lives on \
+             the value-stack store, which only `--interpret` builds"
+        );
+        return;
+    }
+    if uninit == 0 && mismatch == 0 && stale == 0 {
+        crate::loft_eprintln!("stack verify: no uninitialised, mistyped or stale stack reads");
     } else {
         crate::loft_eprintln!(
-            "stack verify: {uninit} uninitialised and {mismatch} mistyped stack read(s), \
-             {sites} distinct site(s)"
+            "stack verify: {uninit} uninitialised, {mismatch} mistyped and {stale} stale \
+             stack read(s), {sites} distinct site(s)"
+        );
+    }
+    if moves > 0 {
+        crate::loft_eprintln!(
+            "  {moves} record relocation(s); {marked} frame slot(s) named one and were marked \
+             stale"
         );
     }
     if partial > 0 {

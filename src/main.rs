@@ -4168,6 +4168,17 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
 /// Silent unless one of the variables is actually set, so an ordinary native run is
 /// unchanged.
 fn announce_profiler_cannot_follow_native() {
+    // @PLN154 — the stack shadow has the same shape of limit and the same reason to say so:
+    // it lives on the interpreter's value-stack store, and a native binary has no such store
+    // to shadow.  Announced here rather than at the exit report, because a native run never
+    // reaches that report and would otherwise say nothing at all.
+    if loft::stack_verify::enabled() {
+        eprintln!(
+            "loft: LOFT_VERIFY_STACK set, but the stack shadow is interpreter-only — this \
+             program runs native,\n  so no slot will be checked. Add --interpret to verify \
+             it."
+        );
+    }
     let asked: Vec<&str> = ["LOFT_PROFILE", "LOFT_ALLOC_PATHS", "LOFT_ALLOC_SITES"]
         .into_iter()
         .filter(|v| std::env::var_os(v).is_some())
