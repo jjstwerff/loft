@@ -6,7 +6,7 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — D-bind-11 and D-bind-16 CLOSED 2026-09-03 (below); D-bind-12, D-bind-13,
+OPEN: **0** — D-bind-18 OPENED AND CLOSED 2026-09-06 (loft#1392: a vector link did not follow a rebind of its SOURCE, below); D-bind-11 and D-bind-16 CLOSED 2026-09-03 (below); D-bind-12, D-bind-13,
 D-bind-14 and D-bind-15 each opened and CLOSED the same day.
 D-const-2 opened and CLOSED the same day (2026-09-01), found by the Store Locks
 reference review.
@@ -590,6 +590,50 @@ gap, D-const-1, now closed).
 The rules doc used to carry these beside its `OPEN` line — closure summaries, and notes on
 the times the count read 0 over a live entry.  They are timeline, so they moved here
 unchanged; [binding.md](binding.md) now states only what is open.
+
+### D-bind-18 — OPENED AND CLOSED (2026-09-06, loft#1392): a vector link followed the link's own whole-value write but not the source's
+
+`(B-Ref-Alias)` makes a `&`-annotated binding *a live LINK to the source instead of a copy*,
+and `(B-Ref-Uniform)` says a `&τ` variable is used exactly like a `τ` variable.  A vector link
+is not a stack deref: it SHARES the source's `DbRef` — the lowering a `&vector` parameter takes
+— so a fresh backing on EITHER side re-points one of the two and the link stops being live.
+loft#1371 gave the link side its cure (`@FR-B-Ref-Write`): a whole-value write THROUGH the link
+clears the shared store and refills it in place.  The source's own whole-value write is the
+same question one step out, and had none:
+
+```loft
+v = [1, 2];
+q = &v;
+v = [7, 8, 9];
+println("q={len(q)} v={len(v)}");     // q=2 v=3 — q is still on the store v held at the bind
+```
+
+Both backends, silently.  The struct and text spellings follow a rebind (`OpCreateStack`,
+loft#1371) and a link to a struct FIELD follows one because a field rebuild is in place
+already, so the vector local was the one shape left.
+
+**Closed by registering the SOURCE in the same set as the link**, so its rebuild clears and
+refills the shared store.  Two things that fall out of it, and both are the rule rather than
+the repair:
+
+* The registration is gated to PASS 2.  The set outlives a pass, so a registration made when
+  the link is parsed reaches the source's own DECLARATION when pass 2 re-reads the body from
+  the top — dropping the allocation that gives the source a backing store at all.  Measured:
+  `v = []` after a link compiled to a clear of a variable `--native` had never declared.
+  Pass 2 reads in order, so the declaration is parsed before the link registers.
+* `(I-Comp)` is stated over the PLACE, not the spelling.  Once the source rebuilds in place,
+  the clear reaches the link too — so a build that reads the destination THROUGH the link
+  (`a = [for i in 0..r.len() { (r[i] ?? 0) * 2 }]` under `r = &a`) reads what it is emptying.
+  It used to work by accident, because the fresh backing left the link on the old store.  The
+  link's partner is now part of both halves of `snapshot_read_destination`: the read TEST
+  (`parts_read_a_vector_link`) and the RENAME, which redirects reads spelled through the link
+  onto the snapshot with the destination's own.  The corpus caught this — the alias CONTROL in
+  `1194-a-comprehension-reads-its-destination` answered `[]`.
+
+Guard `a-vector-link-follows-a-rebind-of-its-source` (14 cells: the rebind in both spellings,
+twice, and to empty; the three writes through the link and the three through the source; a
+comprehension and a literal reading through the link; and the struct-field, text and no-link
+controls), falsified at 3360fb93 — exit 1 -> 0 on both backends.
 
 ### D-bind-17 — CLOSED (2026-09-06, loft#1372, @PLN153 phase 4): a `&` link carries a nullable slot
 

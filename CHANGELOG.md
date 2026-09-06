@@ -135,6 +135,12 @@ named every variable `65535` with a `-` where its slot number and span belong �
 the same command on the same file did not print the same thing.  `introspect` now always
 parses; ordinary runs keep the cache.
 
+**A `&` link to a vector keeps up with its source.**  `q = &v; v = [7, 8, 9]` left `q`
+reading the two elements `v` had when the link was taken, while `v` read three — on both
+backends, with nothing said.  The link now follows the source, as the `&` to a struct, a text
+or a struct field always has.  Writing through either side still reaches the other.
+(loft#1392)
+
 **A local a closure captured, and then assigned again, no longer leaks the value it ends
 up with.**  `s = S{…}; h = |i| { s.a + i }; s = build(h)` kept the store `s` ends up holding,
 and so did the inline form `s = build(|i| { s.a + i })` and the same shapes over a vector —

@@ -4032,19 +4032,25 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
         ));
         // Reads only: the build's WRITES are emitted from `vec` / `dest` after this, so the
         // rename cannot redirect an append.
-        match field_place {
-            Some(place) => {
-                for part in parts.iter_mut() {
-                    part.map_nodes(&mut |n| {
-                        if self.field_place(n).is_some_and(|p| p == place) {
-                            *n = Value::Var(src);
-                        }
-                    });
-                }
+        if let Some(place) = field_place {
+            for part in parts.iter_mut() {
+                part.map_nodes(&mut |n| {
+                    if self.field_place(n).is_some_and(|p| p == place) {
+                        *n = Value::Var(src);
+                    }
+                });
             }
-            None => {
+        } else {
+            // A `&` link shares the destination's store, so a read spelled through the link
+            // is a read of the same place and has to be redirected with the destination's
+            // own — `b = [(r[2] ?? 0), (r[0] ?? 0)]` under `r = &b`.  Renaming only the
+            // destination's name left those reads pointing at the store the build is about
+            // to clear, and the literal answered zeros.
+            let mut names = vec![vec];
+            names.extend(self.vector_link_partner_vars(vec));
+            for name in names {
                 for part in parts.iter_mut() {
-                    crate::parser::collections::rename_var(part, vec, src);
+                    crate::parser::collections::rename_var(part, name, src);
                 }
             }
         }
@@ -4079,7 +4085,37 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
             && vec != u16::MAX
             && vec == self.assign_target
             && self.assign_replaces
-            && parts.iter().any(|v| v.reads_var(vec))
+            && (parts.iter().any(|v| v.reads_var(vec)) || self.parts_read_a_vector_link(vec, parts))
+    }
+
+    /// Do these parts read the destination through a `&` LINK rather than by its own name?
+    ///
+    /// A vector link shares the source's `DbRef`, so `r = &a` makes `r` and `a` one place and
+    /// `a = [for i in 0..r.len() { (r[i] ?? 0) * 2 }]` reads what it is assigning.
+    /// `(I-Comp)` is stated over the PLACE, not the spelling — and the clear that empties the
+    /// destination reaches the link too, so without this the loop reads an emptied vector and
+    /// the build answers `[]`.
+    fn parts_read_a_vector_link(&self, vec: u16, parts: &[&Value]) -> bool {
+        self.vector_link_partner_vars(vec)
+            .into_iter()
+            .any(|pv| parts.iter().any(|v| v.reads_var(pv)))
+    }
+
+    /// The variables a `&` link makes one place with `vec` — the source of a link, or every
+    /// link taken to a source.
+    fn vector_link_partner_vars(&self, vec: u16) -> Vec<u16> {
+        if vec == u16::MAX {
+            return Vec::new();
+        }
+        let name = self.vars.name(vec).to_string();
+        let Some(partners) = self.amp_vector_link_partners.get(&(self.context, name)) else {
+            return Vec::new();
+        };
+        partners
+            .iter()
+            .map(|p| self.vars.var(p))
+            .filter(|v| *v != u16::MAX && *v != vec)
+            .collect()
     }
 
     /// Does a comprehension need to be built into a BUFFER of its own, rather than through

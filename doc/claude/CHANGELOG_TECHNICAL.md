@@ -9,6 +9,27 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A vector link follows a rebind of its source (2026-09-06, loft#1392)
+
+`(B-Ref-Alias)` / `(B-Ref-Uniform)`: a `&` binding is a live link.  A vector link SHARES the
+source's `DbRef` rather than dereferencing a stack slot, so a fresh backing on either side
+re-points one of the two.  loft#1371 cured the link side (`@FR-B-Ref-Write`: a whole-value
+write through the link clears the shared store and refills in place); the source's own
+whole-value write had no cure, so `q = &v; v = [7, 8, 9]` left `q` on the old store, on both
+backends, silently.  Registering the SOURCE in `amp_vector_locals` is the fix.
+
+Two consequences, both load-bearing.  The registration is PASS-2 only: the set outlives a
+pass, so a registration made at the link would reach the source's DECLARATION when pass 2
+re-reads the body from the top and drop the allocation that gives it a backing store —
+measured, `v = []` after a link compiled to a clear of a variable native never declared.  And
+`(I-Comp)` is over the PLACE: with the source rebuilding in place, a build that reads its
+destination through the LINK reads what it is emptying, so `Parser::snapshot_read_destination`
+now takes the link's partner into both its read test (`parts_read_a_vector_link`) and its
+rename.  `1194-a-comprehension-reads-its-destination`'s alias control is what caught it.
+
+Guard `a-vector-link-follows-a-rebind-of-its-source` (14 cells), falsified at 3360fb93.
+formal: binding-history.md D-bind-18.
+
 ### A captured local assigned again frees the store it ends up holding (2026-09-06, loft#1388)
 
 `(O-Latest)`: a closure record adopts the store its capture named AT THE BUILD, and the frame's

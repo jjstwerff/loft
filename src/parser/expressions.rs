@@ -3128,9 +3128,37 @@ use a separate collection or add after the loop"
         // source untouched with nothing said.  Name the local here so `create_vector` clears
         // the SHARED store and refills it in place instead — `@FR-B-Ref-Write`, and the
         // lowering a `&vector` PARAMETER already takes.
-        if amp_vector_bind && var_nr != u16::MAX {
+        if amp_vector_bind && var_nr != u16::MAX && !self.first_pass {
             let name = self.vars.name(var_nr).to_string();
             self.amp_vector_locals.insert((self.context, name));
+            // @FR-B-Ref-Alias — the link is live in BOTH directions, so the SOURCE's own
+            // whole-value write is the same question as the link's.  A vector link shares the
+            // source's `DbRef`, and a fresh backing on either side re-points one of them: with
+            // only the link registered, `q = &v; v = [7, 8, 9]` left `q` on the store `v` held
+            // AT THE BIND — `len(q)` answered 2 where `v` answered 3, on both backends and
+            // with nothing said (loft#1392).  Registering the source makes its rebuild clear
+            // and refill the shared store in place, which is what every other spelling of the
+            // link already does: a `&` to a struct or a text local follows a rebind through
+            // `OpCreateStack`, and a link to a FIELD follows one because a field rebuild is
+            // in place already.  Only a plain local source needs it — a field or an element
+            // source is that in-place case.
+            if let Value::Var(src) = code.unspan() {
+                let src_name = self.vars.name(*src).to_string();
+                self.amp_vector_locals
+                    .insert((self.context, src_name.clone()));
+                // The pair is one place, so record it both ways: `(I-Comp)` asks whether a
+                // build reads its destination, and under `r = &a` the build `a = [for i in
+                // 0..r.len() { r[i] }]` reads it without naming it.
+                let link_name = self.vars.name(var_nr).to_string();
+                self.amp_vector_link_partners
+                    .entry((self.context, link_name.clone()))
+                    .or_default()
+                    .push(src_name.clone());
+                self.amp_vector_link_partners
+                    .entry((self.context, src_name))
+                    .or_default()
+                    .push(link_name);
+            }
             // `pe: &vector<T> = e` IS `pe = &e` (@PLN87 #2), and a vector link is the SHARED
             // `DbRef` rather than a stack deref — so both spellings give the variable the
             // same vector type.  Kept as `RefVar(vector<T>)` the annotation described a link

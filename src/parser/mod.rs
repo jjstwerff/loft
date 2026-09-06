@@ -706,6 +706,15 @@ pub struct Parser {
     /// Recorded at the link and consulted at the literal, the same shape as
     /// `ref_linked_tuple_locals`.
     amp_vector_locals: std::collections::HashSet<(u32, String)>,
+    /// The other member of each `&`-linked vector pair, both ways round — `q = &v` records
+    /// `q -> v` and `v -> q`.
+    ///
+    /// A vector link SHARES the source's store, so the two names are one place: a read of
+    /// either is a read of the other, which is what `(I-Comp)`'s *"a build reads what its
+    /// destination held when the statement began"* has to be asked about.  `Value::reads_var`
+    /// answers for one name, and `a = [for i in 0..r.len() { r[i] }]` under `r = &a` reads the
+    /// destination without naming it.
+    amp_vector_link_partners: std::collections::HashMap<(u32, String), Vec<String>>,
     /// loft#945 — every `(function, variable)` whose vector LITERAL turned out to be the
     /// RECEIVER of a `.map`/`.filter`/`.reduce` chain (`d = [1, 2, 3].map(…)`).
     ///
@@ -1382,6 +1391,7 @@ impl Parser {
             adopted_ret_defs: std::collections::HashSet::new(),
             ref_linked_tuple_locals: std::collections::HashSet::new(),
             amp_vector_locals: std::collections::HashSet::new(),
+            amp_vector_link_partners: std::collections::HashMap::new(),
             literal_chain_lhs: std::collections::HashSet::new(),
             bound_method_stubs: Vec::new(),
             stub_origin: std::collections::HashMap::new(),
