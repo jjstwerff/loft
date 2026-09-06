@@ -144,6 +144,16 @@ PID_FILE=/tmp/loft_test.$REPO_TAG.pid
 #      detection panic per test is still one per test.
 #   3. The wasm32-unknown-unknown rlib used by html_wasm tests —
 #      the html_wasm suite checks staleness before running.
+#   4. target/release/libloft.rlib — the one `--native` and the cdylib
+#      tests link.  This step used to rebuild two of the three rlibs and
+#      PRINT a timing row for each, which reads as "the rlibs are
+#      handled"; the native one — the only rlib an ordinary `--bin loft`
+#      edit loop makes stale — was the one left out, hidden behind the
+#      two rows naming the ones it did build.  A whole green verdict was
+#      read off a run whose native half linked a library four commits
+#      old (2026-09-06) — `make check-rlib` says so in a second, but
+#      only if you think to run it, and after the run it only tells
+#      you the cycle was wasted.
 #
 # Cargo is incremental, so each step is ~free on a clean tree.  Logs
 # go to /tmp/loft_cdylib.log so the test log stays focused on test
@@ -283,6 +293,14 @@ rebuild_native_cdylibs() {
     schedule "wasip2 rlib" "$repo_root" \
       "cd '$repo_root' && cargo build --release --target wasm32-wasip2 --lib --no-default-features --features random -q"
   fi
+
+  # 4. target/release/libloft.rlib — linked by `--native` and the cdylib
+  #    tests.  Unconditional: it is the host target, so unlike 3/3b there
+  #    is no toolchain to impose on anyone.  Incremental, so it is ~free
+  #    when current and is exactly the cycle it saves when it is not.
+  echo "== rebuild native libloft.rlib ==" >> "$log"
+  schedule "native rlib" "$repo_root" \
+    "cd '$repo_root' && cargo build --release --lib -q"
 
   # Wait for all parallel rebuilds; `wait` exits after the slowest.
   for pid in "${jobs[@]}"; do wait "$pid"; done

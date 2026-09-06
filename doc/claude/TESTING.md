@@ -43,6 +43,19 @@ friction after every edit, and that is how a check gets switched off.  **A bare
 make check-rlib          # all three, each with its own cure; skips a target that isn't installed
 ```
 
+**And run it BEFORE the suite, not after the verdict** — afterwards it cannot save the
+run, only tell you the cycle was wasted.  `find_problems.sh` was the trap: it rebuilds
+the six cdylibs and BOTH wasm rlibs and prints them as timing rows, so its own output
+reads as *the rlibs are handled* — while the one it skipped was
+`target/release/libloft.rlib`, the only one an ordinary `cargo build --bin loft` loop
+makes stale — two of the three rlibs, with the missing one hidden behind the two rows
+naming the ones it did build;
+a full `4594 passed` was read off a run whose native half linked a library four commits
+behind the fix it was gating (2026-09-06).  It now schedules that build too, so
+`--bg` needs no pre-flight either.  The general form: ask what an instrument did NOT
+refresh, because a partial refresh that reports its successes misleads more than one
+that refreshes nothing.
+
 **Waiting for a backgrounded `make ci` — do not race the file it writes.** The recipe
 truncates `result.txt` and writes `.ci-running` only after `make` has started, so a wait
 loop armed in the same breath as the launch sees NEITHER yet, exits immediately, and
