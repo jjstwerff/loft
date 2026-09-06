@@ -3012,6 +3012,7 @@ use a separate collection or add after the loop"
         // because the RHS may contain assignments of its own.
         let prev_target = std::mem::replace(&mut self.assign_target, var_nr);
         let prev_replaces = std::mem::replace(&mut self.assign_replaces, op == "=");
+        let prev_snapshot_len = std::mem::take(&mut self.build_snapshot_len);
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
         // `@FR-L-Null-Which` — a LOCAL spells `S?` as the POINTER (`Optional(Reference(S))`,
         // `nullref` for absence); the tagged `__nullable<S>` is a SLOT's spelling — an embedded
@@ -3086,6 +3087,8 @@ use a separate collection or add after the loop"
         }
         self.assign_target = prev_target;
         self.assign_replaces = prev_replaces;
+        // The count the right-hand side's literal recorded, for the detach sites below.
+        let snapshot_len = std::mem::replace(&mut self.build_snapshot_len, prev_snapshot_len);
         self.amp_head = AmpHead::No;
         self.expected = prev_read_target;
         // A `& vector` bind (`d = &v` / `d = &self.data`): the source is a vector lvalue
@@ -4404,7 +4407,7 @@ use a separate collection or add after the loop"
         // still emits the `Set(out, …)` that transfers it (loft#775).
         self.assign_refvar_reference(code, f_type, op, var_nr);
         self.assign_refvar_keyed(code, f_type, op, var_nr);
-        if var_nr != u16::MAX && self.create_vector(code, f_type, op, var_nr) {
+        if var_nr != u16::MAX && self.create_vector(code, f_type, op, var_nr, snapshot_len) {
             return Type::Void;
         }
         // P193: rewrite `local: keyed_collection<T> = []` to
@@ -4513,8 +4516,11 @@ use a separate collection or add after the loop"
             if is_nonempty_literal {
                 let clear = self.clear_vector_field(to, &lhs_parent_tp);
                 if let Value::Insert(ls) = code {
+                    // After the literal's snapshot of this field, when it took one
+                    // (`snapshot_read_destination`): the clear is the detach it precedes.
+                    let at = snapshot_len;
                     for (i, op) in clear.into_iter().enumerate() {
-                        ls.insert(i, op);
+                        ls.insert(at + i, op);
                     }
                 }
                 return Type::Void;

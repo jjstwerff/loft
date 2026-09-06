@@ -481,7 +481,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 410 | 386 | **24** |
+| 409 | 385 | **24** |
 
 The `@FR-O-Complete` walk (B7u) added one peeling site — `scopes::adopted_work_refs` reads a
 right-hand side's `If` arms, `Block` and `Insert` tails through their `Span` to find the
@@ -5831,6 +5831,77 @@ remove of an absent record is a no-op.  Guard `a-null-element-of-a-linked-group-
 0 failures in 60 seeds, both known seeds pass, falsified by hand on ffae9ce6 (exit 101 → 0,
 both backends).  A lesson for the guard convention: a hash-seed-dependent cell needs a
 deterministic sibling (the `index` cell) to be falsifiable in one run.
+
+#### B8a — `@FR-O-Detach` walked: the literal that was never held to `I-Comp`, the native join that declined its detach, and the brace beside it (2026-09-06)
+
+**The split.**  Eight sites, one static question — *does the value being assigned READ the
+binding?* — with one home already, `Value::reads_var` (#330's predicate): four sites ask it
+(the interpreter's reassignment, native's Join reassignment, the parameter rebind, the witness
+classifier), the struct-literal lowering hoists unconditionally, the accumulator detach
+sequences after the whole statement.  Three admissible placements, each with a home: hoist the
+reads into temporaries (parser), defer the free past the assignment (both emitters), release by
+store identity after the `Set` (the witness).  The third question is the runtime one — *is the
+displaced store the new one?* — `Stores::free_displaced` on the interpreter and three
+hand-spelled `_old.store_nr != place.store_nr` tests plus a `PASSTHROUGH` const on native.
+Nothing disagreed among the eight; the yield was step 4.
+
+**The matrix.**  37 cells (`scripts/probe-matrix`, one control): 14 binding kinds (owned
+local, nullable local, heap parameter, nullable parameter, `&` parameter, struct-enum local,
+vector local and parameter, keyed field, text, vector field, an element's vector field, a
+captured collection, a witnessed local) × 20 right-hand-side shapes (a call reading a field,
+the binding passed whole, a callee returning its argument, a literal nesting it whole, a
+projection of itself, a value-`if` reading it in the condition and as an arm, `??` with it as
+the fallback, a method on itself, a block, a nested call, a closure reading it, a read through
+a VIEW, a vector literal of its own elements, `map`, a loop, passed twice, a fn-ref callee).
+70 backend-cells green after the fixes; one cell (a witnessed local bound from a tagged
+projection) is loft#1367's shape, refused here and measured passing on the sibling's tree.
+
+**Fixed.**  (1) The vector literal — sixteen spellings wrong on both backends: local `=`,
+typed local, parameter, struct field, `+=` (a `len` read appended the growing length), a
+struct element, a text element, a bound-guarded read, a loop.  The comprehension had been
+walked three times for the same sentence (loft#1194/#1195/#1196) and the literal never —
+`create_vector` inserted the `=` repoint and `clear_vector_field` the field clear at the head
+of the build, before the element reads.  One home now: `Parser::snapshot_read_destination`,
+which the comprehension's deferred route calls and the literal asks; the two detach sites
+insert after it.  (2) `--native` declined a value-`if`'s displaced free (`owned_ref_reassign`
+listed calls, inserts and blocks): one leaked store per execution of `s = if c { mk(7) } else
+{ s }`, interpreter clean — `(O-NoDiverge)`.  (3) The `match` spelling did not compile
+natively: `output_if_inner` decided the arm's opening brace on a peeled value and its closing
+brace on the bare one.  Guards `a-vector-literal-reads-what-its-destination-held` (16 cells)
+and `a-join-reassignment-whose-other-arm-is-the-binding-frees-and-compiles` (6), both
+falsified at 6f9c0886; the leak channel by hand on the baseline (`LOFT_NATIVE_LEAK_CHECK=1`,
+1 → 0).
+
+**Filed.**  loft#1388 — a captured struct local's reassignment from a call retains the
+displaced store (8-cell matrix: struct × {inline, stored} × call leak, a loop 1:1, a vector
+inline leak; the literal cells clean; two of the three shapes new since b1ccf0e9 with
+loft#1324's change of who frees the build-time store).  This is the rule's own forbidden third
+option — *declining the detach* — spelled as `owns_displaced_store`'s `!is_captured` veto, a
+per-binding answer to a per-store question.  loft#1389 — `e: Sh = Circle{r: 1}` gives `e` a
+dep on ITSELF (`change_var_type → depend`, twice), so a join reassignment reads it as borrowed
+and leaks; the struct twin and the call-bound enum are clean.  loft#1390 — a variant literal
+and a binding of its enum type do not join (`cannot unify: Circle and Sh`; two variants do,
+loft#1117).  loft#1391 — two destinations the snapshot cannot name: a field reached through
+an element, a captured collection.
+
+**Convergence.**  The literal fix closed a class — sixteen spellings across three
+destinations through one home — and its residual is exactly the two destinations
+`field_place` cannot name.  The native fixes closed the `if` and `match` spellings together.
+The closure leak BRANCHES: three leaking shapes with a different mechanism per kind (a stored
+closure's record adopts the build-time store; nothing adopts an inline argument's), so it is
+filed for the closure model rather than folded in.  No shared root among the three fixed
+defects, and none among the four filed.
+
+**Whether the rules covered the cells.**  `(O-Detach)` settled every fixed cell.  `(I-Comp)`
+had the sentence and not the word: it named the comprehension, and now names the literal
+(D-iter-4).  `(O-NoDiverge)` settled the native two.  The variant/enum join (loft#1390) is a
+typing question `types.md`'s join rules do not spell for a variant against its own enum — a
+gap in the definition, not in the code.
+
+**Residuals named.**  The comprehension's field / `+=` own-buffer route is a second ACTION
+beside the snapshot for one question; `create_vector`'s `__trail_tmp` materialisation of a
+concat operand is a third copy of the snapshot idea; native's same-store test has three
+inline spellings beside `PASSTHROUGH`.
 
 #### B2 — open, and the owner's call
 

@@ -3094,26 +3094,25 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
                     // at — clearing it would empty the value the loop is about to read.
                     // The snapshot is taken before that clear, which is what makes the
                     // idiom survive a surrounding loop.  Same cure, same reason, as the
-                    // trailing self-reference `v = a + v` in `create_vector`.
-                    let src_tp = Type::Vector(Box::new(in_t.clone()), Deps::none());
-                    let src = self.create_unique("comp_src", &src_tp);
-                    self.vars.defined(src);
-                    let mut snap = self.vector_db(in_t, src);
-                    let elem_tp = self.append_elem_tp(in_t);
-                    snap.push(self.cl(
-                        "OpAppendVector",
-                        &[Value::Var(src), Value::Var(vec), Value::Int(elem_tp)],
-                    ));
-                    // Reads only: the loop's WRITES are built from `vec_expr` below and
-                    // never appear in these five, so this rename cannot redirect an append.
-                    for part in [
+                    // trailing self-reference `v = a + v` in `create_vector`; one home with
+                    // the literal's snapshot (`snapshot_read_destination`).
+                    let mut snap = Vec::new();
+                    let mut parts = [
                         &mut fill,
                         &mut create_iter,
                         &mut for_next,
                         &mut if_step,
                         &mut body,
-                    ] {
-                        crate::parser::collections::rename_var(part, vec, src);
+                    ];
+                    if let Some(snapshot) = self.snapshot_read_destination(
+                        vec,
+                        &Value::Var(vec),
+                        is_var,
+                        false,
+                        in_t,
+                        &mut parts,
+                    ) {
+                        snap.extend(snapshot);
                     }
                     snap.extend(ops);
                     (snap, *handle)
@@ -3447,8 +3446,20 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
         } else {
             Type::Vector(Box::new(in_t.clone()), Deps::frame(parent_tp.depend()))
         };
-        let (tp, ls) =
+        // A literal that READS its destination reads what the destination held when the
+        // statement began (`I-Comp`, @FR-O-Detach) — take the snapshot before the build.
+        let snapshot = {
+            let mut parts: Vec<&mut Value> = res.iter_mut().collect();
+            self.snapshot_read_destination(vec, val, is_var, is_field, &in_t, &mut parts)
+        };
+        let (tp, mut ls) =
             self.build_vector_list(val, parent_tp, elm, vec, &res, &in_t, tp, is_var, is_field);
+        if let Some(snapshot) = snapshot {
+            self.build_snapshot_len = snapshot.len();
+            for (i, op) in snapshot.into_iter().enumerate() {
+                ls.insert(i, op);
+            }
+        }
         self.lexer.token("]");
         if block {
             *val = v_block(ls, tp.clone(), "Vector");
@@ -3954,6 +3965,90 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
             }
             _ => None,
         }
+    }
+
+    /// The snapshot a collection build takes of a destination it READS, so its reads resolve
+    /// through what the destination held when the statement began.
+    ///
+    /// `(I-Comp)` says a build reads what its destination held when the statement BEGAN, never
+    /// the result being built, whichever part does the reading and however many times the
+    /// statement runs.  A LITERAL is the same build without the loop and is held to the same
+    /// sentence.  Building THROUGH the destination breaks it the moment the destination is
+    /// detached — the `=` repoint (`vector_db`), a field's `OpClearVector` — or grown (`+=`):
+    /// every read inside the parts then resolves through the empty or partially-built result,
+    /// so `v = [v[1], v[0]]` answered `[0, 0]` and `v += [len(v), len(v)]` appended `2, 3`.
+    /// Enforces @FR-O-Detach: the detach is sequenced AFTER every read of the destination by
+    /// the value being built — here by hoisting those reads onto a copy taken before the
+    /// first write, which is the same hoist the comprehension's deferred repoint already made
+    /// for its own five parts.
+    ///
+    /// Returns the ops that take the snapshot — to run BEFORE anything detaches or grows the
+    /// destination — having renamed every read of the destination in `parts` to the snapshot.
+    /// Flat ops, not a block: the snapshot temp is read by the build's own parts, and a block
+    /// would scope its `let` away from them on `--native`.  A literal puts them at the HEAD of
+    /// its ops and records their count in [`Parser::build_snapshot_len`], which the sites that
+    /// insert a detach at the head of a build's ops read as their insertion point.  `None`
+    /// when nothing reads the destination, and always on pass 1: the snapshot is a pass-2
+    /// temp like every other materialising temp here.
+    ///
+    /// Two destinations are left alone.  A KEYED one: its literal is built THROUGH it by
+    /// construction (loft#703) and a vector copy is not its kind.  And a field reached through
+    /// an ELEMENT (`xs[i].items`), which [`Self::field_place`] cannot name — the root-variable
+    /// fallback `comprehension_needs_own_buffer` takes is over-wide (a sibling field matches),
+    /// so renaming on it would redirect reads of the sibling too.
+    pub(crate) fn snapshot_read_destination(
+        &mut self,
+        vec: u16,
+        dest: &Value,
+        is_var: bool,
+        is_field: bool,
+        in_t: &Type,
+        parts: &mut [&mut Value],
+    ) -> Option<Vec<Value>> {
+        if self.first_pass || (vec != u16::MAX && self.keyed_local(vec)) {
+            return None;
+        }
+        let field_place = if is_field {
+            Some(self.field_place(dest)?)
+        } else {
+            None
+        };
+        let reads = {
+            let ro: Vec<&Value> = parts.iter().map(|p| &**p).collect();
+            self.comprehension_reads_target(vec, is_var, &ro)
+                || self.comprehension_needs_own_buffer(vec, dest, is_var, is_field, &ro)
+        };
+        if !reads {
+            return None;
+        }
+        let src_tp = Type::Vector(Box::new(in_t.clone()), Deps::none());
+        let src = self.create_unique("build_src", &src_tp);
+        self.vars.defined(src);
+        let mut snap = self.vector_db(in_t, src);
+        let elem_tp = self.append_elem_tp(in_t);
+        snap.push(self.cl(
+            "OpAppendVector",
+            &[Value::Var(src), dest.clone(), Value::Int(elem_tp)],
+        ));
+        // Reads only: the build's WRITES are emitted from `vec` / `dest` after this, so the
+        // rename cannot redirect an append.
+        match field_place {
+            Some(place) => {
+                for part in parts.iter_mut() {
+                    part.map_nodes(&mut |n| {
+                        if self.field_place(n).is_some_and(|p| p == place) {
+                            *n = Value::Var(src);
+                        }
+                    });
+                }
+            }
+            None => {
+                for part in parts.iter_mut() {
+                    crate::parser::collections::rename_var(part, vec, src);
+                }
+            }
+        }
+        Some(snap)
     }
 
     /// Does a comprehension being built into `vec` READ `vec` itself?

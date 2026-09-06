@@ -153,7 +153,9 @@ the companion [iteration-history.md](iteration-history.md).
   so a length- or emptiness-only check passes on it. **Run it for all three destination
   kinds** — a local, a struct field, and `+=` — because one mechanism serves them and they
   broke together; and run each inside a surrounding LOOP, since a buffer reused across
-  executions of the same site fails only on the second one.
+  executions of the same site fails only on the second one. A LITERAL is the same build without the loop and is held to the same
+  sentence: `v = [v[1], v[0]]` reverses, `v += [len(v), len(v)]` appends the length twice, on a
+  local, a parameter and a struct field alike (D-iter-4).
 - **A comprehension and its combinator agree** — `xs = xs.map(f)` and
   `xs = [for x in xs { f(x) }]` answer the same thing, on the same destination kinds. The
   combinators were correct while the comprehension was not, for every cell above, so this

@@ -1820,7 +1820,12 @@ impl Output<'_> {
             write!(w, "}} as u8)}} else ")?;
         } else if stmt_discard {
             write!(w, ";}} else ")?;
-        } else if let Value::Block(_) = *true_v {
+        } else if b_true {
+            // The SAME test that decided not to open a brace for this arm: a `Block` emits its
+            // own `{ … }`, and `b_true` peels a `Span` to see it.  Asked here on the bare value,
+            // a span-wrapped arm — the `join-arm-owner` block a `match` arm's minting call is
+            // lowered into — opened no brace of its own and then closed one, and every
+            // `s = match k { 9 => mk(7), _ => s }` was an unbalanced `}` rustc refused.
             write!(w, " else ")?;
         } else {
             write!(w, "}} else ")?;

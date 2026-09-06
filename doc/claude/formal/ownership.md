@@ -106,9 +106,14 @@ what `p = mk(p.a + 1)` did on a heap parameter, on both backends, with nothing r
 (loft#1312). The same order appears three more times: the `--native` adopt-vs-copy guard cleared
 the destination while the source still named that store; the reassignment path in `codegen.rs`
 avoids it by asking `Value::reads_var` and deferring the free; and the @PLN87 P2.1 literal
-lowering avoids it by hoisting the field reads into temporaries. Declining the detach is NOT a
-third option — that is what D-own-16's open half does, and it trades a wrong answer for a
-retained store rather than resolving the order.
+lowering avoids it by hoisting the field reads into temporaries. A collection LITERAL is the
+same rule at the build's own detach — the `=` repoint, a field's clear — and had no home until
+D-own-36: `v = [v[1], v[0]]` read the emptied result; `Parser::snapshot_read_destination` now
+hoists its reads onto a copy taken before the first write, the comprehension's cure given one
+home. Declining the detach is NOT a third option — that is what D-own-16's open half does, and
+it trades a wrong answer for a retained store rather than resolving the order; `--native` did
+exactly that for a value-`if` right-hand side (D-own-36's second face) until it counted the
+shape among those that produce a store.
 
 **This is an INTERNAL system — it never rejects a program it can compile.** loft has no
 user-facing borrow checker; the user writes naively and the compiler always finds a valid

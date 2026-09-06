@@ -444,6 +444,13 @@ pub struct Parser {
     /// Whether [`Parser::assign_target`] is being REPLACED (`=`) rather than appended to.
     /// Meaningless while `assign_target` is `u16::MAX`.
     pub(crate) assign_replaces: bool,
+    /// How many ops at the HEAD of the right-hand side's build are the snapshot a literal took
+    /// of the destination it reads ([`Parser::snapshot_read_destination`]); `0` when it took
+    /// none.  `parse_assign_op_inner` takes it once the right-hand side has parsed and hands
+    /// it to the site that inserts the destination's detach — the `=` repoint in
+    /// `create_vector`, the field clear — as that site's insertion point, so the detach lands
+    /// after the snapshot.  Reset per assignment beside [`Parser::assign_target`].
+    pub(crate) build_snapshot_len: usize,
     /// The user-visible heap PARAMETER whose whole-binding reassignment already carried its
     /// own `(F-ParamRebind)` lowering; `u16::MAX` otherwise.  Read and cleared by
     /// [`Parser::parse_assign_op`], which supplies that lowering for every OTHER right-hand
@@ -1355,6 +1362,7 @@ impl Parser {
             amp_head: AmpHead::default(),
             assign_target: u16::MAX,
             assign_replaces: false,
+            build_snapshot_len: 0,
             rebind_lowered: u16::MAX,
             in_sandbox: false,
             parse_depth: 0,

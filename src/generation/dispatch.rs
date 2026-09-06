@@ -205,14 +205,19 @@ impl Output<'_> {
             // held one store per iteration while the interpreter stayed flat), the override
             // veto, and the detach.  What this side adds is native's own: the Rust local must
             // already be DECLARED (a reassignment, not the first bind); the right-hand side must
-            // PRODUCE a store — a call in either spelling, an inline object `Insert`, or a
+            // PRODUCE a store — a call in either spelling, an inline object `Insert`, a
             // `Block` that builds one (the `nullable_unwrap_copy` / `ncc` materialisers,
-            // `chosen = v[i] ?? d`), where a bare `Var` rhs is a copy whose own arm frees what it
-            // displaces — which is true, but only became true for the NULLABLE bare `Var` with
-            // loft#1369: that arm deferred back to here, and the two exclusions closed a circle
-            // in which nothing freed the displaced store (loft#1328: `CallRef` is the second call spelling and was missing — one
-            // store per iteration to frame exit and a `store table exhausted` abort at 70 000
-            // iterations on this backend alone, an accept/reject split the rule forbids); and a
+            // `chosen = v[i] ?? d`), or a value-`if` whose arms do (`s = if c { mk(7) } else
+            // { s }`: the interpreter stashes and post-frees that shape through `rhs_reads_v`,
+            // and without it here the store the then arm displaced leaked on this backend
+            // alone — the `_old != place` guard is what makes the else arm, which hands back
+            // the same store, a no-op), where a bare `Var` rhs is a copy whose own arm frees
+            // what it displaces — which is true, but only became true for the NULLABLE bare
+            // `Var` with loft#1369: that arm deferred back to here, and the two exclusions
+            // closed a circle in which nothing freed the displaced store (loft#1328: `CallRef`
+            // is the second call spelling and was missing — one store per iteration to frame
+            // exit and a `store table exhausted` abort at 70 000 iterations on this backend
+            // alone, an accept/reject split the rule forbids); and a
             // retbuf-attr return-local frees only with an entry-buffer witness, guarded below so
             // the caller's buffer is never the store released.  The displaced free is guarded by
             // `_old != place` and released through `free_displaced`, which declines a
@@ -221,7 +226,11 @@ impl Output<'_> {
                 && variables.owns_displaced_store(var, to, self.data)
                 && matches!(
                     to.unspan(),
-                    Value::Call(_, _) | Value::CallRef(_, _) | Value::Insert(_) | Value::Block(_)
+                    Value::Call(_, _)
+                        | Value::CallRef(_, _)
+                        | Value::Insert(_)
+                        | Value::Block(_)
+                        | Value::If(_, _, _)
                 )
                 && (!is_retbuf_attr || self.retbuf_witness.contains(&var));
             if owned_ref_reassign {

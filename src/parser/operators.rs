@@ -176,12 +176,16 @@ impl Parser {
         }
     }
 
+    /// `snapshot_len` is how many ops at the head of `code` are the literal's snapshot of the
+    /// destination it reads ([`Parser::snapshot_read_destination`]); the `=` repoint this
+    /// inserts lands after them.
     pub(crate) fn create_vector(
         &mut self,
         code: &mut Value,
         f_type: &Type,
         op: &str,
         var_nr: u16,
+        snapshot_len: usize,
     ) -> bool {
         // @PLN25 / loft#909 — whether the target needs a record-pointer BACKING is a
         // question about its storage, and `Optional(τ)` shares τ's storage exactly.  Peel
@@ -330,8 +334,12 @@ impl Parser {
                             front.extend(db_ops);
                         }
                     }
+                    // After the literal's snapshot of the destination, when it took one
+                    // (`snapshot_read_destination`): the repoint below is the detach the
+                    // snapshot must precede.
+                    let at = snapshot_len;
                     for (i, p) in front.into_iter().enumerate() {
-                        ls.insert(i, p);
+                        ls.insert(at + i, p);
                     }
                     if ls.is_empty()
                         && !self.first_pass

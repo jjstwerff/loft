@@ -135,6 +135,20 @@ named every variable `65535` with a `-` where its slot number and span belong �
 the same command on the same file did not print the same thing.  `introspect` now always
 parses; ordinary runs keep the cache.
 
+**A vector literal that reads the vector it replaces reads what that vector held.**  `v =
+[v[1], v[0]]` now reverses `v`, `v += [len(v), len(v)]` appends the length twice, and a struct
+element, a struct field, a parameter or a loop reads the value from before the statement —
+where every one of them used to read the empty (or half-built) result the literal was
+filling, and answer zeros or defaults with nothing said.  Comprehensions were given this
+promise in August; the literal is the same build without the loop and now shares its cure.
+Two destinations still read the result being built — a field reached through an element,
+and a collection a closure captured — and are on the list (loft#1391).
+
+**Replacing a struct "when …" no longer leaks natively, and its `match` spelling compiles.**
+`s = if s.a > 5 { mk(7) } else { s }` released the store it replaced on the interpreter and
+kept it on `--native`, one per pass of a loop; and `s = match s.a { 9 => mk(7), _ => s }` was
+refused by rustc outright.  Both backends now free the same store, and the `match` runs.
+
 **A generic function works at a self-referential struct.**  Calling `fn id<T>(v: T) -> T?`
 with a `Node` whose `next` is a `reference<Node>?` used to kill the compiler outright — no
 message, just a crash — because sizing a `vector<Node>` element walked into `next` forever.

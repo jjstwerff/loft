@@ -6,7 +6,7 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — D-own-35 OPENED AND CLOSED 2026-09-05 (loft#1370: the per-path fact had no home for a VECTOR local — every value-branch bind aliased the chosen arm — closed at the parser's selector, below); D-own-34 OPENED AND CLOSED 2026-09-05 (the owner witness did not survive the cache, and a nullable bind from a borrow-returning call aliased); D-own-33 OPENED AND CLOSED 2026-09-05 (the per-path fact was short of four homes, every one a nullable local not treated as the heap local it is: a literal buffer adopted inside a loop, the branch pre-init, the loop hoist, a keyed `match` bind, below; a fifth face is loft#1367, owned by @PLN153); D-own-32 OPENED AND CLOSED 2026-09-05 (the oracle called a minted variable Owned regardless of its other definitions, and its shadow re-derived the base translation, below); D-own-31 OPENED AND CLOSED 2026-09-05 (the never-free contract named one spelling of five and forbade a release the language ships, below); D-own-30 OPENED AND CLOSED 2026-09-05 (a nullable local holding a projection VIEW freed the store it displaced, below), after D-own-29 2026-09-04 (loft#1346, below) and D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
+OPEN: **0** — D-own-36 OPENED AND CLOSED 2026-09-06 (the `@FR-O-Detach` walk: a collection literal's detach ran before its reads on every destination, and `--native` declined a value-`if`'s displaced free, below); D-own-35 OPENED AND CLOSED 2026-09-05 (loft#1370: the per-path fact had no home for a VECTOR local — every value-branch bind aliased the chosen arm — closed at the parser's selector, below); D-own-34 OPENED AND CLOSED 2026-09-05 (the owner witness did not survive the cache, and a nullable bind from a borrow-returning call aliased); D-own-33 OPENED AND CLOSED 2026-09-05 (the per-path fact was short of four homes, every one a nullable local not treated as the heap local it is: a literal buffer adopted inside a loop, the branch pre-init, the loop hoist, a keyed `match` bind, below; a fifth face is loft#1367, owned by @PLN153); D-own-32 OPENED AND CLOSED 2026-09-05 (the oracle called a minted variable Owned regardless of its other definitions, and its shadow re-derived the base translation, below); D-own-31 OPENED AND CLOSED 2026-09-05 (the never-free contract named one spelling of five and forbade a release the language ships, below); D-own-30 OPENED AND CLOSED 2026-09-05 (a nullable local holding a projection VIEW freed the store it displaced, below), after D-own-29 2026-09-04 (loft#1346, below) and D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
 single cell, its Face B CLOSED the same day, that cell's one known SYMPTOM closed 2026-08-26
 with the FACT still wrong, loft#1098, and the fact itself closed by giving every path of a
 value branch its own binding — below).  D-own-26 CLOSED 2026-09-03: its gate existed all
@@ -38,6 +38,45 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-36 — OPENED AND CLOSED (2026-09-06, the `@FR-O-Detach` walk): a collection literal's detach ran before its reads, and `--native` declined a value-`if`'s displaced free
+
+`(O-Detach)` sequences a binding's detach AFTER every read of it by the value being assigned.
+Walked as a rule (QUALITY.md B8a): its eight sites ask one static question — *does the value
+read the binding?* — with one home, `Value::reads_var`, and answer it by one of three
+placements (hoist the reads into temporaries; defer the free past the assignment; release by
+store identity after the `Set`).  A 37-cell matrix over 14 binding kinds × 20 right-hand-side
+shapes found the eight in agreement and two shapes that never reached one:
+
+* **The vector literal.**  `v = [v[1]?, v[0]?]` answered `[0, 0]`; `len(v)` inside the literal
+  read `0` then `1`; a struct element read its `?? default`; a parameter, a typed local, a
+  struct field and a `+=` all read the result being built — sixteen spellings, both backends,
+  silent.  The build's detach (`create_vector`'s `=` repoint, `clear_vector_field`) was emitted
+  at the head of the build's ops, before the element expressions that read the destination.
+  The comprehension had been held to the rule three times (`I-Comp`, D-iter-1..3) with a
+  snapshot of its own; the literal is the same build without the loop.  Closed by
+  `Parser::snapshot_read_destination` — one home, which the comprehension's deferred route now
+  calls too: copy the destination before the first write, rename every read in the parts to
+  the copy, and let the two detach sites insert after it (`Parser::build_snapshot_len`).  Guard
+  `a-vector-literal-reads-what-its-destination-held`, falsified at 6f9c0886 (14 assertions → 0
+  on the interpreter, the native run's first → 0).  Residual: a field reached through an
+  element and a captured collection are destinations the snapshot cannot name (loft#1391).
+* **A value-`if` on `--native`** (`(O-NoDiverge)`).  `s = if s.a > 5 { mk(7) } else { s }` — the
+  interpreter stashes and post-frees through `rhs_reads_v`; native's `owned_ref_reassign`
+  listed the right-hand sides that produce a store and `Value::If` was not among them, so the
+  then arm's displaced store leaked on that backend alone, one per execution.  Declining the
+  detach is the rule's own forbidden third option.  Added to the list; the identity guard
+  already makes the else arm — the same store — a no-op.  And the `match` spelling of the same
+  shape did not compile natively at all: `output_if_inner` peeled a `Span` to decide not to
+  open a brace for a block arm and asked the bare value when closing one.  Guard
+  `a-join-reassignment-whose-other-arm-is-the-binding-frees-and-compiles`, falsified at
+  6f9c0886 (a rustc refusal → runs; the leak by hand under `LOFT_NATIVE_LEAK_CHECK=1`, 1 → 0).
+
+Filed, not folded in: loft#1388 — a captured struct local's reassignment from a call retains
+the displaced store (`owns_displaced_store`'s `!is_captured` veto is the rule's *declined
+detach*: a per-binding answer to a per-store question); loft#1389 — an annotated struct-enum
+local bound from a variant literal carries a dep on itself and never frees what a join
+displaces; loft#1390 — a variant literal does not join with a binding of its enum type.
 
 ### D-own-35 — OPENED AND CLOSED (2026-09-05, loft#1370): the per-path fact had no home for a VECTOR local, and the parameter rebind read the proxy's carve-out as ownership
 

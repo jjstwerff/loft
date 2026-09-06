@@ -13,7 +13,23 @@ comprehension READS. Every cell drew from a source the destination does not name
 `I-Comp`'s "fresh result, source untouched" clause was pinned only where it is trivially
 true. Varying that one axis broke all THREE destination kinds at once — a local, a struct
 field and a `+=` — and all three are now closed with their own guards. D-iter-1 remains
-CLOSED.
+CLOSED.  D-iter-4 opened and closed 2026-09-06: the LITERAL was the fourth kind, found by walking
+`@FR-O-Detach` rather than this doc's own corpus — which varied what the comprehension reads and
+never asked whether a literal reads at all.
+
+> **D-iter-4 — OPENED AND CLOSED (2026-09-06). A vector LITERAL that reads its destination.**
+> `I-Comp` was walked three times for the comprehension (D-iter-1..3) and the literal — the same
+> build without the loop — never once: `v = [v[1]?, v[0]?]` answered `[0, 0]`, `len(v)` inside
+> the literal read `0` then `1`, a struct element read its `?? default`, and a parameter, a
+> typed local, a struct field and a `+=` all read the result being built — sixteen spellings,
+> both backends, silently (QUALITY.md B8a).  The build's detach (`create_vector`'s `=` repoint,
+> `clear_vector_field`) sat at the head of the build's ops, ahead of the element reads.
+> Closed by giving the comprehension's snapshot one home, `Parser::snapshot_read_destination`,
+> which the literal asks too: the destination is copied before the first write, every read in
+> the parts is renamed to the copy, and the two detach sites insert after it.  Guard
+> `tests/scripts/a-vector-literal-reads-what-its-destination-held.loft`, falsified at 6f9c0886.
+> Two destinations the snapshot cannot NAME remain — a field reached through an element, a
+> captured collection — filed as loft#1391.
 
 > **D-iter-2 — CLOSED (2026-08-30). A comprehension assigned to a struct FIELD it reads.**
 > `s.v = [for i in 0..s.v.len() { s.v[i] * 2 }]` answered `[]` on both backends, silently.

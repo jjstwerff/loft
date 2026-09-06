@@ -9,6 +9,30 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A collection literal reads what its destination held, and a native join reassignment frees what it displaces and compiles (2026-09-06, the `@FR-O-Detach` walk)
+
+`Parser::snapshot_read_destination` (`src/parser/vectors.rs`) is the one home for *a build
+reads its destination*: it copies the destination into a `build_src` temp before the first
+write and renames every read in the parts to the copy — the comprehension's deferred route
+(loft#1194) now calls it, and the vector LITERAL asks it for the first time, on a local (`=`
+and `+=`), a parameter and a struct field (`Parser::field_place` compares the place).  The two
+sites that insert the destination's detach at the head of the build's ops — `create_vector`'s
+`=` repoint and `parse_assign_op_inner`'s `clear_vector_field` — insert after the snapshot,
+whose length `parse_vector` records in `Parser::build_snapshot_len` and `parse_assign_op_inner`
+hands them (flat ops, not a block: a block scoped the temp's `let` away from its readers on
+`--native`).  Sixteen spellings measured wrong before (`[0, 0]`, `len` reading `0` then `1`, a
+struct element's `?? default`), all right after, both backends.  Native's `owned_ref_reassign`
+(`src/generation/dispatch.rs`) now counts a `Value::If` as a right-hand side that produces a
+store, so `s = if c { mk(7) } else { s }` frees the displaced store on both backends
+(`(O-NoDiverge)`); `output_if_inner` (`src/generation/emit.rs`) closes an arm's brace on the
+same peeled test it opened it with, so a span-wrapped `join-arm-owner` arm — the `match`
+spelling — no longer emits an unbalanced `}`.  Guards
+`a-vector-literal-reads-what-its-destination-held` and
+`a-join-reassignment-whose-other-arm-is-the-binding-frees-and-compiles`, both falsified at
+6f9c0886.  Filed: loft#1388, loft#1389, loft#1390, loft#1391.  formal: iteration.md `I-Comp`
+names the literal (D-iter-4), ownership.md D-own-36, IMPLEMENTATIONS.md gains the
+`@FR-O-Detach` row.
+
 ### A match arm converts to the type its siblings answer in — loft#1380's twin (2026-09-06)
 
 `@FR-N-Decl` — a declared slot checks `e ⇐ τ`, and a construct's type is what its destination
