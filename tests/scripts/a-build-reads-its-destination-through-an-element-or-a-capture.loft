@@ -124,6 +124,19 @@ fn test_a_field_through_an_element_in_an_if_arm() {
   assert(shows(xs[0].items) == "[2,1]", "element-field if-arm: got {shows(xs[0].items)}");
 }
 
+// CONTROL — a LOOP VARIABLE's field, the plausible shape of all of these: walk a collection
+// and rewrite a list on each element.  It is a plain field of a plain local, so the snapshot
+// reached it as soon as the literal got one at all; it passed at 00ff5bb5 and was wrong on
+// 2026.9.0.  It is here because the loop variable is bound from `OpVectorRefNullable`, whose
+// index sits at a DIFFERENT argument position from `OpGetVector`'s, so this pins that the
+// place naming stays right for a destination reached through that op.
+fn test_a_loop_variables_field() {
+  xs = [O{items: [1, 2], other: [], tag: "a"}, O{items: [5, 6], other: [], tag: "b"}];
+  for e in xs { e.items = [e.items[1] ?? 0, e.items[0] ?? 0]; }
+  assert(shows(xs[0].items) == "[2,1]" && shows(xs[1].items) == "[6,5]",
+         "loop variable: got {shows(xs[0].items)} {shows(xs[1].items)}, want [2,1] [6,5]");
+}
+
 // CONTROL — a SIBLING field of the same element is a different place and must be read as it
 // stands, not redirected onto the snapshot.
 fn test_a_sibling_field_of_the_same_element() {
