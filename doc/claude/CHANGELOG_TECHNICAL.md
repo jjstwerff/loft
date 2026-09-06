@@ -9,6 +9,32 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A linked group's members must share one element layout (2026-09-06, loft#1385, D-col-2, C117)
+
+A struct holding BOTH a dense `vector<E>` and a `vector<E?>` beside a keyed member split into
+two groups — the dense member fell out of its own group, silently, `len` of the member that
+never received the record being a legal `0`.
+
+It is a conflict between two rules, not a gap in one.  `(Col-Group)` said membership is "not
+about whether the element is dense or nullable"; `(N-Dense)` says a `vector<E>`'s elements are
+non-null unless the author wrote `vector<E?>`.  One record set that may hold absence cannot be
+read through a non-null element type, and the records are not the same shape — a nullable
+element is the tagged `__nullable<E>`, a dense one is `E`.
+
+Both silent answers were measured.  The obvious fix — comparing the element through
+`Stores::key_owner`, so the rewritten keyed member and the dense vector compare equal — DOES
+form the group both ways; the dense member then receives a record and MISREADS it (`a[0].n`
+answered 7, `a[0].k` answered 2, the `Some` discriminant), which is loft#1134's misread and
+worse than the zero it replaces.  So the declaration is declined where the group would form
+(`Parser::refuse_mixed_nullability_group`, in the parser before either membership derivation
+runs, leaving the B7x agreement census untouched), with a message naming both cures.
+`(Col-Group)` now states the layout condition, and the declined alternative — the group
+adopting the tagged layout with tag-aware dense reads — is C117 in DESIGN_DECISIONS.md.
+
+Fires in all four declaration orders.  Guards: the `@EXPECT_ERROR` cell and a controls twin
+whose four shapes each differ from the refused one by exactly one thing — no keyed member (so
+no group forms), all-nullable, all-dense, and a member's own `?`.  `Fixes #1385`.
+
 ### A struct field is a container of its own: (B-Disturb) asks which field grew (2026-09-06, loft#1384)
 
 loft#1373 could not tell `w.a` from `w.b` and gave the case up rather than get it wrong:

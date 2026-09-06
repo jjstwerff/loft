@@ -92,6 +92,12 @@ place — mutating `s` afterwards no longer shows through `t.0` when `T` is a st
 generic and the non-generic spelling of the same function had been giving different
 answers, which is the one thing a type variable is supposed never to do.  A `T` bound to a
 vector or a keyed collection is still shared rather than copied (loft#1365).
+**A record set cannot be held two ways at once, and says so.**  Declaring a list of `E` and a
+list of `E?` beside a lookup over the same records used to leave the first list quietly out of
+the group — writes through it reached nothing else. That declaration is now refused, because
+the two lists store their elements differently and one set cannot be read both ways; the error
+names the two fixes. Lists that agree — all plain, or all nullable — are unaffected.
+
 **A value read out of one field of a record is not disturbed by another field growing.**  The
 copy-on-growth rule now asks WHICH list grew: reading from `w.a` and then appending to `w.a`
 gives you your own copy, while appending to `w.b` leaves your view of `w.a` exactly as it was.

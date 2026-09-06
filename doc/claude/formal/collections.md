@@ -250,9 +250,13 @@ tests/scripts/48b-spatial-slice.loft (the asserted box/open/cap slices). CAVEATS
                 to a single record set, provided at least one of them is keyed.  A record
                 entering through any member is in every member, by any write route.  Membership
                 is a fact about the PAIR — not about declaration order, not about which member
-                is written first, not about whether the element is dense (vector<E>) or
-                nullable (vector<E?>), and not about whether a MEMBER itself is nullable
+                is written first, and not about whether a MEMBER itself is nullable
                 (hash<E[k]>? is a collection over E in that struct, so it is a member).
+                The members must share one element LAYOUT, though: a nullable element is the
+                tagged __nullable<E> (a discriminant plus the payload) and a dense one is E
+                itself, so a dense vector<E> and a vector<E?> cannot both be routes to one
+                record set, and a struct declaring both beside a keyed member is REFUSED
+                (loft#1385).  Every member dense, or every member nullable, is one set.
                 Membership is the whole SET, not a pair: *at least one of THEM* is a question
                 about every collection over that element type in the struct, and the second
                 sentence settles the rest by being applied twice — if a and h are one record
@@ -349,16 +353,7 @@ tests/scripts/901-linked-group-fill.loft.
 
 ## 3. Deviations / decided edges
 
-**OPEN: 1.**
-- **D-col-2** — a struct holding BOTH a dense `vector<E>` and a nullable `vector<E?>` beside a
-  keyed member splits into TWO groups: a write through the dense vector reaches only itself, one
-  through the keyed member reaches the nullable vector and itself.  `(Col-Group)` names that case
-  in as many words (*"not about whether the element is dense or nullable"*).  The mechanism is
-  loft#1204's rather than loft#1375's — `link_shared_nullable_views` rewrites the KEYED member's
-  element to the sibling's `__nullable<E>`, after which the membership test's content comparison
-  no longer matches the dense vector (loft#1385).
-
-Every other deviation this doc has carried is closed; the record is in
+**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
 the companion [collections-history.md](collections-history.md).
 
 ## 4. Conformance / oracle plan (how each rule gets pinned — [VERIFICATION.md](VERIFICATION.md))
