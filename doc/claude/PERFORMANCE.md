@@ -1875,6 +1875,31 @@ cached binary run directly (no loft wrapper) starts in 0.46 ms — so the
 generated machine code already has excellent startup and the entire
 tax is launcher overhead.
 
+### The cache PUBLISH is atomic, and must stay that way
+
+The cached binary lives at `<script dir>/.loft/cache/<stem>-<hash>`, a path SHARED by every
+concurrent run of that source, so writing it is the one step several processes contend on.
+It is published by staging under a private per-process `.<leaf>.<pid>.tmp` name in the SAME
+directory, tightening the mode while the file is still invisible under its final name, and
+then `rename`-ing it into place — `native_utils::publish_cached_binary`, the one home for
+this.
+
+A plain `fs::copy` onto the destination is the thing to never go back to: it truncates in
+place and streams ~11 MB, and for that whole window a concurrent run sees a path that
+EXISTS and passes `cache_safe_to_execute` — which reads symlink, owner and mode but **never
+size** — so it execs a 0-byte-and-growing ELF and dies with **no stdout and no stderr at
+all**.  The mode check does not cover it either: once the entry exists at 0700, a later copy
+truncates it while the mode stays 0700.  POSIX `rename` is atomic and a process already
+exec'ing the previous inode keeps a complete file.  For the same reason the stale-entry
+sweep runs AFTER the publish and spares the entry just written — sweeping first deleted the
+very binary a concurrent run had already accepted as usable.
+
+Measured 2026-09-06: `make ci` red in two runs of three on
+`alias_link_baseline::baseline_leak_clean_native`, whose two native cells compile one source
+concurrently.  Guarded deterministically by the destination's INODE changing across a
+publish (`native_utils::publish_cached_binary_tests`) — racing the race does not falsify,
+see TESTING.md § How a guard reads green while the defect stands.
+
 ### Why the probe is skippable
 
 The probe exists only to **fall back to the interpreter when rustc is

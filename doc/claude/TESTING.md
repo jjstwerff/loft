@@ -2934,6 +2934,34 @@ is checked. `make falsify` catches the commonest case — a guard that never fai
 build it was written to catch — but it only answers for the commit you name. These are the
 shapes that survive it, each one measured here rather than imagined.
 
+**A reproduction that hits a WARM CACHE measures nothing — and the tell is the clock.**  A
+red `make ci` named a native cell that took **2.2 s** in the gate; every attempt to reproduce
+it took **51 ms**.  On that basis it was reported "not reproducible" three ways — 20 serial
+runs, 48 at 16-way concurrency, the whole test binary under nextest — and all of it was
+vacuous: the runs hit a warm artifact cache and never reached the publish path that breaks.
+A pass 40× faster than the failure is not a pass, it is a different experiment.  Two matching
+traps rode along: the cache lives in `<script dir>/.loft/cache/`, **not** under `TMPDIR`, so
+"reproduced with the gate's own `TMPDIR`" was another empty cell; and a harness notice about
+low memory (it kills background tasks on its own budget) was read as a statement about the
+BOX while `free` showed 55–59 GB available at that very moment.  **State the failure's cost —
+wall-clock, or a counter like *did it compile?* — and check the repro matches it BEFORE
+reporting a negative.**
+
+**Racing a race is usually not a falsifiable guard; assert the PROPERTY the race violates.**
+The obvious guard for the cache-publish race — N concurrent cold-cache runs of one source,
+assert all succeed — **passed on the pre-fix build** (18 runs): the window is too narrow to
+hit on demand, so it measured nothing while looking like a regression test.  The deterministic
+reading is the **inode**.  `fs::copy` opens the destination with truncate and streams into the
+SAME inode, which is exactly what lets a reader's already-accepted file empty out underneath
+it; `rename` swaps a different inode in and a process still exec'ing the old one keeps a
+complete file.  So `publish(a); i1 = ino(dest); publish(b); i2 = ino(dest); assert_ne!(i1, i2)`
+— no timing, and it fails on the pre-fix publish with the same inode on both sides.  Keep the
+old implementation in the test file as a POSITIVE CONTROL (`assert_eq!` on the copy form) so
+the probe proves it discriminates without an inverse edit of the product.  If the racing test
+is kept for the end-to-end shape it still covers, its header must say it does NOT reproduce
+the defect and name the guard that does — an inert experiment recorded is reusable, an inert
+experiment mislabelled is a false green.
+
 **A "did this copy too much?" control is not the same cell for every element type, and the
 wrong one argues for reverting a correct fix.**  The natural control for an over-wide copy is
 *an undisturbed view must still ALIAS — a write through it reaches the container*.  That is

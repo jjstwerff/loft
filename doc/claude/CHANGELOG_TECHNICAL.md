@@ -9,6 +9,25 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The native cache publishes a whole binary or none of it (2026-09-06)
+
+`--native` compiles into a per-process scratch dir and publishes to a SHARED, content-keyed
+`<script dir>/.loft/cache/<stem>-<hash>`.  That publish was a plain `fs::copy`, which truncates
+the destination in place and then streams ~11 MB into it; for that window a concurrent run of
+the same source sees a path that exists and passes `cache_safe_to_execute` — symlink, owner and
+mode, but never SIZE — and execs a 0-byte-and-growing ELF, dying with no stdout and no stderr.
+Once an entry exists at 0700 a later copy truncates it while the mode stays 0700, so the P254
+mode check never covered this.  The stale-entry sweep made it worse by removing every `<stem>-*`
+entry BEFORE the copy, including a binary a concurrent run had already accepted.
+
+Now staged under a private `.<leaf>.<pid>.tmp` in the same directory, tightened while still
+invisible under its final name, then `rename`d; the sweep runs after and spares the entry just
+written.  One home: `native_utils::publish_cached_binary`.  Found gating a branch — `make ci`
+red in two runs of three on `alias_link_baseline::baseline_leak_clean_native` (its two native
+cells compile one source concurrently), with an empty output block as the only evidence.
+Guarded on the destination's INODE changing across a publish, which fails on the pre-fix form;
+the end-to-end racing test does NOT falsify and its header says so.
+
 ### A branch's projecting arm gets its own temp, so a binding chosen by an `if` materialises (2026-09-06, loft#1396)
 
 `scopes::value_view_container` names the container a `Set`'s value views THROUGH a branch — any
