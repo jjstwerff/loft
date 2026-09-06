@@ -287,6 +287,17 @@ pub struct Store {
     pub tag: u32,
     /// When true, this Store borrows another's buffer — `Drop` must NOT dealloc.
     borrowed: bool,
+    /// Which SLOT this store occupies in `Stores` — its `store_nr`, the first field of every
+    /// `DbRef` that names it.
+    ///
+    /// @PLN154 phase 3.  A `Store` method does not otherwise know its own number, which is
+    /// why the edit journal buffers changes per store and lets `Stores` tag them at the
+    /// drain.  The relocation log cannot do that: a record that MOVES invalidates every
+    /// reference that named it, and a reference is `(store_nr, rec, pos)` — so the number
+    /// has to travel with the move, not be attached at a later drain.
+    ///
+    /// `u16::MAX` until the slot goes live.
+    pub store_nr: u16,
     /// Which allocation this slot is, on `Stores`' monotonic counter.
     ///
     /// Slot NUMBERS are reused, so `store_nr` alone cannot answer *"is this the same store I
@@ -484,6 +495,7 @@ impl Store {
     /// happens at `State::new`, before the first frame exists.
     pub fn arm_init_shadow(&mut self) {
         self.init_shadow = vec![0u32; self.size as usize * 8];
+        crate::stack_verify::note_armed();
     }
 
     /// Pack a byte's tag: the kind and width the value was written at, and where in that
@@ -576,6 +588,11 @@ impl Store {
             return SlotState::Unwritten;
         }
         let wrote = (base >> 8) as u16;
+        // A handle whose record has moved: the tag kept its width and index and changed only
+        // its family, so it lands here rather than in a second lookup.
+        if wrote & 0xFF00 == crate::stack_verify::STALE {
+            return SlotState::Stale;
+        }
         // A raw byte BLOCK on either side is opaque: whoever assembled it knows what is in
         // it, and the shadow's tag does not.  The fn-ref slot is written as
         // `[MaybeUninit<u8>; 20]` and read back as an `i64` and a `DbRef`; a coroutine frame
@@ -626,6 +643,33 @@ impl Store {
         if at < end {
             self.init_shadow[at..end].copy_from_slice(&tags[..end - at]);
         }
+    }
+
+    /// Mark the `len`-byte value based at `at` as a STALE handle: it names a record that has
+    /// moved.  Keeps the width and the index, so a later read reports the handle rather than
+    /// a width disagreement.
+    pub fn shadow_stale(&mut self, at: usize, len: usize) {
+        let end = (at + len).min(self.init_shadow.len());
+        for slot in &mut self.init_shadow[at.min(end)..end] {
+            if *slot != 0 {
+                *slot = (*slot & 0xFF) | (u32::from(crate::stack_verify::STALE) << 8);
+            }
+        }
+    }
+
+    /// Does a live HANDLE begin at byte `at`?
+    ///
+    /// @PLN154 phase 3's scan asks exactly this and nothing else, and it asks it about every
+    /// four-byte offset in the frame — so the tag's encoding is decoded HERE, beside
+    /// [`pack_tag`](Self::pack_tag) that wrote it, rather than open-coded at the caller where
+    /// a change to the layout would leave a silently-never-matching test behind.
+    #[must_use]
+    pub fn shadow_handle_base_at(&self, at: usize) -> bool {
+        let Some(&tag) = self.init_shadow.get(at) else {
+            return false;
+        };
+        // index 0 within the value (stored as 1), and the handle family.
+        tag & 0xFF == 1 && (tag >> 8) as u16 >> 8 == 1
     }
 
     /// Move the tags of a `len`-byte span from `from` to `to`, within this store.
@@ -728,6 +772,7 @@ impl Store {
             read_only: false,
             free_protect_depth: 0,
             borrowed: false,
+            store_nr: u16::MAX,
             alloc_serial: 0,
             created_at: 0,
             last_op_at: 0,
@@ -855,6 +900,7 @@ impl Store {
             recording: None,
             tag: 0,
             borrowed: false,
+            store_nr: u16::MAX,
             alloc_serial: 0,
             created_at: 0,
             last_op_at: 0,
@@ -925,6 +971,7 @@ impl Store {
             read_only: false,
             free_protect_depth: 0,
             borrowed: false,
+            store_nr: u16::MAX,
             alloc_serial: 0,
             created_at: 0,
             last_op_at: 0,
@@ -1022,6 +1069,7 @@ impl Store {
             read_only: false,
             free_protect_depth: 0,
             borrowed: false,
+            store_nr: u16::MAX,
             alloc_serial: 0,
             created_at: 0,
             last_op_at: 0,
@@ -1314,6 +1362,14 @@ impl Store {
         let new = self.claim(size);
         self.copy(rec, new);
         self.delete(rec);
+        // @PLN154 phase 3 — the record MOVED, so every reference that named it is stale.
+        // Recorded here rather than detected later because this is the only moment both
+        // record numbers exist: afterwards the old one is a free block like any other, and
+        // a frame slot still naming it is indistinguishable from one naming a slot that was
+        // simply reused.
+        if crate::stack_verify::enabled() {
+            crate::stack_verify::note_relocation(self.store_nr, rec, new);
+        }
         new
     }
 
@@ -1990,6 +2046,7 @@ impl Store {
             recording: None,
             tag: self.tag,
             borrowed: false,
+            store_nr: u16::MAX,
             alloc_serial: 0,
             created_at: 0,
             last_op_at: 0,
@@ -2026,6 +2083,7 @@ impl Store {
             read_only: false,
             free_protect_depth: self.free_protect_depth,
             borrowed: false,
+            store_nr: self.store_nr,
             alloc_serial: self.alloc_serial,
             created_at: self.created_at,
             last_op_at: self.last_op_at,
@@ -2071,6 +2129,7 @@ impl Store {
             recording: None,
             tag: self.tag,
             borrowed: true,
+            store_nr: u16::MAX,
             alloc_serial: 0,
             created_at: 0,
             last_op_at: 0,

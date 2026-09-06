@@ -1,0 +1,11 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The view is bound AFTER the growth: nothing is stale, the detector must be silent.
+struct S { n: integer }
+fn main() {
+  v: vector<S> = [S { n: 1 }];
+  for i in 0..200 { v += [S { n: i + 10 }]; }
+  d: S = v[0];
+  println("d={d.n}");
+}

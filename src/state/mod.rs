@@ -2641,7 +2641,7 @@ impl State {
                 crate::stack_verify::note_partial();
                 return;
             }
-            SlotState::Unwritten | SlotState::Mismatch { .. } => {}
+            SlotState::Unwritten | SlotState::Mismatch { .. } | SlotState::Stale => {}
         }
         let line = self
             .line_numbers
@@ -2667,7 +2667,70 @@ impl State {
                     u16::from(op),
                 );
             }
+            SlotState::Stale => {
+                let abs = (self.stack_cur.rec * 8 + self.stack_cur.pos + at) as usize;
+                let rec = self
+                    .database
+                    .store(&self.stack_cur)
+                    .addr::<DbRef>(self.stack_cur.rec, self.stack_cur.pos + at)
+                    .rec;
+                let _ = abs;
+                crate::stack_verify::report_stale(what, ty, at, rec, pc, line, u16::from(op));
+            }
             SlotState::Partial | SlotState::Written => {}
+        }
+    }
+
+    /// @PLN154 phase 3 — a record moved during the operator that just ran, so every frame
+    /// slot naming it is now stale.
+    ///
+    /// The scan is exact rather than a guess, and that is what phases 1-2 bought: the shadow
+    /// already says which bytes are the BASE of a handle, so this reads the twelve bytes it
+    /// knows are a `DbRef` and compares, instead of treating every eight-byte-aligned word in
+    /// the frame as a possible reference.  The whole live frame is scanned, not the top one:
+    /// a view handed down two calls is exactly the case a caller-frame scan would miss.
+    ///
+    /// It runs at the END of the operator, which is also the first moment the containers that
+    /// legitimately track the move have finished updating themselves — scanning earlier would
+    /// report the vector's own header on its way to being rewritten.
+    #[cold]
+    #[inline(never)]
+    fn mark_stale_handles(&mut self) {
+        let moved = crate::stack_verify::take_relocations();
+        if moved.is_empty() {
+            return;
+        }
+        let base = self.stack_cur.rec * 8 + self.stack_cur.pos;
+        let top = self.stack_pos;
+        let mut hits: Vec<u32> = Vec::new();
+        {
+            let store = self.database.store(&self.stack_cur);
+            let mut off = 0u32;
+            while off + size_of::<DbRef>() as u32 <= top {
+                if store.shadow_handle_base_at((base + off) as usize) {
+                    // The shadow is indexed ABSOLUTELY (`rec * 8 + fld`) and `addr` takes the
+                    // FIELD, so the record's own bytes are counted once here and not twice.
+                    let db = store.addr::<DbRef>(self.stack_cur.rec, self.stack_cur.pos + off);
+                    if crate::stack_verify::trace() {
+                        eprintln!(
+                            "[stale-scan] off={off} handle store={} rec={} pos={} moved={:?}",
+                            db.store_nr, db.rec, db.pos, moved
+                        );
+                    }
+                    if moved
+                        .iter()
+                        .any(|&(st, old, _)| st == db.store_nr && old == db.rec)
+                    {
+                        hits.push(off);
+                    }
+                }
+                off += 4;
+            }
+        }
+        crate::stack_verify::note_marked(hits.len() as u64);
+        let store = self.database.store_mut(&self.stack_cur);
+        for off in hits {
+            store.shadow_stale((base + off) as usize, size_of::<DbRef>());
         }
     }
 
@@ -5632,6 +5695,9 @@ impl State {
                     crate::loft_eprintln!("stack census: op budget spent — stopping here");
                     std::process::exit(0);
                 }
+            }
+            if verify_on && crate::stack_verify::any_relocation() {
+                self.mark_stale_handles();
             }
             if verify_on && self.stack_pos < verify_sp {
                 let at = (self.stack_cur.rec * 8 + self.stack_cur.pos + self.stack_pos) as usize;

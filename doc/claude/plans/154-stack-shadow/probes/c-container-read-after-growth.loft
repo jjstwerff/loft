@@ -1,0 +1,11 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The CONTAINER's own handle after a growth that relocated its record: the runtime updates
+// it, so a read of `v` must be silent even though a record moved.
+struct S { n: integer }
+fn main() {
+  v: vector<S> = [S { n: 1 }];
+  for i in 0..200 { v += [S { n: i + 10 }]; }
+  println("first={v[0].n} len={len(v)}");
+}

@@ -30,7 +30,7 @@ for f in tests/scripts/*.loft; do
     continue
   fi
   case "$verdict" in
-    *"no uninitialised or mistyped"*) printf '%s\tclean\t0\t0\n' "$f" >> "$S/per-script.tsv" ;;
+    *"no uninitialised, mistyped or stale"*) printf '%s\tclean\t0\t0\n' "$f" >> "$S/per-script.tsv" ;;
     *) n=$(printf '%s' "$verdict" | sed 's/^stack verify: \([0-9]*\) uninitialised.*/\1/')
        sites=$(printf '%s' "$verdict" | sed 's/.*, \([0-9]*\) distinct.*/\1/')
        printf '%s\tREPORTS\t%s\t%s\n' "$f" "$n" "$sites" >> "$S/per-script.tsv"

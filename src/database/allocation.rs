@@ -781,6 +781,9 @@ impl Stores {
         // `State::release_fnref_bufs` compares it against a per-call snapshot to tell a store
         // the callee MINTED from one that was already there (loft#1185).
         store.alloc_serial = serial;
+        // @PLN154 phase 3 — the slot's own number, stamped where the slot goes live so a
+        // record relocation can name the store it happened in.
+        store.store_nr = slot;
         store.set_created_at(alloc_pc);
         store.last_op_at = 0;
         let rec = if size == u32::MAX {
