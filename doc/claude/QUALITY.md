@@ -5954,7 +5954,7 @@ first cut, caught by A/B against the baseline); and the ORACLE classified a payl
 `lost-write` warning telling an author a landing write was lost, on the tier that gates a
 library's CI.  Guard `a-payload-view-materialises-when-its-subject-is-reassigned` (6 cells,
 three controls), falsified at 5f4ac074; oracle Check A clean over the 1247-file corpus and
-the fuzz corpus; `binding-history.md` D-bind-17.
+the fuzz corpus; `binding-history.md` D-bind-19.
 
 **The peel's own false positive, and what caught it.**  The first cut read the variant check
 as *"one arm names a variable"*, which is also the shape of `a?` discharging a nullable

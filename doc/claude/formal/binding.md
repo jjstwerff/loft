@@ -355,7 +355,12 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 
 ## Deviations
 
-**OPEN: 0** — D-bind-17 CLOSED 2026-09-06 (loft#1372): a `&` link now carries a NULLABLE
+**OPEN: 0** — D-bind-20 CLOSED 2026-09-06 (loft#1393): a view whose container is itself a
+view is a place inside the OUTER container, so a disturbance of that one ends it; D-bind-19
+CLOSED 2026-09-06 (the `@FR-O-Owner` walk): a struct-ENUM PAYLOAD view is a view like any
+other, and `(B-View)` materialises it; D-bind-18 CLOSED 2026-09-06 (loft#1392): a VECTOR link
+follows a rebind of its SOURCE, as `(B-Ref-Alias)` says a live link must.  D-bind-17 CLOSED
+2026-09-06 (loft#1372): a `&` link now carries a NULLABLE
 slot, so `(B-Ref-Intro)`'s *`&τ` for every τ* holds with no τ excluded.  `Optional(τ)` shares
 `τ`'s storage, so a `&τ?` has the same representation as its `&τ` twin and the absence rides
 the slot's own sentinel; what was missing was not a mechanism but one spelling of the SLOT

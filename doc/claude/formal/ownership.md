@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# formal/ownership.md — the `deps` ownership / borrow system (strict; register at `OPEN: 0`)
+# formal/ownership.md — the `deps` ownership / borrow system (strict; register at `OPEN: 1`)
 
 **Catalogue:** @F21 (references `&T`), @I60 (deps / lifetime tracker) — Goal E. Roadmap: @PLN85, @PLN87.
 
@@ -336,7 +336,11 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
+**OPEN: 1.**  `D-own-38` (loft#1388) — the release of a store a closure record adopted, and of
+one orphaned beside it, is decided per BINDING where the question is per STORE.  The direct
+capture's SUPPRESSION is aimed per store now; two releases beside it are not, and the obvious
+cure for one of them was built and measured wrong (it trades a leak for a backend split).
+Every other deviation this doc has carried is closed; the record is in
 [ownership-history.md](ownership-history.md).
 
 > **A zero here is a claim to re-measure, and this is what its oracle covers.**  The join

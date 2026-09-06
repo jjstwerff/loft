@@ -93,6 +93,21 @@ pub(crate) fn narrow_elm_read(
 
 // Lambda and vector expression parsing.
 
+/// Which argument of an element read is its INDEX, for the ops that have one.
+///
+/// The two families differ in arity — `OpGetVector(r, size, index)` carries the element size
+/// and `OpVectorRef(r, index)` does not — so the position is per op and not per family.
+/// Reading it off the wrong one is not a wrong PLACE, because a missing argument declines,
+/// but it is a place not named: the read then keeps pointing at the destination being built.
+/// Each nullable peer reads at the same position as the op it mirrors.
+fn element_index_arg(name: &str) -> Option<usize> {
+    match name {
+        "OpGetVector" | "OpGetVectorNullable" => Some(2),
+        "OpVectorRef" | "OpVectorRefNullable" => Some(1),
+        _ => None,
+    }
+}
+
 /// One step of a PLACE — what `s.f`, `v[0]` and `v[i]` each contribute to the identity of the
 /// location a build is assigned to, so *"is this read the destination?"* is an equality.
 ///
@@ -3985,13 +4000,8 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
             // constant, or a variable, which no expression inside one statement rewrites.
             // Anything else (a computed index) is not named and falls back to declining, as
             // every unnameable destination here does.
-            Value::Call(d, args)
-                if matches!(
-                    self.data.def(*d).name(),
-                    "OpGetVector" | "OpGetVectorNullable" | "OpVectorRef"
-                ) =>
-            {
-                let step = match args.get(2)?.unspan() {
+            Value::Call(d, args) if let Some(at) = element_index_arg(self.data.def(*d).name()) => {
+                let step = match args.get(at)?.unspan() {
                     Value::Int(i) => PlaceStep::ElemConst(*i),
                     Value::Var(i) => PlaceStep::ElemVar(*i),
                     _ => return None,
