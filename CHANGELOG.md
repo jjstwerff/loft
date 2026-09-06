@@ -20,6 +20,12 @@ record alive when `maybe` turned out to be nothing — once per time it happened
 programs only.  A long-running loop that reassigned such a variable grew for as long as it
 ran.
 
+**A function that returns one of two things now hands back a value of its own.**
+`fn pick(p, q, first) -> Node? { if first { p } else { q } }` gave the caller the *second*
+argument itself, so writing to the result changed the caller's own variable — while the first
+argument was correctly copied. Both are copies now, and so is the plain `-> Node` version,
+which had the same problem despite being the documented way around it.
+
 **A generic function used at two integer widths now works in either order.**  Calling the
 same generic with a `u8` and then a `u16` was rejected — *"cannot implicitly narrow u16 to
 u8"*, pointing at the second call — while writing the two calls the other way round compiled
