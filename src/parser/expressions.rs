@@ -3445,7 +3445,9 @@ use a separate collection or add after the loop"
         // and not `spatial` or `trie`, so `g.sp = null` took the SCALAR sentinel path —
         // found when @FR-N-Store's one home started asking here (the drifted-deny-list
         // shape QUALITY.md § Design P8 records).  The store face asks the bare-null half
-        // for the scalar slot; a heap slot's `= null` is its clear, asked where it lowers.
+        // for the scalar slot; a HEAP slot's `= null` is asked where it LOWERS, which is the
+        // only place the five things that spelling can mean are told apart (loft#1404 —
+        // `Parser::copy_ref`).
         if s_type == Type::Null && op == "=" && !crate::data::is_dbref(f_type) {
             self.convert_store(code, &Type::Null, f_type, "the assignment target", None);
         }

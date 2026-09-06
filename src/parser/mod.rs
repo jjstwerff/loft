@@ -4314,6 +4314,27 @@ impl Parser {
         at: Option<&Position>,
         never_error: bool,
     ) -> bool {
+        self.nstore_null_report_as(target_tp, what, at, never_error, None)
+    }
+
+    /// [`Parser::nstore_null_report`] with the CONSEQUENCE clause supplied by the caller.
+    ///
+    /// The default clause — *"the slot holds null"* — is what a scalar slot does, and what a
+    /// record travelling as a HANDLE does: measured, a `null` argument arrives null and a
+    /// `return null` reads back null.  A dense INLINE slot does not, because it has no
+    /// discriminant to spend on absence (`synth_nullable_struct_fields`: a field with no `?`
+    /// "cannot be absent and stays dense"), and an assignment into one does not happen at all.
+    /// So the clause belongs to the POSITION, which only the caller knows, while the tier
+    /// split and the cure stay here.  Passing `None` keeps the wording those callers already
+    /// pin, to the byte.
+    fn nstore_null_report_as(
+        &mut self,
+        target_tp: &Type,
+        what: &str,
+        at: Option<&Position>,
+        never_error: bool,
+        consequence: Option<&str>,
+    ) -> bool {
         if self.first_pass {
             return false;
         }
@@ -4360,10 +4381,11 @@ impl Parser {
                 // drops, not a second message.  Two spellings of one diagnostic is how the
                 // fixtures that pin this text would start disagreeing with the rule behind it.
                 let kind = if heap_target { "" } else { "scalar " };
+                let effect = consequence.unwrap_or("the slot holds null");
                 let msg = diagnostic_format(
                     Level::Warning,
                     format_args!(
-                        "`null` is stored into {what} of the non-null {kind}type `{nm}` — the slot holds null; declare it `{nm}?` to make that explicit"
+                        "`null` is stored into {what} of the non-null {kind}type `{nm}` — {effect}; declare it `{nm}?` to make that explicit"
                     ),
                 );
                 self.nstore_diag(at, Level::Warning, &msg);

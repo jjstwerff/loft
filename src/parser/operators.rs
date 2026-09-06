@@ -888,6 +888,44 @@ impl Parser {
     }
 
     pub(crate) fn copy_ref(&mut self, to: &Value, code: &Value, f_type: &Type) -> Value {
+        // @FR-N-Store's fifth position (loft#1404).  `(N-Store)` names *"a field, a collection
+        // element"* among the slots a bare `null` may not enter, and the four positions
+        // loft#1313 wired all ask — the ASSIGNMENT TARGET asked only for a SCALAR target, so
+        // the heap half passed in silence.
+        //
+        // It is asked HERE and not at the parse site, because `x = null` at a heap target
+        // spells FIVE different things and only the lowering tells them apart.  Measured, all
+        // six on both backends:
+        //
+        //   * `c[key] = null` on a keyed collection  → `OpHashRemove` — `(Col-Remove)`'s
+        //     documented by-key delete;
+        //   * `s.coll = null` on a collection field  → `OpClearVector` / `OpClearKeyed` — that
+        //     field's clear, the same thing `s.coll = []` does (@P307);
+        //   * `n.next = null` on a `reference<T>` POINTER field (#328's share marker) →
+        //     `OpSetDbRef(…, OpNullRefSentinel())` — the store LANDS and the slot holds null;
+        //   * `s.rec = null` on a dense record field, and `v[i] = null` on a vector element →
+        //     `OpCopyRecord(null, …)`, which does nothing at all.
+        //
+        // Only the last reaches this function, so the ask needs no container test, no keyed
+        // test and no pointer-marker test — the four shapes that are not stores never arrive.
+        // Gating at the parse site instead needed all three and still got the pointer field
+        // wrong, because the marker is not on the resolved target type by then
+        // (`issues::issue_328_reference_field_pointer_semantics` is the cell that caught it).
+        //
+        // The CONSEQUENCE clause is this position's own: the shared default *"the slot holds
+        // null"* is measured true for a scalar and for a record travelling as a HANDLE (a
+        // `null` argument arrives null, a `return null` reads back null), and false here.  The
+        // cure is unchanged and is the real one — a dense field has no discriminant to spend
+        // on absence (`synth_nullable_struct_fields`), and the `?` is what creates the room.
+        if matches!(code.unspan(), Value::Null) {
+            self.nstore_null_report_as(
+                f_type,
+                "the assignment target",
+                None,
+                false,
+                Some("the store does not happen, so the slot keeps the value it had"),
+            );
+        }
         let d_nr = self.data.type_def_nr(f_type);
         let tp = self.data.def(d_nr).known_type();
         // When the source is a struct-returning function CALL, set the high

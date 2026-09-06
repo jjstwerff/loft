@@ -105,6 +105,58 @@ build refuses, so its compiling is the receipt.  The `&τ` parameter had never b
 became a warning — `Contract: strained`; a program that compiled yesterday still compiles, and
 `x: integer = find(…)` now runs with a warning where it used to stop.
 
+### D-Null-Assign — OPENED AND CLOSED (2026-09-06, loft#1404): the ASSIGNMENT TARGET was the fifth position
+
+`(N-Store)` names the slots a bare `null` may not enter — *"a local, a field, a collection
+element, a tuple member, a call argument, a return, an INDEX"*.  `D-Null-Heap` above wired the
+heap half at four of them; the assignment target asked only for a SCALAR target, so two shapes
+answered WRONG in silence, on both backends:
+
+```loft
+s.rec = null;    // does not happen — `s.rec.n` still reads 5, where `S{rec: null}` reads 0
+v[i]  = null;    // a no-op — the element and the length are untouched
+```
+
+The same statement therefore meant one thing where `(N-Store)` was asked and another where it
+was not.
+
+**The filed scope was wrong, and the matrix is what corrected it.**  `x = null` at a heap
+target spells FIVE things, and three of them are not stores — so widening the ask to
+`is_dbref`, which is what the cause as filed implied, would have reported correct code.
+Measured at the lowering, all on both backends:
+
+| spelling | lowers to | what it is |
+|---|---|---|
+| `c[key] = null`, keyed | `OpHashRemove` | `(Col-Remove)`'s by-key DELETE |
+| `s.coll = null` | `OpClearVector` / `OpClearKeyed` | that field's CLEAR (@P307) |
+| `n.next = null`, `reference<T>` field | `OpSetDbRef(…, sentinel)` | a store that LANDS |
+| `s.rec = null` | `OpCopyRecord(null, …)` | the dropped write |
+| `v[i] = null` | `OpCopyRecord(null, …)` | the no-op |
+
+So the ask went to `Parser::copy_ref`, the one site that BUILDS the no-op: only the last two
+arrive there, and it needs no container test, no keyed test and no pointer-marker test.  A gate
+at the parse site needed all three and still got the POINTER field wrong, because #328's share
+marker is not on the resolved target type by then —
+`issues::issue_328_reference_field_pointer_semantics` is the cell that caught it, and it is the
+reason the chokepoint moved.
+
+**The VALUE is unchanged, and that is settled rather than deferred.**  A field declared
+`rec: E` is DENSE: `synth_nullable_struct_fields` gives a discriminant only to the `?` the
+author wrote, so a dense slot has nowhere to put "absent" and no store into it can make it hold
+null.  The cure the message already named — *declare it `E?`* — is therefore the real one; the
+`?` is what creates the room.
+
+What did change is the CONSEQUENCE clause, and only at this position.  *"The slot holds null"*
+is measured true for a scalar and for a record travelling as a HANDLE — a `null` argument
+arrives null, a `return null` reads back null — and false here, where nothing is written.  The
+four positions `D-Null-Heap` wired keep their wording to the byte, pinned by
+`heap_nstore::the_four_shipped_positions_keep_their_wording`; the clause now comes from the
+reporting position, which is the only thing that knows.
+
+`Contract: settled` — the rule already named the field and the collection element among its
+slots.  Guarded by six cells in `tests/heap_nstore.rs`, four of them negative controls, because
+the three sanctioned spellings above are correct code that must stay silent.
+
 ### D-Null-Heap — OPENED AND CLOSED (2026-09-03, loft#1313): `(N-Store)` was enforced for the SCALARS only
 
 `(N-Opt)` states the default for every type — *"Storage is non-null by default: a binding, field,
