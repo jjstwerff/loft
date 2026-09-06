@@ -147,6 +147,12 @@ named every variable `65535` with a `-` where its slot number and span belong �
 the same command on the same file did not print the same thing.  `introspect` now always
 parses; ordinary runs keep the cache.
 
+**`if x is Variant { field }` reads the same value on both backends.**  A payload bound by
+`is` was copied by the native compiler and shared by the interpreter, so the same program
+could answer differently depending on how it was run — and the native copy was then never
+released.  `match` has bound it correctly for a year; `is` does now too.  Writing through the
+binding still reaches the value it came from.  (loft#1398)
+
 **Replacing an enum inside a struct while you are still reading its payload now warns.**
 `match w.st { Holder{inner} => { w.st = Empty{z: 0}; inner.a }, … }` reads `Empty`'s field
 through `inner`, because writing into a place does not move what points at it — that is what

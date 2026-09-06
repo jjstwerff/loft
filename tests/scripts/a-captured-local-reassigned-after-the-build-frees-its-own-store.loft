@@ -31,8 +31,14 @@
 // (`scripts/falsify.sh` § ONE CHANNEL IS BLIND).  `tests/wrap.rs::run_test` runs `main` when
 // a file has one and leak-checks it on both backends.
 //
+// The three cells added later — a stored closure called twice, and either spelling in a loop —
+// are `@FR-O-Witness`'s: their stores are released by STORE IDENTITY, and the hand-off at the
+// closure build is what keeps the witness from releasing one the record has taken.
+//
 // @falsified-at: ac412a96 — interpret and native both leaked `kt=81 S×3, kt=25
-//   main_vector<integer>×1` -> clean.  Every control unmoved.
+//   main_vector<integer>×1` -> clean.  Every control unmoved.  With the three witness cells
+//   added, the whole file re-falsifies at cb2dca92: `kt=81 S×9` -> clean on BOTH backends,
+//   values already right there — the leak was the entire symptom.
 
 struct S { a: integer, b: text }
 
@@ -86,7 +92,38 @@ fn test_a_literal_right_hand_side_rebuilds_in_place() {
   assert(s.a == 7 && h(5) == 12, "literal rhs: got {s.a} {h(5)}, want 7 12");
 }
 
+// The two cells @FR-O-Witness closed: a stored closure called TWICE (whose intermediate store
+// no record ever adopted), and a closure record REUSED across loop passes (which re-adopts each
+// pass and orphaned the one before).  Both are the same question — *does anything still hold
+// this store?* — and neither is answerable from a static per-binding fact, which is `(O-Latest)`
+// saying so: a `deps` list can express neither WHICH assignment nor the loop depth.  The
+// witness answers it by STORE IDENTITY, and the hand-off at the build is what stops it
+// answering for a store the record has taken.
+fn test_a_stored_closure_called_twice() {
+  s = S{a: 1, b: "x"};
+  h: fn(integer) -> integer = |i| { s.a + i };
+  s = build(h);
+  s = build(h);
+  assert(s.a == 2, "stored twice: got {s.a}, want 2 — the closure holds its capture-time store");
+}
+
+fn test_an_inline_closure_in_a_loop() {
+  s = S{a: 1, b: "x"};
+  for k in 0..5 { s = build(|i| { s.a + i }); }
+  assert(s.a == 6, "inline loop: got {s.a}, want 6");
+}
+
+fn test_a_stored_closure_in_a_loop() {
+  s = S{a: 1, b: "x"};
+  h: fn(integer) -> integer = |i| { s.a + i };
+  for k in 0..5 { s = build(h); }
+  assert(s.a == 2, "stored loop: got {s.a}, want 2 — `h` reads the store it captured");
+}
+
 fn main() {
+  test_a_stored_closure_called_twice();
+  test_an_inline_closure_in_a_loop();
+  test_a_stored_closure_in_a_loop();
   test_an_inline_closure_argument();
   test_an_inline_closure_argument_twice();
   test_a_stored_closure();

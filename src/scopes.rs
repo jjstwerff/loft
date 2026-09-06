@@ -6735,6 +6735,47 @@ impl Scopes<'_> {
         // sentinels — a witness that never took a store beside a local holding none — compare
         // EQUAL and release nothing.
         let mut witness_ops: Vec<Value> = Vec::new();
+        // @FR-O-Latest — the HAND-OFF, and it comes FIRST.  A closure build in this value
+        // makes the record the owner of the store its capture names AT THE BUILD, so from
+        // here the frame owes nothing for it and the witness gives it up — a clear, never a
+        // free: `free_named`'s cascade owns it now.  Ahead of the guarded release below,
+        // because for an INLINE closure argument the capture and the target are the SAME
+        // local (`s = build(|i| { s.a + i })`): the record adopts the old store and the local
+        // moves to a new one in one statement, so a release asked before the clear would free
+        // the store the record has just taken.  That is `(O-Detach)` in ownership clothing,
+        // and it is what made dropping the veto answer `a=1` where `a=2` is right.
+        let built_here = captures_built_in_value(value, data);
+        // ...and the record this build is about to OVERWRITE gives up what it already holds.
+        // A build inside a loop reaches the same work-ref every pass and `OpDatabase` records
+        // into the store it already names, so the capture slot is rewritten and the store it
+        // held is orphaned — a 5-pass loop kept four (loft#1388).  `free_named`'s cascade is
+        // the adopted store's releaser, so freeing the record here is what hands it back; on
+        // the first pass the work-ref is `Null` and this is a no-op.
+        //
+        // Gated on EVERY capture in the build having a witness, and that gate is the whole
+        // soundness argument: a capture without one is still owned by the FRAME, so the
+        // cascade and the frame would free one store between them.  Measured exactly there —
+        // a VECTOR capture can hold no witness (`heap_def_nr` is `None` for a vector, so the
+        // record-typed witness variable cannot be made), and with the release ungated its
+        // loop answered `1,2` where `4,5` is right, on `--native` alone.  `(O-Derived)`: one
+        // decision, one home.
+        if !built_here.is_empty()
+            && built_here
+                .iter()
+                .all(|(_, c)| self.owner_witness.contains_key(c))
+        {
+            for (rec, _) in &built_here {
+                prefix.push(call("OpFreeRef", *rec, data));
+            }
+        }
+        for (_, c) in &built_here {
+            if let Some(&cw) = self.owner_witness.get(c) {
+                prefix.push(v_set(
+                    cw,
+                    Value::Call(data.def_nr("OpNullRefSentinel"), vec![]),
+                ));
+            }
+        }
         if let Some(&w) = self.owner_witness.get(&v) {
             let kind = {
                 let d_nr = self.d_nr;
@@ -11634,6 +11675,34 @@ fn owner_witness_locals(
         &mut minted,
         &mut viewed,
     );
+    // @FR-O-Latest / @FR-O-Witness — a CAPTURED local reassigned after its build has mixed
+    // ownership too, and between the same two parties the witness exists for: the closure
+    // record owns the store the capture named AT THE BUILD, the frame owns every store the
+    // local is given afterwards.  No static reading is right for both — `(O-Latest)` says a
+    // type-level `deps` list can express neither which assignment nor the loop depth — so the
+    // release has to be by STORE IDENTITY, which is exactly what this witness does.  Without
+    // one, `owns_displaced_store`'s per-BINDING `!is_captured` veto is asked at two sites that
+    // are statically identical and is right at only one of them (loft#1388).
+    let builds = capture_build_backings(data, function, code);
+    for &v in &builds.reassigned_after_build {
+        // Both spellings of "the record took this local's store": a STRUCT capture names the
+        // local outright, a COLLECTION capture names a view whose backing local is this one.
+        // The backing needs the witness for the same reason and, once the record's own
+        // release is emitted (`fn_ref_with_closure`'s pre-build free), for a sharper one: a
+        // local left without one is still owned by the FRAME, so the two would free the same
+        // store between them — measured as the vector loop answering `1,2` where `4,5` is
+        // right, on `--native` alone.
+        if (function.is_captured(v) || builds.backing.values().any(|b| *b == v))
+            && !function.is_argument(v)
+            && !function.name(v).starts_with("__")
+            && !function.was_loop_var(v)
+            && function.tp(v).base().heap_def_nr().is_some()
+            && !materialised_views.contains_key(&v)
+        {
+            minted.insert(v);
+            viewed.insert(v);
+        }
+    }
     let mut out: Vec<u16> = minted
         .intersection(&viewed)
         .copied()
@@ -11748,6 +11817,32 @@ fn witness_set_kind(
     } else {
         WitnessSet::Mint
     }
+}
+
+/// The capture variables a value's closure BUILDS write into their record.
+///
+/// The record owns the store each names from the build on (`free_named`'s cascade is its
+/// releaser), so a capture with an owner witness gives that store up there.  Read off the
+/// VALUE rather than the statement, because an INLINE closure argument builds inside the very
+/// assignment that moves the local on.
+fn captures_built_in_value(value: &Value, data: &Data) -> Vec<(u16, u16)> {
+    let set_dbref = data.def_nr("OpSetDbRef");
+    fn walk(node: &Value, set_dbref: u32, out: &mut Vec<(u16, u16)>) {
+        if let Value::Call(d, args) = node.unspan()
+            && *d == set_dbref
+            && let (Some(Value::Var(rec)), Some(Value::Var(c))) = (
+                args.first().map(Value::unspan),
+                args.get(2).map(Value::unspan),
+            )
+        {
+            out.push((*rec, *c));
+        }
+        node.unspan()
+            .for_each_child(&mut |c| walk(c, set_dbref, out));
+    }
+    let mut out = Vec::new();
+    walk(value, set_dbref, &mut out);
+    out
 }
 
 /// Release the store an owner witness names and reset the witness to the sentinel — as ONE

@@ -9716,6 +9716,33 @@ impl Parser {
                             // note at parse_match_enum_field_bindings in
                             // this file for the match-arm path).
                             self.vars.set_skip_free(v_nr);
+                            // ...and the borrow must be in the TYPE, which is the other half
+                            // of that note and was applied only to the `match` path.  #429
+                            // gave a HEAP payload binding a frame dep on its subject because
+                            // an empty dep list is the @FR-O-Proxy proxy for OWNED, and the
+                            // two backends then read the same bind differently: `--native`
+                            // deep-COPIES it and the interpreter aliases.  The `is` spelling
+                            // is the same bind and had no dep, so `if w.st is Holder { inner }
+                            // { w.st = Empty{…}; inner.a }` answered 1 natively and 0 on the
+                            // interpreter, with a leaked `Pay` record beside it — the same
+                            // divergence #429 closed for `match`, at the sibling site
+                            // (loft#1398).  Scalars carry no DbRef and need no dep, exactly as
+                            // there.
+                            if matches!(
+                                &field_type,
+                                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                            ) && let Some(src) = self.match_borrow_source(&stable_subject)
+                            {
+                                let bound_tp = match self.vars.tp(v_nr).clone() {
+                                    Type::Reference(td, _) => {
+                                        Type::Reference(td, Deps::frame1(src))
+                                    }
+                                    Type::Vector(it, _) => Type::Vector(it, Deps::frame1(src)),
+                                    Type::Enum(td, su, _) => Type::Enum(td, su, Deps::frame1(src)),
+                                    other => other,
+                                };
+                                self.vars.set_type(v_nr, bound_tp);
+                            }
                             self.is_capture_bindings.push(v_set(v_nr, field_read));
                             let old = self.vars.set_name(&field_name, v_nr);
                             self.is_capture_aliases.push((field_name.clone(), old));

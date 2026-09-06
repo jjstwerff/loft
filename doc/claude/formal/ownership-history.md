@@ -6,7 +6,7 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **1** — D-own-38 OPEN 2026-09-06 (loft#1388 residual: the release of a store a closure record adopted, and of one orphaned beside it, is decided per BINDING where the question is per STORE, below); D-own-37 OPENED AND CLOSED 2026-09-06 (loft#1389: the degenerate self-dep was stripped for one of the two RECORD kinds, so an annotated struct-enum local read as borrowed and never freed what a join displaced, below); D-own-36 OPENED AND CLOSED 2026-09-06 (the `@FR-O-Detach` walk: a collection literal's detach ran before its reads on every destination, and `--native` declined a value-`if`'s displaced free, below); D-own-35 OPENED AND CLOSED 2026-09-05 (loft#1370: the per-path fact had no home for a VECTOR local — every value-branch bind aliased the chosen arm — closed at the parser's selector, below); D-own-34 OPENED AND CLOSED 2026-09-05 (the owner witness did not survive the cache, and a nullable bind from a borrow-returning call aliased); D-own-33 OPENED AND CLOSED 2026-09-05 (the per-path fact was short of four homes, every one a nullable local not treated as the heap local it is: a literal buffer adopted inside a loop, the branch pre-init, the loop hoist, a keyed `match` bind, below; a fifth face is loft#1367, owned by @PLN153); D-own-32 OPENED AND CLOSED 2026-09-05 (the oracle called a minted variable Owned regardless of its other definitions, and its shadow re-derived the base translation, below); D-own-31 OPENED AND CLOSED 2026-09-05 (the never-free contract named one spelling of five and forbade a release the language ships, below); D-own-30 OPENED AND CLOSED 2026-09-05 (a nullable local holding a projection VIEW freed the store it displaced, below), after D-own-29 2026-09-04 (loft#1346, below) and D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
+OPEN: **1** — D-own-39 OPENED AND CLOSED 2026-09-06 (loft#1398: the `is` payload binding recorded no borrow in its TYPE, so the empty-deps proxy read it as OWNED and `--native` copied where the interpreter aliased — #429's cure applied to one of its two sites, below); D-own-38 OPEN 2026-09-06 (loft#1388 residual: the release of a store a closure record adopted, and of one orphaned beside it, is decided per BINDING where the question is per STORE, below); D-own-37 OPENED AND CLOSED 2026-09-06 (loft#1389: the degenerate self-dep was stripped for one of the two RECORD kinds, so an annotated struct-enum local read as borrowed and never freed what a join displaced, below); D-own-36 OPENED AND CLOSED 2026-09-06 (the `@FR-O-Detach` walk: a collection literal's detach ran before its reads on every destination, and `--native` declined a value-`if`'s displaced free, below); D-own-35 OPENED AND CLOSED 2026-09-05 (loft#1370: the per-path fact had no home for a VECTOR local — every value-branch bind aliased the chosen arm — closed at the parser's selector, below); D-own-34 OPENED AND CLOSED 2026-09-05 (the owner witness did not survive the cache, and a nullable bind from a borrow-returning call aliased); D-own-33 OPENED AND CLOSED 2026-09-05 (the per-path fact was short of four homes, every one a nullable local not treated as the heap local it is: a literal buffer adopted inside a loop, the branch pre-init, the loop hoist, a keyed `match` bind, below; a fifth face is loft#1367, owned by @PLN153); D-own-32 OPENED AND CLOSED 2026-09-05 (the oracle called a minted variable Owned regardless of its other definitions, and its shadow re-derived the base translation, below); D-own-31 OPENED AND CLOSED 2026-09-05 (the never-free contract named one spelling of five and forbade a release the language ships, below); D-own-30 OPENED AND CLOSED 2026-09-05 (a nullable local holding a projection VIEW freed the store it displaced, below), after D-own-29 2026-09-04 (loft#1346, below) and D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
 single cell, its Face B CLOSED the same day, that cell's one known SYMPTOM closed 2026-08-26
 with the FACT still wrong, loft#1098, and the fact itself closed by giving every path of a
 value branch its own binding — below).  D-own-26 CLOSED 2026-09-03: its gate existed all
@@ -38,6 +38,44 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-39 — OPENED AND CLOSED (2026-09-06, loft#1398): #429's borrow dep reached the `match` binding and not the `is` one
+
+`(O-Proxy)` reads an empty dep list as OWNED, and that proxy is only ever as good as the deps a
+binding actually carries — which is why #429 gave a HEAP struct-enum payload binding a frame dep
+on its subject, closing an interp-vs-native divergence with it.  It was applied to
+`parse_match_enum_field_bindings` alone.  The `is` spelling is the same bind at the sibling
+site, and carried `set_skip_free` without the dep:
+
+```loft
+w = W{st: Holder{inner: Pay{a: 1}}, t: "w"};
+if w.st is Holder { inner } { w.st = Empty{z: 0}; g = inner.a; }
+// --interpret 0, --native 1 (+ kt=82 Pay×1 not freed)
+```
+
+With no dep the type read OWNED, so `--native` deep-COPIED the payload where the interpreter
+aliased it — and then leaked the copy.  `(O-NoDiverge)` forbids the split either way, and
+`(B-Disturb)` says which number is right: overwriting a place is not disturbing it, so the
+binding still names the slot and 0 is the answer.  The `match` twin gave 0 on both backends
+throughout, which is what located the gap at the SITE rather than at the rule.
+
+**Closed by giving the `is` site the same dep**, under the same shape test #429 states: a
+`Reference` / `Vector` / `Enum` payload takes a frame dep on `match_borrow_source`'s answer, a
+SCALAR takes none (it carries no `DbRef`), and a TEXT payload is untouched — it is an owned copy
+with its own write-back route (`record_text_payload_view`).
+
+The two sites are not folded into one home here, and that is the honest state rather than a
+claim: the `match` path binds through the subject expression and the `is` path through a
+stabilised `_is_subj_N` local, and the surrounding code differs enough that a shared helper
+would be a third thing to keep in step.  What is shared is the PREDICATE — both call
+`Parser::match_borrow_source` and both test the same three type kinds — so the next divergence
+of this class is a grep for that call.
+
+Guard `an-is-payload-binding-borrows-its-subject-like-its-match-twin` (8 cells: the overwrite
+shape, the `match` twin beside it, a plain read, a write THROUGH the binding, and four controls
+— vector and text payloads, a LOCAL subject whose reassignment `(B-View)` materialises, and two
+arms over one subject).  Falsified at cb2dca92: `--native` 1 where `--interpret` reads 0, with
+`kt=82 Pay×1` not freed.
 
 ### D-own-38 — OPEN (2026-09-06, loft#1388): the direct capture's suppression is aimed per STORE now, but two releases beside it are still per binding
 

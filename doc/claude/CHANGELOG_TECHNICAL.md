@@ -49,6 +49,24 @@ Filed: loft#1394 (a payload binding written inside the arm, which needs the walk
 model), loft#1392, loft#1395.  formal: binding-history D-bind-19, IMPLEMENTATIONS.md's
 `@FR-O-Oracle` row.
 
+### An `is` payload binding borrows its subject like its `match` twin (2026-09-06, loft#1398)
+
+`(O-Proxy)` reads an empty dep list as OWNED.  #429 gave a HEAP struct-enum payload binding a
+frame dep on its subject for that reason, closing an interp-vs-native divergence — at
+`parse_match_enum_field_bindings` only.  The `is` spelling is the same bind at the sibling site
+and had `set_skip_free` without the dep, so its type read OWNED and `--native` deep-COPIED the
+payload where the interpreter aliased it, then leaked the copy: `if w.st is Holder { inner } {
+w.st = Empty{z: 0}; g = inner.a; }` answered 1 natively and 0 on the interpreter, `kt=82 Pay×1`
+not freed.  `(O-NoDiverge)` forbids the split; `(B-Disturb)` says 0 is right, and the `match`
+twin has answered 0 on both backends throughout.
+
+Fixed at the `is` site with #429's own shape test — `Reference` / `Vector` / `Enum` take the dep,
+a scalar takes none, and a `text` payload is untouched (an owned copy with its own write-back).
+The two sites stay separate on purpose, because they bind through different subject expressions;
+what they share is `Parser::match_borrow_source`, so the next divergence of this class is a grep
+for that call.  Guard `an-is-payload-binding-borrows-its-subject-like-its-match-twin` (8 cells),
+falsified at cb2dca92.  formal: ownership-history.md D-own-39.
+
 ### A payload binding warns when its subject's place is given another variant (2026-09-06, loft#1397)
 
 `(B-Disturb)` is explicit that overwriting a place is NOT disturbing it, so a `match` / `is`
