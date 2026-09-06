@@ -11351,22 +11351,31 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                         cache_dir.display()
                     );
                 } else {
-                    // Remove stale cached binaries for THIS source file only.
-                    let prefix = format!("{source_stem}-");
-                    if let Ok(entries) = std::fs::read_dir(&cache_dir) {
-                        for entry in entries.flatten() {
-                            if entry.file_name().to_string_lossy().starts_with(&prefix) {
-                                let _ = std::fs::remove_file(entry.path());
-                            }
-                        }
-                    }
-                    if std::fs::copy(&binary, &cached_binary).is_ok() {
-                        // P254 — tighten the freshly written binary
-                        // to 0700.  std::fs::copy preserves source
-                        // mode, which for `/tmp/loft_native_bin_<pid>`
-                        // is typically 0644 — wider than we want.
-                        native_utils::tighten_cache_binary(&cached_binary);
-                    }
+                    // Publish ATOMICALLY.  A plain `fs::copy` onto `cached_binary`
+                    // truncates it in place and then streams ~11 MB, and for that
+                    // whole window another process testing the cache sees a file
+                    // that EXISTS and passes `cache_safe_to_execute` — which reads
+                    // symlink, owner and mode but never SIZE.  So a concurrent run
+                    // execs a 0-byte-and-growing ELF and dies with no stdout and no
+                    // stderr at all.  The mode check does not save it: once the
+                    // entry exists at 0700, a later copy truncates it while the
+                    // mode stays 0700.  Measured as a red `make ci` in two runs of
+                    // three, on `alias_link_baseline::baseline_leak_clean_native` —
+                    // whose two native cells compile the same source concurrently,
+                    // so they race exactly when the entry is cold.
+                    //
+                    // Stage under a private per-process name in the SAME directory
+                    // (so the rename cannot cross a filesystem), tighten it while it
+                    // is still invisible under its final name, then rename.  POSIX
+                    // rename is atomic and a process already exec'ing the old inode
+                    // keeps it, so every reader sees one COMPLETE binary.  The
+                    // leading `.` keeps a staged file out of the sweep's prefix.
+                    native_utils::publish_cached_binary(
+                        &binary,
+                        &cached_binary,
+                        &cache_dir,
+                        &source_stem,
+                    );
                 }
             }
             binary

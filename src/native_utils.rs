@@ -1556,6 +1556,61 @@ pub(crate) fn tighten_cache_binary(path: &std::path::Path) {
     let _ = path;
 }
 
+/// Publish a freshly built native binary to its shared, content-keyed cache path.
+///
+/// The publish is the one step that several concurrent runs of the SAME source contend
+/// on, and it must be ATOMIC.  A plain `fs::copy` onto the destination truncates it in
+/// place and then streams the whole binary, and for that entire window a concurrent
+/// reader sees a path that EXISTS and passes [`cache_safe_to_execute`] — which checks
+/// symlink, owner and mode but never SIZE.  The loser exec'd a 0-byte-and-growing ELF
+/// and died with no stdout and no stderr, which is a red gate whose only evidence is an
+/// empty output block.  Nor does the mode check save it: once the entry exists at 0700,
+/// a later copy truncates it while the mode stays 0700.
+///
+/// So stage under a private per-process name in the SAME directory (a rename cannot
+/// cross a filesystem), tighten the mode while the file is still invisible under its
+/// final name, then rename.  POSIX rename is atomic, and a process already exec'ing the
+/// previous inode keeps it — which is why the test for this is that the destination's
+/// INODE changes: publishing in place is precisely the shape that can be truncated
+/// under a reader.
+pub(crate) fn publish_cached_binary(
+    built: &std::path::Path,
+    cached_binary: &std::path::Path,
+    cache_dir: &std::path::Path,
+    source_stem: &str,
+) {
+    let leaf = cached_binary
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    // The leading `.` keeps a staged file out of the sweep's `<stem>-` prefix.
+    let staged = cache_dir.join(format!(".{leaf}.{}.tmp", std::process::id()));
+    if std::fs::copy(built, &staged).is_ok() {
+        // P254 — tighten BEFORE the rename, so the binary is never reachable
+        // under its final name with a wider mode.
+        tighten_cache_binary(&staged);
+        if std::fs::rename(&staged, cached_binary).is_err() {
+            let _ = std::fs::remove_file(&staged);
+        }
+    } else {
+        let _ = std::fs::remove_file(&staged);
+    }
+    // Remove stale cached binaries for THIS source file only, AFTER the publish and
+    // never the entry just written.  Sweeping first deleted the very binary a
+    // concurrent run had already accepted as usable, leaving it to exec a path that
+    // no longer existed.
+    let prefix = format!("{source_stem}-");
+    if let Ok(entries) = std::fs::read_dir(cache_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path != cached_binary && entry.file_name().to_string_lossy().starts_with(&prefix) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+}
+
 /// Collect crate names → rlib paths from a deps directory
 /// (e.g. `libfoo-<hash>.rlib` → `("foo", "/path/to/libfoo-<hash>.rlib")`).
 pub(crate) fn rlibs_in_dir(
@@ -2757,5 +2812,106 @@ mod dep_search_dirs_tests {
     fn an_empty_tree_still_names_the_expected_place() {
         let root = scratch("empty");
         assert_eq!(dep_search_dirs(&root), vec![root.join("deps")]);
+    }
+}
+
+#[cfg(test)]
+mod publish_cached_binary_tests {
+    use super::publish_cached_binary;
+    use std::os::unix::fs::MetadataExt;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join("loft-publish-cache").join(name);
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// The pre-fix publish, kept as the POSITIVE CONTROL.  Without it the test below
+    /// asserts a property nothing was ever measured to violate, and a guard that cannot
+    /// fail is not a guard.
+    fn publish_by_copy(built: &std::path::Path, cached: &std::path::Path) {
+        let _ = std::fs::copy(built, cached);
+    }
+
+    /// A publish REPLACES the destination rather than rewriting it in place.
+    ///
+    /// The inode is the deterministic reading of that: `fs::copy` opens the destination
+    /// with truncate and streams into the SAME inode, so a concurrent reader that has
+    /// already accepted the path watches its bytes vanish and then regrow.  A rename
+    /// swaps in a different inode, and a process still exec'ing the old one keeps a
+    /// complete file.  This is the property; the timing window is only its symptom.
+    #[test]
+    fn a_publish_swaps_the_inode_instead_of_truncating_in_place() {
+        let dir = scratch("inode");
+        let a = dir.join("built-a");
+        let b = dir.join("built-b");
+        std::fs::write(&a, vec![0xAAu8; 4096]).unwrap();
+        std::fs::write(&b, vec![0xBBu8; 8192]).unwrap();
+        let dest = dir.join("prog-deadbeef");
+
+        publish_cached_binary(&a, &dest, &dir, "prog");
+        let first = std::fs::metadata(&dest).unwrap().ino();
+        publish_cached_binary(&b, &dest, &dir, "prog");
+        let second = std::fs::metadata(&dest).unwrap().ino();
+
+        assert_ne!(
+            first, second,
+            "a publish must swap a new inode in, never rewrite the live one"
+        );
+        assert_eq!(std::fs::read(&dest).unwrap(), vec![0xBBu8; 8192]);
+
+        // The control: the copy this replaced keeps the inode, so the same assertion
+        // fails on it — the probe discriminates.
+        let dest2 = dir.join("ctl-deadbeef");
+        publish_by_copy(&a, &dest2);
+        let c1 = std::fs::metadata(&dest2).unwrap().ino();
+        publish_by_copy(&b, &dest2);
+        let c2 = std::fs::metadata(&dest2).unwrap().ino();
+        assert_eq!(
+            c1, c2,
+            "control: a plain copy rewrites the live inode in place"
+        );
+    }
+
+    /// The publish leaves no staging file behind, and the sweep spares the entry it
+    /// just wrote — sweeping first deleted the binary a concurrent run had accepted.
+    #[test]
+    fn the_sweep_takes_other_hashes_and_spares_the_published_entry() {
+        let dir = scratch("sweep");
+        let built = dir.join("built");
+        std::fs::write(&built, vec![0xCCu8; 2048]).unwrap();
+        let stale = dir.join("prog-0000000000000000");
+        std::fs::write(&stale, b"stale").unwrap();
+        let other = dir.join("elsewhere-1111111111111111");
+        std::fs::write(&other, b"other source").unwrap();
+        let dest = dir.join("prog-ffffffffffffffff");
+
+        publish_cached_binary(&built, &dest, &dir, "prog");
+
+        assert!(
+            dest.exists(),
+            "the entry just published must survive its own sweep"
+        );
+        assert_eq!(std::fs::read(&dest).unwrap(), vec![0xCCu8; 2048]);
+        assert!(!stale.exists(), "a stale hash for this source is swept");
+        assert!(
+            other.exists(),
+            "another source's entry is not this sweep's business"
+        );
+        let staging: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| {
+                std::path::Path::new(n)
+                    .extension()
+                    .is_some_and(|e| e == "tmp")
+            })
+            .collect();
+        assert!(
+            staging.is_empty(),
+            "no staging file may be left behind: {staging:?}"
+        );
     }
 }
