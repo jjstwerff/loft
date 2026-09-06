@@ -188,8 +188,9 @@ and so did the inline form `s = build(|i| { s.a + i })` and the same shapes over
 one per reassignment, on both backends, with the right answer printed and only the exit
 warning to say so.  The closure record owns the value it captured; the frame owns whatever the
 local is given afterwards, and now frees it.  A capture that is never reassigned is unchanged:
-that value still belongs to the closure.  Two shapes still keep a value: a stored closure
-called twice, and a closure built inside a loop.  (loft#1388)
+that value still belongs to the closure.  A stored closure called twice, and either spelling
+inside a loop, are clean too.  One shape still keeps a value — a closure capturing a LIST
+inside a loop — and its answers are right on both backends.  (loft#1388)
 
 **A `match` or `if` arm may hand back the enum it is choosing over.**  `e = match e {
 Circle{r} => Circle{r: r + 1}, _ => e }` — replace one variant, keep everything else — was

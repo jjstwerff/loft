@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# formal/ownership.md — the `deps` ownership / borrow system (strict; register at `OPEN: 1`)
+# formal/ownership.md — the `deps` ownership / borrow system (strict; register at `OPEN: 0`)
 
 **Catalogue:** @F21 (references `&T`), @I60 (deps / lifetime tracker) — Goal E. Roadmap: @PLN85, @PLN87.
 
@@ -336,12 +336,12 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-**OPEN: 1.**  `D-own-38` (loft#1388) — the release of a store a closure record adopted, and of
-one orphaned beside it, is decided per BINDING where the question is per STORE.  The direct
-capture's SUPPRESSION is aimed per store now; two releases beside it are not, and the obvious
-cure for one of them was built and measured wrong (it trades a leak for a backend split).
-Every other deviation this doc has carried is closed; the record is in
-[ownership-history.md](ownership-history.md).
+**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
+[ownership-history.md](ownership-history.md).  The most recent, `D-own-38` (loft#1388), was
+closed by `(O-Witness)`: every release a captured local owes is now by STORE IDENTITY, with the
+hand-off at the closure build placed ahead of it for `(O-Detach)`'s ordering.  One shape keeps
+a store — a closure capturing a VECTOR inside a loop, because the witness is record-typed — and
+the entry records why the obvious widening is not taken: it answers wrong on `--native`.
 
 > **A zero here is a claim to re-measure, and this is what its oracle covers.**  The join
 > family is pinned by three files: `1323-every-arm-of-a-value-branch-has-its-own-binding`

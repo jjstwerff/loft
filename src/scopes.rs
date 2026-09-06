@@ -11696,6 +11696,13 @@ fn owner_witness_locals(
             && !function.is_argument(v)
             && !function.name(v).starts_with("__")
             && !function.was_loop_var(v)
+            // RECORD kinds only, and that boundary is measured rather than assumed.  A vector
+            // witness was built — a `Vector`-typed `__own_` handle, admitted here and released
+            // by the same identity guard — and it answers WRONG: the vector-capture loop read
+            // `1,2` where `4,5` is right, on `--native`, because the witness releases a store
+            // the record still holds.  A leak is the better trade, so the vector-capture loop
+            // keeps one store (values right on both backends) until the release the record
+            // owes is decided per SLOT rather than per local.
             && function.tp(v).base().heap_def_nr().is_some()
             && !materialised_views.contains_key(&v)
         {

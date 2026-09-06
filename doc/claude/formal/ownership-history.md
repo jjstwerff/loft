@@ -6,7 +6,7 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **1** — D-own-39 OPENED AND CLOSED 2026-09-06 (loft#1398: the `is` payload binding recorded no borrow in its TYPE, so the empty-deps proxy read it as OWNED and `--native` copied where the interpreter aliased — #429's cure applied to one of its two sites, below); D-own-38 OPEN 2026-09-06 (loft#1388 residual: the release of a store a closure record adopted, and of one orphaned beside it, is decided per BINDING where the question is per STORE, below); D-own-37 OPENED AND CLOSED 2026-09-06 (loft#1389: the degenerate self-dep was stripped for one of the two RECORD kinds, so an annotated struct-enum local read as borrowed and never freed what a join displaced, below); D-own-36 OPENED AND CLOSED 2026-09-06 (the `@FR-O-Detach` walk: a collection literal's detach ran before its reads on every destination, and `--native` declined a value-`if`'s displaced free, below); D-own-35 OPENED AND CLOSED 2026-09-05 (loft#1370: the per-path fact had no home for a VECTOR local — every value-branch bind aliased the chosen arm — closed at the parser's selector, below); D-own-34 OPENED AND CLOSED 2026-09-05 (the owner witness did not survive the cache, and a nullable bind from a borrow-returning call aliased); D-own-33 OPENED AND CLOSED 2026-09-05 (the per-path fact was short of four homes, every one a nullable local not treated as the heap local it is: a literal buffer adopted inside a loop, the branch pre-init, the loop hoist, a keyed `match` bind, below; a fifth face is loft#1367, owned by @PLN153); D-own-32 OPENED AND CLOSED 2026-09-05 (the oracle called a minted variable Owned regardless of its other definitions, and its shadow re-derived the base translation, below); D-own-31 OPENED AND CLOSED 2026-09-05 (the never-free contract named one spelling of five and forbade a release the language ships, below); D-own-30 OPENED AND CLOSED 2026-09-05 (a nullable local holding a projection VIEW freed the store it displaced, below), after D-own-29 2026-09-04 (loft#1346, below) and D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
+OPEN: **0** — D-own-38 CLOSED 2026-09-06 (loft#1388: the release is by STORE IDENTITY now, `@FR-O-Witness`, with the hand-off at the closure build; below); D-own-39 OPENED AND CLOSED 2026-09-06 (loft#1398: the `is` payload binding recorded no borrow in its TYPE, so the empty-deps proxy read it as OWNED and `--native` copied where the interpreter aliased — #429's cure applied to one of its two sites, below); D-own-38 OPEN 2026-09-06 (loft#1388 residual: the release of a store a closure record adopted, and of one orphaned beside it, is decided per BINDING where the question is per STORE, below); D-own-37 OPENED AND CLOSED 2026-09-06 (loft#1389: the degenerate self-dep was stripped for one of the two RECORD kinds, so an annotated struct-enum local read as borrowed and never freed what a join displaced, below); D-own-36 OPENED AND CLOSED 2026-09-06 (the `@FR-O-Detach` walk: a collection literal's detach ran before its reads on every destination, and `--native` declined a value-`if`'s displaced free, below); D-own-35 OPENED AND CLOSED 2026-09-05 (loft#1370: the per-path fact had no home for a VECTOR local — every value-branch bind aliased the chosen arm — closed at the parser's selector, below); D-own-34 OPENED AND CLOSED 2026-09-05 (the owner witness did not survive the cache, and a nullable bind from a borrow-returning call aliased); D-own-33 OPENED AND CLOSED 2026-09-05 (the per-path fact was short of four homes, every one a nullable local not treated as the heap local it is: a literal buffer adopted inside a loop, the branch pre-init, the loop hoist, a keyed `match` bind, below; a fifth face is loft#1367, owned by @PLN153); D-own-32 OPENED AND CLOSED 2026-09-05 (the oracle called a minted variable Owned regardless of its other definitions, and its shadow re-derived the base translation, below); D-own-31 OPENED AND CLOSED 2026-09-05 (the never-free contract named one spelling of five and forbade a release the language ships, below); D-own-30 OPENED AND CLOSED 2026-09-05 (a nullable local holding a projection VIEW freed the store it displaced, below), after D-own-29 2026-09-04 (loft#1346, below) and D-own-28 the same day (loft#1335).  D-own-8 CLOSED 2026-09-03 (opened 2026-08-24, NARROWED 2026-08-25 to a
 single cell, its Face B CLOSED the same day, that cell's one known SYMPTOM closed 2026-08-26
 with the FACT still wrong, loft#1098, and the fact itself closed by giving every path of a
 value branch its own binding — below).  D-own-26 CLOSED 2026-09-03: its gate existed all
@@ -77,7 +77,7 @@ shape, the `match` twin beside it, a plain read, a write THROUGH the binding, an
 arms over one subject).  Falsified at cb2dca92: `--native` 1 where `--interpret` reads 0, with
 `kt=82 Pay×1` not freed.
 
-### D-own-38 — OPEN (2026-09-06, loft#1388): the direct capture's suppression is aimed per STORE now, but two releases beside it are still per binding
+### D-own-38 — OPENED AND CLOSED (2026-09-06, loft#1388): every release a captured local owes is by STORE IDENTITY
 
 `(O-Latest)` says ownership belongs to the LATEST assignment *at that point*.  A closure record
 adopts the store its capture named AT THE BUILD, and the frame's scope-exit free is suppressed
@@ -143,8 +143,43 @@ and both are answered today by a static fact about the BINDING:
   reading the same verdict `capture_adoption_owns_free` now reads — one decision, as that note
   requires.
 
-Neither is reachable from a per-binding fact, which is why they are recorded rather than
-patched: a static answer that is right at one of the two sites is wrong at the other.
+Neither is reachable from a per-binding fact, and that is `(O-Latest)` saying so rather than an
+observation about this code: the fact belongs to the LATEST assignment at that point, and a
+type-level `deps` list can express neither which assignment nor the loop depth.  So the veto is
+wrong in KIND, not merely imprecise, and its two sites are statically indistinguishable by
+construction.
+
+**CLOSED the same day, by the mechanism the rules already licensed.**  `(O-Witness)` is release
+by STORE IDENTITY, and a captured local reassigned after its build has exactly the mixed
+ownership it models — the record owns the store the capture named AT THE BUILD, the frame owns
+every store after it.  Three parts, and each answers one of the failures above:
+
+* **The witness**, extended to such a local.  `owner_witness_locals` admits it off
+  `CaptureBuilds::reassigned_after_build`, in both spellings of "the record took this local's
+  store": a struct capture names the local outright, a collection capture names a view whose
+  backing local is this one.
+* **The HAND-OFF at the closure build, emitted FIRST.**  The record becomes the owner there, so
+  the witness gives that store up — a clear, never a free.  Ahead of the guarded release,
+  because for an INLINE closure argument the capture and the target are the same local: the
+  record adopts the old store and the local moves on in one statement, so a release asked first
+  frees what the record has just taken.  That is `(O-Detach)` in ownership clothing, and it is
+  exactly what made dropping the veto answer `a=1` where `a=2` is right.
+* **The record's own release**, beside it and GATED on every capture in the build having a
+  witness.  The gate is the soundness argument: a capture without one is still owned by the
+  frame, so the cascade and the frame would free one store between them.  `(O-Derived)` — one
+  decision, one home.
+
+Every row of the issue's matrix is clean on both backends with its value unchanged, including
+the two that stayed open at 3360fb93 (a stored closure called twice, and either spelling in a
+loop), plus a three-call and a three-step cell it did not carry.
+
+**Residual, and it is a mechanism limit with a measured boundary.**  A closure capturing a
+VECTOR inside a loop keeps one store.  The witness is record-typed — `heap_def_nr` is `None`
+for a vector — so such a local cannot hold one, and the record's release is therefore gated off
+for it.  A vector-typed witness was BUILT and measured WRONG: the leak goes, and `--native`
+answers `1,2` where `4,5` is right, because the witness then releases a store the record still
+holds.  A leak is the better trade, so it stays until the release the record owes is decided
+per SLOT rather than per local.  Values are right on both backends throughout.
 
 Guard `a-captured-local-reassigned-after-the-build-frees-its-own-store` (7 cells: both build
 spellings, the struct and vector captures, and the two controls that must NOT move — a capture

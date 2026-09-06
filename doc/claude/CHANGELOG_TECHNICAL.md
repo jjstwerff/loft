@@ -177,11 +177,10 @@ whose root is the local, minted inside that same right-hand side).
 
 Measured over 9 cells on both backends: 7 clean where 6 leaked, values unchanged.  Guard
 `a-captured-local-reassigned-after-the-build-frees-its-own-store`, falsified at ac412a96.
-Two residual cells stay open as `formal/ownership-history.md` D-own-38 — a stored closure with
-TWO reassignments (the intermediate store, which needs the displacement free asked per STORE
-rather than per binding) and a closure record REUSED across loop passes (which orphans each
-previous adoption when the capture slot is overwritten).  Both are the same question at a
-different moment, and neither is reachable from a static per-binding fact.
+Both residual cells were CLOSED the same day by `(O-Witness)` — release by store identity, with
+the hand-off at the closure build ahead of it and the record's own release gated on every
+capture in the build having a witness.  See the entry below and `formal/ownership-history.md`
+D-own-38 for what the gate is protecting against and for the one shape that keeps a store.
 
 ### A variant arm and an enum arm join, and the `match` join widens like the `if` join (2026-09-06, loft#1390 + loft#1389)
 
