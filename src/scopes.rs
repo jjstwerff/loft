@@ -269,6 +269,51 @@ fn same_place(view: (u16, u32), disturbed: (u16, u32)) -> bool {
         && (view.1 == disturbed.1 || view.1 == ANY_FIELD || disturbed.1 == ANY_FIELD)
 }
 
+/// The container the value of a `Set` VIEWS — [`base_container_var`] for a plain projection,
+/// and through a BRANCH to the container its arms project from.
+///
+/// `x = if k > 0 { h.inner } else { mk(0) }` is a view of `h` on the arm that projects and a
+/// fresh value on the other, and asked only of the whole `If` it named no container at all — so
+/// a later `h = …` disturbed nothing, and the binding kept reading the container it no longer
+/// belongs to (measured on both backends, on a struct tail and a collection one).
+///
+/// Arms that MINT are ignored rather than disqualifying: one arm viewing is enough for the
+/// binding to be a view on some run, and this is a per-binding fact.  Two arms viewing
+/// DIFFERENT containers name none — there is no single place to be disturbed.
+///
+/// ⚠ Read ONLY by the walk that NAMES the views to materialise, never by the deps strip.  The
+/// strip makes a binding an owner, and for a branch-valued right-hand side the emitters have no
+/// copy to pair with that — `container_element_base` answers `None` for an `If` — so a binding
+/// stripped here would own a store it only views and free the CONTAINER's at scope exit
+/// (loft#778's class, measured).  What supplies the copy instead is per ARM:
+/// [`Scopes::arm_bind`] gives a projection arm its own temp once this has named the binding,
+/// which is `(O-Complete)`'s per-path fact rather than one verdict for the whole `Set`.
+///
+/// Deliberately NOT folded into [`crate::use_analysis::projection_container_var`], which the
+/// ownership oracle and both emitters read: peeling an arbitrary `if` there would claim `a?` on
+/// a nullable parameter, whose lowering is an `if` with a `Var` arm, and answer `Borrowed` for
+/// a value the callee minted.
+fn value_view_container(value: &Value, data: &Data) -> Option<u16> {
+    let tail = |ops: &[Value]| -> Option<u16> {
+        ops.iter()
+            .rev()
+            .find(|o| !matches!(o.unspan(), Value::Line(_)))
+            .and_then(|t| value_view_container(t, data))
+    };
+    match value.unspan() {
+        Value::If(_, t, e) => {
+            match (value_view_container(t, data), value_view_container(e, data)) {
+                (Some(a), Some(b)) if a == b => Some(a),
+                (Some(a), None) | (None, Some(a)) => Some(a),
+                _ => None,
+            }
+        }
+        Value::Block(b) => tail(&b.operators),
+        Value::Insert(ops) => tail(ops),
+        other => base_container_var(other, data),
+    }
+}
+
 /// What an argument LIFTED into a `__lift_N` temp borrows — the deps its type must carry.
 ///
 /// A lift temp holds a value the caller reads out of something it does not own: an element
@@ -1033,7 +1078,7 @@ impl ViewWalk<'_> {
             if matches!(
                 self.function.tp(*v).base(),
                 Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
-            ) && let Some(container) = base_container_var(rhs.unspan(), self.data)
+            ) && let Some(container) = value_view_container(rhs, self.data)
             {
                 // The view belongs to the frame that owns its VARIABLE. Re-binding an outer
                 // local inside a nested block gives a view that outlives the block, and
@@ -10159,6 +10204,35 @@ impl Scopes<'_> {
             Value::CallRef(_, _) => self
                 .arm_callref_lift_type(tail, data, function)
                 .map(ArmBind::Bind),
+            // A PROJECTION tail, when the joined binding is one `(B-View)`'s materialise clause
+            // names: this arm VIEWS a container that is disturbed while the binding is live, so
+            // this path needs a store of its own — `(O-Complete)`, per binding and per PATH.
+            // An owned temp is how it gets one: `__lift_N = h.inner` carrying no deps is the
+            // plain projection bind the F1 materialise already copies on both backends, so
+            // nothing here re-derives a copy, which is this function's whole contract.
+            //
+            // Gated on the walk's answer and not on the shape, because a projection arm whose
+            // container is NEVER disturbed must keep aliasing — that is what `(B-View)` is for,
+            // and copying it would lose a write that lands today.  Only the ARM is rewritten;
+            // an arm that mints keeps its own store and the join reconciles them as before.
+            Value::Call(d, _)
+                if crate::use_analysis::is_projection_op(data, *d)
+                    && bound != u16::MAX
+                    && self.views_to_materialise.contains_key(&bound) =>
+            {
+                let (base, opt) = function.tp(bound).peel_optional();
+                match base {
+                    Type::Reference(r, _) => Some(ArmBind::Bind(Self::reopt(
+                        opt,
+                        Type::Reference(*r, Deps::none()),
+                    ))),
+                    Type::Enum(r, true, _) => Some(ArmBind::Bind(Self::reopt(
+                        opt,
+                        Type::Enum(*r, true, Deps::none()),
+                    ))),
+                    _ => None,
+                }
+            }
             Value::Call(d, _) => {
                 let def = data.def(*d);
                 if !def.is_loft_defined() {

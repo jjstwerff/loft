@@ -95,6 +95,11 @@ The **say-what-you-do** release. Two threads, and they turned out to be one: eve
 the language reference was read against the compiler that ships, and most of what came back
 was not a wrong sentence but a promise nothing was keeping.
 
+**A value chosen by an `if` keeps what it was given.**  `x = if k > 0 { h.inner } else
+{ mk(0) }` used to start reading the NEW `h` as soon as `h` was replaced — on both backends
+when `x` was fresh, and on the compiled one even when it was not.  It now keeps the value it
+was handed, like every other binding.
+
 **A view taken inside an `if` or `match` arm is copied when its container is replaced in the
 same arm.**  `got = match sh { Holder{inner} => { sh = Empty{…}; inner.a }, … }` read the new
 subject's bytes; the same two lines written outside a branch have been copied and reported for

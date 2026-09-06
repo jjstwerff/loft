@@ -9,6 +9,22 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A branch's projecting arm gets its own temp, so a binding chosen by an `if` materialises (2026-09-06, loft#1396)
+
+`scopes::value_view_container` names the container a `Set`'s value views THROUGH a branch — any
+arm's, none where two arms name different ones — and is read only by the walk that names views
+to materialise, never by the deps strip.  The copy is supplied per ARM instead: `Scopes::arm_bind`
+gains a projection case, gated on that naming, so the arm-lift machinery binds `h.inner` into an
+owned `__lift_N` whose plain projection bind the F1 materialise already copies on both backends,
+while a minting arm keeps its own store.  `x = if k > 0 { h.inner } else { mk(0) }` then survives
+a later `h = …` as a first bind and as a reassignment, where before it read the new container on
+both backends and on `--native` respectively.  The whole-statement alternative (strip the
+binding's deps) was built and measured wrong — no emitter has a copy for a branch-valued
+right-hand side, so the binding owned a store it only viewed — and the helper's doc carries that.
+Guard `a-projection-arm-of-a-branch-materialises-when-its-container-is-reassigned` (6 cells, two
+controls), falsified at bd629983.  formal: binding-history D-bind-19.  The chained spelling stays
+open as loft#1393's view-of-a-view, which is wrong without a branch too.
+
 ### A `Set` whose value is a branch is walked in the order it runs, so a view bound in an arm sees its container's reassignment (2026-09-06, loft#1394)
 
 `ViewWalk::walk_stmt` gains an arm for a `Set` whose right-hand side is an `If`, `Block` or

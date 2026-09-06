@@ -6,10 +6,11 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — D-bind-21 OPENED AND CLOSED 2026-09-06 (loft#1394: a view BOUND INSIDE a
+OPEN: **0** — D-bind-22 OPENED AND CLOSED 2026-09-06 (loft#1396: a binding whose value is a
+BRANCH with a projecting arm was named by nothing, so it never materialised — closed by naming
+it through the branch and giving the projecting ARM its own temp, below); D-bind-21 OPENED AND CLOSED 2026-09-06 (loft#1394: a view BOUND INSIDE a
 branch arm whose container is reassigned in the SAME arm was never materialised, because
-the walk read a `Set` with a value-branch right-hand side whole — below); D-bind-20 OPENED AND CLOSED 2026-09-06 (loft#1393: a view OF A VIEW was not shaken when the outer container was disturbed, below); D-bind-19 OPENED AND CLOSED 2026-09-06 (the `@FR-O-Owner` walk: a struct-ENUMPAYLOAD view was invisible to `(B-View)`'s materialise clause, because the chain that names a
-projection's container could not see through the variant check the lowering wraps its subject
+the walk read a `Set` with a value-branch right-hand side whole — below); D-bind-20 OPENED AND CLOSED 2026-09-06 (loft#1393: a view OF A VIEW was not shaken when the outer container was disturbed, below); D-bind-19 OPENED AND CLOSED 2026-09-06 (the `@FR-O-Owner` walk: a struct-ENUM PAYLOAD view was invisible to `(B-View)`'s materialise clause, because the chain that names aprojection's container could not see through the variant check the lowering wraps its subject
 in — below); D-bind-18 OPENED AND CLOSED 2026-09-06 (loft#1392: a vector link did not follow a
 rebind of its SOURCE, below); D-bind-11 and D-bind-16 CLOSED 2026-09-03 (below); D-bind-12, D-bind-13,
 D-bind-14 and D-bind-15 each opened and CLOSED the same day.
@@ -18,6 +19,36 @@ reference review.
 B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
 opened and closed 2026-08-05); B-Ref-AnnotationOnly is enforced in every position, not
 only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
+
+> **D-bind-22 — OPENED AND CLOSED (2026-09-06, loft#1396) — a binding whose value is a BRANCH
+> with a projecting arm was outside the materialise clause.**  `x = if k > 0 { h.inner } else
+> { mk(0) }` followed by `h = Hold{…}` read the NEW container on both backends as a first bind,
+> and on `--native` alone as a reassignment — the wrong answer with an `(O-NoDiverge)` split on
+> top of it.  The walk that NAMES views asked which container the value projects from, and asked
+> it of the whole `if`, which projects from nothing; the binding was therefore never named, and
+> the machinery downstream had nothing to act on.
+>
+> The naming now looks THROUGH a branch (`scopes::value_view_container`): a container named by
+> any arm, none where two arms name different ones.  **The copy is per ARM, not per statement**,
+> and that split is the entry's substance.  `(O-Complete)` asks for the fact per binding and per
+> PATH; only the projecting arm needs a store of its own, so `Scopes::arm_bind` — the arm-lift
+> machinery that already binds a call or a variable tail into a `__lift_N` temp — gains the
+> projection case, gated on the walk having named the binding.  An arm whose container is never
+> disturbed keeps aliasing, which is what `(B-View)` is for.
+>
+> ⚠ **The whole-statement cure was built first and is measured WRONG.**  Stripping a
+> branch-valued binding's deps makes it the OWNER of a store it only views, and the emitters
+> have no whole-statement copy to pair with that — `container_element_base` answers `None` for
+> an `If` — so its scope-exit free names the CONTAINER's store, which is loft#778's class.  It
+> was backed out whole before the per-arm form replaced it, and the naming helper carries that
+> in its own doc so the next reader does not re-derive it.
+>
+> Guard `tests/scripts/a-projection-arm-of-a-branch-materialises-when-its-container-is-reassigned.loft`
+> (6 cells: the first bind, the reassignment, the minting arm, the unbranched control, an
+> UNDISTURBED arm that must still alias, and a loop whose every pass reads the container as it
+> then stands).  The chained spelling — `t = dv.tiles; prev = if … { t.proto } … ; dv = …` — is
+> NOT closed here and is not this deviation: the same chain without a branch is equally wrong,
+> which is loft#1393's view-of-a-view.
 
 > **D-bind-21 — OPENED AND CLOSED (2026-09-06, loft#1394) — a view bound INSIDE a branch arm
 > did not see its container's reassignment in the same arm.**  `(B-Disturb)` × `(B-View)` are

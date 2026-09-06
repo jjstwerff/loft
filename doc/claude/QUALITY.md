@@ -481,12 +481,13 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 411 | 387 | **24** |
+| 412 | 388 | **24** |
 
 Joining the `@FR-O-Owner` walk onto the loft#1389/#1390/#1392 tree re-measures it once more:
 **408 · 384 · 24** — neither side's number, as every join so far.  Joining @PLN154 (the stack
 shadow) and loft#1397's lint on top: **410 · 386 · 24**, both additions on the peeling side;
-loft#1388's capture handover adds one more of the same kind — **411 · 387 · 24**.  The `@FR-O-Complete` walk (B7u) added one peeling site — `scopes::adopted_work_refs` reads a
+loft#1388's capture handover adds one more of the same kind — **411 · 387 · 24** — and
+loft#1396's `value_view_container` one more again: **412 · 388 · 24**.  The `@FR-O-Complete` walk (B7u) added one peeling site — `scopes::adopted_work_refs` reads a
 right-hand side's `If` arms, `Block` and `Insert` tails through their `Span` to find the
 construction work-refs a binding adopts.  loft#1356 added two peeling sites (the eager factory's tail scan reads a `Return` and a `Set` through their `Span`), loft#1362 two (`scopes::in_place_rebuild` reads the statement-level `OpDatabase` through its `Span`, and `copy_hands_off` walks a nested destination place through each level's), loft#1357 one, and the projection-view marking one (`scopes::nullable_view_locals` reads each `Set`'s source through its `Span` to match a `Value::TupleGet` or a projection `Value::Call`) — the statement scan in `scopes::convert` takes a `Span` off an `if` whose condition consumes a `??` temp, so it can put the evaluated condition back under the same position.  The `@FR-O-Witness` walk (B7v) added two peeling sites — `scopes::sink_set_into_arms` reads an `if`/`match`'s arms, `Block` and `Insert` tails through their `Span` to lower a value-branch reassignment to the statement form.  `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -1499,9 +1500,12 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 45 | **12** | 33 |
+| 46 | **12** | 34 |
 
-Re-measured on the tree that holds both streams: **45 · 12 · 33**.  The `@FR-O-Owner` walk
+Re-measured on the tree that holds both streams: **45 · 12 · 33**, and **46 · 12 · 34** once
+loft#1396's `value_view_container` joins it — another function resolving a projection by op
+name.  Neither side predicted the joined number and neither tried to: a row can only be true on
+the tree it is measured on.  The `@FR-O-Owner` walk
 folded two byte-identical container-namer loops into one home and the loft#1384 place walk
 joined it there, so neither branch's row survives the join — the audit classifies FUNCTIONS,
 and a merged body is one function however many branches touched it.
@@ -6076,6 +6080,44 @@ classifier, and this one is now measured in both directions on the form it just 
 `src/`.  The one `heap_dep().is_none()` read (`protectable_ref_args`) is a different question —
 *does this TYPE carry a store* — and is not an ownership proxy at all.  The four-way split
 holds: 28 positive sites, 9 reaching a free, every one of those consulting the override.
+
+#### B8e — loft#1396 closed: the naming through a branch, and the copy per ARM (2026-09-06)
+
+The shape B8c backed out, taken up rather than handed over because the measurement and the
+formal reading were already here.  Two gaps, and the second is why the first could not be
+closed on its own.
+
+**Naming.**  The walk that names views to materialise asked which container a `Set`'s value
+projects from, and asked it of the whole `if` — which projects from nothing.  So
+`x = if k > 0 { h.inner } else { mk(0) }` was never named, and nothing downstream had anything
+to act on.  `scopes::value_view_container` now looks through a branch: any arm's container,
+none where two arms name different ones, arms that mint ignored rather than disqualifying.
+
+**Copy.**  B8c's widening stripped the named binding's deps — and that is measured WRONG,
+which is the entry's substance: no emitter has a whole-statement copy for a branch-valued
+right-hand side (`container_element_base` answers `None` for an `If`), so the binding became
+the owner of a store it only views and its scope-exit free named the CONTAINER's store.
+`(O-Complete)` says the fact is per binding and per PATH, and that is the form that works:
+only the PROJECTING arm needs a store of its own, so `Scopes::arm_bind` — the arm-lift
+machinery that already binds a call or a variable tail into a `__lift_N` — gains the
+projection case, gated on the walk having named the binding.  The minting arm keeps its own
+store, an undisturbed arm keeps aliasing, and nothing re-derives a copy: the temp is bound by
+the single-bind lowering, which is `arm_bind`'s whole contract.
+
+**What that closed for free.**  The REASSIGNMENT spelling was right on the interpreter and
+wrong on `--native` — an `(O-NoDiverge)` split I had filed as a second, separate half needing
+the join-own machinery.  It needed nothing: once the arm materialises, both backends agree.
+A cure at the right layer closed a divergence that looked like its own defect from the layer
+above.
+
+**Verified.**  The 15-cell ordering matrix, this session's four earlier guards, and a new one
+(6 cells, two controls: an UNDISTURBED arm that must still alias, and a loop whose every pass
+reads the container as it then stands), falsified at bd629983.
+
+**Not closed, and not this.**  The chained spelling — `t = dv.tiles;
+prev = if … { t.proto } … ; dv = …` — stays wrong, and the control that says so is that the
+SAME chain without a branch is equally wrong: that is loft#1393's view-of-a-view, which the
+sibling checkout has fixed on its own tree and this one does not carry.
 
 #### B2 — open, and the owner's call
 
