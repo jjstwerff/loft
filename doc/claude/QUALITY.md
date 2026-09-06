@@ -6131,6 +6131,88 @@ prev = if … { t.proto } … ; dv = …` — stays wrong, and the control that 
 SAME chain without a branch is equally wrong: that is loft#1393's view-of-a-view, which the
 sibling checkout has fixed on its own tree and this one does not carry.
 
+#### B8f — `@FR-Col-Remove` walked: the removal that keeps what the element owned, and the leak that was holding a silent wrong together (2026-09-06)
+
+Picked because the rule had **zero citations** — `collections.md` names four spellings for
+"delete one element" and no code site said which of them it was enforcing — and because
+neither stream was in collections.  Split into the questions its sites ask: which slot does a
+spelling name (by INDEX vs by RECORD), what happens to the OTHERS (dense renumber vs keys
+untouched), what happens to what the element OWNED, and where the loop cursor lands.
+
+**What holds.**  Most of the rule is enforced and the walk is the receipt.  `c[key] = null`
+removes by key and leaves every other key reachable on all five keyed kinds; a linked group is
+one record set through every route (remove through the vector member, through the keyed member,
+or through a loop — all three leave neither); `v.remove(-1)` counts from the end and an
+out-of-range index answers `false` and changes nothing; `for x in v { x#remove; }` visits every
+element exactly once, forwards and under `rev`.  A 27-cell value matrix over container kind ×
+child kind × spelling × position is green on both backends.
+
+**The instrument.**  A leak inside a live store is invisible to `collect_store_leaks`, and the
+allocation profiler is `--interpret`-only and reports BYTES.  `store_memory()` already reports
+`records N`, which is an exact integer, works on both backends, and is readable from loft — so
+the assertion is *a constant population costs a constant record count*, which is the invariant
+itself and is allocator-independent.  Two runs of the same loop at different N, compared.
+
+**loft#1402 — a vector removal never releases what the element owned.**  Same element type,
+2000 add-then-remove cycles, final population 0: `v.remove(i)` and `#remove` hold 2004 records,
+`sorted`'s `#remove` 2004, while `sorted[k] = null` holds 4, `hash[k] = null` 6, `index`'s
+`#remove` 3, and the linked-group route 4.  One record retained per removal, without bound;
+`--native` confirms it 84 MB above the flat baseline at 2M cycles.  The boundary is exactly
+`remove_vector_at`'s unlinked branch, which shifts the bytes and calls no `remove_claims` —
+while `remove_owned`'s inline branch, the by-RECORD twin, does.  Only the element's CHILDREN
+leak: a scalar-only element is flat.
+
+**loft#1401 — and the leak is what was holding a silent wrong together.**  The cure is one
+call through `vector::get_vector`, which already maps an index to an element and already
+answers `rec == 0` for exactly the indices that remove nothing.  It made every route flat and
+kept all 27 value cells green — and broke `445-generic-tree-walk`, which was right to break:
+
+```loft
+gd_cur = gd_stack[gd_n - 1] ?? gd_root;   // NOT materialised
+gd_stack.remove(gd_n - 1);
+gd_order += [gd_cur];                     // ... still a view of the removed element
+```
+
+A projection discharged with `??` escapes `(H-Materialise)`.  The plain `c = v[1]` materialises
+and says so; `c = v[1] ?? Box{n:0}` stays a live alias and says nothing — so after
+`v.remove(0)` it reads **3 where its element held 2**, on both backends, and a write through it
+still reaches the container while the advice that promises otherwise never fires.  `(N-Index)`
+types `v[i]` as `τ?`, so `??` is the discharge the language REQUIRES for a non-null binding:
+this is the ordinary spelling.  Both filed rather than fixed, in that order — nothing may
+release the element's children while such a binding is still a live view of it.
+
+**Two cures built, measured and backed out** (recorded on #1401 so they are not re-derived).
+`value_view_container`'s `Value::Block` arm asks the tail; a `??` lowers to a block whose tail
+is the `if` the discharge became, whose arms name the ncc temp and a fresh default — two
+different names, so the branch arm answers `None`.  Taking the block's own RESULT TYPE instead
+(which already reads `{#ncc(2):ref(Box)["v"]}`, and which `lift_view_deps` reads one function
+below for the same question) makes the walk register the view — `LOFT_DEBUG_F8=1` prints
+`c(Reshaped)` — and changes no value.  Making the strip site ask the same namer it does (it
+gates on `base_container_var`, a DIFFERENT namer from the walk's) makes every gate pass —
+instrumented, the `??` case reads `tp_ok=true in_walk=true namer=Some(0) deps=[0]`, identical
+to the plain case but for the RHS node kind — and still changes no value, because no emitter
+has a copy for a block-valued right-hand side.  That second one is worse than inert: the advice
+then fires and ASSERTS "writes through `c` no longer reach `v`" while the write still lands.
+The same conclusion B8c and B8e reached for a branch-valued RHS, one node kind over: naming and
+copy land together or not at all.
+
+**Fixed here.**  The refusal that told a `trie` author their loop was "hash iteration".  Three
+kinds take the snapshot substitution — `hash`, `trie`, `spatial` — and share the one scratch
+variable, so the message spelled for the hash also prescribed `hash[key] = null` for a
+collection the author never wrote.  It now names the kind, recovered from the scratch's own
+deps for a local and from the struct's one snapshot-walked field for `for e in b.data`, and
+stays kind-neutral where two such fields make it undecidable rather than guessing.  A `spatial`
+gets its own cure spelling, since its key is coordinate axes.  The message is a pinned surface
+— `tests/issues.rs`, `the-reference-quotes-its-refusals-word-for-word.loft` and CAVEATS.md all
+quote it — and all three moved with it, which is what that script exists to force.
+
+**The lesson.**  A leak fix can be load-bearing for a silent wrong.  This one reads as
+obviously right in isolation, has a one-line cure at a chokepoint the rule names, passes 262/262
+on its subject suite and a 27-cell matrix — and shipping it alone would have turned a wrong
+answer into a use-after-free.  What caught it was running the full corpus rather than the
+targeted suite, and the failing test was not a guard for any of this: it was a generic tree
+walk whose author had simply written the ordinary spelling.
+
 #### B2 — open, and the owner's call
 
 | decision | evidence | why it is not mine to take |

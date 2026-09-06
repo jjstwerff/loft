@@ -1416,6 +1416,10 @@ impl State {
     # Panics
     When requested on a not-implemented iterator.
     */
+    /// `e#remove` — @FR-Col-Remove's in-loop spelling, and the one that also has to say
+    /// where the cursor lands: the arms below dispatch on the container's layout, and each
+    /// leaves the walk on the element that takes the removed one's place, so a plain
+    /// `for e in v { e#remove; }` visits every element exactly once.
     pub fn remove(&mut self) {
         let state_var = self.code::<u16>();
         let on = self.code::<u8>();

@@ -392,8 +392,20 @@ tests/scripts/901-linked-group-fill.loft.
 
 ## 3. Deviations / decided edges
 
-**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
+**OPEN: 1.**  The record of the closed ones is in
 the companion [collections-history.md](collections-history.md).
+
+> **D-col-2 — OPEN (2026-09-06, loft#1402) — a by-INDEX removal keeps what the element
+> OWNED.**  `(Col-Remove)` deletes one element; LOFT.md says `v#remove` "removes exactly one
+> element, releases what that element owned".  `Stores::remove_vector_at`'s UNLINKED branch
+> shifts the bytes and releases nothing, so `v.remove(i)` and `e#remove` retain one record per
+> removal — a constant population costs a record count that grows with the number of removals,
+> on both backends.  The by-RECORD twin (`remove_owned`, reached by `c[key] = null`) releases
+> them, and so does the LINKED layout, so the same `sorted` leaks through `#remove` and not
+> through `[key] = null`.  ⚠ It does not close alone: while [binding.md](binding.md)'s
+> `D-bind-21` / loft#1401 leaves a `??`-discharged binding a live view of the removed element,
+> releasing the element's children breaks that binding — `445-generic-tree-walk.loft` is the
+> measured case.  #1401 first.  Found in the `@FR-Col-Remove` walk (QUALITY.md B8f).
 
 ## 4. Conformance / oracle plan (how each rule gets pinned — [VERIFICATION.md](VERIFICATION.md))
 

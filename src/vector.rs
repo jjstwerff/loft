@@ -718,6 +718,10 @@ pub fn get_elem_hoisted<T: Copy, const VERIFY: bool>(
     }
 }
 
+/// @FR-Col-RemoveDense — a vector stays DENSE: removing index `i` shifts every later
+/// element down one, so there are no holes and no tombstones and index `j > i` now names what
+/// was at `j+1`.  That renumbering is what ends the place a view names (@FR-B-Disturb), so it
+/// is a contract rather than an implementation choice (@PLN130 F3 declined hole-punching).
 pub fn remove_vector(db: &DbRef, size: u32, index: i64, stores: &mut [Store]) -> bool {
     if db.is_null() {
         return false; // nothing to remove from a null (absent) vector

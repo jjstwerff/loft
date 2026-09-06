@@ -28,6 +28,24 @@ cells compile one source concurrently), with an empty output block as the only e
 Guarded on the destination's INODE changing across a publish, which fails on the pre-fix form;
 the end-to-end racing test does NOT falsify and its header says so.
 
+### A `#remove` refusal names the collection the author wrote (2026-09-06, loft#1403)
+
+`hash`, `trie` and `spatial` all iterate a pre-sorted SNAPSHOT of their records, so `#remove`
+would remove from the snapshot and is refused for all three — through one scratch variable, and
+so through one message spelled for the hash: a `trie` author was told their loop was "hash
+iteration" and prescribed `hash[key] = null` for a collection they never wrote.  The refusal now
+names the kind, recovered from the scratch's own deps where the source is a local and from the
+struct's one snapshot-walked field for `for e in b.data`; with two such fields the loop's own is
+not decidable from there, so the wording stays kind-neutral rather than guessing.  A `spatial`
+is keyed by coordinate axes and gets `spatial[x, y] = null` as its cure.  The message is a
+pinned surface — `tests/issues.rs`, `the-reference-quotes-its-refusals-word-for-word.loft` and
+CAVEATS.md quote it — and all three moved with it.  `@FR-Col-Remove` gained its first code
+citations in the same pass (`remove_vector_at`, `remove_owned`, `State::remove`,
+`vector::remove_vector`), from the walk that found this (QUALITY.md B8f), which also filed
+loft#1401 (a `??`-discharged projection escapes `(H-Materialise)` and reads a renumbered
+position after a removal) and loft#1402 (a by-index removal keeps what the element owned — one
+record per removal, and it cannot be closed before #1401).
+
 ### A branch's projecting arm gets its own temp, so a binding chosen by an `if` materialises (2026-09-06, loft#1396)
 
 `scopes::value_view_container` names the container a `Set`'s value views THROUGH a branch — any

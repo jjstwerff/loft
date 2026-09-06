@@ -755,6 +755,9 @@ impl Stores {
         claim != 0 && hash::owns_entries(store, claim)
     }
 
+    /// @FR-Col-Remove's by-RECORD form — "delete one element" AND release what it owned.
+    /// [`Stores::remove_vector_at`] is the by-INDEX twin; [`Stores::remove`] below is the
+    /// UNLINK half both of them share, and is deliberately not this.
     pub fn remove_owned(&mut self, data: &DbRef, rec: &DbRef, db: u16) {
         let parts = self.types[db as usize].parts.clone();
         let content = match &parts {
@@ -875,6 +878,13 @@ impl Stores {
     /// Handing the element's width to [`vector::remove_vector`] for the linked
     /// layout shifted a span several slots long, so removing one element removed
     /// its neighbour with it — and nothing freed the record (loft#903).
+    ///
+    /// @FR-Col-Remove — one of the two homes for "delete one element": this is the
+    /// by-INDEX form (`v.remove(i)`, `e#remove`), [`Stores::remove_owned`] the by-RECORD
+    /// one (`c[key] = null`).  Both owe the same two things, and only the second is shared:
+    /// the container is UNLINKED here (@FR-Col-RemoveDense renumbers it), and releasing what
+    /// the element owned is loft#1402 — the inline layout does not, and cannot until
+    /// loft#1401 stops a `??`-discharged binding staying a live view of the removed element.
     pub fn remove_vector_at(&mut self, data: &DbRef, elem_tp: u16, index: i64) -> bool {
         if !self.is_linked(elem_tp) {
             let size = u32::from(self.size(elem_tp));
@@ -916,6 +926,10 @@ impl Stores {
 
     UNLINK only — see [`Stores::remove_owned`] for the user-level form that also
     releases the record's heap.
+
+    @FR-Col-RemoveKeyed for the five keyed kinds — removal is BY KEY and renumbers nothing,
+    so every other key stays reachable; @FR-Col-RemoveDense for the two by-value ones, where
+    the shift below is what keeps the container dense.
     # Panics
     When not in a structure.
     */
