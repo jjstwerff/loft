@@ -135,6 +135,14 @@ named every variable `65535` with a `-` where its slot number and span belong �
 the same command on the same file did not print the same thing.  `introspect` now always
 parses; ordinary runs keep the cache.
 
+**A local a closure captured, and then assigned again, no longer leaks the value it ends
+up with.**  `s = S{…}; h = |i| { s.a + i }; s = build(h)` kept the store `s` ends up holding,
+and so did the inline form `s = build(|i| { s.a + i })` and the same shapes over a vector —
+one per reassignment, on both backends, with the right answer printed and only the exit
+warning to say so.  The closure record owns the value it captured; the frame owns whatever the
+local is given afterwards, and now frees it.  A capture that is never reassigned is unchanged:
+that value still belongs to the closure.  (loft#1388)
+
 **A `match` or `if` arm may hand back the enum it is choosing over.**  `e = match e {
 Circle{r} => Circle{r: r + 1}, _ => e }` — replace one variant, keep everything else — was
 refused with *"expected Circle, got Sh"*, as was its `if` spelling, where the same value

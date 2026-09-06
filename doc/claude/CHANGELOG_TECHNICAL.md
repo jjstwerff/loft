@@ -9,6 +9,34 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A captured local assigned again frees the store it ends up holding (2026-09-06, loft#1388)
+
+`(O-Latest)`: a closure record adopts the store its capture named AT THE BUILD, and the frame's
+scope-exit free is suppressed so the record's cascade is the sole owner (#323).  loft#1324
+established that the suppression must name the same STORE the adoption does, and closed it for
+the COLLECTION half via `capture_build_backings`.  The DIRECT half asked `is_captured(v)` — a
+fact about the BINDING — and kept suppressing the free of whatever the local named LAST, so
+every reassignment after a build orphaned a store.
+
+`capture_build_backings` now returns `CaptureBuilds`: the backing map it always had, plus the
+set of captured locals ASSIGNED AGAIN after their build, read off the same walk.
+`capture_adoption_owns_free` — the one home `get_free_vars`, `check_ref_leaks` and
+`ownership_cfg`'s leak oracle all read — declines the suppression for those.  The two build
+spellings differ in ORDER: a stored closure is built by an earlier statement, an inline argument
+inside the very right-hand side that reassigns the local, and `Value::walk` is pre-order, so the
+inline build is reached AFTER its own assignment.  `captures_built_in` reads those builds off
+the right-hand side against the map as it stood before the assignment, and the walk skips them
+when it arrives — both spellings of "the capture reaches `v`" (the local outright, and a view
+whose root is the local, minted inside that same right-hand side).
+
+Measured over 9 cells on both backends: 7 clean where 6 leaked, values unchanged.  Guard
+`a-captured-local-reassigned-after-the-build-frees-its-own-store`, falsified at ac412a96.
+Two residual cells stay open as `formal/ownership-history.md` D-own-38 — a stored closure with
+TWO reassignments (the intermediate store, which needs the displacement free asked per STORE
+rather than per binding) and a closure record REUSED across loop passes (which orphans each
+previous adoption when the capture slot is overwritten).  Both are the same question at a
+different moment, and neither is reachable from a static per-binding fact.
+
 ### A variant arm and an enum arm join, and the `match` join widens like the `if` join (2026-09-06, loft#1390 + loft#1389)
 
 `formal/types.md` `(C-Var)` licenses `Reference(S) ⤳ Enum(E)` and nothing between two variants,

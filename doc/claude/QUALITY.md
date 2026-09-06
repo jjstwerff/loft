@@ -2460,7 +2460,15 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 727 | 364 | 5 | **358** |
+| 728 | 364 | 5 | **359** |
+
+loft#1389 added one function on the OPAQUE side — `728 | 364 | 5 | 359` — `Parser::change_var`'s
+self-dep strip, which now names `Type::Reference | Type::Enum(_, true, _)` where it used to
+name one of them.  Opaque is the right column and the right answer: the strip is stated over
+the two RECORD kinds deliberately, and the collection kinds it does not name carry the @P302
+re-init-in-place ownership marker rather than a degenerate borrow (6418 of them in the corpus
+against no `Enum` at all — `formal/ownership-history.md` D-own-37).  A peel here would widen
+the strip onto exactly those, which is the wrong answer, not the wider one.
 
 The `@FR-O-Complete` walk (B7u) moved one function from opaque to seeing-through:
 `scopes::needs_pre_init`, which names the locals that get a null before a branch and the

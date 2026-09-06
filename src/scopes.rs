@@ -112,7 +112,7 @@ struct Scopes<'s> {
     /// The backing local each CAPTURE named at the closure build — see
     /// [`capture_build_backings`].  Computed once off the raw body, because the answer is
     /// positional (@FR-O-Latest) and the variable table carries only the LAST assignment.
-    capture_build_backing: HashMap<u16, u16>,
+    capture_build_backing: CaptureBuilds,
     /// The loop depth at which each `__lift_N` temp was created.  A temp created INSIDE the
     /// innermost loop that re-runs its Set has its scope exited — and its slot freed — every
     /// iteration, so a transition free there would free twice; one created OUTSIDE that loop
@@ -4749,10 +4749,21 @@ fn adopted_work_refs(rhs: &Value, function: &Function, data: &Data, out: &mut Ve
 pub(crate) fn capture_adoption_owns_free(
     data: &Data,
     function: &Function,
-    built_with: &HashMap<u16, u16>,
+    built_with: &CaptureBuilds,
     v: u16,
 ) -> bool {
-    (function.is_captured(v) || backs_an_adopted_capture(data, function, built_with, v))
+    // @FR-O-Latest — the record adopts the store the capture named AT THE BUILD, so the
+    // handover is only sound while the local still names that store.  A local assigned again
+    // after the build names a different one, which nothing else frees: the record's cascade
+    // reaches the adopted store and the frame's free was suppressed on the strength of the
+    // BINDING being captured.  loft#1324 closed this for the collection half, where the
+    // backing local is found through `built_with`; the direct half asked `is_captured` and
+    // kept suppressing whatever the local named LAST, so `s = S{…}; h = |i| { s.a + i };
+    // s = build(h)` leaked the store `s` ends up holding, on both backends, once per
+    // reassignment and once per pass of a loop (loft#1388).
+    !built_with.reassigned_after_build.contains(&v)
+        && (function.is_captured(v)
+            || backs_an_adopted_capture(data, function, &built_with.backing, v))
         && crate::data::is_dbref(function.tp(v).base())
 }
 
@@ -4780,12 +4791,41 @@ pub(crate) fn capture_build_backings(
     data: &Data,
     function: &Function,
     code: &Value,
-) -> HashMap<u16, u16> {
+) -> CaptureBuilds {
     let set_dbref = data.def_nr("OpSetDbRef");
     let mut latest: HashMap<u16, u16> = HashMap::new();
-    let mut out: HashMap<u16, u16> = HashMap::new();
+    let mut out = CaptureBuilds::default();
+    let mut built: HashSet<u16> = HashSet::new();
+    // Capture vars already resolved at their enclosing statement, waiting for the walk to
+    // reach the build node itself.  See the `Value::Set` arm.
+    let mut resolved_in_rhs: HashSet<u16> = HashSet::new();
     code.walk(&mut |node: &Value| match node.unspan() {
         Value::Set(v, rhs) => {
+            // A build inside this statement's OWN right-hand side captures the value the
+            // local held BEFORE the assignment — `s = build(|i| { s.a + i })` hands the
+            // closure the store `s` is about to stop naming.  `Value::walk` is pre-order, so
+            // the build node is reached AFTER this one, by which time `latest` describes the
+            // assignment rather than the capture.  Resolve those builds here, against
+            // `latest` as it still stands, and let the walk skip them when it arrives.
+            for (c, backing) in captures_built_in(data, rhs, set_dbref, &latest) {
+                built.insert(c);
+                if let Some(b) = backing {
+                    out.backing.insert(c, b);
+                    built.insert(b);
+                }
+                resolved_in_rhs.insert(c);
+                // @FR-O-Latest — this very assignment is the one that moves the local off
+                // the store the record just adopted.
+                if c == *v || backing == Some(*v) {
+                    out.reassigned_after_build.insert(*v);
+                }
+            }
+            // @FR-O-Latest, the OTHER half of loft#1324.  The record holds the store the
+            // capture named at the BUILD; a local assigned again after that names a different
+            // one, and the frame is the only thing left to free it.
+            if built.contains(v) {
+                out.reassigned_after_build.insert(*v);
+            }
             match crate::use_analysis::view_root_slots(data, rhs).as_deref() {
                 Some([root]) if *root != *v && !function.is_argument(*root) => {
                     latest.insert(*v, *root);
@@ -4798,15 +4838,68 @@ pub(crate) fn capture_build_backings(
             }
         }
         Value::Call(d, args) if *d == set_dbref => {
-            if let Some(Value::Var(c)) = args.get(2).map(Value::unspan)
-                && let Some(&backing) = latest.get(c)
-            {
-                out.insert(*c, backing);
+            if let Some(Value::Var(c)) = args.get(2).map(Value::unspan) {
+                if resolved_in_rhs.remove(c) {
+                    return;
+                }
+                built.insert(*c);
+                if let Some(&backing) = latest.get(c) {
+                    out.backing.insert(*c, backing);
+                    built.insert(backing);
+                }
             }
         }
         _ => {}
     });
     out
+}
+
+/// The captures a right-hand side BUILDS, each with the backing local it names.
+///
+/// Two spellings, the pair [`capture_build_backings`] itself carries: a struct capture names
+/// the local outright (no backing), a collection capture names a VIEW whose root is the local.
+/// A view minted inside this same right-hand side is resolved from the statements walked here;
+/// anything older comes from `outer`, which describes the program up to — and not including —
+/// the assignment this right-hand side belongs to.
+fn captures_built_in(
+    data: &Data,
+    rhs: &Value,
+    set_dbref: u32,
+    outer: &HashMap<u16, u16>,
+) -> Vec<(u16, Option<u16>)> {
+    let mut latest = outer.clone();
+    let mut found: Vec<(u16, Option<u16>)> = Vec::new();
+    rhs.walk(&mut |node: &Value| match node.unspan() {
+        Value::Set(c, src) => match crate::use_analysis::view_root_slots(data, src).as_deref() {
+            Some([root]) if root != c => {
+                latest.insert(*c, *root);
+            }
+            _ => {
+                latest.remove(c);
+            }
+        },
+        Value::Call(d, args) if *d == set_dbref => {
+            if let Some(Value::Var(c)) = args.get(2).map(Value::unspan) {
+                found.push((*c, latest.get(c).copied()));
+            }
+        }
+        _ => {}
+    });
+    found
+}
+
+/// What a body's closure BUILDS say about the locals they capture.
+///
+/// Two facts, one walk, because both are read off the same `OpSetDbRef(___clos_N, …, capture)`
+/// point and a second walk would be a copy of an ordering that has drifted before.
+#[derive(Default)]
+pub(crate) struct CaptureBuilds {
+    /// The backing local a capture named AT THE BUILD — the store the record actually holds.
+    /// A capture that owns its store outright (a struct) has no backing root and is absent.
+    pub(crate) backing: HashMap<u16, u16>,
+    /// Locals whose store the record adopted and which were ASSIGNED AGAIN afterwards, so the
+    /// local no longer names the adopted store and the frame still owes its own free.
+    pub(crate) reassigned_after_build: HashSet<u16>,
 }
 
 /// Is `v` the store behind a capture whose closure record ADOPTS it?
