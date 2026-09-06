@@ -387,7 +387,10 @@ impl Stores {
                 // is the privileged one (loft#843).
                 others.push(f_nr as u16);
                 matched.push(f_nr as u16);
-                linked.entry(f_nr as u16).or_default().push(fld.len() as u16);
+                linked
+                    .entry(f_nr as u16)
+                    .or_default()
+                    .push(fld.len() as u16);
             }
             // A keyed member arriving LAST has to join the members that were skipped while it
             // was absent.  `Stores::field` runs once per field as the struct is built, so at
