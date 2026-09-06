@@ -5753,7 +5753,18 @@ return and the literal field.  Two spellings were not refused, and both answered
   chain refused it and was discarded for that), the sibling-variant carve-out and the loft#1350
   tuple boxing (both keyed on `arm_of_sibling`, "handed a sibling expression's type", rather than
   on the `else` keyword) and the honest deps.  A `Void` then arm expects nothing of its chain, as
-  before.  Baselined: b1ccf0e9 prints the same bits.
+  before.  Baselined: b1ccf0e9 prints the same bits.  **One shape narrowed, measured by loft3
+  and relayed the same night:** a STATEMENT chain whose then arm yields a value and whose
+  middle arm is a statement — `if k == 1 { 5 } else if k == 2 { println("two") } else { 9 };` —
+  compiled before and is now *"expected integer, got void on if"*, on both backends.
+  `(F-Block)` allows it: the `;` discards every arm's value and `(F-Drop)` still runs the
+  `println`.  It is loft#1382's gate one construct out — the plain `else` twin
+  `if k == 1 { 5 } else { println("two") };` was already refused while the mirror
+  `if k == 1 { println("one") } else { 5 };` is accepted — because the arm-agreement check
+  cannot tell statement position from value position: a top-level statement `if` arrives with
+  `Unknown(0)` expected, not `Void`, so `parse_if_expecting` cannot either.  Left as the loud
+  side rather than re-opened here: the two silent-wrongs it closes outrank it, and the cure is
+  #1382's statement-position fact, which closes both together.  Recorded on #1380 as well.
 
 **Filed, not fixed:** loft#1381 — a statement `if` whose else arm yields a value it discards
 (`else { 5 }`) fails rustc natively (E0308) while the interpreter runs it; loud, pre-existing,
