@@ -407,7 +407,7 @@ impl DbRef {
         }
     }
 
-    pub fn push<T>(&mut self, stores: &mut [Store], value: T) {
+    pub fn push<T: 'static>(&mut self, stores: &mut [Store], value: T) {
         *stores[self.store_nr as usize].addr_mut::<T>(self.rec, self.pos) = value;
         self.pos += size_of::<T>() as u32;
     }

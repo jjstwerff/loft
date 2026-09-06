@@ -2407,12 +2407,7 @@ impl State {
         // with it: the next occupant of this offset inherits nothing from this value, and
         // a later read there has to be earned by a later write.
         if crate::stack_verify::enabled() {
-            self.verify_slot(
-                "get_stack",
-                std::any::type_name::<T>(),
-                self.stack_pos,
-                size_of::<T>(),
-            );
+            self.verify_slot::<T>("get_stack", self.stack_pos);
             let at = (self.stack_cur.rec * 8 + self.stack_cur.pos + self.stack_pos) as usize;
             let step = self.stack_step(size_of::<T>() as u32) as usize;
             self.database
@@ -2594,7 +2589,7 @@ impl State {
         // form was covered while the other three were not).
     }
 
-    pub fn get_var<T>(&mut self, pos: u16) -> &T {
+    pub fn get_var<T: 'static>(&mut self, pos: u16) -> &T {
         // get_var reads T at (stack_pos - pos); pos > stack_pos would underflow.
         // pos < size_of::<T>() is also invalid (read extends before the frame base).
         // Note: pos == 0 is valid when accessing a pre-reserved frame slot above the
@@ -2609,12 +2604,7 @@ impl State {
         // @PLN154 — a frame read.  No kill: the slot stays live, and a local read twice is
         // read twice.
         if crate::stack_verify::enabled() {
-            self.verify_slot(
-                "get_var",
-                std::any::type_name::<T>(),
-                self.stack_pos - u32::from(pos),
-                size_of::<T>(),
-            );
+            self.verify_slot::<T>("get_var", self.stack_pos - u32::from(pos));
         }
         self.database.store(&self.stack_cur).addr::<T>(
             self.stack_cur.rec,
@@ -2627,19 +2617,22 @@ impl State {
     /// Named where the check is made rather than where the tag was set, because the answer
     /// a reader needs is *which read got a value nobody wrote* — the write that did not
     /// happen has no site.
-    fn verify_slot(&self, what: &str, ty: &str, at: u32, width: usize) {
+    fn verify_slot<T: 'static>(&self, what: &str, at: u32) {
+        use crate::stack_verify::SlotState;
+        let width = size_of::<T>();
         let abs = (self.stack_cur.rec * 8 + self.stack_cur.pos + at) as usize;
         let store = self.database.store(&self.stack_cur);
         if !store.shadow_armed() {
             return;
         }
-        match store.shadow_state(abs, width) {
-            crate::stack_verify::SlotState::Written => return,
-            crate::stack_verify::SlotState::Partial => {
+        let state = store.shadow_state(abs, width, crate::stack_verify::kind_of::<T>());
+        match state {
+            SlotState::Written => return,
+            SlotState::Partial => {
                 crate::stack_verify::note_partial();
                 return;
             }
-            crate::stack_verify::SlotState::Unwritten => {}
+            SlotState::Unwritten | SlotState::Mismatch { .. } => {}
         }
         let line = self
             .line_numbers
@@ -2647,10 +2640,29 @@ impl State {
             .next_back()
             .map_or(0, |(_, &v)| v);
         let (pc, op, _fn_d_nr) = crate::crash_report::last_context();
-        crate::stack_verify::report_uninit(what, ty, at, width, pc, line, u16::from(op));
+        let ty = std::any::type_name::<T>();
+        match state {
+            SlotState::Unwritten => {
+                crate::stack_verify::report_uninit(what, ty, at, width, pc, line, u16::from(op));
+            }
+            SlotState::Mismatch { wrote } => {
+                crate::stack_verify::report_mismatch(
+                    what,
+                    ty,
+                    at,
+                    width,
+                    wrote,
+                    false,
+                    pc,
+                    line,
+                    u16::from(op),
+                );
+            }
+            SlotState::Partial | SlotState::Written => {}
+        }
     }
 
-    pub fn mut_var<T>(&mut self, pos: u16) -> &mut T {
+    pub fn mut_var<T: 'static>(&mut self, pos: u16) -> &mut T {
         debug_assert!(
             u32::from(pos) <= self.stack_pos,
             "mut_var: pos={pos} exceeds stack_pos={} (frame underflow)",
@@ -2664,7 +2676,7 @@ impl State {
         )
     }
 
-    pub fn put_var<T>(&mut self, pos: u16, value: T) {
+    pub fn put_var<T: 'static>(&mut self, pos: u16, value: T) {
         // @PLAN53 cluster 2 / S4: the value's footprint on the stack is its
         // stepped span (matches the get_stack/put_stack steps it pairs with);
         // identity when LOFT_ALIGN off.

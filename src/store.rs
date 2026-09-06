@@ -357,7 +357,7 @@ pub struct Store {
     /// and `3` (`WAL`) are reserved for future phases.
     #[cfg_attr(not(feature = "mmap"), allow(dead_code))]
     durable_tier: u16,
-    /// @PLN154 — the stack shadow: one tag byte per store byte, `0` meaning nothing has
+    /// @PLN154 — the stack shadow: one tag word per store byte, `0` meaning nothing has
     /// written it.
     ///
     /// Empty on every store but the interpreter's value stack, and empty there too unless
@@ -366,7 +366,7 @@ pub struct Store {
     /// bytes it describes, because a shadow kept anywhere else has to be told about every
     /// growth and every move by hand, and phase 0 measured 33 separate routes that write
     /// these bytes.
-    init_shadow: Vec<u8>,
+    init_shadow: Vec<u32>,
 }
 
 impl Debug for Store {
@@ -483,7 +483,22 @@ impl Store {
     /// The store's existing bytes are tagged UNWRITTEN, which is what they are: arming
     /// happens at `State::new`, before the first frame exists.
     pub fn arm_init_shadow(&mut self) {
-        self.init_shadow = vec![0u8; self.size as usize * 8];
+        self.init_shadow = vec![0u32; self.size as usize * 8];
+    }
+
+    /// Pack a byte's tag: the kind and width the value was written at, and where in that
+    /// value this byte sits.
+    ///
+    /// The index is what makes a read starting INSIDE a value distinguishable from one
+    /// starting at its base, which is the difference between *"the slot holds another type"*
+    /// and *"the two sides disagree about where the slot begins"*.  Both are findings and
+    /// they want different words.
+    #[inline]
+    const fn pack_tag(kind: u16, idx: usize) -> u32 {
+        // Beyond 254 bytes the index saturates: only an opaque raw span is that wide, and
+        // an opaque tag is admitted at any offset anyway.
+        let idx = if idx > 254 { 254 } else { idx };
+        ((kind as u32) << 8) | (idx as u32 + 1)
     }
 
     /// Is the @PLN154 shadow armed on this store?
@@ -503,13 +518,13 @@ impl Store {
     /// report: the positive control that tells a detector that cannot fire from a corpus
     /// that is clean.
     #[inline]
-    pub fn shadow_write(&mut self, at: usize, len: usize) {
+    pub fn shadow_write(&mut self, at: usize, len: usize, kind: u16) {
         if crate::stack_verify::inject() {
             return;
         }
         let end = (at + len).min(self.init_shadow.len());
-        if at < end {
-            self.init_shadow[at..end].fill(1);
+        for (i, slot) in self.init_shadow[at.min(end)..end].iter_mut().enumerate() {
+            *slot = Self::pack_tag(kind, i);
         }
     }
 
@@ -541,8 +556,8 @@ impl Store {
     /// a fault in the shadow's own plumbing rather than a finding about the program, and
     /// reporting it as one would bury the real findings.
     #[must_use]
-    pub fn shadow_state(&self, at: usize, len: usize) -> crate::stack_verify::SlotState {
-        use crate::stack_verify::SlotState;
+    pub fn shadow_state(&self, at: usize, len: usize, kind: u16) -> crate::stack_verify::SlotState {
+        use crate::stack_verify::{OPAQUE, SlotState, kind_width};
         if self.init_shadow.is_empty() {
             return SlotState::Written;
         }
@@ -550,23 +565,57 @@ impl Store {
             crate::stack_verify::note_out_of_range();
             return SlotState::Written;
         };
-        match span.iter().position(|&t| t == 0) {
-            None => SlotState::Written,
-            Some(0) => SlotState::Unwritten,
-            Some(_) => SlotState::Partial,
+        let base = span[0];
+        if base == 0 {
+            return SlotState::Unwritten;
         }
+        let wrote = (base >> 8) as u16;
+        // A raw byte BLOCK on either side is opaque: whoever assembled it knows what is in
+        // it, and the shadow's tag does not.  The fn-ref slot is written as
+        // `[MaybeUninit<u8>; 20]` and read back as an `i64` and a `DbRef`; a coroutine frame
+        // is restored from its own snapshot.  Those are composite reads, not disagreements.
+        if wrote == OPAQUE || kind == OPAQUE {
+            return SlotState::Written;
+        }
+        if wrote == kind && base & 0xFF == 1 {
+            return SlotState::Written;
+        }
+        // THE FINDING IS A HANDLE CROSSING A VALUE, in either direction.  A `DbRef` is a
+        // position in a store, so reading one as a number answers an address wearing a
+        // number's clothes, and reading a number as one indexes a store by data — and
+        // neither can be an intended pun, because a slot the compiler typed as a reference
+        // is a reference on every path.  That is the monomorph-layout class this phase was
+        // opened for: loft#1028 wrote `OpNullRefSentinel`'s twelve bytes into a slot the
+        // monomorph read as an `integer`, and loft#1016 defaulted a `__typevar_T` RECORD
+        // into one it read as a float.
+        //
+        // The WIDTH comparison is deliberately not a finding, and that is measured rather
+        // than conceded: the interpreter's frame carries composite slots the compiler
+        // addresses field by field — the 20-byte fn-ref slot, the iterator state `OpStep`
+        // reads as two `u32`s — so a width rule reports the frame's own layout on 43 of the
+        // first 180 corpus programs.  What survives is counted as a pun, not reported.
+        let crossing = (wrote >> 8 == 1) != (kind >> 8 == 1);
+        if crossing {
+            return SlotState::Mismatch { wrote };
+        }
+        // The remaining disagreements are the language's own puns: a scalar narrower than
+        // its stepped slot (`OpSizeScalar` reads eight bytes to discard a `boolean`), a null
+        // sentinel written as the word it is and read as the float it stands for, and a
+        // composite slot read one field at a time.
+        let _ = kind_width(wrote);
+        SlotState::Partial
     }
 
     /// Read the tags of `at..at + len`, for a move that has to carry them.
     #[must_use]
-    pub fn shadow_tags(&self, at: usize, len: usize) -> Vec<u8> {
+    pub fn shadow_tags(&self, at: usize, len: usize) -> Vec<u32> {
         self.init_shadow
             .get(at..at + len)
-            .map_or_else(|| vec![0u8; len], <[u8]>::to_vec)
+            .map_or_else(|| vec![0u32; len], <[u32]>::to_vec)
     }
 
     /// Write `tags` over the span starting at `at`.
-    pub fn shadow_set_tags(&mut self, at: usize, tags: &[u8]) {
+    pub fn shadow_set_tags(&mut self, at: usize, tags: &[u32]) {
         let end = (at + tags.len()).min(self.init_shadow.len());
         if at < end {
             self.init_shadow[at..end].copy_from_slice(&tags[..end - at]);
@@ -2752,7 +2801,7 @@ impl Store {
     }
 
     #[inline]
-    pub fn addr_mut<T>(&mut self, rec: u32, fld: u32) -> &mut T {
+    pub fn addr_mut<T: 'static>(&mut self, rec: u32, fld: u32) -> &mut T {
         // Only hard `read_only` blocks writes.  Call-bracket
         // `free_protected` lets writes through (only frees are blocked).
         debug_assert!(
@@ -2786,7 +2835,11 @@ impl Store {
         // the typed accessor above them carries only 74.5 % of the bytes.  Off, this is
         // the length load and the not-taken branch.
         if !self.init_shadow.is_empty() {
-            self.shadow_write(at as usize, std::mem::size_of::<T>());
+            self.shadow_write(
+                at as usize,
+                std::mem::size_of::<T>(),
+                crate::stack_verify::kind_of::<T>(),
+            );
         }
         unsafe {
             let off = self.ptr.offset(at).cast::<T>();
@@ -2815,7 +2868,7 @@ impl Store {
         );
         let at = self.offset_in_bounds(rec, fld, len);
         if !self.init_shadow.is_empty() {
-            self.shadow_write(at as usize, len);
+            self.shadow_write(at as usize, len, crate::stack_verify::OPAQUE);
         }
         unsafe { self.ptr.offset(at) }
     }
@@ -2833,7 +2886,7 @@ impl Store {
         // @PLN154 — a `&mut [u8]` handed out is a write of the whole span as far as the
         // shadow can tell; the caller need not come back through a typed accessor.
         if !self.init_shadow.is_empty() {
-            self.shadow_write(at as usize, size);
+            self.shadow_write(at as usize, size, crate::stack_verify::OPAQUE);
         }
         unsafe {
             let p = self.ptr.offset(at);
@@ -3014,7 +3067,7 @@ impl Store {
         // @PLN154 — `addr_mut::<u8>` above tagged one byte; the write covers `len`.
         if !self.init_shadow.is_empty() {
             let at = (rec as usize) * 8 + pos as usize;
-            self.shadow_write(at, len as usize);
+            self.shadow_write(at, len as usize, crate::stack_verify::OPAQUE);
         }
     }
 
@@ -3098,7 +3151,7 @@ impl Store {
                     self.shadow_tags((from_rec as isize * 8 + from_pos) as usize, len as usize);
                 to_store.shadow_set_tags(at, &tags);
             } else {
-                to_store.shadow_write(at, len as usize);
+                to_store.shadow_write(at, len as usize, crate::stack_verify::OPAQUE);
             }
         }
     }
