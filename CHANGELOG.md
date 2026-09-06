@@ -20,6 +20,11 @@ record alive when `maybe` turned out to be nothing — once per time it happened
 programs only.  A long-running loop that reassigned such a variable grew for as long as it
 ran.
 
+**Writing an `if` statement the other way round now works.**
+`if k == 1 { println("one") } else { 5 };` compiled, while the mirror
+`if k == 1 { 5 } else { println("one") };` was rejected — the same statement with its arms
+swapped. Both are statements, both throw the value away, and both now compile.
+
 **A function that returns one of two things now hands back a value of its own.**
 `fn pick(p, q, first) -> Node? { if first { p } else { q } }` gave the caller the *second*
 argument itself, so writing to the result changed the caller's own variable — while the first

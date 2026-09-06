@@ -2133,7 +2133,15 @@ impl Parser {
                 // A sibling variant keeps its OWN shape: the expected type names the
                 // then arm's variant, and taking it whole would report this arm as that
                 // one — which is also what lets `parse_if` see that the two differ.
-                let honest = if sibling_variant {
+                let honest = if stmt_arm {
+                    // loft#1382 — in STATEMENT position the arm keeps its OWN type.  Taking
+                    // the then arm's would tell the native emitter both arms are non-void,
+                    // and its `(F-Block)` discard gate (loft#1381) keys on exactly one arm
+                    // being void — so the mirror would parse here and then hand rustc a raw
+                    // E0308.  The `if`'s own join is decided in `parse_if` from the THEN
+                    // arm and is unaffected.
+                    t.clone()
+                } else if sibling_variant {
                     t.clone()
                 } else if let Some(w) = boxed_arm_w {
                     // The arm was boxed into `w` (loft#1350): its value is that work-ref,
