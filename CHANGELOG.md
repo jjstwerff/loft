@@ -166,6 +166,13 @@ the one spelling the equivalent warning deliberately skips: a per-arm binding wa
 proof that the variant could not change underneath it. It can. The value is unchanged; you are
 told, and told to copy the payload out first.  (loft#1397)
 
+**A list read out of a chosen branch keeps the value it was given.**  `b = if … {
+d.tiles.proto } else { [] }` followed by a new `d` used to read the NEW `d` when the program
+was interpreted, while the compiled build read the old one — the same program answering two
+different things depending on how you ran it.  Both give the old value now, which is the one
+the branch chose.  Writing through such a list still does not reach the struct it came from:
+copying is what a plain list assignment does, and the branch spelling follows it.  (loft#1399)
+
 **A value kept from one loop pass to the next is the value from that pass.**  Reading a list
 out of a returned struct in two steps — `t = dv.tiles; prev = t.proto;` — left `prev` reading
 the CURRENT pass's data on the next turn, so a loop comparing consecutive steps answered

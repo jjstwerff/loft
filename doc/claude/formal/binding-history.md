@@ -6,7 +6,7 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — D-bind-22 OPENED AND CLOSED 2026-09-06 (loft#1396: a binding whose value is a
+OPEN: **0** — D-bind-23 OPENED AND CLOSED 2026-09-06 (loft#1399: a branch arm projecting a COLLECTION got no copy, so `--interpret` read the reassigned container where `--native` was right; below); D-bind-22 OPENED AND CLOSED 2026-09-06 (loft#1396: a binding whose value is a
 BRANCH with a projecting arm was named by nothing, so it never materialised — closed by naming
 it through the branch and giving the projecting ARM its own temp, below); D-bind-21 OPENED AND CLOSED 2026-09-06 (loft#1394: a view BOUND INSIDE a
 branch arm whose container is reassigned in the SAME arm was never materialised, because
@@ -19,6 +19,34 @@ reference review.
 B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
 opened and closed 2026-08-05); B-Ref-AnnotationOnly is enforced in every position, not
 only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
+
+> **D-bind-23 — OPENED AND CLOSED (2026-09-06, loft#1399) — a branch arm projecting a
+> COLLECTION got no copy.**  loft#1396 gave a projecting arm its own temp and matched
+> `Reference` and struct-`Enum`, answering `None` for a `Vector`; the deps-strip route that
+> would otherwise reach a collection is (correctly) not taken for a branch-valued binding, so
+> nothing copied.  `--interpret` read the NEW container, `--native` answered correctly off
+> empty deps — a split `(O-NoDiverge)` forbids, with `(B-View-Base)` settling the value:
+> *a projection is a VIEW at every element type, not only a struct-typed one*.  Closed by the
+> same buffer-and-refill a whole-vector copy already uses (`ArmBind::CopyVector`).
+>
+> **The root was TREE-DEPENDENT, and that is the entry's lesson.**  Filed against the sibling
+> branch it read *"the walk never names a collection view"*, which is true there and false on
+> the tree that merges: the union of the two `leaf` gates at the loft#1396 pick — that branch's
+> `value_view_container` over this one's `.base()` + `Vector` type list — is what made naming
+> and copy land together, so here the binding IS named (`LOFT_DEBUG_F8` prints it) and only the
+> copy was missing.  The same patch measured INERT on the branch where nothing is named, was
+> reverted there as dead, and is live here.  An experiment that measures inert is not thereby
+> wrong; recording WHY it was inert is what let this one be recognised rather than re-derived.
+>
+> **The boundary is inverted between the two kinds, and reading it the record way is how this
+> fix looks over-wide when it is not.**  For a RECORD tail an undisturbed projection ALIASES
+> and must keep doing so.  For a COLLECTION tail it does not: `(B-Copy)` makes a whole-value
+> vector bind a copy, so a write through it reaching nothing is the documented answer in the
+> branch spelling exactly as in the plain one.  Measured on both, in both spellings.
+>
+> Guard `a-collection-projection-arm-of-a-branch-materialises` (9 cells), falsified at
+> c22c318f: interpret one assertion failure -> 0, native INERT — which is the right verdict for
+> a backend divergence, since only one side can move.
 
 > **D-bind-22 — OPENED AND CLOSED (2026-09-06, loft#1396) — a binding whose value is a BRANCH
 > with a projecting arm was outside the materialise clause.**  `x = if k > 0 { h.inner } else

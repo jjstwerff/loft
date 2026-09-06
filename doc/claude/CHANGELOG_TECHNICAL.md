@@ -109,6 +109,26 @@ materialises.  Guard `a-payload-binding-warns-when-its-subject-is-given-another-
 and the local subject), falsified at 26c5609b.  Zero reports over `tests/scripts`, `tests/docs`
 and `default/`.  `LOFT_NO_VARIANT_OVERWRITTEN` turns it off; DIAGNOSTICS.md carries its row.
 
+### A branch arm projecting a collection gets its copy (2026-09-06, loft#1399)
+
+loft#1396 gave a projecting arm its own temp, matching `Reference` and struct-`Enum` and
+answering `None` for a `Vector`; the deps strip that would otherwise reach a collection is
+correctly not taken for a branch-valued binding, so nothing copied — `--interpret` read the
+reassigned container while `--native` was right off empty deps.  `(B-View-Base)` settles the
+value at the old one; closed with `ArmBind::CopyVector`, the buffer-and-refill a whole-vector
+copy already uses.
+
+Two things worth more than the fix.  The ROOT was tree-dependent: filed against the sibling
+branch as *"the walk never names a collection view"*, true there and false here, because the
+union of the two `leaf` gates at the loft#1396 pick made naming and copy land together — so
+the same patch measured INERT there and is live here.  And the aliasing BOUNDARY is inverted
+between the kinds: a record projection aliases when undisturbed, a collection one copies
+(`(B-Copy)`), so an "undisturbed arms must still alias" control is right for a record and
+wrong for a collection — which is how this fix looks over-wide when read the record way.
+Guard `a-collection-projection-arm-of-a-branch-materialises` (9 cells), falsified at c22c318f
+with native INERT, the correct verdict for a backend divergence.  formal: binding-history.md
+D-bind-23.
+
 ### A view of a view is a place inside the outer container (2026-09-06, loft#1393)
 
 `(B-Disturb)` ends a view's place when its CONTAINER is disturbed, and a chain names ONE place

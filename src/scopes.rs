@@ -10230,6 +10230,23 @@ impl Scopes<'_> {
                         opt,
                         Type::Enum(*r, true, Deps::none()),
                     ))),
+                    // A COLLECTION arm needs the copy EMITTED, not just a temp bound: the
+                    // vector bind's copy-vs-view is decided at PARSE time, so a temp typed
+                    // without deps arrives too late to be heard.  Same buffer-and-refill the
+                    // whole-vector copy takes (loft#1377's arm), reached here because the walk
+                    // NAMES a collection view on this tree — which is what made the same idea
+                    // inert where it does not (loft#1399).
+                    Type::Vector(inner, _) => {
+                        let wrapper = format!("main_vector<{}>", inner.name(data));
+                        if data.name_type(&wrapper, data.def(self.d_nr).source) == u16::MAX {
+                            return None;
+                        }
+                        let elem = data.vector_element_type(inner, self.database)?;
+                        Some(ArmBind::CopyVector {
+                            tp: Type::Vector(inner.clone(), Deps::none()),
+                            elem: i32::from(elem),
+                        })
+                    }
                     _ => None,
                 }
             }
